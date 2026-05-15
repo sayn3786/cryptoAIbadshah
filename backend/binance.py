@@ -17,7 +17,7 @@ KUCOIN_BASE  = "https://api.kucoin.com"
 OKX_BASE     = "https://www.okx.com"
 BYBIT_BASE   = "https://api.bybit.com"
 TIMEOUT      = 15
-BINANCE_RETRIES = int(os.getenv("BINANCE_RETRIES", "4"))
+BINANCE_RETRIES = int(os.getenv("BINANCE_RETRIES", "1"))
 
 # CoinGecko IDs
 CG_IDS = {
@@ -512,16 +512,12 @@ class BinanceClient:
         relative to the coin's live market cap so impact is comparable
         across coins (BTC vs ONDO, etc.).
         """
-        try:
-            data = self._get(f"{FUTURES_BASE}/fapi/v1/depth",
-                             {"symbol": symbol, "limit": 1000})
-            bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
-            asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
+        def build_walls(bids, asks):
             if not bids or not asks:
                 return {}
 
             current     = bids[0][0]
-            bucket_size = current * 0.001  # 0.1% bucket
+            bucket_size = current * 0.001
 
             def cluster_wall(orders):
                 buckets: Dict[float, dict] = {}
@@ -541,12 +537,10 @@ class BinanceClient:
             bid_usd   = sum(p * q for p, q in near_bids)
             ask_usd   = sum(p * q for p, q in near_asks)
 
-            if market_cap is None:
-                market_cap = self._get_market_cap(symbol)
+            mcap = market_cap if market_cap is not None else self._get_market_cap(symbol)
 
             def wall_dict(w):
-                mcap_pct = round(w["usd"] / market_cap * 100, 6) if market_cap else None
-                # Significance thresholds: high >0.005%, medium >0.0005%, low otherwise
+                mcap_pct = round(w["usd"] / mcap * 100, 6) if mcap else None
                 if mcap_pct is None:
                     sig = None
                 elif mcap_pct >= 0.005:
@@ -571,8 +565,34 @@ class BinanceClient:
                 "near_bid_usd":  round(bid_usd, 2),
                 "near_ask_usd":  round(ask_usd, 2),
                 "current_price": round(current, 2),
-                "market_cap":    round(market_cap, 0) if market_cap else None,
+                "market_cap":    round(mcap, 0) if mcap else None,
             }
+
+        try:
+            data = self._get(f"{FUTURES_BASE}/fapi/v1/depth",
+                             {"symbol": symbol, "limit": 1000})
+            bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
+            asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
+            walls = build_walls(bids, asks)
+            if walls:
+                walls["source"] = "binance"
+                return walls
+        except Exception:
+            pass
+
+        try:
+            inst_id = OKX_PAIRS.get(symbol)
+            if not inst_id:
+                return {}
+            data = self._get(f"{OKX_BASE}/api/v5/market/books",
+                             {"instId": inst_id, "sz": "400"})
+            book = (data.get("data") or [{}])[0]
+            bids = [(float(p), float(q)) for p, q, *_ in book.get("bids", [])]
+            asks = [(float(p), float(q)) for p, q, *_ in book.get("asks", [])]
+            walls = build_walls(bids, asks)
+            if walls:
+                walls["source"] = "okx"
+            return walls
         except Exception:
             return {}
 

@@ -381,11 +381,12 @@ function renderCVDCharts(spot, fut) {
 function renderCVDPanel(id, cvd, series, valId, trendId) {
   if (!cvd) return;
   const el = document.getElementById(valId);
-  el.textContent = Number(cvd.current).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const isFlat = !cvd.series?.some(d => Math.abs(Number(d.cvd || 0)) > 0);
+  el.textContent = isFlat ? 'Estimated' : Number(cvd.current).toLocaleString('en-US', { maximumFractionDigits: 2 });
   el.style.color = cvd.trend === 'bullish' ? 'var(--bull)' : cvd.trend === 'bearish' ? 'var(--bear)' : 'var(--neutral)';
 
   const tEl = document.getElementById(trendId);
-  tEl.textContent = cvd.trend || 'neutral';
+  tEl.textContent = isFlat ? 'unavailable' : (cvd.trend || 'neutral');
   tEl.className = `cvd-trend ${cvd.trend || 'neutral'}`;
 
   if (series && cvd.series?.length) {
@@ -582,7 +583,7 @@ function renderOrderBook(ob) {
   if (!buyEl || !sellEl) return;
 
   if (!ob || !ob.biggest_bid) {
-    const msg = '<p class="empty">Order book unavailable (Binance required)</p>';
+    const msg = '<p class="empty">Order book unavailable for this exchange</p>';
     buyEl.innerHTML = sellEl.innerHTML = msg;
     return;
   }
