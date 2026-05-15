@@ -180,13 +180,16 @@ def analyze_elliott_wave(
     # Fibonacci extension targets
     targets = []
     if len(prices) >= 3:
-        last_swing = abs(prices[-1] - prices[-2])
+        current = prices[-1]
+        # Cap swing at 25% of price — weekly pivot swings can be huge and
+        # produce negative targets at 1.618x extension without this guard.
+        last_swing = min(abs(current - prices[-2]), current * 0.25)
         mults = [0.618, 1.000, 1.618]
         for m in mults:
             if bias == "bullish":
-                targets.append(round(prices[-1] + last_swing * m, 6))
+                targets.append(round(current + last_swing * m, 6))
             else:
-                targets.append(round(prices[-1] - last_swing * m, 6))
+                targets.append(round(max(current * 0.001, current - last_swing * m), 6))
 
     return {
         "wave_count": label,
