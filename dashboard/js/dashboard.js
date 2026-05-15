@@ -132,6 +132,9 @@ async function loadAnalysis() {
 }
 
 function renderAll(a) {
+  // Show demo mode banner if applicable
+  document.getElementById('demoBanner').classList.toggle('hidden', !a.demo_mode);
+
   renderPrice(a);
   renderSignal(a.signal);
   renderRSICard(a.rsi);

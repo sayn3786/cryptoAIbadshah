@@ -91,6 +91,7 @@ async def _build_analysis(symbol: str, timeframe: str) -> dict:
         "elliott_wave": elliott,
     }
     analysis["signal"] = generate_signal(analysis)
+    analysis["demo_mode"] = client._demo
     return analysis
 
 

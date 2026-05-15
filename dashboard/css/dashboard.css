@@ -365,6 +365,13 @@ a:hover { color: var(--gold2); }
   font-size: .72rem; color: var(--muted);
 }
 
+/* ─── Demo Banner ────────────────────────────────────────────────────────────── */
+.demo-banner {
+  background: linear-gradient(90deg, #92400e, #b45309);
+  color: #fef3c7; font-size: .8rem; text-align: center;
+  padding: 7px 16px; border-bottom: 1px solid #d97706;
+}
+
 /* ─── Scrollbars ─────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
