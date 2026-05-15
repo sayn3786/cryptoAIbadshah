@@ -4,6 +4,7 @@ Pure Python (requests), no compilation required.
 """
 import time
 import requests
+import os
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 
@@ -14,6 +15,7 @@ KRAKEN_BASE  = "https://api.kraken.com/0/public"
 GATE_BASE    = "https://api.gateio.ws/api/v4"
 KUCOIN_BASE  = "https://api.kucoin.com"
 TIMEOUT      = 15
+BINANCE_RETRIES = int(os.getenv("BINANCE_RETRIES", "4"))
 
 # CoinGecko IDs
 CG_IDS = {
@@ -61,6 +63,7 @@ class BinanceClient:
         self._s = requests.Session()
         self._s.headers.update({"User-Agent": "Mozilla/5.0 CryptoBadshah/2.0"})
         self._mcap_cache: dict = {}   # symbol -> (value, fetched_at)
+        self.last_binance_error = None
         self._mcap_ttl = 300          # 5-minute cache — avoids hammering CoinGecko
 
     # ── Internal ─────────────────────────────────────────────────────────────
@@ -84,20 +87,31 @@ class BinanceClient:
     # ── Binance ───────────────────────────────────────────────────────────────
 
     def _binance_klines(self, symbol, interval, limit) -> Optional[List[Dict]]:
-        try:
-            data = self._get(f"{SPOT_BASE}/api/v3/klines",
-                             {"symbol": symbol, "interval": interval, "limit": limit})
-            return [self._parse_kline(k) for k in data]
-        except Exception:
-            return None
+        return self._binance_request(f"{SPOT_BASE}/api/v3/klines",
+                                     {"symbol": symbol, "interval": interval, "limit": limit})
 
     def _binance_futures_klines(self, symbol, interval, limit) -> Optional[List[Dict]]:
+        return self._binance_request(f"{FUTURES_BASE}/fapi/v1/klines",
+                                     {"symbol": symbol, "interval": interval, "limit": limit})
+
+    def _binance_request(self, url: str, params: dict) -> Optional[List[Dict]]:
+        self.last_binance_error = None
+        for attempt in range(BINANCE_RETRIES):
+            try:
+                data = self._get(url, params)
+                return [self._parse_kline(k) for k in data]
+            except Exception as e:
+                self.last_binance_error = f"{type(e).__name__}: {e}"
+                if attempt < BINANCE_RETRIES - 1:
+                    time.sleep(0.4 * (attempt + 1))
+        return None
+
+    def binance_ping(self) -> str:
         try:
-            data = self._get(f"{FUTURES_BASE}/fapi/v1/klines",
-                             {"symbol": symbol, "interval": interval, "limit": limit})
-            return [self._parse_kline(k) for k in data]
-        except Exception:
-            return None
+            self._get(f"{SPOT_BASE}/api/v3/ping")
+            return "ok"
+        except Exception as e:
+            return f"error: {type(e).__name__}: {e}"
 
     # ── CoinGecko ─────────────────────────────────────────────────────────────
 

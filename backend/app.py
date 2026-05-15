@@ -140,12 +140,11 @@ def api_diagnostics():
     """Test each data source and return which ones are reachable."""
     import requests as req
     tests = {
-        "binance":   "https://api.binance.com/api/v3/ping",
         "coingecko": "https://api.coingecko.com/api/v3/ping",
         "kraken":    "https://api.kraken.com/0/public/Time",
         "gateio":    "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT",
     }
-    results = {}
+    results = {"binance": client.binance_ping()}
     for name, url in tests.items():
         try:
             r = req.get(url, timeout=8)
@@ -153,6 +152,7 @@ def api_diagnostics():
         except Exception as e:
             results[name] = f"error: {type(e).__name__}"
     results["current_source"] = client.data_source
+    results["binance_last_error"] = client.last_binance_error
     return jsonify(results)
 
 
