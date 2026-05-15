@@ -28,13 +28,12 @@ if not exist .env (
 echo  Installing dependencies...
 pip install -r requirements.txt -q
 if errorlevel 1 (
-    echo  ERROR: Failed to install packages. Try running as Administrator.
+    echo  ERROR: Failed to install packages.
     pause
     exit /b 1
 )
 
-:: Open browser after 4 seconds in background
-echo  Opening browser in 4 seconds...
+:: Open browser after 4 seconds
 start /b cmd /c "timeout /t 4 /nobreak >nul && start http://localhost:8000/dashboard/"
 
 :: Start server
