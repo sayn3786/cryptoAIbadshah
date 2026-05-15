@@ -13,6 +13,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from binance import BinanceClient
 from coinglass import CoinGlassClient
+from cvd_sources import fetch_cvd_from_source
 from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_pivots, find_volume_spikes
 from holidays import get_upcoming_holidays
 from patterns import detect_harmonics, analyze_elliott_wave
@@ -156,6 +157,23 @@ def api_diagnostics():
     results["current_source"] = client.data_source
     results["binance_last_error"] = client.last_binance_error
     return jsonify(results)
+
+
+@app.get("/api/cvd/<symbol>")
+def api_cvd(symbol):
+    symbol    = symbol.upper()
+    source    = request.args.get("source", "auto").lower()
+    cvd_type  = request.args.get("type", "spot").lower()
+    timeframe = request.args.get("timeframe", "1W").upper()
+    if symbol not in SYMBOLS:
+        return jsonify({"error": f"Symbol {symbol} not supported"}), 404
+    bs       = SYMBOLS[symbol]
+    interval = TF_INTERVAL.get(timeframe, "1w")
+    limit    = 120
+    result   = fetch_cvd_from_source(bs, source, cvd_type, interval, limit, cg_client)
+    if result is None:
+        return jsonify({"error": f"Source '{source}' unavailable for {symbol}"}), 503
+    return jsonify(result)
 
 
 @app.get("/api/analysis/<symbol>")

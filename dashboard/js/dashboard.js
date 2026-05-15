@@ -12,6 +12,8 @@ const S = {
   futCvdChart: null,
   futCvdSeries: null,
   journalData: null,
+  spotCvdSource: 'auto',
+  futCvdSource: 'auto',
 };
 
 const API = location.port === '' || location.port === '80' || location.port === '443'
@@ -550,6 +552,47 @@ function showError(msg) {
   if (el) el.textContent = 'Error: ' + msg;
 }
 
+/* ─── CVD source loader ───────────────────────────────────────────────────── */
+async function loadCvdFromSource(cvdType) {
+  const isSpot   = cvdType === 'spot';
+  const source   = isSpot ? S.spotCvdSource : S.futCvdSource;
+  const selId    = isSpot ? 'spotCvdSource' : 'futCvdSource';
+  const sel      = document.getElementById(selId);
+  const series   = isSpot ? S.spotCvdSeries : S.futCvdSeries;
+  const valId    = isSpot ? 'spotCvdVal'   : 'futCvdVal';
+  const trendId  = isSpot ? 'spotCvdTrend' : 'futCvdTrend';
+
+  if (source === 'auto') {
+    // Use data already loaded from the main analysis
+    if (S.analysis) {
+      const cvd = isSpot ? S.analysis.spot_cvd : (S.analysis.agg_cvd || S.analysis.futures_cvd);
+      renderCVDPanel(isSpot ? 'spot' : 'fut', cvd, series, valId, trendId);
+    }
+    return;
+  }
+
+  sel.classList.add('cvd-source-loading');
+  try {
+    const res = await fetch(
+      `${API}/cvd/${S.symbol}?source=${source}&type=${cvdType}&timeframe=${S.timeframe}`
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const cvd = await res.json();
+    renderCVDPanel(isSpot ? 'spot' : 'fut', cvd, series, valId, trendId);
+  } catch (e) {
+    const tEl = document.getElementById(trendId);
+    if (tEl) { tEl.textContent = 'error'; tEl.className = 'cvd-trend neutral'; }
+    const vEl = document.getElementById(valId);
+    if (vEl) vEl.textContent = '—';
+    console.warn(`CVD source '${source}' failed:`, e.message);
+  } finally {
+    sel.classList.remove('cvd-source-loading');
+  }
+}
+
 /* ─── Selector wiring ─────────────────────────────────────────────────────── */
 function wireSelectors() {
   document.getElementById('assetTabs').addEventListener('click', e => {
@@ -568,6 +611,16 @@ function wireSelectors() {
     btn.classList.add('active');
     S.timeframe = btn.dataset.tf;
     loadAnalysis();
+  });
+
+  document.getElementById('spotCvdSource').addEventListener('change', e => {
+    S.spotCvdSource = e.target.value;
+    loadCvdFromSource('spot');
+  });
+
+  document.getElementById('futCvdSource').addEventListener('change', e => {
+    S.futCvdSource = e.target.value;
+    loadCvdFromSource('futures');
   });
 }
 

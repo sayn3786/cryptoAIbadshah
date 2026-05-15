@@ -154,7 +154,20 @@
 
     <div class="chart-sidebar">
       <div class="card cvd-card">
-        <h3 class="card-title">Spot CVD</h3>
+        <div class="cvd-header">
+          <h3 class="card-title">Spot CVD</h3>
+          <select class="cvd-source-sel" id="spotCvdSource" title="Data source">
+            <option value="auto">Auto</option>
+            <option value="binance">Binance</option>
+            <option value="mexc">MEXC</option>
+            <option value="okx">OKX</option>
+            <option value="kucoin">KuCoin</option>
+            <option value="gateio">Gate.io</option>
+            <option value="lbank">LBank</option>
+            <option value="coingecko">CoinGecko</option>
+            <option value="coinmarketcap">CoinMarketCap</option>
+          </select>
+        </div>
         <div class="cvd-current">
           <span id="spotCvdVal">—</span>
           <span class="cvd-trend" id="spotCvdTrend">—</span>
@@ -162,7 +175,21 @@
         <div id="spotCvdChart" class="mini-chart-container"></div>
       </div>
       <div class="card cvd-card">
-        <h3 class="card-title">Futures CVD</h3>
+        <div class="cvd-header">
+          <h3 class="card-title">Futures CVD</h3>
+          <select class="cvd-source-sel" id="futCvdSource" title="Data source">
+            <option value="auto">Auto</option>
+            <option value="binance">Binance</option>
+            <option value="mexc">MEXC</option>
+            <option value="okx">OKX</option>
+            <option value="coinglass">CoinGlass</option>
+            <option value="kucoin">KuCoin</option>
+            <option value="gateio">Gate.io</option>
+            <option value="lbank">LBank</option>
+            <option value="coingecko">CoinGecko</option>
+            <option value="coinmarketcap">CoinMarketCap</option>
+          </select>
+        </div>
         <div class="cvd-current">
           <span id="futCvdVal">—</span>
           <span class="cvd-trend" id="futCvdTrend">—</span>
