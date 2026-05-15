@@ -165,6 +165,8 @@ function renderAll(a) {
   renderHarmonics(a.harmonics);
   renderElliottWave(a.elliott_wave);
   renderConfluence(a.signal);
+  renderVolumeSpikes(a.volume_spikes);
+  renderHolidayBanner(a.upcoming_holidays);
   document.getElementById('chartTitle').textContent = `${a.symbol}/USDT · ${a.timeframe}`;
 }
 
@@ -551,6 +553,53 @@ function wireSelectors() {
 async function refresh() {
   await loadAnalysis();
   await loadTicker();
+}
+
+/* ─── Volume Spikes ───────────────────────────────────────────────────────── */
+function renderVolumeSpikes(vs) {
+  const buyEl  = document.getElementById('bigBuyBody');
+  const sellEl = document.getElementById('bigSellBody');
+  if (!vs || !buyEl || !sellEl) return;
+
+  function spikeHTML(data, kind) {
+    if (!data) return '<p class="empty">No data</p>';
+    const ratio = data.volume_ratio || 0;
+    const dir   = data.candle_dir || '';
+    const date  = data.timestamp ? ts(data.timestamp) : '—';
+    return `
+      <div class="spike-ratio ${kind}">${ratio.toFixed(1)}× avg vol</div>
+      <div class="spike-row"><span class="spike-label">Date</span><span class="spike-val">${date}</span></div>
+      <div class="spike-row"><span class="spike-label">Close Price</span><span class="spike-val">$${(data.price || 0).toLocaleString('en-US', {maximumFractionDigits: 4})}</span></div>
+      <div class="spike-row"><span class="spike-label">${kind === 'buy' ? 'Buy' : 'Sell'} Volume</span><span class="spike-val">${fmtK(data.volume)}</span></div>
+      <div class="spike-row"><span class="spike-label">Candle</span><span class="spike-val ${dir === 'bullish' ? 'bullish' : 'bearish'}">${dir === 'bullish' ? '▲ Bullish' : '▼ Bearish'}</span></div>
+    `;
+  }
+
+  buyEl.innerHTML  = spikeHTML(vs.biggest_buy,  'buy');
+  sellEl.innerHTML = spikeHTML(vs.biggest_sell, 'sell');
+}
+
+/* ─── Holiday Banner ──────────────────────────────────────────────────────── */
+function renderHolidayBanner(holidays) {
+  const el = document.getElementById('holidayBanner');
+  if (!el) return;
+  if (!holidays || !holidays.length) {
+    el.classList.add('hidden');
+    return;
+  }
+
+  const pills = holidays.map(h => {
+    const when = h.days_away === 0 ? 'Today' :
+                 h.days_away === 1 ? 'Tomorrow' :
+                 `in ${h.days_away}d`;
+    return `<span class="hol-pill impact-${h.impact}" title="${h.region}">
+      ${h.name} · ${when}
+    </span>`;
+  }).join('');
+
+  el.className = 'holiday-banner';
+  el.innerHTML = `🔔 <strong>Upcoming Holidays — expect reduced liquidity:</strong>
+    <span class="hol-items">${pills}</span>`;
 }
 
 /* ─── Bootstrap ───────────────────────────────────────────────────────────── */

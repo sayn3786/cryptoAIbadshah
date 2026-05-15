@@ -376,6 +376,36 @@ a:hover { color: var(--gold2); }
   color: #bfdbfe; border-bottom-color: #3b82f6;
 }
 
+/* ─── Holiday Banner ──────────────────────────────────────────────────────────── */
+.holiday-banner {
+  background: linear-gradient(90deg, #3b2200, #78350f);
+  color: #fde68a; font-size: .82rem; text-align: center;
+  padding: 8px 16px; border-bottom: 1px solid #f59e0b;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.holiday-banner .hol-items { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+.holiday-banner .hol-pill {
+  background: rgba(255,255,255,.08); border-radius: 20px;
+  padding: 2px 12px; font-weight: 600;
+}
+.holiday-banner .hol-pill.impact-high   { border: 1px solid #f59e0b; }
+.holiday-banner .hol-pill.impact-medium { border: 1px solid #d97706; opacity: .85; }
+.holiday-banner .hol-pill.impact-low    { border: 1px solid #92400e; opacity: .7; }
+
+/* ─── Volume Spikes ──────────────────────────────────────────────────────────── */
+.row-volume { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.spike-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.spike-row  { display: flex; justify-content: space-between; align-items: center; font-size: .85rem; }
+.spike-label { color: var(--muted); }
+.spike-val   { font-weight: 600; font-family: var(--mono); }
+.spike-ratio {
+  font-size: 1.6rem; font-weight: 800; font-family: var(--mono); margin-bottom: 4px;
+}
+.spike-ratio.buy  { color: var(--bull); }
+.spike-ratio.sell { color: var(--bear); }
+.bullish { color: var(--bull); }
+.bearish { color: var(--bear); }
+
 /* ─── Scrollbars ─────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }

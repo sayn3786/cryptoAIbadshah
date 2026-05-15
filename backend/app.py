@@ -13,7 +13,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from binance import BinanceClient
 from coinglass import CoinGlassClient
-from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_pivots
+from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_pivots, find_volume_spikes
+from holidays import get_upcoming_holidays
 from patterns import detect_harmonics, analyze_elliott_wave
 from signals import generate_signal
 from journal import generate_journal
@@ -75,9 +76,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     rsi_series = calculate_rsi_series(closes)
     current_rsi = next((v for v in reversed(rsi_series) if v is not None), None)
 
-    spot_cvd = calculate_cvd(spot, "spot")
-    fut_cvd  = calculate_cvd(futures, "futures")
-    agg_cvd  = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
+    spot_cvd      = calculate_cvd(spot, "spot")
+    fut_cvd       = calculate_cvd(futures, "futures")
+    agg_cvd       = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
+    volume_spikes = find_volume_spikes(spot)
     fvgs     = detect_fvg(spot)
     ph, pl   = find_pivots(spot, window=2)
 
@@ -105,6 +107,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "fvgs":         fvgs[:15],
         "harmonics":    harmonics,
         "elliott_wave": elliott,
+        "volume_spikes":     volume_spikes,
+        "upcoming_holidays": get_upcoming_holidays(),
         "data_source":       client.data_source,
         "demo_mode":         client.data_source == "demo",
         "coinglass_enabled": cg_client.enabled,

@@ -101,6 +101,37 @@ def detect_fvg(candles: List[Dict], min_size_pct: float = 0.05) -> List[Dict]:
     return fvgs
 
 
+def find_volume_spikes(candles: List[Dict]) -> Dict:
+    """Find the biggest buy and sell candles by taker volume."""
+    if len(candles) < 5:
+        return {}
+
+    buy_vols  = [c.get("taker_buy_volume", c["volume"] * 0.5) for c in candles]
+    sell_vols = [c["volume"] - b for c, b in zip(candles, buy_vols)]
+    avg_vol   = sum(c["volume"] for c in candles) / len(candles)
+
+    bi = max(range(len(candles)), key=lambda i: buy_vols[i])
+    si = max(range(len(candles)), key=lambda i: sell_vols[i])
+
+    def _entry(idx: int, vol: float, kind: str) -> Dict:
+        c = candles[idx]
+        return {
+            "timestamp":    c["timestamp"],
+            "price":        round(c["close"], 8),
+            "volume":       round(vol, 2),
+            "avg_volume":   round(avg_vol, 2),
+            "volume_ratio": round(vol / avg_vol, 2) if avg_vol > 0 else 0,
+            "type":         kind,
+            "candle_dir":   "bullish" if c["close"] >= c["open"] else "bearish",
+        }
+
+    return {
+        "biggest_buy":  _entry(bi, buy_vols[bi],  "BUY"),
+        "biggest_sell": _entry(si, sell_vols[si], "SELL"),
+        "avg_volume":   round(avg_vol, 2),
+    }
+
+
 def find_pivots(
     candles: List[Dict], window: int = 3
 ) -> Tuple[List[Dict], List[Dict]]:
