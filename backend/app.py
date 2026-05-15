@@ -80,8 +80,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     fut_cvd       = calculate_cvd(futures, "futures")
     agg_cvd       = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
     volume_spikes = find_volume_spikes(spot)
-    order_book    = client.get_order_book_walls(bs)
     market_cap    = client.get_market_cap(bs)
+    order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
     fvgs     = detect_fvg(spot)
     ph, pl   = find_pivots(spot, window=2)
 

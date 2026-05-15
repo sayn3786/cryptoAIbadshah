@@ -60,6 +60,8 @@ class BinanceClient:
         self.data_source = "binance"
         self._s = requests.Session()
         self._s.headers.update({"User-Agent": "Mozilla/5.0 CryptoBadshah/2.0"})
+        self._mcap_cache: dict = {}   # symbol -> (value, fetched_at)
+        self._mcap_ttl = 300          # 5-minute cache — avoids hammering CoinGecko
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
@@ -376,6 +378,12 @@ class BinanceClient:
         return self._get_market_cap(symbol)
 
     def _get_market_cap(self, symbol: str) -> Optional[float]:
+        cached = self._mcap_cache.get(symbol)
+        if cached:
+            value, fetched_at = cached
+            if time.time() - fetched_at < self._mcap_ttl:
+                return value
+
         cg_id = CG_IDS.get(symbol)
         if not cg_id:
             return None
@@ -385,11 +393,14 @@ class BinanceClient:
                 "vs_currencies": "usd",
                 "include_market_cap": "true",
             })
-            return data.get(cg_id, {}).get("usd_market_cap")
+            value = data.get(cg_id, {}).get("usd_market_cap")
+            if value:
+                self._mcap_cache[symbol] = (value, time.time())
+            return value
         except Exception:
             return None
 
-    def get_order_book_walls(self, symbol: str) -> Dict:
+    def get_order_book_walls(self, symbol: str, market_cap: Optional[float] = None) -> Dict:
         """
         Largest bid/ask walls from the futures order book.
         Clusters price levels into 0.1% buckets, then sizes each wall
@@ -425,7 +436,8 @@ class BinanceClient:
             bid_usd   = sum(p * q for p, q in near_bids)
             ask_usd   = sum(p * q for p, q in near_asks)
 
-            market_cap = self._get_market_cap(symbol)
+            if market_cap is None:
+                market_cap = self._get_market_cap(symbol)
 
             def wall_dict(w):
                 mcap_pct = round(w["usd"] / market_cap * 100, 6) if market_cap else None
