@@ -5,12 +5,10 @@
       "maxDuration": 30
     }
   },
-  "routes": [
-    { "src": "/api/(.*)",          "dest": "/api/index.py"         },
-    { "src": "/dashboard/css/(.*)", "dest": "/dashboard/css/$1"    },
-    { "src": "/dashboard/js/(.*)",  "dest": "/dashboard/js/$1"     },
-    { "src": "/dashboard/(.*)",     "dest": "/dashboard/$1"        },
-    { "src": "/",                   "dest": "/dashboard/index.html" },
-    { "src": "/(.*)",               "dest": "/api/index.py"        }
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index.py"
+    }
   ]
 }
