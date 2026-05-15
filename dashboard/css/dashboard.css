@@ -159,7 +159,7 @@ a:hover { color: var(--gold2); }
 /* ─── Row 1: Hero ────────────────────────────────────────────────────────────── */
 .row-hero {
   display: grid;
-  grid-template-columns: 1.4fr 1.6fr 1fr 1fr 1fr 1fr;
+  grid-template-columns: 1.4fr 1.6fr 1fr 1fr 1fr 1fr 1fr;
   gap: 12px;
 }
 

@@ -81,6 +81,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     agg_cvd       = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
     volume_spikes = find_volume_spikes(spot)
     order_book    = client.get_order_book_walls(bs)
+    market_cap    = client.get_market_cap(bs)
     fvgs     = detect_fvg(spot)
     ph, pl   = find_pivots(spot, window=2)
 
@@ -108,6 +109,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "fvgs":         fvgs[:15],
         "harmonics":    harmonics,
         "elliott_wave": elliott,
+        "market_cap":        market_cap,
         "volume_spikes":     volume_spikes,
         "order_book":        order_book,
         "upcoming_holidays": get_upcoming_holidays(),

@@ -372,6 +372,9 @@ class BinanceClient:
         from mock_data import mock_liquidations
         return mock_liquidations(symbol)
 
+    def get_market_cap(self, symbol: str) -> Optional[float]:
+        return self._get_market_cap(symbol)
+
     def _get_market_cap(self, symbol: str) -> Optional[float]:
         cg_id = CG_IDS.get(symbol)
         if not cg_id:

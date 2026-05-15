@@ -158,6 +158,7 @@ function renderAll(a) {
   renderFunding(a.funding_rate);
   renderOI(a.open_interest);
   renderLiquidations(a.liquidations);
+  renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs);
   renderRSIChart(a.rsi_series);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd);
@@ -320,6 +321,19 @@ function renderLiquidations(l) {
 }
 
 /* ─── Main candlestick chart ──────────────────────────────────────────────── */
+function renderMarketCap(mcap) {
+  const valEl  = document.getElementById('mcapValue');
+  const rankEl = document.getElementById('mcapRank');
+  if (!valEl) return;
+  if (!mcap) { valEl.textContent = '—'; rankEl.textContent = 'via CoinGecko'; return; }
+  const fmt = mcap >= 1e12 ? `$${(mcap/1e12).toFixed(2)}T`
+            : mcap >= 1e9  ? `$${(mcap/1e9).toFixed(2)}B`
+            : mcap >= 1e6  ? `$${(mcap/1e6).toFixed(1)}M`
+            : `$${mcap.toLocaleString()}`;
+  valEl.textContent  = fmt;
+  rankEl.textContent = 'Live · CoinGecko';
+}
+
 function renderMainChart(candles, fvgs) {
   if (!candles?.length || !S.candleSeries) return;
 
