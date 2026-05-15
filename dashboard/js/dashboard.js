@@ -641,15 +641,23 @@ async function refresh() {
 
 /* ─── Order Book Walls ────────────────────────────────────────────────────── */
 function renderOrderBook(ob) {
-  const buyEl  = document.getElementById('bigBuyBody');
-  const sellEl = document.getElementById('bigSellBody');
+  const buyEl   = document.getElementById('bigBuyBody');
+  const sellEl  = document.getElementById('bigSellBody');
+  const buySrc  = document.getElementById('obBuySource');
+  const sellSrc = document.getElementById('obSellSource');
   if (!buyEl || !sellEl) return;
 
   if (!ob || !ob.biggest_bid) {
-    const msg = '<p class="empty">Order book unavailable for this exchange</p>';
+    const msg = '<p class="empty">Order book data unavailable — no supported exchange has depth data for this asset</p>';
     buyEl.innerHTML = sellEl.innerHTML = msg;
+    if (buySrc)  buySrc.textContent  = 'Unavailable';
+    if (sellSrc) sellSrc.textContent = 'Unavailable';
     return;
   }
+
+  const srcLabel = ob.source ? ob.source.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Live Order Book';
+  if (buySrc)  buySrc.textContent  = srcLabel;
+  if (sellSrc) sellSrc.textContent = srcLabel;
 
   const ratio = ob.bid_ask_ratio || 1;
   const ratioLabel = ratio > 1.2 ? '🟢 Bid-heavy (bullish pressure)' :
