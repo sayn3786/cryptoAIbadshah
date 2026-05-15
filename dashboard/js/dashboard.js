@@ -166,7 +166,7 @@ function renderAll(a) {
   renderRSIChart(a.rsi_series);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd);
   renderFVGTable(a.fvgs);
-  renderHarmonics(a.harmonics);
+  renderFlags(a.flags);
   renderElliottWave(a.elliott_wave);
   renderConfluence(a.signal);
   renderOrderBook(a.order_book);
@@ -430,29 +430,39 @@ function renderFVGTable(fvgs) {
   }).join('');
 }
 
-/* ─── Harmonic Patterns ───────────────────────────────────────────────────── */
-function renderHarmonics(harmonics) {
-  const el = document.getElementById('harmonicList');
-  if (!harmonics?.length) {
-    el.innerHTML = '<p class="empty">No harmonic patterns detected</p>';
+/* ─── Flag Patterns ───────────────────────────────────────────────────────── */
+function renderFlags(flags) {
+  const el    = document.getElementById('flagList');
+  const badge = document.getElementById('flagCount');
+  if (!flags?.length) {
+    el.innerHTML = '<p class="empty">No flag patterns detected</p>';
+    badge.textContent = '0';
     return;
   }
-  el.innerHTML = harmonics.map(h => {
-    const cls = h.direction === 'bullish' ? 'bull' : 'bear';
-    const prz = h.at_completion ? ' prz' : '';
-    const alert = h.at_completion ? '⚡ ' : '';
-    return `<div class="harmonic-item ${cls}${prz}">
-      <div class="harm-top">
-        <span class="harm-name ${cls}">${alert}${h.pattern}</span>
-        <span class="tag ${cls}">${h.direction}</span>
-        ${h.at_completion ? '<span class="tag gold" style="background:rgba(245,158,11,.15);color:var(--gold)">At PRZ</span>' : ''}
+  badge.textContent = flags.length;
+  const p = (v, d = 4) => Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
+  el.innerHTML = flags.map(f => {
+    const cls       = f.direction === 'bullish' ? 'bull' : 'bear';
+    const domCls    = f.dominant ? ' dominant' : '';
+    const icon      = f.direction === 'bullish' ? '▲' : '▼';
+    const activeBadge = f.is_active
+      ? '<span class="flag-active">Active</span>' : '';
+    const domBadge  = f.dominant
+      ? '<span class="flag-active" style="background:rgba(245,158,11,.15);color:var(--gold)">Dominant</span>' : '';
+    return `<div class="flag-item ${cls}${domCls}">
+      <div class="flag-top">
+        <span class="flag-name ${cls}">${icon} ${f.direction === 'bullish' ? 'Bullish' : 'Bearish'} Flag</span>
+        <span class="flag-tf">${f.timeframe}</span>
+        ${activeBadge}${domBadge}
       </div>
-      <div class="harm-prz">PRZ: <span>$${Number(h.PRZ_low).toLocaleString('en-US', { maximumFractionDigits: 4 })}</span> – <span>$${Number(h.PRZ_high).toLocaleString('en-US', { maximumFractionDigits: 4 })}</span></div>
-      <div class="harm-ratios">
-        <span class="harm-ratio">AB/XA: ${h.ratios.AB_XA}</span>
-        <span class="harm-ratio">BC/AB: ${h.ratios.BC_AB}</span>
-        <span class="harm-ratio">CD/BC: ${h.ratios.CD_BC}</span>
-        <span class="harm-ratio">D/XA: ${h.ratios.D_XA}</span>
+      <div class="flag-stats">
+        <span class="flag-stat">Pole <span>${f.direction === 'bullish' ? '+' : ''}${f.pole_pct}%</span></span>
+        <span class="flag-stat">Retrace <span>${f.retrace_pct}%</span></span>
+        <span class="flag-stat">Bars <span>${f.consolidation_bars}</span></span>
+        <span class="flag-stat">Strength <span>${f.strength}</span></span>
+      </div>
+      <div class="flag-target">Target: <span>$${p(f.target)}</span>
+        &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
       </div>
     </div>`;
   }).join('');

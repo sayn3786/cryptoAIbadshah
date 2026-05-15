@@ -1,134 +1,136 @@
-from typing import List, Dict, Tuple
-
-TOL = 0.10  # 10% tolerance for Fibonacci ratios
+from typing import List, Dict, Optional, Tuple
 
 
-def _ratio(a: float, b: float) -> float:
-    return abs(a) / abs(b) if b != 0 else 0.0
+# ── Flag pattern detection ─────────────────────────────────────────────────────
 
+def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
+                 min_pole_pct: float = 4.0) -> List[Dict]:
+    """
+    Detect bullish and bearish flag patterns in a candle list.
 
-def _near(r: float, target: float, tol: float = TOL) -> bool:
-    return abs(r - target) <= tol
+    A flag has two parts:
+      Pole  — a sharp directional move (≥ min_pole_pct%) over 2-8 bars.
+      Flag  — a consolidation channel (3-20 bars) that retraces 15-62% of the pole.
 
-
-def _in_range(r: float, lo: float, hi: float) -> bool:
-    return lo <= r <= hi
-
-
-# Each pattern: AB_XA, BC_AB, CD_BC, D_XA — None means range check
-HARMONIC_SPECS: Dict[str, Dict] = {
-    "Gartley": {
-        "AB_XA": (0.618, None),
-        "BC_AB": (0.382, 0.886),
-        "CD_BC": (1.272, 1.618),
-        "D_XA": (0.786, None),
-    },
-    "Butterfly": {
-        "AB_XA": (0.786, None),
-        "BC_AB": (0.382, 0.886),
-        "CD_BC": (1.618, 2.618),
-        "D_XA": (1.272, 1.618),
-    },
-    "Bat": {
-        "AB_XA": (0.382, 0.500),
-        "BC_AB": (0.382, 0.886),
-        "CD_BC": (1.618, 2.618),
-        "D_XA": (0.886, None),
-    },
-    "Crab": {
-        "AB_XA": (0.382, 0.618),
-        "BC_AB": (0.382, 0.886),
-        "CD_BC": (2.618, 3.618),
-        "D_XA": (1.618, None),
-    },
-    "Shark": {
-        "AB_XA": (0.446, 0.618),
-        "BC_AB": (1.130, 1.618),
-        "CD_BC": (0.500, 0.886),
-        "D_XA": (0.886, 1.130),
-    },
-}
-
-
-def _check(ratio: float, spec: Tuple) -> bool:
-    lo, hi = spec
-    if hi is None:
-        return _near(ratio, lo)
-    # Expand range boundaries by half the tolerance so real markets aren't
-    # excluded for being slightly outside the textbook zone.
-    return _in_range(ratio, lo * (1 - TOL * 0.5), hi * (1 + TOL * 0.5))
-
-
-def detect_harmonics(
-    pivot_highs: List[Dict],
-    pivot_lows: List[Dict],
-    current_price: float,
-) -> List[Dict]:
-    all_pivots = sorted(
-        [{"t": "H", **p} for p in pivot_highs] + [{"t": "L", **p} for p in pivot_lows],
-        key=lambda p: p["index"],
-    )
-
-    if len(all_pivots) < 5:
+    Strength = pole_pct × (1 – retrace_fraction) × recency_bonus × tf_weight.
+    The highest-strength flag per unique pole start is returned (max 6 total).
+    """
+    n = len(candles)
+    if n < 10:
         return []
 
-    found = []
+    candidates: List[Dict] = []
 
-    for i in range(len(all_pivots) - 4):
-        pts = all_pivots[i : i + 5]
-        prices = [p["price"] for p in pts]
-        X, A, B, C, D = prices
+    for ps in range(n - 4):                       # pole start index
+        for pe in range(ps + 2, min(ps + 9, n)):  # pole end (exclusive)
+            pole_open  = candles[ps]["open"]
+            pole_close = candles[pe - 1]["close"]
+            pole_move  = (pole_close - pole_open) / (pole_open + 1e-12)
 
-        XA = A - X
-        AB = B - A
-        BC = C - B
-        CD = D - C
+            if abs(pole_move) * 100 < min_pole_pct:
+                continue
 
-        # Legs must strictly alternate direction
-        if not (XA * AB < 0 and AB * BC < 0 and BC * CD < 0):
-            continue
+            pole_high  = max(c["high"] for c in candles[ps:pe])
+            pole_low   = min(c["low"]  for c in candles[ps:pe])
+            pole_height = pole_high - pole_low
+            if pole_height < 1e-12:
+                continue
 
-        AB_XA = _ratio(AB, XA)
-        BC_AB = _ratio(BC, AB)
-        CD_BC = _ratio(CD, BC)
-        D_XA_ratio = _ratio(D - X, XA)
+            is_bull = pole_move > 0
+            remaining = candles[pe:]
+            if len(remaining) < 3:
+                continue
 
-        for name, spec in HARMONIC_SPECS.items():
-            if (
-                _check(AB_XA, spec["AB_XA"])
-                and _check(BC_AB, spec["BC_AB"])
-                and _check(CD_BC, spec["CD_BC"])
-                and _check(D_XA_ratio, spec["D_XA"])
-            ):
-                direction = "bullish" if XA < 0 else "bearish"
-                prz_lo = D * (1 - TOL / 2)
-                prz_hi = D * (1 + TOL / 2)
-                at_prz = prz_lo <= current_price <= prz_hi
+            best: Optional[Dict] = None
+            best_strength = 0.0
 
-                found.append(
-                    {
-                        "pattern": name,
-                        "direction": direction,
-                        "X": round(X, 6),
-                        "A": round(A, 6),
-                        "B": round(B, 6),
-                        "C": round(C, 6),
-                        "D": round(D, 6),
-                        "PRZ_low": round(prz_lo, 6),
-                        "PRZ_high": round(prz_hi, 6),
-                        "at_completion": at_prz,
-                        "ratios": {
-                            "AB_XA": round(AB_XA, 3),
-                            "BC_AB": round(BC_AB, 3),
-                            "CD_BC": round(CD_BC, 3),
-                            "D_XA": round(D_XA_ratio, 3),
-                        },
-                        "timestamp": pts[4]["timestamp"],
+            for fl in range(3, min(21, len(remaining) + 1)):  # flag length
+                flag = remaining[:fl]
+                fh   = max(c["high"] for c in flag)
+                fl_  = min(c["low"]  for c in flag)
+
+                if is_bull:
+                    retrace = (pole_close - fl_) / pole_height
+                else:
+                    retrace = (fh - pole_close) / pole_height
+
+                if not (0.10 <= retrace <= 0.65):
+                    continue
+
+                # Recency bonus: patterns ending closer to the last candle score higher
+                recency = 1.0 + (pe + fl) / n * 0.5
+
+                direction = "bullish" if is_bull else "bearish"
+                pole_pct  = round(abs(pole_move) * 100, 2)
+
+                if is_bull:
+                    target = round(fh + pole_height, 8)
+                else:
+                    target = round(max(fl_ - pole_height, pole_low * 0.5), 8)
+
+                strength = pole_pct * (1.0 - retrace) * recency * tf_weight
+
+                if strength > best_strength:
+                    best_strength = strength
+                    best = {
+                        "direction":          direction,
+                        "timeframe":          tf_label,
+                        "tf_weight":          tf_weight,
+                        "pole_pct":           pole_pct,
+                        "pole_high":          round(pole_high, 8),
+                        "pole_low":           round(pole_low,  8),
+                        "pole_start_price":   round(pole_open,  8),
+                        "pole_end_price":     round(pole_close, 8),
+                        "flag_high":          round(fh,  8),
+                        "flag_low":           round(fl_, 8),
+                        "retrace_pct":        round(retrace * 100, 2),
+                        "target":             target,
+                        "strength":           round(strength, 3),
+                        "consolidation_bars": fl,
+                        "pole_start_ts":      candles[ps]["timestamp"],
+                        "flag_end_ts":        flag[-1]["timestamp"],
+                        "is_active":          (pe + fl) >= n - 3,
                     }
-                )
 
-    return found[-6:]
+            if best:
+                candidates.append(best)
 
+    # Deduplicate by pole start — keep strongest per unique pole origin
+    seen: Dict[int, Dict] = {}
+    for f in candidates:
+        key = f["pole_start_ts"]
+        if key not in seen or f["strength"] > seen[key]["strength"]:
+            seen[key] = f
+
+    result = sorted(seen.values(), key=lambda f: f["strength"], reverse=True)
+    return result[:6]
+
+
+def pick_dominant_flags(all_flags: List[Dict]) -> List[Dict]:
+    """
+    From multi-timeframe flags, pick the dominant direction at the highest
+    tf_weight tier, then return all flags sorted by (tf_weight × strength).
+    """
+    if not all_flags:
+        return []
+
+    # Find the highest tf tier present
+    max_weight = max(f["tf_weight"] for f in all_flags)
+    top_tier   = [f for f in all_flags if f["tf_weight"] == max_weight]
+
+    # Dominant direction at top tier
+    bull_score = sum(f["strength"] for f in top_tier if f["direction"] == "bullish")
+    bear_score = sum(f["strength"] for f in top_tier if f["direction"] == "bearish")
+    dominant   = "bullish" if bull_score >= bear_score else "bearish"
+
+    # Tag dominance, then sort globally
+    for f in all_flags:
+        f["dominant"] = (f["tf_weight"] == max_weight and f["direction"] == dominant)
+
+    return sorted(all_flags, key=lambda f: f["tf_weight"] * f["strength"], reverse=True)
+
+
+# ── Elliott Wave (unchanged) ───────────────────────────────────────────────────
 
 def analyze_elliott_wave(
     candles: List[Dict],
@@ -152,12 +154,10 @@ def analyze_elliott_wave(
 
     recent = all_pivots[-12:]
     prices = [p["price"] for p in recent]
-    trend = "bullish" if prices[-1] > prices[0] else "bearish"
+    trend  = "bullish" if prices[-1] > prices[0] else "bearish"
 
-    # Count swing alternations
     swings = sum(
-        1
-        for i in range(1, len(recent))
+        1 for i in range(1, len(recent))
         if recent[i]["type"] != recent[i - 1]["type"]
     )
 
@@ -175,18 +175,14 @@ def analyze_elliott_wave(
     pos = (swings % 8) + 1
     label, desc = _wave_labels.get(pos, ("Unknown", "Unclear wave structure"))
 
-    # Bias
     bullish_waves = {1, 3, 5, 7} if trend == "bullish" else {2, 4, 6, 8}
     bias = "bullish" if pos in bullish_waves else "bearish"
 
-    # Fibonacci extension targets — based on current market price, not last pivot,
-    # so targets are always forward-looking from where price is right now.
     current_price = candles[-1]["close"] if candles else prices[-1]
     targets = []
     if len(prices) >= 2:
         last_swing = min(abs(prices[-1] - prices[-2]), current_price * 0.25)
-        mults = [0.618, 1.000, 1.618]
-        for m in mults:
+        for m in [0.618, 1.000, 1.618]:
             if bias == "bullish":
                 t = round(current_price + last_swing * m, 6)
                 if t > current_price:
@@ -197,11 +193,30 @@ def analyze_elliott_wave(
                     targets.append(t)
 
     return {
-        "wave_count": label,
+        "wave_count":   label,
         "current_wave": pos,
-        "bias": bias,
-        "trend": trend,
-        "description": desc,
-        "targets": targets,
-        "pivot_count": len(all_pivots),
+        "bias":         bias,
+        "trend":        trend,
+        "description":  desc,
+        "targets":      targets,
+        "pivot_count":  len(all_pivots),
     }
+
+
+def find_pivots(
+    candles: List[Dict], window: int = 3
+) -> Tuple[List[Dict], List[Dict]]:
+    highs = [c["high"] for c in candles]
+    lows  = [c["low"]  for c in candles]
+    ph, pl = [], []
+
+    for i in range(window, len(candles) - window):
+        if all(highs[i] >= highs[i - j] for j in range(1, window + 1)) and \
+           all(highs[i] >= highs[i + j] for j in range(1, window + 1)):
+            ph.append({"index": i, "price": highs[i], "timestamp": candles[i]["timestamp"]})
+
+        if all(lows[i] <= lows[i - j] for j in range(1, window + 1)) and \
+           all(lows[i] <= lows[i + j] for j in range(1, window + 1)):
+            pl.append({"index": i, "price": lows[i], "timestamp": candles[i]["timestamp"]})
+
+    return ph, pl

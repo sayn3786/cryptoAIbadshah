@@ -296,21 +296,26 @@ a:hover { color: var(--gold2); }
   font-family: var(--mono);
 }
 
-/* Harmonic list */
-.harmonic-list { display: flex; flex-direction: column; gap: 8px; }
-.harmonic-item {
+/* Flag pattern list */
+.flag-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: 320px; }
+.flag-item {
   background: var(--bg2); border-radius: 8px; padding: 10px 12px;
-  border-left: 3px solid transparent;
+  border-left: 3px solid transparent; position: relative;
 }
-.harmonic-item.bull { border-left-color: var(--bull); }
-.harmonic-item.bear { border-left-color: var(--bear); }
-.harmonic-item.prz  { box-shadow: 0 0 0 1px var(--gold); }
-.harm-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.harm-name { font-weight: 700; font-size: .85rem; }
-.harm-ratios { display: flex; gap: 8px; flex-wrap: wrap; }
-.harm-ratio { font-size: .68rem; color: var(--muted2); font-family: var(--mono); }
-.harm-prz { font-size: .72rem; font-family: var(--mono); }
-.harm-prz span { color: var(--gold); font-weight: 600; }
+.flag-item.bull  { border-left-color: var(--bull); }
+.flag-item.bear  { border-left-color: var(--bear); }
+.flag-item.dominant { box-shadow: 0 0 0 1px var(--gold); }
+.flag-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; flex-wrap: wrap; }
+.flag-name { font-weight: 700; font-size: .84rem; font-family: var(--mono); }
+.flag-tf { font-size: .66rem; font-weight: 700; padding: 1px 6px; border-radius: 100px;
+           background: rgba(99,102,241,.15); color: var(--neutral); }
+.flag-active { font-size: .66rem; font-weight: 700; padding: 1px 6px; border-radius: 100px;
+               background: rgba(245,158,11,.15); color: var(--gold); }
+.flag-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.flag-stat { font-size: .7rem; color: var(--muted2); font-family: var(--mono); }
+.flag-stat span { color: var(--text); font-weight: 600; }
+.flag-target { font-size: .72rem; font-family: var(--mono); }
+.flag-target span { color: var(--gold); font-weight: 600; }
 
 /* ─── Row 5: Wave + Confluence ─────────────────────────────────────────────── */
 .row-wave { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

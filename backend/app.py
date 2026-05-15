@@ -14,9 +14,9 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from cvd_sources import fetch_cvd_from_source
-from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_pivots, find_volume_spikes
+from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes
 from holidays import get_upcoming_holidays
-from patterns import detect_harmonics, analyze_elliott_wave
+from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
 from signals import generate_signal
 from journal import generate_journal
 
@@ -34,6 +34,21 @@ SYMBOLS = {
 }
 TF_INTERVAL = {"1W": "1w", "2W": "1w", "3W": "1w", "1M": "1M"}
 TF_AGG      = {"2W": 2, "3W": 3}
+
+# Sub-timeframes for flag detection: (interval, limit, agg_factor, label, tf_weight)
+# tf_weight grows with timeframe size — highest weight = dominant tier
+TF_FLAG_SUBS = {
+    "1W": [("4h",  200, 1, "4H",  1.0),
+           ("8h",  150, 1, "8H",  1.5),
+           ("12h", 120, 1, "12H", 2.0)],
+    "2W": [("1d",   90, 1, "1D",  1.0),
+           ("1w",   60, 1, "1W",  2.0)],
+    "3W": [("1w",   60, 1, "1W",  1.0),
+           ("1w",  120, 2, "2W",  2.0)],
+    "1M": [("1w",   60, 1, "1W",  1.0),
+           ("1w",  120, 2, "2W",  1.5),
+           ("1w",  180, 3, "3W",  2.0)],
+}
 
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
@@ -86,16 +101,22 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
     fvgs = detect_fvg(spot)
 
-    # Fine pivots (window=2) for Elliott Wave — captures short swings
+    # Elliott Wave pivots
     ph, pl = find_pivots(spot, window=2)
-    # Major pivots for Harmonics — needs multi-month swing points
-    ph_major, pl_major = find_pivots(spot, window=5)
-    # Fall back to window=3 if not enough major pivots to form XABCD
-    if len(ph_major) + len(pl_major) < 6:
-        ph_major, pl_major = find_pivots(spot, window=3)
+    elliott = analyze_elliott_wave(spot, ph, pl)
 
-    harmonics = detect_harmonics(ph_major, pl_major, closes[-1] if closes else 0)
-    elliott   = analyze_elliott_wave(spot, ph, pl)
+    # Flag patterns — fetch sub-timeframe candles and run detection on each tier
+    all_flags = []
+    for sub_iv, sub_limit, agg_n, label, weight in TF_FLAG_SUBS.get(timeframe, []):
+        try:
+            sub_candles = client.get_spot_klines(bs, sub_iv, sub_limit)
+            if agg_n > 1:
+                sub_candles = client.aggregate_candles(sub_candles, agg_n)
+            if len(sub_candles) >= 10:
+                all_flags.extend(detect_flags(sub_candles, label, weight))
+        except Exception:
+            pass
+    flags = pick_dominant_flags(all_flags)
 
     rsi_with_ts = [
         {"timestamp": spot[i]["timestamp"], "rsi": v}
@@ -116,7 +137,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "open_interest": oi,
         "liquidations": liq,
         "fvgs":         fvgs[:15],
-        "harmonics":    harmonics,
+        "flags":        flags,
         "elliott_wave": elliott,
         "market_cap":        market_cap,
         "volume_spikes":     volume_spikes,
