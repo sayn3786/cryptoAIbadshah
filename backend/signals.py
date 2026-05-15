@@ -85,8 +85,12 @@ def generate_signal(analysis: Dict) -> Dict:
                 score -= 12
                 bear_reasons.append(f"OI +{oi_change:.1f}% with falling price — bearish")
         elif oi_change < -5:
-            bull_reasons.append(f"OI declining ({oi_change:.1f}%) — short squeeze potential")
-            score += 5
+            if price_up:
+                score += 8
+                bull_reasons.append(f"OI declining ({oi_change:.1f}%) with rising price — shorts being squeezed out")
+            else:
+                score -= 8
+                bear_reasons.append(f"OI declining ({oi_change:.1f}%) with falling price — longs capitulating")
 
     # ── Fair Value Gaps ───────────────────────────────────────────────────────
     unfilled = [f for f in fvgs if not f["filled"]]
