@@ -373,43 +373,59 @@ class BinanceClient:
         return mock_liquidations(symbol)
 
     def get_order_book_walls(self, symbol: str) -> Dict:
-        """Largest single bid and ask walls currently in the order book."""
+        """
+        Largest bid/ask walls from the futures order book.
+        Clusters price levels into 0.1% buckets to find aggregate walls
+        rather than single tiny orders.
+        """
         try:
-            data = self._get(f"{SPOT_BASE}/api/v3/depth",
-                             {"symbol": symbol, "limit": 500})
+            # Futures has larger institutional orders than spot
+            data = self._get(f"{FUTURES_BASE}/fapi/v1/depth",
+                             {"symbol": symbol, "limit": 1000})
             bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
             asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
             if not bids or not asks:
                 return {}
 
-            current = bids[0][0]  # best bid ≈ mid price
+            current = bids[0][0]
+            bucket_size = current * 0.001  # 0.1% price bucket width
 
-            big_bid = max(bids, key=lambda x: x[0] * x[1])
-            big_ask = max(asks, key=lambda x: x[0] * x[1])
+            def cluster_wall(orders):
+                buckets: Dict[float, dict] = {}
+                for price, qty in orders:
+                    key = round(round(price / bucket_size) * bucket_size, 2)
+                    if key not in buckets:
+                        buckets[key] = {"price": key, "qty": 0.0, "usd": 0.0}
+                    buckets[key]["qty"] += qty
+                    buckets[key]["usd"] += price * qty
+                if not buckets:
+                    return None
+                return max(buckets.values(), key=lambda x: x["usd"])
 
-            # Bid/ask imbalance within ±2% of price
+            big_bid = cluster_wall(bids)
+            big_ask = cluster_wall(asks)
+
+            # Imbalance within ±2% of price
             near_bids = [(p, q) for p, q in bids if p >= current * 0.98]
             near_asks = [(p, q) for p, q in asks if p <= current * 1.02]
             bid_usd = sum(p * q for p, q in near_bids)
             ask_usd = sum(p * q for p, q in near_asks)
 
+            def wall_dict(w):
+                return {
+                    "price":        round(w["price"], 2),
+                    "qty":          round(w["qty"], 4),
+                    "usd_value":    round(w["usd"], 2),
+                    "distance_pct": round((w["price"] - current) / current * 100, 3),
+                }
+
             return {
-                "biggest_bid": {
-                    "price":       round(big_bid[0], 6),
-                    "qty":         round(big_bid[1], 6),
-                    "usd_value":   round(big_bid[0] * big_bid[1], 2),
-                    "distance_pct": round((big_bid[0] - current) / current * 100, 3),
-                },
-                "biggest_ask": {
-                    "price":       round(big_ask[0], 6),
-                    "qty":         round(big_ask[1], 6),
-                    "usd_value":   round(big_ask[0] * big_ask[1], 2),
-                    "distance_pct": round((big_ask[0] - current) / current * 100, 3),
-                },
-                "bid_ask_ratio":       round(bid_usd / (ask_usd + 1e-9), 3),
-                "near_bid_usd":        round(bid_usd, 2),
-                "near_ask_usd":        round(ask_usd, 2),
-                "current_price":       round(current, 6),
+                "biggest_bid":   wall_dict(big_bid) if big_bid else None,
+                "biggest_ask":   wall_dict(big_ask) if big_ask else None,
+                "bid_ask_ratio": round(bid_usd / (ask_usd + 1e-9), 3),
+                "near_bid_usd":  round(bid_usd, 2),
+                "near_ask_usd":  round(ask_usd, 2),
+                "current_price": round(current, 2),
             }
         except Exception:
             return {}
