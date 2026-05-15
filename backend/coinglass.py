@@ -1,0 +1,219 @@
+"""
+CoinGlass API client — real derivatives data.
+Provides: Aggregated Funding Rate, Open Interest, Liquidations, CVD.
+Requires a free API key from https://coinglass.com/pricing (free tier available).
+Set COINGLASS_API_KEY in your .env file.
+"""
+import os
+import requests
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+CG_BASE = "https://open-api.coinglass.com/public/v2"
+TIMEOUT = 15
+
+# CoinGlass uses short symbol names
+CG_SYMBOLS = {
+    "BTCUSDT":  "BTC",
+    "ETHUSDT":  "ETH",
+    "LINKUSDT": "LINK",
+    "TAOUSDT":  "TAO",
+    "HYPEUSDT": "HYPE",
+    "ONDOUSDT": "ONDO",
+}
+
+
+class CoinGlassClient:
+    def __init__(self, api_key: str = ""):
+        self.api_key = api_key or os.getenv("COINGLASS_API_KEY", "")
+        self._s = requests.Session()
+        self._s.headers.update({
+            "coinglassSecret": self.api_key,
+            "User-Agent": "CryptoBadshah/2.0",
+        })
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.api_key) and self.api_key != "your_coinglass_key_here"
+
+    def _get(self, path: str, params: dict = None) -> Optional[dict]:
+        try:
+            r = self._s.get(f"{CG_BASE}{path}", params=params or {}, timeout=TIMEOUT)
+            r.raise_for_status()
+            data = r.json()
+            if data.get("code") in ("0", 0):
+                return data.get("data")
+            return None
+        except Exception:
+            return None
+
+    # ── Funding Rate ─────────────────────────────────────────────────────────
+
+    def get_funding_rate(self, symbol: str) -> Optional[Dict]:
+        sym = CG_SYMBOLS.get(symbol)
+        if not sym or not self.enabled:
+            return None
+
+        data = self._get("/funding_usd_history", {"symbol": sym, "time_type": "h8"})
+        if not data:
+            return None
+
+        try:
+            # data is a list of exchange funding rates
+            # Each item: {exchangeName, rates: [[ts, rate], ...]}
+            all_rates = []
+            history = []
+
+            for exchange in data:
+                rates = exchange.get("rates", [])
+                for ts, rate in rates:
+                    all_rates.append(float(rate))
+                    history.append({
+                        "timestamp": int(ts),
+                        "rate": round(float(rate) * 100, 4),
+                        "exchange": exchange.get("exchangeName", ""),
+                    })
+
+            if not all_rates:
+                return None
+
+            # Aggregate: weighted average across exchanges
+            recent_rates = [h["rate"] for h in sorted(history, key=lambda x: x["timestamp"])[-10:]]
+            return {
+                "current": round(recent_rates[-1], 4) if recent_rates else 0.0,
+                "average": round(sum(recent_rates) / len(recent_rates), 4),
+                "history": sorted(history, key=lambda x: x["timestamp"])[-20:],
+                "source":  "coinglass",
+            }
+        except Exception:
+            return None
+
+    # ── Open Interest ─────────────────────────────────────────────────────────
+
+    def get_open_interest(self, symbol: str) -> Optional[Dict]:
+        sym = CG_SYMBOLS.get(symbol)
+        if not sym or not self.enabled:
+            return None
+
+        # Current aggregated OI
+        data = self._get("/open_interest", {"symbol": sym})
+        if not data:
+            return None
+
+        try:
+            # Sum OI across all exchanges
+            total_oi = sum(float(ex.get("openInterest", 0)) for ex in data
+                           if isinstance(data, list)) if isinstance(data, list) \
+                       else float(data.get("openInterest", 0))
+
+            # OI history
+            hist_data = self._get("/open_interest_history",
+                                  {"symbol": sym, "time_type": "h8", "currency": "USD"})
+            history = []
+            change_pct = 0.0
+            if hist_data and isinstance(hist_data, dict):
+                for ex_data in hist_data.get("dataMap", {}).values():
+                    for ts, oi_val in (ex_data or []):
+                        history.append({"timestamp": int(ts), "oi": float(oi_val)})
+                    break  # Use first exchange for trend
+                history = sorted(history, key=lambda x: x["timestamp"])[-14:]
+                if len(history) >= 2:
+                    change_pct = (history[-1]["oi"] - history[0]["oi"]) / (history[0]["oi"] + 1e-9) * 100
+
+            return {
+                "value":      round(total_oi, 2),
+                "change_pct": round(change_pct, 2),
+                "history":    history,
+                "source":     "coinglass",
+            }
+        except Exception:
+            return None
+
+    # ── Liquidations ──────────────────────────────────────────────────────────
+
+    def get_liquidations(self, symbol: str) -> Optional[Dict]:
+        sym = CG_SYMBOLS.get(symbol)
+        if not sym or not self.enabled:
+            return None
+
+        data = self._get("/liquidation_chart",
+                         {"symbol": sym, "time_type": "h4", "currency": "USD"})
+        if not data:
+            return None
+
+        try:
+            longs  = 0.0
+            shorts = 0.0
+            recent = []
+
+            if isinstance(data, dict):
+                long_data  = data.get("longList",  [])
+                short_data = data.get("shortList", [])
+                timestamps = data.get("dateList",  [])
+
+                longs  = sum(float(v) for v in long_data)
+                shorts = sum(float(v) for v in short_data)
+
+                for i, ts in enumerate(timestamps[-20:]):
+                    lng = float(long_data[i])  if i < len(long_data)  else 0
+                    sht = float(short_data[i]) if i < len(short_data) else 0
+                    if lng > 0:
+                        recent.append({"side": "LONG",  "qty": 0, "price": 0,
+                                       "value": lng, "timestamp": int(ts)})
+                    if sht > 0:
+                        recent.append({"side": "SHORT", "qty": 0, "price": 0,
+                                       "value": sht, "timestamp": int(ts)})
+
+            return {
+                "longs_liquidated":  round(longs,  2),
+                "shorts_liquidated": round(shorts, 2),
+                "total":             round(longs + shorts, 2),
+                "recent":            sorted(recent, key=lambda x: x["timestamp"], reverse=True)[:20],
+                "source":            "coinglass",
+            }
+        except Exception:
+            return None
+
+    # ── Aggregated CVD ────────────────────────────────────────────────────────
+
+    def get_aggregated_cvd(self, symbol: str) -> Optional[Dict]:
+        """Aggregated futures CVD across all exchanges."""
+        sym = CG_SYMBOLS.get(symbol)
+        if not sym or not self.enabled:
+            return None
+
+        data = self._get("/taker_buy_sell_volume",
+                         {"symbol": sym, "time_type": "h4", "currency": "USD"})
+        if not data:
+            return None
+
+        try:
+            series = []
+            cvd = 0.0
+            buys  = data.get("buyList",  [])
+            sells = data.get("sellList", [])
+            dates = data.get("dateList", [])
+
+            for i, ts in enumerate(dates):
+                buy  = float(buys[i])  if i < len(buys)  else 0
+                sell = float(sells[i]) if i < len(sells) else 0
+                cvd += buy - sell
+                series.append({"timestamp": int(ts), "cvd": round(cvd, 2),
+                                "delta": round(buy - sell, 2)})
+
+            if not series:
+                return None
+
+            recent = [s["cvd"] for s in series[-5:]]
+            pct    = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9)
+            trend  = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
+
+            return {
+                "current": round(cvd, 2),
+                "trend":   trend,
+                "series":  series[-30:],
+                "label":   "futures_aggregated",
+                "source":  "coinglass",
+            }
+        except Exception:
+            return None

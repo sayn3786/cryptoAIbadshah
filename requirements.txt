@@ -1,0 +1,4 @@
+flask==3.1.0
+requests==2.32.3
+python-dotenv==1.0.1
+# waitress is only needed for local Windows deployment — install manually: pip install waitress
