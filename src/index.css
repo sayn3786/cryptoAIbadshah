@@ -1,10 +1,10 @@
 :root {
-  --bg: #f4f7f8;
+  --bg: #eef4f4;
   --panel: #ffffff;
-  --heading: #101827;
-  --text: #526070;
+  --heading: #111827;
+  --text: #4b5968;
   --muted: #6c7888;
-  --border: #dce4ea;
+  --border: #d8e3e5;
   --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
 
   color: var(--text);
@@ -31,6 +31,7 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   letter-spacing: 0;
 }

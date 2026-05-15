@@ -1,15 +1,18 @@
 {
-  "name": "taovault",
+  "name": "gomining-ai-analyst",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:full": "node scripts/dev-full.mjs",
+    "mcp:bridge": "node server/mcp-bridge.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@polkadot/api": "^16.5.6",
     "@polkadot/extension-dapp": "^0.63.1",
     "@polkadot/util": "^14.0.3",

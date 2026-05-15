@@ -1,30 +1,72 @@
-# TaoVault
+# GoMining AI Analyst
 
-A browser-based Bittensor wallet starter built with React, Vite, and Polkadot-compatible wallet extensions.
+A React/Vite dashboard for planning how to use the official GoMining MCP Server.
 
-## Features
+The app gives you a command-center style workspace with:
 
-- Connects to Bittensor Finney mainnet, testnet, or lite RPC endpoints.
-- Uses extension-based signing through `@polkadot/extension-dapp`.
-- Displays live free TAO balance from `system.account`.
-- Converts account and recipient addresses to Bittensor SS58 format `42`.
-- Prepares `balances.transferKeepAlive` transactions without collecting seed phrases or private keys.
+- MCP connection details for `https://mcp.gomining.com/mcp`.
+- Portfolio snapshot cards for hashrate, daily BTC, ROI, and value.
+- Miner performance ranking with ROI, payback, efficiency, and status.
+- Mining rewards trend view.
+- Marketplace buying rules and safety warnings.
+- Copy-ready AI prompts for portfolio audits, miner optimization, marketplace scans, and daily digests.
+- A local MCP bridge that lists and calls GoMining's exposed MCP tools.
+- A GoMining AI Skills page with install commands and Claude.ai upload guidance.
 
 ## Run Locally
 
 ```bash
 npm install
-npm run dev
+npm run dev:full
 ```
 
-Then open the local Vite URL shown in the terminal. Install or unlock a Polkadot-compatible browser extension and allow TaoVault to access the account you want to use.
+Open the local Vite URL shown in the terminal, usually `http://127.0.0.1:5173`.
 
-## Safety Notes
+`npm run dev:full` starts both:
 
-TaoVault never asks for a mnemonic. Keep seed phrases offline and only approve transactions after checking the network, destination address, and amount in your wallet extension.
+- Vite frontend on `http://127.0.0.1:5173`.
+- Local MCP bridge on `http://127.0.0.1:8787`.
 
-## Useful References
+## How To Use It With GoMining MCP
 
-- Bittensor networks: https://docs.learnbittensor.org/concepts/bittensor-networks
-- Creating/importing Bittensor wallets: https://docs.learnbittensor.org/keys/working-with-keys
-- Bittensor EVM and SS58 conversion notes: https://docs.learnbittensor.org/evm-tutorials/convert-h160-to-ss58
+1. Open an MCP-compatible AI tool such as Claude, Cursor, Windsurf, or Claude Code.
+2. Add this remote MCP server:
+
+```text
+https://mcp.gomining.com/mcp
+```
+
+3. Approve GoMining account permissions on the consent screen.
+4. Paste your GoMining API key into the app so the bridge can send GoMining's required `API_KEY` header.
+5. Use the live MCP console to retrieve exposed tools and call them with JSON arguments.
+6. Use the prompts in the app to analyze your wallet, miners, rewards, Simple Earn status, VIP tier, and marketplace options.
+
+The API key is stored only in local bridge memory by default. Restarting the bridge clears it. You can also provide it as an environment variable:
+
+```bash
+set GOMINING_API_KEY=your_key_here
+npm run dev:full
+```
+
+The GoMining MCP tools are read-only at the time this app was created. Always verify balances, deposit addresses, prices, and ROI inside GoMining before taking action.
+
+## GoMining AI Skills
+
+GoMining AI Skills are open-source knowledge packages for compatible AI agents. They are different from MCP:
+
+- MCP retrieves live or account-specific data through tools.
+- Skills teach the agent GoMining concepts, product rules, tokenomics, VIP tiers, wallet behavior, cards, Simple Earn, KYC, cashback, Academy, and related platform areas.
+
+Install all skills:
+
+```bash
+npx skills add gomining-ai/gomining-agent-skills --all
+```
+
+Install one skill:
+
+```bash
+npx skills add gomining-ai/gomining-agent-skills --skill gomining-token
+```
+
+Repository: https://github.com/gomining-ai/gomining-agent-skills
