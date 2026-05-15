@@ -53,7 +53,6 @@ KUCOIN_PAIRS = {
     "ONDOUSDT": "ONDO-USDT",
 }
 
-DATA_SOURCES = ["binance", "coingecko", "kraken", "gateio", "kucoin", "demo"]
 
 
 class BinanceClient:
@@ -79,11 +78,6 @@ class BinanceClient:
             "volume":           float(k[5]),
             "taker_buy_volume": float(k[9]),
         }
-
-    def _next_source(self):
-        idx = DATA_SOURCES.index(self.data_source)
-        if idx + 1 < len(DATA_SOURCES):
-            self.data_source = DATA_SOURCES[idx + 1]
 
     # ── Binance ───────────────────────────────────────────────────────────────
 
@@ -287,108 +281,94 @@ class BinanceClient:
     def get_spot_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
         is_monthly = (interval == "1M")
 
-        # 1. Binance
-        if self.data_source == "binance":
-            result = self._binance_klines(symbol, interval, limit)
-            if result:
-                return result
-            self._next_source()
+        # Always try each source in order — never skip based on shared state
+        result = self._binance_klines(symbol, interval, limit)
+        if result:
+            self.data_source = "binance"
+            return result
 
-        # 2. CoinGecko
-        if self.data_source == "coingecko":
-            result = self._cg_monthly_candles(symbol, limit) if is_monthly \
-                     else self._cg_weekly_candles(symbol, limit)
-            if result:
-                return result
-            self._next_source()
+        result = self._cg_monthly_candles(symbol, limit) if is_monthly \
+                 else self._cg_weekly_candles(symbol, limit)
+        if result:
+            self.data_source = "coingecko"
+            return result
 
-        # 3. Kraken
-        if self.data_source == "kraken":
-            result = self._kraken_weekly_candles(symbol, limit)
-            if result:
-                return result
-            self._next_source()
+        result = self._kraken_weekly_candles(symbol, limit)
+        if result:
+            self.data_source = "kraken"
+            return result
 
-        # 4. Gate.io
-        if self.data_source == "gateio":
-            result = self._gate_weekly_candles(symbol, limit)
-            if result:
-                return result
-            self._next_source()
+        result = self._gate_weekly_candles(symbol, limit)
+        if result:
+            self.data_source = "gateio"
+            return result
 
-        # 5. KuCoin
-        if self.data_source == "kucoin":
-            result = self._kucoin_weekly_candles(symbol, limit)
-            if result:
-                return result
-            self._next_source()
+        result = self._kucoin_weekly_candles(symbol, limit)
+        if result:
+            self.data_source = "kucoin"
+            return result
 
-        # 6. Demo
+        self.data_source = "demo"
         from mock_data import mock_spot_klines
         return mock_spot_klines(symbol, interval, limit)
 
     def get_futures_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
-        if self.data_source == "binance":
-            result = self._binance_futures_klines(symbol, interval, limit)
-            if result:
-                return result
-            # Don't advance source — spot klines call will do that
+        result = self._binance_futures_klines(symbol, interval, limit)
+        if result:
+            return result
         return self.get_spot_klines(symbol, interval, limit)
 
     def get_funding_rate(self, symbol: str, limit: int = 10) -> Dict:
-        if self.data_source == "binance":
-            try:
-                data = self._get(f"{FUTURES_BASE}/fapi/v1/fundingRate",
-                                 {"symbol": symbol, "limit": limit})
-                if data:
-                    rates = [float(d["fundingRate"]) * 100 for d in data]
-                    return {
-                        "current": round(rates[-1], 4),
-                        "average": round(sum(rates) / len(rates), 4),
-                        "history": [{"timestamp": int(d["fundingTime"]),
-                                     "rate": round(float(d["fundingRate"]) * 100, 4)}
-                                    for d in data],
-                    }
-            except Exception:
-                pass
+        try:
+            data = self._get(f"{FUTURES_BASE}/fapi/v1/fundingRate",
+                             {"symbol": symbol, "limit": limit})
+            if data:
+                rates = [float(d["fundingRate"]) * 100 for d in data]
+                return {
+                    "current": round(rates[-1], 4),
+                    "average": round(sum(rates) / len(rates), 4),
+                    "history": [{"timestamp": int(d["fundingTime"]),
+                                 "rate": round(float(d["fundingRate"]) * 100, 4)}
+                                for d in data],
+                }
+        except Exception:
+            pass
         from mock_data import mock_funding_rate
         return mock_funding_rate(symbol, limit)
 
     def get_open_interest(self, symbol: str) -> Dict:
-        if self.data_source == "binance":
-            try:
-                cur = float(self._get(f"{FUTURES_BASE}/fapi/v1/openInterest",
-                                      {"symbol": symbol})["openInterest"])
-                hist = self._get(f"{FUTURES_BASE}/futures/data/openInterestHist",
-                                 {"symbol": symbol, "period": "1d", "limit": 14})
-                history = [{"timestamp": int(d["timestamp"]),
-                            "oi": float(d["sumOpenInterest"])} for d in hist]
-                chg = (cur - history[0]["oi"]) / history[0]["oi"] * 100 if history else 0.0
-                return {"value": round(cur, 2), "change_pct": round(chg, 2), "history": history}
-            except Exception:
-                pass
+        try:
+            cur = float(self._get(f"{FUTURES_BASE}/fapi/v1/openInterest",
+                                  {"symbol": symbol})["openInterest"])
+            hist = self._get(f"{FUTURES_BASE}/futures/data/openInterestHist",
+                             {"symbol": symbol, "period": "1d", "limit": 14})
+            history = [{"timestamp": int(d["timestamp"]),
+                        "oi": float(d["sumOpenInterest"])} for d in hist]
+            chg = (cur - history[0]["oi"]) / history[0]["oi"] * 100 if history else 0.0
+            return {"value": round(cur, 2), "change_pct": round(chg, 2), "history": history}
+        except Exception:
+            pass
         from mock_data import mock_open_interest
         return mock_open_interest(symbol)
 
     def get_liquidations(self, symbol: str) -> Dict:
-        if self.data_source == "binance":
-            try:
-                data   = self._get(f"{FUTURES_BASE}/fapi/v1/allForceOrders",
-                                   {"symbol": symbol, "limit": 100})
-                longs  = sum(float(d["origQty"]) * float(d["price"])
-                             for d in data if d.get("side") == "SELL")
-                shorts = sum(float(d["origQty"]) * float(d["price"])
-                             for d in data if d.get("side") == "BUY")
-                return {
-                    "longs_liquidated": round(longs, 2),
-                    "shorts_liquidated": round(shorts, 2),
-                    "total": round(longs + shorts, 2),
-                    "recent": [{"side": "LONG" if d.get("side") == "SELL" else "SHORT",
-                                "qty": float(d["origQty"]), "price": float(d["price"]),
-                                "timestamp": int(d["time"])} for d in data[:20]],
-                }
-            except Exception:
-                pass
+        try:
+            data   = self._get(f"{FUTURES_BASE}/fapi/v1/allForceOrders",
+                               {"symbol": symbol, "limit": 100})
+            longs  = sum(float(d["origQty"]) * float(d["price"])
+                         for d in data if d.get("side") == "SELL")
+            shorts = sum(float(d["origQty"]) * float(d["price"])
+                         for d in data if d.get("side") == "BUY")
+            return {
+                "longs_liquidated": round(longs, 2),
+                "shorts_liquidated": round(shorts, 2),
+                "total": round(longs + shorts, 2),
+                "recent": [{"side": "LONG" if d.get("side") == "SELL" else "SHORT",
+                            "qty": float(d["origQty"]), "price": float(d["price"]),
+                            "timestamp": int(d["time"])} for d in data[:20]],
+            }
+        except Exception:
+            pass
         from mock_data import mock_liquidations
         return mock_liquidations(symbol)
 
