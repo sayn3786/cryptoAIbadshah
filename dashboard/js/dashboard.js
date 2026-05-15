@@ -132,8 +132,18 @@ async function loadAnalysis() {
 }
 
 function renderAll(a) {
-  // Show demo mode banner if applicable
-  document.getElementById('demoBanner').classList.toggle('hidden', !a.demo_mode);
+  // Show data source banner
+  const banner = document.getElementById('demoBanner');
+  const src = a.data_source || 'demo';
+  if (src === 'binance') {
+    banner.classList.add('hidden');
+  } else if (src === 'coingecko') {
+    banner.className = 'demo-banner cg-banner';
+    banner.innerHTML = '🟡 <strong>CoinGecko</strong> — Live price data via CoinGecko API. Derivatives data (funding/OI/liquidations) is estimated.';
+  } else {
+    banner.className = 'demo-banner';
+    banner.innerHTML = '⚡ <strong>Demo Mode</strong> — All APIs unreachable. Showing synthetic data. Run locally for live data.';
+  }
 
   renderPrice(a);
   renderSignal(a.signal);

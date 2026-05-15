@@ -95,7 +95,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "fvgs":         fvgs[:15],
         "harmonics":    harmonics,
         "elliott_wave": elliott,
-        "demo_mode":    client._demo,
+        "data_source": client.data_source,
+        "demo_mode":   client.data_source == "demo",
     }
     analysis["signal"] = generate_signal(analysis)
     return analysis
