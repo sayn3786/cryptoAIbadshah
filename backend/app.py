@@ -55,6 +55,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     limit    = 250 if timeframe in TF_AGG else 120
 
     spot    = client.get_spot_klines(bs, interval, limit)
+    spot_source = client.data_source
     futures = client.get_futures_klines(bs, interval, limit)
 
     if timeframe in TF_AGG:
@@ -120,8 +121,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "volume_spikes":     volume_spikes,
         "order_book":        order_book,
         "upcoming_holidays": get_upcoming_holidays(),
-        "data_source":       client.data_source,
-        "demo_mode":         client.data_source == "demo",
+        "data_source":       spot_source,
+        "demo_mode":         spot_source == "demo",
         "coinglass_enabled": cg_client.enabled,
     }
     analysis["signal"] = generate_signal(analysis)

@@ -318,7 +318,10 @@ class BinanceClient:
         result = self._binance_futures_klines(symbol, interval, limit)
         if result:
             return result
-        return self.get_spot_klines(symbol, interval, limit)
+        current_source = self.data_source
+        result = self.get_spot_klines(symbol, interval, limit)
+        self.data_source = current_source
+        return result
 
     def get_funding_rate(self, symbol: str, limit: int = 10) -> Dict:
         try:
