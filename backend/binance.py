@@ -372,6 +372,48 @@ class BinanceClient:
         from mock_data import mock_liquidations
         return mock_liquidations(symbol)
 
+    def get_order_book_walls(self, symbol: str) -> Dict:
+        """Largest single bid and ask walls currently in the order book."""
+        try:
+            data = self._get(f"{SPOT_BASE}/api/v3/depth",
+                             {"symbol": symbol, "limit": 500})
+            bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
+            asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
+            if not bids or not asks:
+                return {}
+
+            current = bids[0][0]  # best bid ≈ mid price
+
+            big_bid = max(bids, key=lambda x: x[0] * x[1])
+            big_ask = max(asks, key=lambda x: x[0] * x[1])
+
+            # Bid/ask imbalance within ±2% of price
+            near_bids = [(p, q) for p, q in bids if p >= current * 0.98]
+            near_asks = [(p, q) for p, q in asks if p <= current * 1.02]
+            bid_usd = sum(p * q for p, q in near_bids)
+            ask_usd = sum(p * q for p, q in near_asks)
+
+            return {
+                "biggest_bid": {
+                    "price":       round(big_bid[0], 6),
+                    "qty":         round(big_bid[1], 6),
+                    "usd_value":   round(big_bid[0] * big_bid[1], 2),
+                    "distance_pct": round((big_bid[0] - current) / current * 100, 3),
+                },
+                "biggest_ask": {
+                    "price":       round(big_ask[0], 6),
+                    "qty":         round(big_ask[1], 6),
+                    "usd_value":   round(big_ask[0] * big_ask[1], 2),
+                    "distance_pct": round((big_ask[0] - current) / current * 100, 3),
+                },
+                "bid_ask_ratio":       round(bid_usd / (ask_usd + 1e-9), 3),
+                "near_bid_usd":        round(bid_usd, 2),
+                "near_ask_usd":        round(ask_usd, 2),
+                "current_price":       round(current, 6),
+            }
+        except Exception:
+            return {}
+
     @staticmethod
     def aggregate_candles(candles: List[Dict], n: int) -> List[Dict]:
         result = []

@@ -392,7 +392,8 @@ a:hover { color: var(--gold2); }
 .holiday-banner .hol-pill.impact-medium { border: 1px solid #d97706; opacity: .85; }
 .holiday-banner .hol-pill.impact-low    { border: 1px solid #92400e; opacity: .7; }
 
-/* ─── Volume Spikes ──────────────────────────────────────────────────────────── */
+/* ─── Order Book Walls ───────────────────────────────────────────────────────── */
+.card-sub { font-size: .7rem; font-weight: 400; color: var(--muted); margin-left: 6px; }
 .row-volume { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .spike-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .spike-row  { display: flex; justify-content: space-between; align-items: center; font-size: .85rem; }

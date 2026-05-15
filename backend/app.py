@@ -80,6 +80,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     fut_cvd       = calculate_cvd(futures, "futures")
     agg_cvd       = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
     volume_spikes = find_volume_spikes(spot)
+    order_book    = client.get_order_book_walls(bs)
     fvgs     = detect_fvg(spot)
     ph, pl   = find_pivots(spot, window=2)
 
@@ -108,6 +109,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "harmonics":    harmonics,
         "elliott_wave": elliott,
         "volume_spikes":     volume_spikes,
+        "order_book":        order_book,
         "upcoming_holidays": get_upcoming_holidays(),
         "data_source":       client.data_source,
         "demo_mode":         client.data_source == "demo",

@@ -165,7 +165,7 @@ function renderAll(a) {
   renderHarmonics(a.harmonics);
   renderElliottWave(a.elliott_wave);
   renderConfluence(a.signal);
-  renderVolumeSpikes(a.volume_spikes);
+  renderOrderBook(a.order_book);
   renderHolidayBanner(a.upcoming_holidays);
   document.getElementById('chartTitle').textContent = `${a.symbol}/USDT · ${a.timeframe}`;
 }
@@ -555,28 +555,41 @@ async function refresh() {
   await loadTicker();
 }
 
-/* ─── Volume Spikes ───────────────────────────────────────────────────────── */
-function renderVolumeSpikes(vs) {
+/* ─── Order Book Walls ────────────────────────────────────────────────────── */
+function renderOrderBook(ob) {
   const buyEl  = document.getElementById('bigBuyBody');
   const sellEl = document.getElementById('bigSellBody');
-  if (!vs || !buyEl || !sellEl) return;
+  if (!buyEl || !sellEl) return;
 
-  function spikeHTML(data, kind) {
-    if (!data) return '<p class="empty">No data</p>';
-    const ratio = data.volume_ratio || 0;
-    const dir   = data.candle_dir || '';
-    const date  = data.timestamp ? ts(data.timestamp) : '—';
+  if (!ob || !ob.biggest_bid) {
+    const msg = '<p class="empty">Order book unavailable (Binance required)</p>';
+    buyEl.innerHTML = sellEl.innerHTML = msg;
+    return;
+  }
+
+  const ratio = ob.bid_ask_ratio || 1;
+  const ratioLabel = ratio > 1.2 ? '🟢 Bid-heavy (bullish pressure)' :
+                     ratio < 0.8 ? '🔴 Ask-heavy (selling pressure)' :
+                     '⚪ Balanced';
+
+  function wallHTML(w, kind) {
+    const dist = w.distance_pct;
+    const distStr = dist === 0 ? 'at market' :
+                    dist > 0   ? `+${dist.toFixed(2)}% above` :
+                                 `${dist.toFixed(2)}% below`;
+    const usdVal = w.usd_value >= 1e6
+      ? `$${(w.usd_value / 1e6).toFixed(2)}M`
+      : `$${(w.usd_value / 1e3).toFixed(1)}K`;
     return `
-      <div class="spike-ratio ${kind}">${ratio.toFixed(1)}× avg vol</div>
-      <div class="spike-row"><span class="spike-label">Date</span><span class="spike-val">${date}</span></div>
-      <div class="spike-row"><span class="spike-label">Close Price</span><span class="spike-val">$${(data.price || 0).toLocaleString('en-US', {maximumFractionDigits: 4})}</span></div>
-      <div class="spike-row"><span class="spike-label">${kind === 'buy' ? 'Buy' : 'Sell'} Volume</span><span class="spike-val">${fmtK(data.volume)}</span></div>
-      <div class="spike-row"><span class="spike-label">Candle</span><span class="spike-val ${dir === 'bullish' ? 'bullish' : 'bearish'}">${dir === 'bullish' ? '▲ Bullish' : '▼ Bearish'}</span></div>
+      <div class="spike-ratio ${kind}">${usdVal}</div>
+      <div class="spike-row"><span class="spike-label">Price Level</span><span class="spike-val">$${w.price.toLocaleString('en-US', {maximumFractionDigits: 4})}</span></div>
+      <div class="spike-row"><span class="spike-label">Order Size</span><span class="spike-val">${w.qty.toLocaleString('en-US', {maximumFractionDigits: 4})} coins</span></div>
+      <div class="spike-row"><span class="spike-label">Distance</span><span class="spike-val">${distStr}</span></div>
     `;
   }
 
-  buyEl.innerHTML  = spikeHTML(vs.biggest_buy,  'buy');
-  sellEl.innerHTML = spikeHTML(vs.biggest_sell, 'sell');
+  buyEl.innerHTML  = wallHTML(ob.biggest_bid, 'buy')  + `<div class="spike-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span class="spike-label">±2% Imbalance</span><span class="spike-val" style="font-size:.8rem">${ratioLabel}</span></div>`;
+  sellEl.innerHTML = wallHTML(ob.biggest_ask, 'sell') + `<div class="spike-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span class="spike-label">Near Bid vol</span><span class="spike-val">${fmtK(ob.near_bid_usd)} <span style="color:var(--muted)">vs</span> ${fmtK(ob.near_ask_usd)} ask</span></div>`;
 }
 
 /* ─── Holiday Banner ──────────────────────────────────────────────────────── */
