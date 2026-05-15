@@ -34,8 +34,21 @@ def calculate_cvd(candles: List[Dict], label: str = "spot") -> Dict:
     series = []
 
     for c in candles:
-        total = c.get("volume", 0.0)
-        buy   = c.get("taker_buy_volume", total / 2.0)
+        total   = c.get("volume", 0.0)
+        raw_buy = c.get("taker_buy_volume")
+
+        # When taker_buy_volume is absent or set to exactly half (fallback sources),
+        # estimate buying pressure from the candle's close position within its range.
+        if raw_buy is None or (total > 1e-9 and abs(raw_buy / total - 0.5) < 1e-6):
+            high  = c.get("high",  0.0)
+            low   = c.get("low",   0.0)
+            close = c.get("close", 0.0)
+            rng   = high - low
+            buy_frac = (close - low) / (rng + 1e-9) if rng > 1e-12 else 0.5
+            buy = total * buy_frac
+        else:
+            buy = raw_buy
+
         sell  = total - buy
         delta = buy - sell
         cvd  += delta
