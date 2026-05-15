@@ -462,9 +462,14 @@ function renderElliottWave(e) {
 
   const tEl = document.getElementById('waveTargets');
   const bias = e.bias || 'neutral';
-  tEl.innerHTML = (e.targets || []).map((t, i) =>
-    `<div class="wave-target ${bias}">TP${i + 1}: $${Number(t).toLocaleString('en-US', { maximumFractionDigits: 4 })}</div>`
-  ).join('');
+  const targets = (e.targets || []);
+  if (!targets.length) {
+    tEl.innerHTML = `<span style="color:var(--muted);font-size:.82rem">No targets ahead of current price</span>`;
+  } else {
+    tEl.innerHTML = targets.map((t, i) =>
+      `<div class="wave-target ${bias}">Target ${i + 1}: $${Number(t).toLocaleString('en-US', { maximumFractionDigits: 4 })}</div>`
+    ).join('');
+  }
 }
 
 /* ─── Confluence lists ────────────────────────────────────────────────────── */
