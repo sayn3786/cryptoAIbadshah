@@ -12,6 +12,7 @@ FUTURES_BASE = "https://fapi.binance.com"
 CG_BASE      = "https://api.coingecko.com/api/v3"
 KRAKEN_BASE  = "https://api.kraken.com/0/public"
 GATE_BASE    = "https://api.gateio.ws/api/v4"
+KUCOIN_BASE  = "https://api.kucoin.com"
 TIMEOUT      = 15
 
 # CoinGecko IDs
@@ -42,7 +43,17 @@ GATE_PAIRS = {
     "ONDOUSDT": "ONDO_USDT",
 }
 
-DATA_SOURCES = ["binance", "coingecko", "kraken", "gateio", "demo"]
+# KuCoin trading pairs
+KUCOIN_PAIRS = {
+    "BTCUSDT":  "BTC-USDT",
+    "ETHUSDT":  "ETH-USDT",
+    "LINKUSDT": "LINK-USDT",
+    "TAOUSDT":  "TAO-USDT",
+    "HYPEUSDT": "HYPE-USDT",
+    "ONDOUSDT": "ONDO-USDT",
+}
+
+DATA_SOURCES = ["binance", "coingecko", "kraken", "gateio", "kucoin", "demo"]
 
 
 class BinanceClient:
@@ -173,6 +184,32 @@ class BinanceClient:
         except Exception:
             return None
 
+    # ── KuCoin ────────────────────────────────────────────────────────────────
+
+    def _kucoin_weekly_candles(self, symbol: str, limit: int = 100) -> Optional[List[Dict]]:
+        pair = KUCOIN_PAIRS.get(symbol)
+        if not pair:
+            return None
+        try:
+            # KuCoin: type=1week, returns newest-first [time, open, close, high, low, volume, turnover]
+            data = self._get(f"{KUCOIN_BASE}/api/v1/market/candles",
+                             {"type": "1week", "symbol": pair})
+            raw = (data.get("data") or []) if isinstance(data, dict) else []
+            out = []
+            for k in reversed(raw[-limit:]):
+                out.append({
+                    "timestamp":        int(k[0]) * 1000,
+                    "open":             float(k[1]),
+                    "high":             float(k[3]),
+                    "low":              float(k[4]),
+                    "close":            float(k[2]),
+                    "volume":           float(k[5]),
+                    "taker_buy_volume": float(k[5]) * 0.5,
+                })
+            return out if out else None
+        except Exception:
+            return None
+
     # ── Aggregation helpers ───────────────────────────────────────────────────
 
     def _group_by_week(self, prices, volumes, limit) -> List[Dict]:
@@ -279,7 +316,14 @@ class BinanceClient:
                 return result
             self._next_source()
 
-        # 5. Demo
+        # 5. KuCoin
+        if self.data_source == "kucoin":
+            result = self._kucoin_weekly_candles(symbol, limit)
+            if result:
+                return result
+            self._next_source()
+
+        # 6. Demo
         from mock_data import mock_spot_klines
         return mock_spot_klines(symbol, interval, limit)
 

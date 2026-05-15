@@ -135,11 +135,13 @@ function renderAll(a) {
   // Show data source banner
   const banner = document.getElementById('demoBanner');
   const src = a.data_source || 'demo';
+  const cgSuffix = a.coinglass_enabled ? ' + <strong>CoinGlass</strong> derivatives.' : '';
   const srcLabels = {
-    binance:   null,
-    coingecko: ['🟡', 'CoinGecko', 'Live price & volume data via CoinGecko. Derivatives (funding/OI/liq) are estimated.', 'cg-banner'],
-    kraken:    ['🟢', 'Kraken',    'Live OHLCV data via Kraken exchange. Derivatives data is estimated.', 'cg-banner'],
-    gateio:    ['🟢', 'Gate.io',   'Live OHLCV data via Gate.io exchange. Derivatives data is estimated.', 'cg-banner'],
+    binance:   a.coinglass_enabled ? ['🟢', 'Binance', `Live data via Binance.${cgSuffix}`, 'cg-banner'] : null,
+    coingecko: ['🟡', 'CoinGecko', `Live price & volume via CoinGecko. Derivatives estimated.${cgSuffix}`, 'cg-banner'],
+    kraken:    ['🟢', 'Kraken',    `Live OHLCV via Kraken.${cgSuffix}`, 'cg-banner'],
+    gateio:    ['🟢', 'Gate.io',   `Live OHLCV via Gate.io.${cgSuffix}`, 'cg-banner'],
+    kucoin:    ['🟢', 'KuCoin',    `Live OHLCV via KuCoin.${cgSuffix}`, 'cg-banner'],
     demo:      ['⚡', 'Demo Mode', 'All APIs unreachable. Synthetic data shown. Check <a href="/api/diagnostics" target="_blank">diagnostics</a>.', ''],
   };
   const info = srcLabels[src];
@@ -158,7 +160,7 @@ function renderAll(a) {
   renderLiquidations(a.liquidations);
   renderMainChart(a.candles, a.fvgs);
   renderRSIChart(a.rsi_series);
-  renderCVDCharts(a.spot_cvd, a.futures_cvd);
+  renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd);
   renderFVGTable(a.fvgs);
   renderHarmonics(a.harmonics);
   renderElliottWave(a.elliott_wave);

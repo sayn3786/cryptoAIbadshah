@@ -18,8 +18,9 @@ TESTS = [
     ("Binance ping", "https://api.binance.com/api/v3/ping"),
     ("CoinGecko",    "https://api.coingecko.com/api/v3/ping"),
     ("Kraken",       "https://api.kraken.com/0/public/Time"),
-    ("CoinCap",      "https://api.coincap.io/v2/assets/bitcoin"),
     ("Gate.io",      "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT"),
+    ("KuCoin",       "https://api.kucoin.com/api/v1/market/candles?type=1week&symbol=BTC-USDT"),
+    ("CoinGlass",    "https://open-api.coinglass.com/public/v2/open_interest?symbol=BTC"),
 ]
 
 print("Testing connectivity:\n")

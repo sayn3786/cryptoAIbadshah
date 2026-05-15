@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from binance import BinanceClient
+from coinglass import CoinGlassClient
 from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_pivots
 from patterns import detect_harmonics, analyze_elliott_wave
 from signals import generate_signal
@@ -19,6 +20,7 @@ from journal import generate_journal
 
 app = Flask(__name__)
 client = BinanceClient()
+cg_client = CoinGlassClient()
 
 SYMBOLS = {
     "BTC":  "BTCUSDT",
@@ -59,9 +61,15 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         spot    = client.aggregate_candles(spot, n)
         futures = client.aggregate_candles(futures, n)
 
-    funding = client.get_funding_rate(bs)
-    oi      = client.get_open_interest(bs)
-    liq     = client.get_liquidations(bs)
+    # Use CoinGlass for richer derivatives data when API key is configured
+    if cg_client.enabled:
+        funding = cg_client.get_funding_rate(bs) or client.get_funding_rate(bs)
+        oi      = cg_client.get_open_interest(bs) or client.get_open_interest(bs)
+        liq     = cg_client.get_liquidations(bs)  or client.get_liquidations(bs)
+    else:
+        funding = client.get_funding_rate(bs)
+        oi      = client.get_open_interest(bs)
+        liq     = client.get_liquidations(bs)
 
     closes     = [c["close"] for c in spot]
     rsi_series = calculate_rsi_series(closes)
@@ -69,6 +77,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     spot_cvd = calculate_cvd(spot, "spot")
     fut_cvd  = calculate_cvd(futures, "futures")
+    agg_cvd  = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
     fvgs     = detect_fvg(spot)
     ph, pl   = find_pivots(spot, window=2)
 
@@ -89,14 +98,16 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "rsi_series":   rsi_with_ts[-30:],
         "spot_cvd":     spot_cvd,
         "futures_cvd":  fut_cvd,
+        "agg_cvd":      agg_cvd,
         "funding_rate": funding,
         "open_interest": oi,
         "liquidations": liq,
         "fvgs":         fvgs[:15],
         "harmonics":    harmonics,
         "elliott_wave": elliott,
-        "data_source": client.data_source,
-        "demo_mode":   client.data_source == "demo",
+        "data_source":       client.data_source,
+        "demo_mode":         client.data_source == "demo",
+        "coinglass_enabled": cg_client.enabled,
     }
     analysis["signal"] = generate_signal(analysis)
     return analysis
