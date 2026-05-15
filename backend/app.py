@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from flask import Flask, jsonify, request, send_from_directory, Response
+from flask import Flask, jsonify, redirect, request, send_from_directory, Response
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -216,13 +216,16 @@ DASHBOARD = os.path.join(ROOT, "dashboard")
 def serve_dashboard(filename="index.html"):
     return send_from_directory(DASHBOARD, filename)
 
-@app.route("/")
 @app.route("/<path:filename>")
-def serve_root(filename="index.html"):
+def serve_root(filename):
     # Don't catch API routes
     if filename.startswith("api/"):
         return jsonify({"error": "not found"}), 404
     return send_from_directory(ROOT, filename)
+
+@app.route("/")
+def serve_home():
+    return redirect("/dashboard/", code=302)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
