@@ -5,7 +5,7 @@ async function fetchCryptoData() {
     const url = 'https://api.coingecko.com/api/v3/coins/markets';
     const params = new URLSearchParams({
         vs_currency: 'usd',   // Currency in which you want the prices
-        ids: 'bitcoin,ethereum,ripple,solana'  // You can add more coin IDs here
+        ids: 'bitcoin,ethereum,chainlink,bittensor,hyperliquid,ondo-finance'
     });
 
     try {
