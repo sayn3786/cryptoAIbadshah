@@ -55,7 +55,7 @@ def calculate_cvd(candles: List[Dict], label: str = "spot") -> Dict:
     return {"current": round(cvd, 2), "trend": trend, "series": series[-30:], "label": label}
 
 
-def detect_fvg(candles: List[Dict], min_size_pct: float = 0.05) -> List[Dict]:
+def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
     fvgs: List[Dict] = []
     if len(candles) < 3:
         return fvgs
