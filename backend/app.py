@@ -82,10 +82,14 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     volume_spikes = find_volume_spikes(spot)
     market_cap    = client.get_market_cap(bs)
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
-    fvgs     = detect_fvg(spot)
-    ph, pl   = find_pivots(spot, window=2)
+    fvgs = detect_fvg(spot)
 
-    harmonics = detect_harmonics(ph, pl, closes[-1] if closes else 0)
+    # Fine pivots (window=2) for Elliott Wave — captures short swings
+    ph, pl = find_pivots(spot, window=2)
+    # Major pivots (window=5) for Harmonics — needs multi-month swing points
+    ph_major, pl_major = find_pivots(spot, window=5)
+
+    harmonics = detect_harmonics(ph_major, pl_major, closes[-1] if closes else 0)
     elliott   = analyze_elliott_wave(spot, ph, pl)
 
     rsi_with_ts = [

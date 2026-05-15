@@ -1,6 +1,6 @@
 from typing import List, Dict, Tuple
 
-TOL = 0.06  # 6% tolerance for Fibonacci ratios
+TOL = 0.10  # 10% tolerance for Fibonacci ratios
 
 
 def _ratio(a: float, b: float) -> float:
