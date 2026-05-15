@@ -32,22 +32,44 @@ SYMBOLS = {
     "HYPE": "HYPEUSDT",
     "ONDO": "ONDOUSDT",
 }
-TF_INTERVAL = {"1W": "1w", "2W": "1w", "3W": "1w", "1M": "1M"}
-TF_AGG      = {"2W": 2, "3W": 3}
+TF_INTERVAL = {
+    "4H": "4h", "8H": "8h", "12H": "12h", "1D": "1d",
+    "1W": "1w", "2W": "1w", "3W":  "1w",  "1M": "1M",
+}
+TF_AGG = {"2W": 2, "3W": 3}
+
+# Candle limits per timeframe — more candles for shorter bars so the chart
+# covers enough history to be useful.
+TF_LIMIT = {
+    "4H": 180, "8H": 180, "12H": 150, "1D": 120,
+    "1W": 120, "2W": 250, "3W":  250, "1M": 120,
+}
 
 # Sub-timeframes for flag detection: (interval, limit, agg_factor, label, tf_weight)
 # tf_weight grows with timeframe size — highest weight = dominant tier
 TF_FLAG_SUBS = {
-    "1W": [("4h",  200, 1, "4H",  1.0),
-           ("8h",  150, 1, "8H",  1.5),
-           ("12h", 120, 1, "12H", 2.0)],
-    "2W": [("1d",   90, 1, "1D",  1.0),
-           ("1w",   60, 1, "1W",  2.0)],
-    "3W": [("1w",   60, 1, "1W",  1.0),
-           ("1w",  120, 2, "2W",  2.0)],
-    "1M": [("1w",   60, 1, "1W",  1.0),
-           ("1w",  120, 2, "2W",  1.5),
-           ("1w",  180, 3, "3W",  2.0)],
+    "4H":  [("15m", 200, 1, "15m", 1.0),
+            ("30m", 200, 1, "30m", 1.5),
+            ("1h",  150, 1, "1H",  2.0)],
+    "8H":  [("30m", 200, 1, "30m", 1.0),
+            ("1h",  150, 1, "1H",  1.5),
+            ("2h",  120, 1, "2H",  2.0)],
+    "12H": [("1h",  150, 1, "1H",  1.0),
+            ("2h",  120, 1, "2H",  1.5),
+            ("4h",  100, 1, "4H",  2.0)],
+    "1D":  [("2h",  150, 1, "2H",  1.0),
+            ("4h",  120, 1, "4H",  1.5),
+            ("8h",  100, 1, "8H",  2.0)],
+    "1W":  [("4h",  200, 1, "4H",  1.0),
+            ("8h",  150, 1, "8H",  1.5),
+            ("12h", 120, 1, "12H", 2.0)],
+    "2W":  [("1d",   90, 1, "1D",  1.0),
+            ("1w",   60, 1, "1W",  2.0)],
+    "3W":  [("1w",   60, 1, "1W",  1.0),
+            ("1w",  120, 2, "2W",  2.0)],
+    "1M":  [("1w",   60, 1, "1W",  1.0),
+            ("1w",  120, 2, "2W",  1.5),
+            ("1w",  180, 3, "3W",  2.0)],
 }
 
 
@@ -68,7 +90,7 @@ def options(_p):
 def build_analysis(symbol: str, timeframe: str) -> dict:
     bs       = SYMBOLS[symbol]
     interval = TF_INTERVAL.get(timeframe, "1w")
-    limit    = 250 if timeframe in TF_AGG else 120
+    limit    = TF_LIMIT.get(timeframe, 120)
 
     spot    = client.get_spot_klines(bs, interval, limit)
     spot_source = client.data_source
