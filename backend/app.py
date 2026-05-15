@@ -108,6 +108,27 @@ def api_symbols():
     return jsonify(list(SYMBOLS.keys()))
 
 
+@app.get("/api/diagnostics")
+def api_diagnostics():
+    """Test each data source and return which ones are reachable."""
+    import requests as req
+    tests = {
+        "binance":   "https://api.binance.com/api/v3/ping",
+        "coingecko": "https://api.coingecko.com/api/v3/ping",
+        "kraken":    "https://api.kraken.com/0/public/Time",
+        "gateio":    "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT",
+    }
+    results = {}
+    for name, url in tests.items():
+        try:
+            r = req.get(url, timeout=8)
+            results[name] = "ok" if r.status_code == 200 else f"http_{r.status_code}"
+        except Exception as e:
+            results[name] = f"error: {type(e).__name__}"
+    results["current_source"] = client.data_source
+    return jsonify(results)
+
+
 @app.get("/api/analysis/<symbol>")
 def api_analysis(symbol):
     symbol    = symbol.upper()

@@ -135,14 +135,19 @@ function renderAll(a) {
   // Show data source banner
   const banner = document.getElementById('demoBanner');
   const src = a.data_source || 'demo';
-  if (src === 'binance') {
+  const srcLabels = {
+    binance:   null,
+    coingecko: ['🟡', 'CoinGecko', 'Live price & volume data via CoinGecko. Derivatives (funding/OI/liq) are estimated.', 'cg-banner'],
+    kraken:    ['🟢', 'Kraken',    'Live OHLCV data via Kraken exchange. Derivatives data is estimated.', 'cg-banner'],
+    gateio:    ['🟢', 'Gate.io',   'Live OHLCV data via Gate.io exchange. Derivatives data is estimated.', 'cg-banner'],
+    demo:      ['⚡', 'Demo Mode', 'All APIs unreachable. Synthetic data shown. Check <a href="/api/diagnostics" target="_blank">diagnostics</a>.', ''],
+  };
+  const info = srcLabels[src];
+  if (!info) {
     banner.classList.add('hidden');
-  } else if (src === 'coingecko') {
-    banner.className = 'demo-banner cg-banner';
-    banner.innerHTML = '🟡 <strong>CoinGecko</strong> — Live price data via CoinGecko API. Derivatives data (funding/OI/liquidations) is estimated.';
   } else {
-    banner.className = 'demo-banner';
-    banner.innerHTML = '⚡ <strong>Demo Mode</strong> — All APIs unreachable. Showing synthetic data. Run locally for live data.';
+    banner.className = `demo-banner ${info[3]}`;
+    banner.innerHTML = `${info[0]} <strong>${info[1]}</strong> — ${info[2]}`;
   }
 
   renderPrice(a);
