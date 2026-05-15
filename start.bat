@@ -20,19 +20,30 @@ if errorlevel 1 (
 if not exist .env (
     if exist .env.example (
         copy .env.example .env >nul
-        echo  Created .env file - add your ANTHROPIC_API_KEY for AI journal generation
+        echo  Created .env from .env.example
     )
 )
 
 :: Install dependencies
 echo  Installing dependencies...
 pip install -r requirements.txt -q
+if errorlevel 1 (
+    echo  ERROR: Failed to install packages. Try running as Administrator.
+    pause
+    exit /b 1
+)
+
+:: Open browser after 4 seconds in background
+echo  Opening browser in 4 seconds...
+start /b cmd /c "timeout /t 4 /nobreak >nul && start http://localhost:8000/dashboard/"
 
 :: Start server
 echo.
-echo  Starting server...
-echo  Dashboard: http://localhost:8000/dashboard/
-echo  Press Ctrl+C to stop
+echo  ============================================
+echo   Server running at localhost:8000
+echo   Dashboard: http://localhost:8000/dashboard/
+echo   Press Ctrl+C to stop
+echo  ============================================
 echo.
 cd backend
 python app.py
