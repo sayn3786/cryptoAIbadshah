@@ -141,6 +141,8 @@ def api_diagnostics():
     import requests as req
     tests = {
         "coingecko": "https://api.coingecko.com/api/v3/ping",
+        "okx":       "https://www.okx.com/api/v5/public/time",
+        "bybit":     "https://api.bybit.com/v5/market/time",
         "kraken":    "https://api.kraken.com/0/public/Time",
         "gateio":    "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT",
     }

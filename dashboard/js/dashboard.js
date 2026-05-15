@@ -146,7 +146,8 @@ function renderAll(a) {
   };
   const info = srcLabels[src];
   if (!info) {
-    banner.classList.add('hidden');
+    banner.className = 'demo-banner cg-banner';
+    banner.innerHTML = `● <strong>${src.toUpperCase()}</strong> — Live OHLCV via ${src.toUpperCase()}.${cgSuffix}`;
   } else {
     banner.className = `demo-banner ${info[3]}`;
     banner.innerHTML = `${info[0]} <strong>${info[1]}</strong> — ${info[2]}`;

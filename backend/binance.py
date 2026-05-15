@@ -14,6 +14,8 @@ CG_BASE      = "https://api.coingecko.com/api/v3"
 KRAKEN_BASE  = "https://api.kraken.com/0/public"
 GATE_BASE    = "https://api.gateio.ws/api/v4"
 KUCOIN_BASE  = "https://api.kucoin.com"
+OKX_BASE     = "https://www.okx.com"
+BYBIT_BASE   = "https://api.bybit.com"
 TIMEOUT      = 15
 BINANCE_RETRIES = int(os.getenv("BINANCE_RETRIES", "4"))
 
@@ -43,6 +45,24 @@ GATE_PAIRS = {
     "TAOUSDT":  "TAO_USDT",
     "HYPEUSDT": "HYPE_USDT",
     "ONDOUSDT": "ONDO_USDT",
+}
+
+OKX_PAIRS = {
+    "BTCUSDT":  "BTC-USDT",
+    "ETHUSDT":  "ETH-USDT",
+    "LINKUSDT": "LINK-USDT",
+    "TAOUSDT":  "TAO-USDT",
+    "HYPEUSDT": "HYPE-USDT",
+    "ONDOUSDT": "ONDO-USDT",
+}
+
+BYBIT_PAIRS = {
+    "BTCUSDT":  "BTCUSDT",
+    "ETHUSDT":  "ETHUSDT",
+    "LINKUSDT": "LINKUSDT",
+    "TAOUSDT":  "TAOUSDT",
+    "HYPEUSDT": "HYPEUSDT",
+    "ONDOUSDT": "ONDOUSDT",
 }
 
 # KuCoin trading pairs
@@ -196,6 +216,64 @@ class BinanceClient:
 
     # ── KuCoin ────────────────────────────────────────────────────────────────
 
+    def _okx_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        inst_id = OKX_PAIRS.get(symbol)
+        if not inst_id:
+            return None
+        bar = "1M" if interval == "1M" else "1W"
+        try:
+            data = self._get(f"{OKX_BASE}/api/v5/market/candles",
+                             {"instId": inst_id, "bar": bar, "limit": min(limit, 300)})
+            rows = data.get("data") if isinstance(data, dict) else None
+            if not rows:
+                return None
+            out = []
+            for k in reversed(rows):
+                vol = float(k[5])
+                out.append({
+                    "timestamp":        int(k[0]),
+                    "open":             float(k[1]),
+                    "high":             float(k[2]),
+                    "low":              float(k[3]),
+                    "close":            float(k[4]),
+                    "volume":           vol,
+                    "taker_buy_volume": vol * 0.5,
+                })
+            return out[-limit:] if out else None
+        except Exception:
+            return None
+
+    def _bybit_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        pair = BYBIT_PAIRS.get(symbol)
+        if not pair:
+            return None
+        bybit_interval = "M" if interval == "1M" else "W"
+        try:
+            data = self._get(f"{BYBIT_BASE}/v5/market/kline", {
+                "category": "spot",
+                "symbol": pair,
+                "interval": bybit_interval,
+                "limit": min(limit, 1000),
+            })
+            rows = data.get("result", {}).get("list") if isinstance(data, dict) else None
+            if not rows:
+                return None
+            out = []
+            for k in reversed(rows):
+                vol = float(k[5])
+                out.append({
+                    "timestamp":        int(k[0]),
+                    "open":             float(k[1]),
+                    "high":             float(k[2]),
+                    "low":              float(k[3]),
+                    "close":            float(k[4]),
+                    "volume":           vol,
+                    "taker_buy_volume": vol * 0.5,
+                })
+            return out[-limit:] if out else None
+        except Exception:
+            return None
+
     def _kucoin_weekly_candles(self, symbol: str, limit: int = 100) -> Optional[List[Dict]]:
         pair = KUCOIN_PAIRS.get(symbol)
         if not pair:
@@ -303,6 +381,26 @@ class BinanceClient:
             self.data_source = "binance"
             return result
 
+        result = self._okx_candles(symbol, interval, limit)
+        if result:
+            self.data_source = "okx"
+            return result
+
+        result = self._bybit_candles(symbol, interval, limit)
+        if result:
+            self.data_source = "bybit"
+            return result
+
+        result = self._kucoin_weekly_candles(symbol, limit)
+        if result:
+            self.data_source = "kucoin"
+            return result
+
+        result = self._gate_weekly_candles(symbol, limit)
+        if result:
+            self.data_source = "gateio"
+            return result
+
         result = self._cg_monthly_candles(symbol, limit) if is_monthly \
                  else self._cg_weekly_candles(symbol, limit)
         if result:
@@ -312,16 +410,6 @@ class BinanceClient:
         result = self._kraken_weekly_candles(symbol, limit)
         if result:
             self.data_source = "kraken"
-            return result
-
-        result = self._gate_weekly_candles(symbol, limit)
-        if result:
-            self.data_source = "gateio"
-            return result
-
-        result = self._kucoin_weekly_candles(symbol, limit)
-        if result:
-            self.data_source = "kucoin"
             return result
 
         self.data_source = "demo"
