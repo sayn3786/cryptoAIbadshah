@@ -146,10 +146,13 @@ def generate_signal(analysis: Dict) -> Dict:
     rr_ratio = None
 
     if candles and len(candles) >= 14 and current_price > 0:
-        atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
+        raw_atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
+        # Cap ATR at 8% of price — weekly candles have huge ranges that produce
+        # nonsensical (or negative) TP targets without this guard.
+        atr = min(raw_atr, current_price * 0.08)
         entry = round(current_price, 8)
         if direction == "LONG":
-            sl = round(current_price - atr * 1.5, 8)
+            sl = round(max(current_price * 0.001, current_price - atr * 1.5), 8)
             tp_targets = [
                 round(current_price + atr * 2.0, 8),
                 round(current_price + atr * 3.5, 8),
@@ -158,9 +161,9 @@ def generate_signal(analysis: Dict) -> Dict:
         elif direction == "SHORT":
             sl = round(current_price + atr * 1.5, 8)
             tp_targets = [
-                round(current_price - atr * 2.0, 8),
-                round(current_price - atr * 3.5, 8),
-                round(current_price - atr * 5.5, 8),
+                round(max(current_price * 0.001, current_price - atr * 2.0), 8),
+                round(max(current_price * 0.001, current_price - atr * 3.5), 8),
+                round(max(current_price * 0.001, current_price - atr * 5.5), 8),
             ]
 
         if sl and sl != entry and tp_targets:
