@@ -572,24 +572,48 @@ function renderOrderBook(ob) {
                      ratio < 0.8 ? '🔴 Ask-heavy (selling pressure)' :
                      '⚪ Balanced';
 
+  const mcapStr = ob.market_cap
+    ? ob.market_cap >= 1e12 ? `$${(ob.market_cap/1e12).toFixed(2)}T`
+    : ob.market_cap >= 1e9  ? `$${(ob.market_cap/1e9).toFixed(1)}B`
+    : `$${(ob.market_cap/1e6).toFixed(0)}M`
+    : null;
+
   function wallHTML(w, kind) {
     const dist = w.distance_pct;
     const distStr = dist === 0 ? 'at market' :
-                    dist > 0   ? `+${dist.toFixed(2)}% above` :
-                                 `${dist.toFixed(2)}% below`;
-    const usdVal = w.usd_value >= 1e6
-      ? `$${(w.usd_value / 1e6).toFixed(2)}M`
-      : `$${(w.usd_value / 1e3).toFixed(1)}K`;
+                    dist > 0   ? `+${dist.toFixed(3)}% above` :
+                                 `${dist.toFixed(3)}% below`;
+    const usdVal = w.usd_value >= 1e9 ? `$${(w.usd_value/1e9).toFixed(2)}B`
+                 : w.usd_value >= 1e6 ? `$${(w.usd_value/1e6).toFixed(2)}M`
+                 : `$${(w.usd_value/1e3).toFixed(1)}K`;
+
+    const sigColors = { high: 'var(--bull)', medium: '#f59e0b', low: 'var(--muted)' };
+    const sigLabels = { high: '⚡ High impact', medium: '〰 Medium impact', low: '· Low impact' };
+    const sigColor  = sigColors[w.significance] || 'var(--muted)';
+    const sigLabel  = sigLabels[w.significance] || '—';
+
+    const mcapRow = w.mcap_pct != null ? `
+      <div class="spike-row">
+        <span class="spike-label">Market Cap impact</span>
+        <span class="spike-val" style="color:${sigColor}">${w.mcap_pct.toFixed(4)}% &nbsp;${sigLabel}</span>
+      </div>` : '';
+    const mcapRefRow = mcapStr ? `
+      <div class="spike-row">
+        <span class="spike-label">Market Cap</span>
+        <span class="spike-val" style="color:var(--muted)">${mcapStr}</span>
+      </div>` : '';
+
     return `
       <div class="spike-ratio ${kind}">${usdVal}</div>
-      <div class="spike-row"><span class="spike-label">Price Level</span><span class="spike-val">$${w.price.toLocaleString('en-US', {maximumFractionDigits: 4})}</span></div>
-      <div class="spike-row"><span class="spike-label">Order Size</span><span class="spike-val">${w.qty.toLocaleString('en-US', {maximumFractionDigits: 4})} coins</span></div>
+      <div class="spike-row"><span class="spike-label">Price Level</span><span class="spike-val">$${w.price.toLocaleString('en-US', {maximumFractionDigits: 2})}</span></div>
+      <div class="spike-row"><span class="spike-label">Qty (coins)</span><span class="spike-val">${w.qty.toLocaleString('en-US', {maximumFractionDigits: 4})}</span></div>
       <div class="spike-row"><span class="spike-label">Distance</span><span class="spike-val">${distStr}</span></div>
+      ${mcapRow}${mcapRefRow}
     `;
   }
 
   buyEl.innerHTML  = wallHTML(ob.biggest_bid, 'buy')  + `<div class="spike-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span class="spike-label">±2% Imbalance</span><span class="spike-val" style="font-size:.8rem">${ratioLabel}</span></div>`;
-  sellEl.innerHTML = wallHTML(ob.biggest_ask, 'sell') + `<div class="spike-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span class="spike-label">Near Bid vol</span><span class="spike-val">${fmtK(ob.near_bid_usd)} <span style="color:var(--muted)">vs</span> ${fmtK(ob.near_ask_usd)} ask</span></div>`;
+  sellEl.innerHTML = wallHTML(ob.biggest_ask, 'sell') + `<div class="spike-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span class="spike-label">Bid vs Ask (±2%)</span><span class="spike-val">${fmtK(ob.near_bid_usd)} <span style="color:var(--muted)">vs</span> ${fmtK(ob.near_ask_usd)}</span></div>`;
 }
 
 /* ─── Holiday Banner ──────────────────────────────────────────────────────── */

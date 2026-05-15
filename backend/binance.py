@@ -372,14 +372,28 @@ class BinanceClient:
         from mock_data import mock_liquidations
         return mock_liquidations(symbol)
 
+    def _get_market_cap(self, symbol: str) -> Optional[float]:
+        cg_id = CG_IDS.get(symbol)
+        if not cg_id:
+            return None
+        try:
+            data = self._get(f"{CG_BASE}/simple/price", {
+                "ids": cg_id,
+                "vs_currencies": "usd",
+                "include_market_cap": "true",
+            })
+            return data.get(cg_id, {}).get("usd_market_cap")
+        except Exception:
+            return None
+
     def get_order_book_walls(self, symbol: str) -> Dict:
         """
         Largest bid/ask walls from the futures order book.
-        Clusters price levels into 0.1% buckets to find aggregate walls
-        rather than single tiny orders.
+        Clusters price levels into 0.1% buckets, then sizes each wall
+        relative to the coin's live market cap so impact is comparable
+        across coins (BTC vs ONDO, etc.).
         """
         try:
-            # Futures has larger institutional orders than spot
             data = self._get(f"{FUTURES_BASE}/fapi/v1/depth",
                              {"symbol": symbol, "limit": 1000})
             bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
@@ -387,8 +401,8 @@ class BinanceClient:
             if not bids or not asks:
                 return {}
 
-            current = bids[0][0]
-            bucket_size = current * 0.001  # 0.1% price bucket width
+            current     = bids[0][0]
+            bucket_size = current * 0.001  # 0.1% bucket
 
             def cluster_wall(orders):
                 buckets: Dict[float, dict] = {}
@@ -398,25 +412,36 @@ class BinanceClient:
                         buckets[key] = {"price": key, "qty": 0.0, "usd": 0.0}
                     buckets[key]["qty"] += qty
                     buckets[key]["usd"] += price * qty
-                if not buckets:
-                    return None
-                return max(buckets.values(), key=lambda x: x["usd"])
+                return max(buckets.values(), key=lambda x: x["usd"]) if buckets else None
 
             big_bid = cluster_wall(bids)
             big_ask = cluster_wall(asks)
 
-            # Imbalance within ±2% of price
             near_bids = [(p, q) for p, q in bids if p >= current * 0.98]
             near_asks = [(p, q) for p, q in asks if p <= current * 1.02]
-            bid_usd = sum(p * q for p, q in near_bids)
-            ask_usd = sum(p * q for p, q in near_asks)
+            bid_usd   = sum(p * q for p, q in near_bids)
+            ask_usd   = sum(p * q for p, q in near_asks)
+
+            market_cap = self._get_market_cap(symbol)
 
             def wall_dict(w):
+                mcap_pct = round(w["usd"] / market_cap * 100, 6) if market_cap else None
+                # Significance thresholds: high >0.005%, medium >0.0005%, low otherwise
+                if mcap_pct is None:
+                    sig = None
+                elif mcap_pct >= 0.005:
+                    sig = "high"
+                elif mcap_pct >= 0.0005:
+                    sig = "medium"
+                else:
+                    sig = "low"
                 return {
-                    "price":        round(w["price"], 2),
-                    "qty":          round(w["qty"], 4),
-                    "usd_value":    round(w["usd"], 2),
-                    "distance_pct": round((w["price"] - current) / current * 100, 3),
+                    "price":          round(w["price"], 2),
+                    "qty":            round(w["qty"], 4),
+                    "usd_value":      round(w["usd"], 2),
+                    "distance_pct":   round((w["price"] - current) / current * 100, 3),
+                    "mcap_pct":       mcap_pct,
+                    "significance":   sig,
                 }
 
             return {
@@ -426,6 +451,7 @@ class BinanceClient:
                 "near_bid_usd":  round(bid_usd, 2),
                 "near_ask_usd":  round(ask_usd, 2),
                 "current_price": round(current, 2),
+                "market_cap":    round(market_cap, 0) if market_cap else None,
             }
         except Exception:
             return {}
