@@ -86,8 +86,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     # Fine pivots (window=2) for Elliott Wave — captures short swings
     ph, pl = find_pivots(spot, window=2)
-    # Major pivots (window=5) for Harmonics — needs multi-month swing points
+    # Major pivots for Harmonics — needs multi-month swing points
     ph_major, pl_major = find_pivots(spot, window=5)
+    # Fall back to window=3 if not enough major pivots to form XABCD
+    if len(ph_major) + len(pl_major) < 6:
+        ph_major, pl_major = find_pivots(spot, window=3)
 
     harmonics = detect_harmonics(ph_major, pl_major, closes[-1] if closes else 0)
     elliott   = analyze_elliott_wave(spot, ph, pl)

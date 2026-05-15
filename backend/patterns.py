@@ -54,7 +54,9 @@ def _check(ratio: float, spec: Tuple) -> bool:
     lo, hi = spec
     if hi is None:
         return _near(ratio, lo)
-    return _in_range(ratio, lo, hi)
+    # Expand range boundaries by half the tolerance so real markets aren't
+    # excluded for being slightly outside the textbook zone.
+    return _in_range(ratio, lo * (1 - TOL * 0.5), hi * (1 + TOL * 0.5))
 
 
 def detect_harmonics(
