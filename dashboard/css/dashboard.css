@@ -487,6 +487,39 @@ a:hover { color: var(--gold2); }
 
 .journal-loading { display: flex; align-items: center; gap: 12px; padding: 24px 0; color: var(--muted2); font-size: .85rem; }
 .journal-output { margin-top: 16px; }
+
+/* ─── D-ID Video Generation ──────────────────────────────────────────────── */
+.video-gen-section {
+  margin-top: 20px; padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.video-gen-header {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.video-gen-title { font-size: .85rem; font-weight: 700; color: var(--text); }
+.video-gen-sub   { font-size: .7rem; color: var(--muted2); font-family: var(--mono); }
+.video-gen-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.btn-video {
+  font-size: .8rem; padding: 7px 18px; border-radius: 8px; cursor: pointer; font-weight: 600;
+  border: 1px solid rgba(99,102,241,.5); background: rgba(99,102,241,.12);
+  color: #a5b4fc; transition: background .15s;
+}
+.btn-video:hover    { background: rgba(99,102,241,.22); }
+.btn-video:disabled { opacity: .55; cursor: default; }
+.video-status { font-size: .75rem; color: var(--muted2); font-family: var(--mono); }
+.video-truncate-warn {
+  font-size: .72rem; color: var(--gold); background: rgba(245,158,11,.08);
+  border: 1px solid rgba(245,158,11,.2); border-radius: 6px;
+  padding: 6px 12px; margin-bottom: 10px;
+}
+.video-output { margin-top: 14px; }
+.did-video {
+  width: 100%; border-radius: 10px; background: #000;
+  max-height: 480px; display: block;
+}
+.did-video-actions {
+  display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;
+}
 .journal-meta { font-size: .72rem; color: var(--muted); margin-bottom: 12px; font-family: var(--mono); }
 
 .journal-tabs { display: flex; gap: 6px; margin-bottom: 12px; }

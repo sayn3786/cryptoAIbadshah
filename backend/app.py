@@ -19,6 +19,7 @@ from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
 from signals import generate_signal
 from journal import generate_journal
+from video import create_talk, get_talk
 
 app = Flask(__name__)
 client = BinanceClient()
@@ -269,6 +270,40 @@ def api_journal(symbol):
         analysis = build_analysis(symbol, timeframe)
         journal  = generate_journal(symbol, timeframe, analysis)
         return jsonify({"journal": journal, "symbol": symbol, "timeframe": timeframe})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Video generation (D-ID + ElevenLabs) ──────────────────────────────────────
+
+@app.route("/api/video/create", methods=["POST"])
+def api_video_create():
+    body   = request.get_json(silent=True) or {}
+    script = (body.get("script") or "").strip()
+    if not script:
+        return jsonify({"error": "No script provided"}), 400
+    try:
+        result = create_talk(script)
+        return jsonify({
+            "talk_id":   result.get("id"),
+            "status":    result.get("status"),
+            "truncated": result.get("truncated", False),
+        })
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/video/status/<talk_id>")
+def api_video_status(talk_id):
+    try:
+        result = get_talk(talk_id)
+        return jsonify({
+            "status":     result.get("status"),
+            "result_url": result.get("result_url"),
+            "error":      result.get("error"),
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

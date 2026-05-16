@@ -961,6 +961,83 @@ function copyJournal() {
   });
 }
 
+/* ─── D-ID Video Generation ──────────────────────────────────────────────── */
+async function generateVideo() {
+  const scriptEl = document.getElementById('journalScript');
+  const script   = scriptEl?.innerText?.trim();
+  if (!script) {
+    alert('Generate the journal script first, then click Generate Video.');
+    return;
+  }
+
+  const btn     = document.getElementById('genVideoBtn');
+  const status  = document.getElementById('videoStatus');
+  const warn    = document.getElementById('videoTruncateWarn');
+  const output  = document.getElementById('videoOutput');
+
+  btn.disabled     = true;
+  btn.textContent  = '⏳ Submitting…';
+  status.textContent = '';
+  warn.classList.add('hidden');
+  output.classList.add('hidden');
+  output.innerHTML = '';
+
+  try {
+    const res  = await fetch(`${API}/video/create`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ script }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    if (data.truncated) warn.classList.remove('hidden');
+
+    btn.textContent = '⏳ Rendering…';
+    status.textContent = 'D-ID is rendering your video — usually 1–3 min…';
+    await _pollVideo(data.talk_id);
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    btn.disabled    = false;
+    btn.textContent = '🎬 Generate Video';
+  }
+}
+
+async function _pollVideo(talkId) {
+  const btn    = document.getElementById('genVideoBtn');
+  const status = document.getElementById('videoStatus');
+  const output = document.getElementById('videoOutput');
+  let   secs   = 0;
+
+  for (let i = 0; i < 72; i++) {   // max 6 min (72 × 5 s)
+    await new Promise(r => setTimeout(r, 5000));
+    secs += 5;
+
+    const res  = await fetch(`${API}/video/status/${talkId}`);
+    const data = await res.json();
+
+    if (data.error && data.status !== 'created' && data.status !== 'started') {
+      throw new Error(data.error || 'D-ID rendering failed');
+    }
+
+    if (data.status === 'done' && data.result_url) {
+      status.textContent = '✅ Video ready!';
+      output.classList.remove('hidden');
+      output.innerHTML = `
+        <video class="did-video" src="${data.result_url}" controls playsinline></video>
+        <div class="did-video-actions">
+          <a class="btn-outline" href="${data.result_url}" download target="_blank">⬇️ Download MP4</a>
+          <button class="btn-outline" onclick="navigator.clipboard.writeText('${data.result_url}').then(()=>this.textContent='✅ Copied!').catch(()=>{})">🔗 Copy URL</button>
+        </div>`;
+      btn.disabled    = false;
+      btn.textContent = '🎬 Generate Video';
+      return;
+    }
+
+    status.textContent = `Rendering… ${secs}s elapsed (${data.status})`;
+  }
+  throw new Error('Timed out after 6 min — check your D-ID dashboard for the video');
+}
+
 /* ─── UI helpers ──────────────────────────────────────────────────────────── */
 function setLoading(on) {
   document.getElementById('loadingOverlay').classList.toggle('hidden', !on);

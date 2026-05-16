@@ -355,6 +355,24 @@
         <div class="journal-content hidden" id="journalTitle"></div>
         <div class="journal-content hidden" id="journalDesc"></div>
         <button class="btn-outline copy-btn" onclick="copyJournal()">📋 Copy to Clipboard</button>
+
+        <!-- D-ID Video Generation -->
+        <div class="video-gen-section">
+          <div class="video-gen-header">
+            <span class="video-gen-title">🎬 Generate AI Avatar Video</span>
+            <span class="video-gen-sub">D-ID · ElevenLabs voice · your avatar</span>
+          </div>
+          <div class="video-gen-controls">
+            <button class="btn-video" id="genVideoBtn" onclick="generateVideo()">
+              🎬 Generate Video
+            </button>
+            <span class="video-status" id="videoStatus"></span>
+          </div>
+          <div class="video-truncate-warn hidden" id="videoTruncateWarn">
+            ⚠️ Script was trimmed to 4 500 characters for D-ID. The video covers the opening section.
+          </div>
+          <div class="video-output hidden" id="videoOutput"></div>
+        </div>
       </div>
     </div>
   </section>
