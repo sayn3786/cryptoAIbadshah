@@ -14,7 +14,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from cvd_sources import fetch_cvd_from_source
-from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes
+from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
 from signals import generate_signal
@@ -122,6 +122,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     market_cap    = client.get_market_cap(bs)
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
     fvgs = detect_fvg(spot)
+    engulfing = detect_engulfing(spot) if timeframe in ("1W", "2W", "3W", "1M") else []
 
     # Elliott Wave pivots
     ph, pl = find_pivots(spot, window=2)
@@ -159,6 +160,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "open_interest": oi,
         "liquidations": liq,
         "fvgs":         fvgs[:15],
+        "engulfing":    engulfing,
         "flags":        flags,
         "elliott_wave": elliott,
         "market_cap":        market_cap,

@@ -145,6 +145,59 @@ def find_volume_spikes(candles: List[Dict]) -> Dict:
     }
 
 
+def detect_engulfing(candles: List[Dict], lookback: int = 4) -> List[Dict]:
+    """Detect confirmed bullish/bearish engulfing patterns.
+
+    Only checks closed candles — candles[-1] (still forming) is excluded.
+    """
+    patterns: List[Dict] = []
+    # Exclude the last (potentially forming) candle
+    closed = candles[:-1]
+    if len(closed) < 2:
+        return patterns
+
+    start = max(1, len(closed) - lookback)
+    for i in range(start, len(closed)):
+        prev = closed[i - 1]
+        curr = closed[i]
+
+        prev_body = abs(prev["close"] - prev["open"])
+        curr_body = abs(curr["close"] - curr["open"])
+        if prev_body < 1e-9 or curr_body < 1e-9:
+            continue
+
+        candles_ago = len(closed) - i  # 1 = most recent confirmed candle
+
+        base = {
+            "timestamp":   curr["timestamp"],
+            "confirmed":   True,
+            "candles_ago": candles_ago,
+            "body_ratio":  round(curr_body / prev_body, 2),
+            "engulf_open": round(curr["open"],  8),
+            "engulf_close": round(curr["close"], 8),
+            "prev_open":   round(prev["open"],  8),
+            "prev_close":  round(prev["close"], 8),
+        }
+
+        # Bullish engulfing: prev bearish, curr bullish, body engulfs prev body
+        if (prev["close"] < prev["open"]
+                and curr["close"] > curr["open"]
+                and curr["open"]  <= prev["close"]
+                and curr["close"] >= prev["open"]
+                and curr_body > prev_body):
+            patterns.append({**base, "type": "bullish_engulfing", "direction": "bullish"})
+
+        # Bearish engulfing: prev bullish, curr bearish, body engulfs prev body
+        elif (prev["close"] > prev["open"]
+                and curr["close"] < curr["open"]
+                and curr["open"]  >= prev["close"]
+                and curr["close"] <= prev["open"]
+                and curr_body > prev_body):
+            patterns.append({**base, "type": "bearish_engulfing", "direction": "bearish"})
+
+    return patterns
+
+
 def find_pivots(
     candles: List[Dict], window: int = 3
 ) -> Tuple[List[Dict], List[Dict]]:

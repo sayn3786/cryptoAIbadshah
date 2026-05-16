@@ -317,6 +317,31 @@ a:hover { color: var(--gold2); }
 .flag-target { font-size: .72rem; font-family: var(--mono); }
 .flag-target span { color: var(--gold); font-weight: 600; }
 
+/* ─── Engulfing / Candlestick Patterns card ──────────────────────────────────── */
+.engulf-list { display: flex; flex-direction: column; gap: 8px; }
+.engulf-item {
+  background: var(--bg2); border-radius: 8px; padding: 10px 14px;
+  border-left: 3px solid transparent;
+}
+.engulf-item.bull { border-left-color: var(--bull); }
+.engulf-item.bear { border-left-color: var(--bear); }
+.engulf-item.engulf-fresh { box-shadow: 0 0 0 1px rgba(245,158,11,.35); }
+.engulf-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; flex-wrap: wrap; }
+.engulf-name { font-weight: 700; font-size: .85rem; font-family: var(--mono); }
+.engulf-badge {
+  font-size: .66rem; font-weight: 700; padding: 1px 7px; border-radius: 100px;
+  background: rgba(99,102,241,.15); color: var(--muted2);
+}
+.engulf-badge.engulf-new {
+  background: rgba(245,158,11,.18); color: var(--gold);
+}
+.engulf-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 5px; }
+.engulf-stat { font-size: .7rem; color: var(--muted2); font-family: var(--mono); }
+.engulf-stat span { color: var(--text); font-weight: 600; }
+.engulf-note { font-size: .74rem; font-style: italic; margin-top: 2px; }
+.engulf-note.bull { color: var(--bull); }
+.engulf-note.bear { color: var(--bear); }
+
 /* ─── Trade Management card ──────────────────────────────────────────────────── */
 .row-trade-mgmt { margin-bottom: 0; }
 .trade-mgmt-card { padding: 16px 20px; }

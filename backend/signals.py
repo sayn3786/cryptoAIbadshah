@@ -126,6 +126,26 @@ def generate_signal(analysis: Dict) -> Dict:
                 f"({f['pole_pct']}% pole, target ${f['target']:,.4f})"
             )
 
+    # ── Engulfing Patterns ────────────────────────────────────────────────────
+    engulfing = analysis.get("engulfing") or []
+    for e in engulfing:
+        if not e.get("confirmed"):
+            continue
+        ago = e.get("candles_ago", 99)
+        # Only score if within last 2 confirmed candles; most recent gets higher weight
+        if ago > 2:
+            continue
+        pts = 25 if ago == 1 else 15
+        ratio = e.get("body_ratio", 1.0)
+        label = f"{'Bearish' if e['direction'] == 'bearish' else 'Bullish'} engulfing confirmed " \
+                f"({ago} candle ago, {ratio}× body) — high-TF reversal signal"
+        if e["direction"] == "bullish":
+            score += pts
+            bull_reasons.append(label)
+        else:
+            score -= pts
+            bear_reasons.append(label)
+
     # ── Elliott Wave ──────────────────────────────────────────────────────────
     wave_bias = elliott.get("bias", "neutral")
     wave_label = elliott.get("wave_count", "")

@@ -167,6 +167,7 @@ function renderAll(a) {
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd);
   renderFVGTable(a.fvgs);
   renderFlags(a.flags);
+  renderEngulfing(a.engulfing, a.timeframe);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
   renderConfluence(a.signal);
@@ -607,6 +608,57 @@ function renderFlags(flags) {
       </div>
       <div class="flag-target">Target: <span>$${p(f.target)}</span>
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ─── Engulfing Patterns ──────────────────────────────────────────────────── */
+function renderEngulfing(patterns, timeframe) {
+  const section = document.getElementById('engulfingSection');
+  const el      = document.getElementById('engulfList');
+  const badge   = document.getElementById('engulfCount');
+  const htfTFs  = ['1W', '2W', '3W', '1M'];
+
+  // Only show the section on high timeframes
+  if (!htfTFs.includes(timeframe)) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  if (!patterns?.length) {
+    el.innerHTML = '<p class="empty">No confirmed engulfing patterns in the last 4 candles</p>';
+    badge.textContent = '0';
+    return;
+  }
+
+  badge.textContent = patterns.length;
+  const fmt = v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+  el.innerHTML = patterns.map(p => {
+    const isBull  = p.direction === 'bullish';
+    const cls     = isBull ? 'bull' : 'bear';
+    const icon    = isBull ? '▲' : '▼';
+    const label   = isBull ? 'Bullish Engulfing' : 'Bearish Engulfing';
+    const agoText = p.candles_ago === 1 ? 'Most recent candle' : `${p.candles_ago} candles ago`;
+    const fresh   = p.candles_ago <= 1;
+    return `<div class="engulf-item ${cls}${fresh ? ' engulf-fresh' : ''}">
+      <div class="engulf-top">
+        <span class="engulf-name ${cls}">${icon} ${label}</span>
+        <span class="engulf-badge">✓ Confirmed</span>
+        ${fresh ? '<span class="engulf-badge engulf-new">Latest</span>' : ''}
+      </div>
+      <div class="engulf-stats">
+        <span class="engulf-stat">Prev candle <span>${fmt(p.prev_open)} → ${fmt(p.prev_close)}</span></span>
+        <span class="engulf-stat">Engulf candle <span>${fmt(p.engulf_open)} → ${fmt(p.engulf_close)}</span></span>
+        <span class="engulf-stat">Body ratio <span>${p.body_ratio}×</span></span>
+        <span class="engulf-stat">When <span>${agoText}</span></span>
+      </div>
+      <div class="engulf-note ${cls}">
+        ${isBull
+          ? `Bearish candle fully engulfed — potential reversal to the upside`
+          : `Bullish candle fully engulfed — potential reversal to the downside`}
       </div>
     </div>`;
   }).join('');
