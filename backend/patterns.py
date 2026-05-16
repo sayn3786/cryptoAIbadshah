@@ -108,26 +108,33 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
 
 def pick_dominant_flags(all_flags: List[Dict]) -> List[Dict]:
     """
-    From multi-timeframe flags, pick the dominant direction at the highest
-    tf_weight tier, then return all flags sorted by (tf_weight × strength).
+    From multi-timeframe flags, keep only the STRONGEST flag per
+    (direction × timeframe) pair, pick the dominant direction at the highest
+    tf_weight tier, then return sorted by (tf_weight × strength).
     """
     if not all_flags:
         return []
 
-    # Find the highest tf tier present
-    max_weight = max(f["tf_weight"] for f in all_flags)
-    top_tier   = [f for f in all_flags if f["tf_weight"] == max_weight]
+    # ── Deduplicate: keep strongest per (direction, timeframe) ───────────────
+    best: Dict[tuple, Dict] = {}
+    for f in all_flags:
+        key = (f["direction"], f["timeframe"])
+        if key not in best or f["strength"] > best[key]["strength"]:
+            best[key] = f
+    deduped = list(best.values())
 
-    # Dominant direction at top tier
+    # ── Dominant direction at the highest tf_weight tier ─────────────────────
+    max_weight = max(f["tf_weight"] for f in deduped)
+    top_tier   = [f for f in deduped if f["tf_weight"] == max_weight]
+
     bull_score = sum(f["strength"] for f in top_tier if f["direction"] == "bullish")
     bear_score = sum(f["strength"] for f in top_tier if f["direction"] == "bearish")
     dominant   = "bullish" if bull_score >= bear_score else "bearish"
 
-    # Tag dominance, then sort globally
-    for f in all_flags:
+    for f in deduped:
         f["dominant"] = (f["tf_weight"] == max_weight and f["direction"] == dominant)
 
-    return sorted(all_flags, key=lambda f: f["tf_weight"] * f["strength"], reverse=True)
+    return sorted(deduped, key=lambda f: f["tf_weight"] * f["strength"], reverse=True)
 
 
 # ── Elliott Wave (unchanged) ───────────────────────────────────────────────────

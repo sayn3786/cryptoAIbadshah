@@ -108,21 +108,29 @@ def generate_signal(analysis: Dict) -> Dict:
             f"{len(above)} bearish FVG(s) as resistance (nearest: ${above[0]['midpoint']:,.4f})"
         )
 
-    # ── Flag Patterns ─────────────────────────────────────────────────────────
+    # ── Flag Patterns — one strongest per direction ───────────────────────────
+    # flags are already deduplicated per (direction × timeframe) by pick_dominant_flags;
+    # here we further limit to the single strongest bull and single strongest bear
+    # so the confluence list stays concise.
+    scored_dirs: set = set()
     for f in flags:
         if not f.get("is_active"):
             continue
+        d = f["direction"]
+        if d in scored_dirs:
+            continue          # already scored a flag for this direction
+        scored_dirs.add(d)
         bonus = 20 if f.get("dominant") else 10
-        if f["direction"] == "bullish":
+        if d == "bullish":
             score += bonus
             bull_reasons.append(
-                f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag active on {f['timeframe']} "
+                f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag on {f['timeframe']} "
                 f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f})"
             )
         else:
             score -= bonus
             bear_reasons.append(
-                f"{'Dominant b' if f.get('dominant') else 'B'}earish flag active on {f['timeframe']} "
+                f"{'Dominant b' if f.get('dominant') else 'B'}earish flag on {f['timeframe']} "
                 f"({f['pole_pct']}% pole, target ${f['target']:,.4f})"
             )
 
