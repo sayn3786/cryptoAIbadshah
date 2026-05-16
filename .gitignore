@@ -26,3 +26,7 @@ dist-ssr
 
 backend/__pycache__/
 .env
+
+# Capacitor / Android build artifacts
+android/
+ios/

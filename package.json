@@ -1,0 +1,23 @@
+{
+  "name": "cryptoaibadshah",
+  "version": "1.0.0",
+  "description": "Trading Consultant",
+  "main": "index.js",
+  "scripts": {
+    "sync":         "npx cap sync android",
+    "open:android": "npx cap open android",
+    "build:android":"npx cap sync android && npx cap build android"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:44077/git/sayn3786/cryptoAIbadshah"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4"
+  }
+}
