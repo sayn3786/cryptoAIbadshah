@@ -631,7 +631,32 @@ function saveTrades(trades) {
 function logTrade() {
   const a = S.analysis;
   if (!a?.signal || a.signal.direction === 'NEUTRAL' || !a.signal.entry) return;
-  const sig = a.signal;
+  const sig    = a.signal;
+  const tf     = a.timeframe;
+  const isLong = sig.direction === 'LONG';
+  const rule   = TF_CLOSE_RULES[tf] || TF_CLOSE_RULES['1W'];
+  const fp     = v => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+
+  // Active flag matching the signal direction — same logic as renderTradeManagement
+  const matchFlag = (a.flags || []).find(f =>
+    f.is_active && f.direction === (isLong ? 'bullish' : 'bearish')
+  );
+  const triggerPrice = isLong
+    ? (matchFlag ? matchFlag.flag_low  : sig.sl)
+    : (matchFlag ? matchFlag.flag_high : sig.sl);
+
+  const exit_rules = {
+    rule1: `Hit TP1 → close 50%, ${rule.be1} at ${fp(sig.entry)}`,
+    rule2: `Hit TP2 → close 30%, trail remaining SL ${isLong ? 'below each new higher' : 'above each new lower'} ${rule.trail} ${isLong ? 'low' : 'high'}`,
+    rule3: `${rule.candle} closes ${isLong ? 'below' : 'above'} ${fp(triggerPrice)}${matchFlag ? ' (back inside flag)' : ' (stop loss)'} → full exit`,
+    rule4: matchFlag
+      ? `Flag ${isLong ? 'breakout' : 'breakdown'} fails after ${matchFlag.consolidation_bars + 3}+ ${tf} bars → re-evaluate, reduce size by 50%`
+      : `${rule.noFollow} with no follow-through → re-evaluate, reduce size by 50%`,
+    timing: `Review position ${rule.check} — only act on closed ${rule.candle}s`,
+    hold:   `Expected hold: ${rule.hold}`,
+    reminder: `Never close mid-candle on wicks — wait for the ${rule.candle} to fully close`,
+  };
+
   const trade = {
     id: `${a.symbol}-${a.timeframe}-${Date.now()}`,
     timestamp: Date.now(),
@@ -645,8 +670,9 @@ function logTrade() {
     tp3:    sig.tp_targets?.[2] ?? null,
     rr:     sig.rr_ratio,
     strength:     sig.strength,
-    bull_reasons: sig.bullish_reasons  || [],
-    bear_reasons: sig.bearish_reasons  || [],
+    bull_reasons: sig.bullish_reasons || [],
+    bear_reasons: sig.bearish_reasons || [],
+    exit_rules,
     status:         'open',
     exit_price:     null,
     exit_timestamp: null,
@@ -776,7 +802,21 @@ function renderMyTrades() {
       </div>
       <div class="tc-levels">${tpRows}</div>
       ${t.rr ? `<div class="tc-rr">R/R at entry: <strong>${t.rr}:1</strong></div>` : ''}
-      ${reasons ? `<details class="tc-context"><summary>Original Signal Context</summary><ul class="tc-reasons">${reasons}</ul></details>` : ''}
+      ${reasons ? `<details class="tc-context"><summary>Signal Context</summary><ul class="tc-reasons">${reasons}</ul></details>` : ''}
+      ${t.exit_rules ? `<details class="tc-context">
+        <summary>Exit Rules (at entry)</summary>
+        <ol class="tc-exit-rules">
+          <li>${t.exit_rules.rule1}</li>
+          <li>${t.exit_rules.rule2}</li>
+          <li>${t.exit_rules.rule3}</li>
+          <li>${t.exit_rules.rule4}</li>
+        </ol>
+        <div class="tc-exit-timing">
+          <span>⏱ ${t.exit_rules.timing}</span>
+          <span>📅 ${t.exit_rules.hold}</span>
+          <em>${t.exit_rules.reminder}</em>
+        </div>
+      </details>` : ''}
       <div id="cf-${t.id}" class="tc-close-form" style="display:none">
         <input id="cp-${t.id}" class="tc-price-input" type="number" placeholder="Exit price" step="any" />
         <button class="btn-tc btn-tc-confirm" onclick="confirmClose('${t.id}')">Confirm Close</button>

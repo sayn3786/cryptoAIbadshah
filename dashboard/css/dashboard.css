@@ -376,6 +376,12 @@ a:hover { color: var(--gold2); }
   background:var(--bg3); color:var(--text); width:140px; font-family:var(--mono);
 }
 .tc-price-input:focus { outline:1px solid var(--bull); border-color:var(--bull); }
+.tc-exit-rules { margin:6px 0 6px 16px; padding:0; display:flex; flex-direction:column; gap:4px; }
+.tc-exit-rules li { font-size:.72rem; color:var(--text); line-height:1.5; }
+.tc-exit-timing { display:flex; flex-direction:column; gap:3px; margin-top:6px; padding-top:6px;
+                  border-top:1px solid var(--border); }
+.tc-exit-timing span { font-size:.72rem; color:var(--muted2); }
+.tc-exit-timing em  { font-size:.68rem; color:var(--muted2); font-style:italic; margin-top:2px; }
 
 /* Log Trade button in Trade Management header */
 .btn-log-trade {
