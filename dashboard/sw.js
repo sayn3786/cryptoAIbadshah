@@ -1,31 +1,28 @@
 /* CryptoBadshah — Service Worker
    Strategy:
-   - App shell (HTML/CSS/JS) → Cache-first, update in background
-   - API calls (/api/*)       → Network-first, no cache
-   - Google Fonts             → Cache-first (stale-while-revalidate)
+   - HTML / CSS / JS   → Network-first (always fresh), cache as offline fallback
+   - API calls (/api/) → Network-only, never cached (live market data)
+   - Icons / manifest  → Cache-first (static assets, rarely change)
+   - Google Fonts      → Cache-first
 */
 
-const CACHE     = 'cryptobadshah-v2';
-const SHELL     = [
-  '/dashboard/',
-  '/dashboard/index.html',
-  '/dashboard/css/dashboard.css',
-  '/dashboard/js/dashboard.js',
+const CACHE  = 'cryptobadshah-v3';
+const STATIC = [
   '/dashboard/manifest.json',
   '/dashboard/icons/icon-192.png',
   '/dashboard/icons/icon-512.png',
 ];
 
-// ── Install: pre-cache the app shell ─────────────────────────────────────────
+// ── Install: pre-cache only static assets that never change ──────────────────
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => c.addAll(SHELL))
+      .then(c => c.addAll(STATIC))
       .then(() => self.skipWaiting())
   );
 });
 
-// ── Activate: remove stale caches ────────────────────────────────────────────
+// ── Activate: remove old caches ──────────────────────────────────────────────
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
@@ -34,11 +31,11 @@ self.addEventListener('activate', e => {
   );
 });
 
-// ── Fetch: routing strategy ───────────────────────────────────────────────────
+// ── Fetch ─────────────────────────────────────────────────────────────────────
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  // Always go to network for API calls — never serve stale market data
+  // API — always network, no cache
   if (url.pathname.startsWith('/api/')) {
     e.respondWith(fetch(e.request).catch(() =>
       new Response(JSON.stringify({ error: 'Offline — no cached data available' }),
@@ -47,8 +44,8 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Google Fonts — cache-first
-  if (url.hostname.includes('fonts.g')) {
+  // Google Fonts + static icons/manifest — cache-first
+  if (url.hostname.includes('fonts.g') || STATIC.some(p => url.pathname === p)) {
     e.respondWith(
       caches.match(e.request).then(cached =>
         cached || fetch(e.request).then(res => {
@@ -61,17 +58,14 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // App shell — cache-first, refresh in background
+  // HTML / CSS / JS — network-first, fall back to cache when offline
   e.respondWith(
-    caches.match(e.request).then(cached => {
-      const fresh = fetch(e.request).then(res => {
-        if (res.ok) {
-          const clone = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || fresh;
-    })
+    fetch(e.request).then(res => {
+      if (res.ok) {
+        const clone = res.clone();
+        caches.open(CACHE).then(c => c.put(e.request, clone));
+      }
+      return res;
+    }).catch(() => caches.match(e.request))
   );
 });
