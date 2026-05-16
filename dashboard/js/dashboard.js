@@ -433,14 +433,20 @@ function renderFVGTable(fvgs) {
 
 /* ─── Trade Management ────────────────────────────────────────────────────── */
 const TF_CLOSE_RULES = {
-  '4H':  { candle: '4H candle',     hold: '1 – 5 days',    check: 'every 4 h' },
-  '8H':  { candle: '8H candle',     hold: '3 – 10 days',   check: 'every 8 h' },
-  '12H': { candle: '12H candle',    hold: '5 – 14 days',   check: 'twice daily' },
-  '1D':  { candle: 'daily candle',  hold: '1 – 4 weeks',   check: 'daily at close' },
-  '1W':  { candle: 'weekly candle', hold: '1 – 3 months',  check: 'weekly at close' },
-  '2W':  { candle: '2W candle',     hold: '2 – 6 months',  check: 'every 2 weeks' },
-  '3W':  { candle: '3W candle',     hold: '2 – 6 months',  check: 'every 3 weeks' },
-  '1M':  { candle: 'monthly candle',hold: '3 – 12 months', check: 'monthly at close' },
+  // candle  : close-trigger candle label
+  // hold    : expected trade duration
+  // check   : how often to review
+  // trail   : swing unit for trailing SL after TP2
+  // noFollow: how long to wait before calling the move dead
+  // be1     : breakeven note after TP1
+  '4H':  { candle: '4H candle',      hold: '1 – 5 days',     check: 'every 4 h',        trail: '4H swing',      noFollow: '6+ 4H candles (~1 day)',          be1: 'move SL to entry — short TF; protect quickly' },
+  '8H':  { candle: '8H candle',      hold: '3 – 10 days',    check: 'every 8 h',        trail: '8H swing',      noFollow: '4+ 8H candles (~1.5 days)',        be1: 'move SL to entry (breakeven)' },
+  '12H': { candle: '12H candle',     hold: '5 – 14 days',    check: 'twice daily',      trail: '12H swing',     noFollow: '3+ 12H candles (~1.5 days)',       be1: 'move SL to entry (breakeven)' },
+  '1D':  { candle: 'daily candle',   hold: '1 – 4 weeks',    check: 'daily at close',   trail: 'daily candle',  noFollow: '3+ daily candles (~3 days)',        be1: 'move SL to entry (breakeven)' },
+  '1W':  { candle: 'weekly candle',  hold: '1 – 3 months',   check: 'weekly at close',  trail: 'weekly candle', noFollow: '2+ weekly candles (~2 weeks)',      be1: 'move SL to entry (breakeven)' },
+  '2W':  { candle: '2W candle',      hold: '2 – 6 months',   check: 'every 2 weeks',    trail: '2W candle',     noFollow: '2+ 2W candles (~1 month)',          be1: 'move SL to entry — wide TF; be patient' },
+  '3W':  { candle: '3W candle',      hold: '2 – 6 months',   check: 'every 3 weeks',    trail: '3W candle',     noFollow: '2+ 3W candles (~6 weeks)',          be1: 'move SL to entry — wide TF; be patient' },
+  '1M':  { candle: 'monthly candle', hold: '3 – 12 months',  check: 'monthly at close', trail: 'monthly candle',noFollow: '2+ monthly candles (~2 months)',    be1: 'move SL to entry — macro trade; hold conviction' },
 };
 
 function renderTradeManagement(a) {
@@ -532,25 +538,27 @@ function renderTradeManagement(a) {
       <div class="tm-rules">
         <div class="tm-rule active">
           <span class="tm-rule-icon">1.</span>
-          <span>Hit TP1 → close 50%, move SL to <strong>${p(entry)}</strong> (breakeven)</span>
+          <span>Hit TP1 → close 50%, ${rule.be1} at <strong>${p(entry)}</strong></span>
         </div>
         <div class="tm-rule active">
           <span class="tm-rule-icon">2.</span>
-          <span>Hit TP2 → close 30%, trail remaining SL below each new ${isLong ? 'higher low' : 'lower high'}</span>
+          <span>Hit TP2 → close 30%, trail remaining SL ${isLong ? 'below each new higher' : 'above each new lower'} <strong>${rule.trail} ${isLong ? 'low' : 'high'}</strong></span>
         </div>
         <div class="tm-rule active">
           <span class="tm-rule-icon">3.</span>
-          <span>${rule.candle} closes ${isLong ? 'below' : 'above'} <strong>${p(triggerPrice)}</strong>${matchFlag ? ' (back inside flag)' : ''} → full exit</span>
+          <span><strong>${rule.candle}</strong> closes ${isLong ? 'below' : 'above'} <strong>${p(triggerPrice)}</strong>${matchFlag ? ' (back inside flag)' : ' (stop loss)'} → full exit</span>
         </div>
         <div class="tm-rule active">
           <span class="tm-rule-icon">4.</span>
-          <span>${matchFlag ? `Flag ${isLong ? 'breakout' : 'breakdown'} fails after ${matchFlag.consolidation_bars + 3}+ bars` : '3+ candles with no follow-through'} → re-evaluate, reduce size</span>
+          <span>${matchFlag
+            ? `Flag ${isLong ? 'breakout' : 'breakdown'} fails after ${matchFlag.consolidation_bars + 3}+ ${tf} bars`
+            : `${rule.noFollow} with no follow-through`} → re-evaluate, reduce size by 50%</span>
         </div>
         <div class="tm-divider"></div>
         <div class="tm-section-title" style="margin-top:4px">Timing</div>
         <div class="tm-rule active">
           <span class="tm-rule-icon">⏱</span>
-          <span>Check signals <strong>${rule.check}</strong></span>
+          <span>Review position <strong>${rule.check}</strong> — only act on closed ${rule.candle}s</span>
         </div>
         <div class="tm-rule active">
           <span class="tm-rule-icon">📅</span>
@@ -558,7 +566,7 @@ function renderTradeManagement(a) {
         </div>
         <div class="tm-rule" style="margin-top:6px; font-size:.68rem; color:var(--muted); font-style:italic">
           <span class="tm-rule-icon"></span>
-          <span>Never close mid-candle on wicks — wait for the ${rule.candle} to fully close</span>
+          <span>Never close mid-candle on wicks — wait for the ${rule.candle} to fully close before acting</span>
         </div>
       </div>
     </div>`;
