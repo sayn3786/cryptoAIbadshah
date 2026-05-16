@@ -534,7 +534,7 @@ function renderTradeManagement(a) {
 
   const rulesHTML = `
     <div class="tm-col">
-      <div class="tm-section-title">Exit Rules</div>
+      <div class="tm-section-title">Exit Rules <span style="color:var(--muted);font-weight:400;font-size:.75rem">(${tf})</span></div>
       <div class="tm-rules">
         <div class="tm-rule active">
           <span class="tm-rule-icon">1.</span>
