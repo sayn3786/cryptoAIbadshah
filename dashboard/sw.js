@@ -5,7 +5,7 @@
    - Google Fonts             → Cache-first (stale-while-revalidate)
 */
 
-const CACHE     = 'cryptobadshah-v1';
+const CACHE     = 'cryptobadshah-v2';
 const SHELL     = [
   '/dashboard/',
   '/dashboard/index.html',
