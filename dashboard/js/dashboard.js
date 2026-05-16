@@ -124,6 +124,7 @@ async function loadAnalysis() {
     }
     S.analysis = await res.json();
     renderAll(S.analysis);
+    renderMyTrades();
     document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     console.error('Analysis failed:', e);
@@ -465,6 +466,9 @@ function renderTradeManagement(a) {
   dirEl.className   = 'trade-mgmt-dir ' + dir.toLowerCase();
   tfEl.textContent  = tf;
 
+  const logBtn = document.getElementById('logTradeBtn');
+  if (logBtn) logBtn.style.display = (dir === 'NEUTRAL' || !sig.entry) ? 'none' : '';
+
   if (dir === 'NEUTRAL' || !sig.entry) {
     body.innerHTML = '<p class="empty">No directional signal — wait for confirmation before entering</p>';
     return;
@@ -608,6 +612,175 @@ function renderFlags(flags) {
       </div>
       <div class="flag-target">Target: <span>$${p(f.target)}</span>
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ─── My Trades ───────────────────────────────────────────────────────────── */
+const TRADES_KEY = 'cryptobadshah_trades';
+
+function getTrades() {
+  try { return JSON.parse(localStorage.getItem(TRADES_KEY) || '[]'); }
+  catch { return []; }
+}
+function saveTrades(trades) {
+  localStorage.setItem(TRADES_KEY, JSON.stringify(trades));
+}
+
+function logTrade() {
+  const a = S.analysis;
+  if (!a?.signal || a.signal.direction === 'NEUTRAL' || !a.signal.entry) return;
+  const sig = a.signal;
+  const trade = {
+    id: `${a.symbol}-${a.timeframe}-${Date.now()}`,
+    timestamp: Date.now(),
+    symbol: a.symbol,
+    timeframe: a.timeframe,
+    direction: sig.direction,
+    entry:  sig.entry,
+    sl:     sig.sl,
+    tp1:    sig.tp_targets?.[0] ?? null,
+    tp2:    sig.tp_targets?.[1] ?? null,
+    tp3:    sig.tp_targets?.[2] ?? null,
+    rr:     sig.rr_ratio,
+    strength:     sig.strength,
+    bull_reasons: sig.bullish_reasons  || [],
+    bear_reasons: sig.bearish_reasons  || [],
+    status:         'open',
+    exit_price:     null,
+    exit_timestamp: null,
+  };
+  const trades = getTrades();
+  trades.unshift(trade);
+  saveTrades(trades);
+  renderMyTrades();
+  const btn = document.getElementById('logTradeBtn');
+  if (btn) { btn.textContent = '✓ Logged!'; btn.disabled = true;
+    setTimeout(() => { btn.textContent = '📌 Log Trade'; btn.disabled = false; }, 2000); }
+}
+
+function deleteTrade(id) {
+  if (!confirm('Delete this trade log?')) return;
+  saveTrades(getTrades().filter(t => t.id !== id));
+  renderMyTrades();
+}
+
+function clearClosedTrades() {
+  saveTrades(getTrades().filter(t => t.status === 'open'));
+  renderMyTrades();
+}
+
+function showCloseForm(id) {
+  const f = document.getElementById('cf-' + id);
+  if (f) f.style.display = f.style.display === 'none' ? 'flex' : 'none';
+}
+
+function confirmClose(id) {
+  const input = document.getElementById('cp-' + id);
+  const price = parseFloat(input?.value);
+  if (!price || price <= 0) { if (input) input.style.outline = '1px solid var(--bear)'; return; }
+  const trades = getTrades();
+  const t = trades.find(t => t.id === id);
+  if (!t) return;
+  t.status = 'closed';
+  t.exit_price = price;
+  t.exit_timestamp = Date.now();
+  saveTrades(trades);
+  renderMyTrades();
+}
+
+function renderMyTrades() {
+  const el    = document.getElementById('tradesList');
+  const badge = document.getElementById('tradesCount');
+  if (!el) return;
+  const trades = getTrades();
+  badge.textContent = trades.length;
+  if (!trades.length) {
+    el.innerHTML = '<p class="empty">No trades logged yet — load a signal and click 📌 Log Trade in the Trade Management card</p>';
+    return;
+  }
+
+  // Current price for the loaded symbol (for live P&L)
+  const curPrices = {};
+  if (S.analysis?.candles?.length) {
+    const c = S.analysis.candles;
+    curPrices[S.analysis.symbol] = c[c.length - 1].close;
+  }
+
+  const fmt  = v => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+  const fmtPct = (v, ref, isLong) => {
+    if (v == null || ref == null) return '';
+    const pct = isLong ? (v - ref) / ref * 100 : (ref - v) / ref * 100;
+    const cls = pct >= 0 ? 'bull' : 'bear';
+    return `<span class="${cls}" style="font-size:.7rem">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>`;
+  };
+
+  el.innerHTML = trades.map(t => {
+    const isLong  = t.direction === 'LONG';
+    const dCls    = isLong ? 'bull' : 'bear';
+    const cur     = curPrices[t.symbol];
+    const days    = Math.floor((Date.now() - t.timestamp) / 86400000);
+    const dated   = new Date(t.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+
+    // Live P&L
+    let pnlHtml = '';
+    if (t.status === 'open' && cur) {
+      const pnl = isLong ? (cur - t.entry) / t.entry * 100 : (t.entry - cur) / t.entry * 100;
+      const pc  = pnl >= 0 ? 'bull' : 'bear';
+      pnlHtml = `<span class="trade-pnl ${pc}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% live</span>`;
+    } else if (t.status === 'closed' && t.exit_price) {
+      const pnl = isLong ? (t.exit_price - t.entry) / t.entry * 100 : (t.entry - t.exit_price) / t.entry * 100;
+      const pc  = pnl >= 0 ? 'bull' : 'bear';
+      pnlHtml = `<span class="trade-pnl ${pc}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% (exit ${fmt(t.exit_price)})</span>`;
+    } else if (t.status === 'open') {
+      pnlHtml = `<span class="trade-pnl muted">Load ${t.symbol} to see P&L</span>`;
+    }
+
+    // TP progress
+    const tpRows = [
+      { label:'Entry', val:t.entry,  cls:'' },
+      { label:'SL',    val:t.sl,     cls:'bear' },
+      { label:'TP1',   val:t.tp1,    cls:'bull' },
+      { label:'TP2',   val:t.tp2,    cls:'bull' },
+      { label:'TP3',   val:t.tp3,    cls:'bull' },
+    ].map(r => `<div class="tl-item">
+        <span class="tl-label">${r.label}</span>
+        <span class="tl-val ${r.cls}">${fmt(r.val)} ${r.cls ? fmtPct(r.val, t.entry, isLong) : ''}</span>
+      </div>`).join('');
+
+    // Original signal reasons
+    const reasons = [
+      ...(t.bull_reasons || []).map(r => `<li class="bull">▲ ${r}</li>`),
+      ...(t.bear_reasons || []).map(r => `<li class="bear">▼ ${r}</li>`),
+    ].join('');
+
+    return `<div class="trade-card ${dCls}" id="trade-${t.id}">
+      <div class="tc-header">
+        <div class="tc-title">
+          <span class="tc-symbol">${t.symbol}</span>
+          <span class="tc-tf">${t.timeframe}</span>
+          <span class="tc-dir ${dCls}">${t.direction}</span>
+          <span class="tc-status ${t.status}">${t.status}</span>
+          <span class="tc-strength">Signal ${t.strength}/100</span>
+        </div>
+        <div class="tc-actions">
+          ${t.status === 'open' ? `<button class="btn-tc btn-tc-close" onclick="showCloseForm('${t.id}')">Close Trade</button>` : ''}
+          <button class="btn-tc btn-tc-del" onclick="deleteTrade('${t.id}')">✕</button>
+        </div>
+      </div>
+      <div class="tc-meta">
+        <span>📅 ${dated}</span>
+        <span>⏱ ${days} day${days !== 1 ? 's' : ''} ${t.status === 'open' ? 'open' : 'held'}</span>
+        ${pnlHtml}
+      </div>
+      <div class="tc-levels">${tpRows}</div>
+      ${t.rr ? `<div class="tc-rr">R/R at entry: <strong>${t.rr}:1</strong></div>` : ''}
+      ${reasons ? `<details class="tc-context"><summary>Original Signal Context</summary><ul class="tc-reasons">${reasons}</ul></details>` : ''}
+      <div id="cf-${t.id}" class="tc-close-form" style="display:none">
+        <input id="cp-${t.id}" class="tc-price-input" type="number" placeholder="Exit price" step="any" />
+        <button class="btn-tc btn-tc-confirm" onclick="confirmClose('${t.id}')">Confirm Close</button>
+        <button class="btn-tc" onclick="showCloseForm('${t.id}')">Cancel</button>
       </div>
     </div>`;
   }).join('');
@@ -931,6 +1104,7 @@ function renderHolidayBanner(holidays) {
 document.addEventListener('DOMContentLoaded', () => {
   wireSelectors();
   initCharts();
+  renderMyTrades();
   loadTicker();
   loadAnalysis();
 

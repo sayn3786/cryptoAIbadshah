@@ -270,6 +270,7 @@
         <h3 class="card-title">Trade Management</h3>
         <span class="trade-mgmt-dir" id="tradeMgmtDir"></span>
         <span class="trade-mgmt-tf"  id="tradeMgmtTf"></span>
+        <button class="btn-log-trade" id="logTradeBtn" onclick="logTrade()" style="display:none">📌 Log Trade</button>
       </div>
       <div id="tradeMgmtBody" class="trade-mgmt-body">
         <p class="empty">Load an asset to see the trade plan</p>
@@ -318,6 +319,19 @@
   </section>
 
   <!-- Row 6: Journal Generator -->
+  <!-- Row 7: My Trades -->
+  <section class="row-my-trades">
+    <div class="card my-trades-card">
+      <div class="my-trades-header">
+        <h3 class="card-title">📌 My Trades <span class="badge" id="tradesCount">0</span></h3>
+        <button class="btn-outline btn-sm" onclick="clearClosedTrades()" title="Remove all closed trades">Clear Closed</button>
+      </div>
+      <div id="tradesList" class="trades-list">
+        <p class="empty">No trades logged yet — load a signal and click 📌 Log Trade in the Trade Management card</p>
+      </div>
+    </div>
+  </section>
+
   <section class="row-journal">
     <div class="card journal-card">
       <div class="journal-header">

@@ -317,6 +317,76 @@ a:hover { color: var(--gold2); }
 .flag-target { font-size: .72rem; font-family: var(--mono); }
 .flag-target span { color: var(--gold); font-weight: 600; }
 
+/* ─── My Trades ─────────────────────────────────────────────────────────────── */
+.my-trades-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.my-trades-header .card-title { flex:1; }
+.btn-sm { font-size:.72rem; padding:4px 10px; }
+.trades-list { display:flex; flex-direction:column; gap:10px; }
+.trade-card {
+  background:var(--bg2); border-radius:10px; padding:14px 16px;
+  border-left:3px solid transparent;
+}
+.trade-card.bull { border-left-color:var(--bull); }
+.trade-card.bear { border-left-color:var(--bear); }
+.tc-header { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.tc-title  { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.tc-symbol { font-size:.9rem; font-weight:800; font-family:var(--mono); }
+.tc-tf     { font-size:.68rem; font-weight:700; padding:1px 6px; border-radius:100px;
+             background:rgba(99,102,241,.15); color:var(--neutral); }
+.tc-dir    { font-size:.68rem; font-weight:800; padding:1px 8px; border-radius:100px; text-transform:uppercase; }
+.tc-dir.bull { background:rgba(16,185,129,.15); color:var(--bull); }
+.tc-dir.bear { background:rgba(239,68,68,.15);  color:var(--bear); }
+.tc-status { font-size:.66rem; font-weight:700; padding:1px 6px; border-radius:100px;
+             text-transform:uppercase; letter-spacing:.4px; }
+.tc-status.open   { background:rgba(245,158,11,.15); color:var(--gold); }
+.tc-status.closed { background:rgba(99,102,241,.12); color:var(--muted2); }
+.tc-strength { font-size:.68rem; color:var(--muted2); font-family:var(--mono); }
+.tc-actions { display:flex; gap:6px; align-items:center; }
+.btn-tc { font-size:.72rem; padding:3px 10px; border-radius:6px; border:1px solid var(--border);
+          background:transparent; color:var(--muted2); cursor:pointer; transition:background .15s; }
+.btn-tc:hover { background:var(--bg3); color:var(--text); }
+.btn-tc-close { border-color:rgba(245,158,11,.4); color:var(--gold); }
+.btn-tc-close:hover { background:rgba(245,158,11,.1); }
+.btn-tc-confirm { border-color:rgba(16,185,129,.4); color:var(--bull); }
+.btn-tc-confirm:hover { background:rgba(16,185,129,.1); }
+.btn-tc-del { border-color:rgba(239,68,68,.3); color:var(--bear); font-size:.8rem; padding:3px 8px; }
+.btn-tc-del:hover { background:rgba(239,68,68,.1); }
+.tc-meta { display:flex; align-items:center; gap:12px; font-size:.72rem; color:var(--muted2);
+           margin-bottom:10px; flex-wrap:wrap; }
+.trade-pnl { font-weight:700; font-size:.78rem; font-family:var(--mono); }
+.trade-pnl.muted { color:var(--muted2); font-weight:400; }
+.tc-levels { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+.tl-item   { display:flex; flex-direction:column; gap:2px; min-width:64px; }
+.tl-label  { font-size:.62rem; text-transform:uppercase; letter-spacing:.5px; color:var(--muted2); }
+.tl-val    { font-size:.78rem; font-family:var(--mono); font-weight:600; color:var(--text); }
+.tl-val.bull { color:var(--bull); }
+.tl-val.bear { color:var(--bear); }
+.tc-rr { font-size:.72rem; color:var(--muted2); margin-bottom:8px; }
+.tc-rr strong { color:var(--text); }
+.tc-context { margin-top:8px; }
+.tc-context summary { font-size:.72rem; color:var(--muted2); cursor:pointer; user-select:none; }
+.tc-context summary:hover { color:var(--text); }
+.tc-reasons { list-style:none; padding:6px 0 0; margin:0; display:flex; flex-direction:column; gap:3px; }
+.tc-reasons li { font-size:.72rem; color:var(--muted2); }
+.tc-reasons li.bull { color:var(--bull); }
+.tc-reasons li.bear { color:var(--bear); }
+.tc-close-form { display:flex; align-items:center; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.tc-price-input {
+  font-size:.8rem; padding:5px 10px; border-radius:7px; border:1px solid var(--border);
+  background:var(--bg3); color:var(--text); width:140px; font-family:var(--mono);
+}
+.tc-price-input:focus { outline:1px solid var(--bull); border-color:var(--bull); }
+
+/* Log Trade button in Trade Management header */
+.btn-log-trade {
+  font-size:.72rem; padding:4px 12px; border-radius:7px;
+  border:1px solid rgba(245,158,11,.4); background:rgba(245,158,11,.08);
+  color:var(--gold); cursor:pointer; font-weight:600; transition:background .15s;
+  margin-left:auto;
+}
+.btn-log-trade:hover    { background:rgba(245,158,11,.18); }
+.btn-log-trade:disabled { opacity:.5; cursor:default; }
+
 /* ─── Engulfing / Candlestick Patterns card ──────────────────────────────────── */
 .engulf-list { display: flex; flex-direction: column; gap: 8px; }
 .engulf-item {
