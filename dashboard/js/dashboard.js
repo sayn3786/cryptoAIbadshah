@@ -167,6 +167,7 @@ function renderAll(a) {
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd);
   renderFVGTable(a.fvgs);
   renderFlags(a.flags);
+  renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
   renderConfluence(a.signal);
   renderOrderBook(a.order_book);
@@ -428,6 +429,141 @@ function renderFVGTable(fvgs) {
       <td>${status}</td>
     </tr>`;
   }).join('');
+}
+
+/* ─── Trade Management ────────────────────────────────────────────────────── */
+const TF_CLOSE_RULES = {
+  '4H':  { candle: '4H candle',     hold: '1 – 5 days',    check: 'every 4 h' },
+  '8H':  { candle: '8H candle',     hold: '3 – 10 days',   check: 'every 8 h' },
+  '12H': { candle: '12H candle',    hold: '5 – 14 days',   check: 'twice daily' },
+  '1D':  { candle: 'daily candle',  hold: '1 – 4 weeks',   check: 'daily at close' },
+  '1W':  { candle: 'weekly candle', hold: '1 – 3 months',  check: 'weekly at close' },
+  '2W':  { candle: '2W candle',     hold: '2 – 6 months',  check: 'every 2 weeks' },
+  '3W':  { candle: '3W candle',     hold: '2 – 6 months',  check: 'every 3 weeks' },
+  '1M':  { candle: 'monthly candle',hold: '3 – 12 months', check: 'monthly at close' },
+};
+
+function renderTradeManagement(a) {
+  const body   = document.getElementById('tradeMgmtBody');
+  const dirEl  = document.getElementById('tradeMgmtDir');
+  const tfEl   = document.getElementById('tradeMgmtTf');
+  if (!body) return;
+
+  const sig = a.signal || {};
+  const dir = sig.direction || 'NEUTRAL';
+  const tf  = a.timeframe  || '1W';
+  const rule = TF_CLOSE_RULES[tf] || TF_CLOSE_RULES['1W'];
+
+  dirEl.textContent = dir;
+  dirEl.className   = 'trade-mgmt-dir ' + dir.toLowerCase();
+  tfEl.textContent  = tf;
+
+  if (dir === 'NEUTRAL' || !sig.entry) {
+    body.innerHTML = '<p class="empty">No directional signal — wait for confirmation before entering</p>';
+    return;
+  }
+
+  const isLong = dir === 'LONG';
+  const entry  = sig.entry;
+  const sl     = sig.sl;
+  const tps    = sig.tp_targets || [];
+  const rr     = sig.rr_ratio;
+
+  // Best active flag for this direction
+  const matchFlag = (a.flags || []).find(f =>
+    f.is_active && f.direction === (isLong ? 'bullish' : 'bearish')
+  );
+
+  const p  = (v, d = 2) => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: d }) : '—';
+  const pct = (a, b)    => b ? ((a - b) / b * 100).toFixed(1) + '%' : '';
+  const pctHtml = (v, ref, good) => {
+    const s = pct(v, ref);
+    const cls = good ? 'bull' : 'bear';
+    return s ? `<span class="tm-pct ${cls}">${s}</span>` : '';
+  };
+
+  // Close-trigger price: flag_low for long, flag_high for short (or fallback to sl)
+  const triggerPrice = isLong
+    ? (matchFlag ? matchFlag.flag_low  : sl)
+    : (matchFlag ? matchFlag.flag_high : sl);
+
+  const flagTarget = matchFlag ? matchFlag.target : null;
+
+  const levelsHTML = `
+    <div class="tm-col">
+      <div class="tm-section-title">Levels</div>
+      <div class="tm-row">
+        <span class="tm-label">Entry</span>
+        <span class="tm-val">${p(entry)}</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-label">Stop Loss</span>
+        <span class="tm-val bear">${p(sl)} ${pctHtml(sl, entry, false)}</span>
+      </div>
+      <div class="tm-divider"></div>
+      <div class="tm-row">
+        <span class="tm-label">TP 1 <span style="color:var(--muted);font-size:.68rem">— sell 50%</span></span>
+        <span class="tm-val bull">${p(tps[0])} ${pctHtml(tps[0], entry, true)}</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-label">TP 2 <span style="color:var(--muted);font-size:.68rem">— sell 30%</span></span>
+        <span class="tm-val bull">${p(tps[1])} ${pctHtml(tps[1], entry, true)}</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-label">TP 3 <span style="color:var(--muted);font-size:.68rem">— sell 20%</span></span>
+        <span class="tm-val bull">${p(tps[2])} ${pctHtml(tps[2], entry, true)}</span>
+      </div>
+      ${flagTarget ? `
+      <div class="tm-row">
+        <span class="tm-label">Flag Target</span>
+        <span class="tm-val gold">${p(flagTarget)} ${pctHtml(flagTarget, entry, isLong)}</span>
+      </div>` : ''}
+      ${rr ? `
+      <div class="tm-divider"></div>
+      <div class="tm-row">
+        <span class="tm-label">R / R Ratio</span>
+        <span class="tm-val ${rr >= 2 ? 'bull' : rr >= 1.5 ? '' : 'bear'}">${rr} : 1</span>
+      </div>` : ''}
+    </div>`;
+
+  const rulesHTML = `
+    <div class="tm-col">
+      <div class="tm-section-title">Exit Rules</div>
+      <div class="tm-rules">
+        <div class="tm-rule active">
+          <span class="tm-rule-icon">1.</span>
+          <span>Hit TP1 → close 50%, move SL to <strong>${p(entry)}</strong> (breakeven)</span>
+        </div>
+        <div class="tm-rule active">
+          <span class="tm-rule-icon">2.</span>
+          <span>Hit TP2 → close 30%, trail remaining SL below each new ${isLong ? 'higher low' : 'lower high'}</span>
+        </div>
+        <div class="tm-rule active">
+          <span class="tm-rule-icon">3.</span>
+          <span>${rule.candle} closes ${isLong ? 'below' : 'above'} <strong>${p(triggerPrice)}</strong>${matchFlag ? ' (back inside flag)' : ''} → full exit</span>
+        </div>
+        <div class="tm-rule active">
+          <span class="tm-rule-icon">4.</span>
+          <span>${matchFlag ? `Flag ${isLong ? 'breakout' : 'breakdown'} fails after ${matchFlag.consolidation_bars + 3}+ bars` : '3+ candles with no follow-through'} → re-evaluate, reduce size</span>
+        </div>
+        <div class="tm-divider"></div>
+        <div class="tm-section-title" style="margin-top:4px">Timing</div>
+        <div class="tm-rule active">
+          <span class="tm-rule-icon">⏱</span>
+          <span>Check signals <strong>${rule.check}</strong></span>
+        </div>
+        <div class="tm-rule active">
+          <span class="tm-rule-icon">📅</span>
+          <span>Expected hold: <strong>${rule.hold}</strong></span>
+        </div>
+        <div class="tm-rule" style="margin-top:6px; font-size:.68rem; color:var(--muted); font-style:italic">
+          <span class="tm-rule-icon"></span>
+          <span>Never close mid-candle on wicks — wait for the ${rule.candle} to fully close</span>
+        </div>
+      </div>
+    </div>`;
+
+  body.innerHTML = levelsHTML + rulesHTML;
 }
 
 /* ─── Flag Patterns ───────────────────────────────────────────────────────── */

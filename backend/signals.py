@@ -7,14 +7,14 @@ def generate_signal(analysis: Dict) -> Dict:
     bear_reasons: List[str] = []
 
     rsi = analysis.get("rsi")
-    spot_cvd = analysis.get("spot_cvd") or {}
+    spot_cvd    = analysis.get("spot_cvd") or {}
     futures_cvd = analysis.get("futures_cvd") or {}
-    funding = analysis.get("funding_rate") or {}
-    oi = analysis.get("open_interest") or {}
-    fvgs = analysis.get("fvgs") or []
-    harmonics = analysis.get("harmonics") or []
-    elliott = analysis.get("elliott_wave") or {}
-    candles = analysis.get("candles") or []
+    funding     = analysis.get("funding_rate") or {}
+    oi          = analysis.get("open_interest") or {}
+    fvgs        = analysis.get("fvgs") or []
+    flags       = analysis.get("flags") or []
+    elliott     = analysis.get("elliott_wave") or {}
+    candles     = analysis.get("candles") or []
 
     current_price = candles[-1]["close"] if candles else 0.0
 
@@ -108,19 +108,23 @@ def generate_signal(analysis: Dict) -> Dict:
             f"{len(above)} bearish FVG(s) as resistance (nearest: ${above[0]['midpoint']:,.4f})"
         )
 
-    # ── Harmonic Patterns ─────────────────────────────────────────────────────
-    for h in harmonics:
-        if h.get("at_completion"):
-            if h["direction"] == "bullish":
-                score += 22
-                bull_reasons.append(
-                    f"Bullish {h['pattern']} harmonic completing at ${h['D']:,.4f}"
-                )
-            else:
-                score -= 22
-                bear_reasons.append(
-                    f"Bearish {h['pattern']} harmonic completing at ${h['D']:,.4f}"
-                )
+    # ── Flag Patterns ─────────────────────────────────────────────────────────
+    for f in flags:
+        if not f.get("is_active"):
+            continue
+        bonus = 20 if f.get("dominant") else 10
+        if f["direction"] == "bullish":
+            score += bonus
+            bull_reasons.append(
+                f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag active on {f['timeframe']} "
+                f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f})"
+            )
+        else:
+            score -= bonus
+            bear_reasons.append(
+                f"{'Dominant b' if f.get('dominant') else 'B'}earish flag active on {f['timeframe']} "
+                f"({f['pole_pct']}% pole, target ${f['target']:,.4f})"
+            )
 
     # ── Elliott Wave ──────────────────────────────────────────────────────────
     wave_bias = elliott.get("bias", "neutral")
