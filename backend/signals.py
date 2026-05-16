@@ -153,25 +153,37 @@ def generate_signal(analysis: Dict) -> Dict:
     tp_targets: List[float] = []
     rr_ratio = None
 
+    timeframe = analysis.get("timeframe", "1W")
+    # SL/TP multipliers scale with timeframe so levels feel proportional.
+    # Shorter TFs use tighter stops; longer TFs allow wider swings.
+    TF_MULT = {
+        "4H":  (1.0, 1.5, 2.5, 4.0),
+        "8H":  (1.0, 1.8, 3.0, 4.5),
+        "12H": (1.2, 2.0, 3.5, 5.0),
+        "1D":  (1.3, 2.0, 3.5, 5.5),
+        "1W":  (1.5, 2.0, 3.5, 5.5),
+        "2W":  (1.5, 2.5, 4.0, 6.0),
+        "3W":  (1.5, 2.5, 4.0, 6.5),
+        "1M":  (1.5, 2.5, 4.5, 7.0),
+    }
+    sl_m, tp1_m, tp2_m, tp3_m = TF_MULT.get(timeframe, (1.5, 2.0, 3.5, 5.5))
+
     if candles and len(candles) >= 14 and current_price > 0:
-        raw_atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
-        # Cap ATR at 8% of price — weekly candles have huge ranges that produce
-        # nonsensical (or negative) TP targets without this guard.
-        atr = min(raw_atr, current_price * 0.08)
+        atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
         entry = round(current_price, 8)
         if direction == "LONG":
-            sl = round(max(current_price * 0.001, current_price - atr * 1.5), 8)
+            sl = round(max(current_price * 0.001, current_price - atr * sl_m), 8)
             tp_targets = [
-                round(current_price + atr * 2.0, 8),
-                round(current_price + atr * 3.5, 8),
-                round(current_price + atr * 5.5, 8),
+                round(current_price + atr * tp1_m, 8),
+                round(current_price + atr * tp2_m, 8),
+                round(current_price + atr * tp3_m, 8),
             ]
         elif direction == "SHORT":
-            sl = round(current_price + atr * 1.5, 8)
+            sl = round(current_price + atr * sl_m, 8)
             tp_targets = [
-                round(max(current_price * 0.001, current_price - atr * 2.0), 8),
-                round(max(current_price * 0.001, current_price - atr * 3.5), 8),
-                round(max(current_price * 0.001, current_price - atr * 5.5), 8),
+                round(max(current_price * 0.001, current_price - atr * tp1_m), 8),
+                round(max(current_price * 0.001, current_price - atr * tp2_m), 8),
+                round(max(current_price * 0.001, current_price - atr * tp3_m), 8),
             ]
 
         if sl and sl != entry and tp_targets:
