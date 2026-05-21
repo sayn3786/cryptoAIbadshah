@@ -123,7 +123,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     market_cap    = client.get_market_cap(bs)
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
     fvgs = detect_fvg(spot)
-    engulfing = detect_engulfing(spot) if timeframe in ("1W", "2W", "3W", "1M") else []
+    engulfing = detect_engulfing(spot)
 
     # Elliott Wave pivots
     ph, pl = find_pivots(spot, window=2)

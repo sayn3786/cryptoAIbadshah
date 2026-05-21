@@ -977,13 +977,6 @@ function renderEngulfing(patterns, timeframe) {
   const section = document.getElementById('engulfingSection');
   const el      = document.getElementById('engulfList');
   const badge   = document.getElementById('engulfCount');
-  const htfTFs  = ['1W', '2W', '3W', '1M'];
-
-  // Only show the section on high timeframes
-  if (!htfTFs.includes(timeframe)) {
-    section.style.display = 'none';
-    return;
-  }
   section.style.display = '';
 
   if (!patterns?.length) {
