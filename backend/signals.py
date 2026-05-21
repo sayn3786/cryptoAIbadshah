@@ -196,22 +196,49 @@ def generate_signal(analysis: Dict) -> Dict:
     }
     sl_m, tp1_m, tp2_m, tp3_m = TF_MULT.get(timeframe, (1.5, 2.0, 3.5, 5.5))
 
+    # Per-TF maximum SL as a fraction of entry price. Prevents absurd stops on
+    # volatile assets where ATR × multiplier can exceed 50-75% of price.
+    TF_MAX_SL_PCT = {
+        "4H":  0.05,
+        "8H":  0.07,
+        "12H": 0.08,
+        "1D":  0.10,
+        "1W":  0.15,
+        "2W":  0.20,
+        "3W":  0.22,
+        "1M":  0.25,
+    }
+    max_sl_pct = TF_MAX_SL_PCT.get(timeframe, 0.15)
+
     if candles and len(candles) >= 14 and current_price > 0:
         atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
         entry = round(current_price, 8)
+
+        # Scale all distances proportionally if ATR-based SL would exceed cap.
+        raw_sl_dist = atr * sl_m
+        max_sl_dist = current_price * max_sl_pct
+        if raw_sl_dist > max_sl_dist and raw_sl_dist > 0:
+            scale = max_sl_dist / raw_sl_dist
+        else:
+            scale = 1.0
+        sl_dist  = raw_sl_dist  * scale
+        tp1_dist = atr * tp1_m * scale
+        tp2_dist = atr * tp2_m * scale
+        tp3_dist = atr * tp3_m * scale
+
         if direction == "LONG":
-            sl = round(max(current_price * 0.001, current_price - atr * sl_m), 8)
+            sl = round(max(current_price * 0.001, current_price - sl_dist), 8)
             tp_targets = [
-                round(current_price + atr * tp1_m, 8),
-                round(current_price + atr * tp2_m, 8),
-                round(current_price + atr * tp3_m, 8),
+                round(current_price + tp1_dist, 8),
+                round(current_price + tp2_dist, 8),
+                round(current_price + tp3_dist, 8),
             ]
         elif direction == "SHORT":
-            sl = round(current_price + atr * sl_m, 8)
+            sl = round(current_price + sl_dist, 8)
             tp_targets = [
-                round(max(current_price * 0.001, current_price - atr * tp1_m), 8),
-                round(max(current_price * 0.001, current_price - atr * tp2_m), 8),
-                round(max(current_price * 0.001, current_price - atr * tp3_m), 8),
+                round(max(current_price * 0.001, current_price - tp1_dist), 8),
+                round(max(current_price * 0.001, current_price - tp2_dist), 8),
+                round(max(current_price * 0.001, current_price - tp3_dist), 8),
             ]
 
         if sl and sl != entry and tp_targets:
