@@ -182,44 +182,46 @@ def generate_signal(analysis: Dict) -> Dict:
     rr_ratio = None
 
     timeframe = analysis.get("timeframe", "1W")
-    # SL/TP multipliers — ratios between levels stay consistent per TF.
-    # TP3 multipliers are kept at 4× SL so the max implied TP3% stays bounded
-    # (max_atr_pct × 4 gives a clean ceiling — see TF_MAX_ATR_PCT below).
-    TF_MULT = {
-        "4H":  (1.0, 1.5, 2.5, 3.5),
-        "8H":  (1.0, 1.8, 2.8, 4.0),
-        "12H": (1.2, 1.8, 3.0, 4.0),
-        "1D":  (1.3, 1.8, 3.0, 4.0),
-        "1W":  (1.5, 2.0, 3.0, 4.0),
-        "2W":  (1.5, 2.0, 3.0, 4.0),
-        "3W":  (1.5, 2.0, 3.0, 4.0),
-        "1M":  (1.5, 2.0, 3.0, 4.0),
-    }
-    sl_m, tp1_m, tp2_m, tp3_m = TF_MULT.get(timeframe, (1.5, 2.0, 3.0, 4.0))
 
-    # Dynamic ATR cap: clamp the effective ATR to at most X% of price.
-    # This is the primary volatility normaliser — a high-ATR asset (HYPE, TAO)
-    # gets the same *proportional* risk structure as a low-ATR asset (BTC),
-    # without needing any per-symbol hardcoding.
-    # Implied max SL  = max_atr_pct × sl_m
-    # Implied max TP3 = max_atr_pct × tp3_m (= 4× sl_m, always ≤ 60%)
-    TF_MAX_ATR_PCT = {
-        "4H":  0.030,   # max SL ~3%,  max TP3 ~10.5%
-        "8H":  0.045,   # max SL ~4.5%, max TP3 ~18%
-        "12H": 0.055,   # max SL ~6.6%, max TP3 ~22%
-        "1D":  0.070,   # max SL ~9%,  max TP3 ~28%
-        "1W":  0.100,   # max SL ~15%, max TP3 ~40%
-        "2W":  0.130,   # max SL ~19%, max TP3 ~52%
-        "3W":  0.150,   # max SL ~22%, max TP3 ~60%
-        "1M":  0.150,   # max SL ~22%, max TP3 ~60%
+    # SL ATR multiplier per timeframe — wider candles need more breathing room.
+    TF_SL_MULT = {
+        "4H":  1.0, "8H":  1.0, "12H": 1.2,
+        "1D":  1.3, "1W":  1.5, "2W":  1.5,
+        "3W":  1.5, "1M":  1.5,
     }
-    max_atr_abs = current_price * TF_MAX_ATR_PCT.get(timeframe, 0.10)
+    sl_m = TF_SL_MULT.get(timeframe, 1.5)
+
+    # TPs are derived from SL distance as R:R multiples — consistent across all TFs.
+    # Gaps increase deliberately: TP1→TP2 = +1R, TP2→TP3 = +1.5R.
+    #   TP1 = 1.5R  easy first target; enables moving SL to breakeven
+    #   TP2 = 2.5R  core profit target; main R:R justification
+    #   TP3 = 4.0R  runner; only hit on strong trend continuation
+    TP1_RR, TP2_RR, TP3_RR = 1.5, 2.5, 4.0
+    tp1_m = sl_m * TP1_RR
+    tp2_m = sl_m * TP2_RR
+    tp3_m = sl_m * TP3_RR
+
+    # Dynamic ATR cap: clamp effective ATR to at most X% of price so
+    # high-volatility assets (HYPE, TAO) get proportionally tighter distances
+    # without any per-symbol rules. All levels scale from the same eff_atr.
+    # Implied max SL  = max_atr_pct × sl_m
+    # Implied max TP3 = max_atr_pct × tp3_m  (always ≤ 60%)
+    TF_MAX_ATR_PCT = {
+        "4H":  0.030,   # max SL  3%,  max TP3 18%
+        "8H":  0.040,   # max SL  4%,  max TP3 24%
+        "12H": 0.050,   # max SL  6%,  max TP3 30%
+        "1D":  0.065,   # max SL  8.5%, max TP3 39%
+        "1W":  0.090,   # max SL 13.5%, max TP3 54%
+        "2W":  0.100,   # max SL 15%,  max TP3 60%
+        "3W":  0.100,   # max SL 15%,  max TP3 60%
+        "1M":  0.100,   # max SL 15%,  max TP3 60%
+    }
+    max_atr_abs = current_price * TF_MAX_ATR_PCT.get(timeframe, 0.09)
 
     if candles and len(candles) >= 14 and current_price > 0:
         atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
         entry = round(current_price, 8)
 
-        # Compress ATR if it exceeds the per-TF ceiling; all distances scale together
         eff_atr  = min(atr, max_atr_abs)
         sl_dist  = eff_atr * sl_m
         tp1_dist = eff_atr * tp1_m
