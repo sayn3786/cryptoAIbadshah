@@ -553,20 +553,22 @@ function renderActiveTrade(a, t) {
 
 /* ─── Trade Management ────────────────────────────────────────────────────── */
 const TF_CLOSE_RULES = {
-  // candle  : close-trigger candle label
-  // hold    : expected trade duration
-  // check   : how often to review
-  // trail   : swing unit for trailing SL after TP2
-  // noFollow: how long to wait before calling the move dead
-  // be1     : breakeven note after TP1
-  '4H':  { candle: '4H candle',      hold: '1 – 5 days',     check: 'every 4 h',        trail: '4H swing',      noFollow: '6+ 4H candles (~1 day)',          be1: 'move SL to entry — short TF; protect quickly' },
-  '8H':  { candle: '8H candle',      hold: '3 – 10 days',    check: 'every 8 h',        trail: '8H swing',      noFollow: '4+ 8H candles (~1.5 days)',        be1: 'move SL to entry (breakeven)' },
-  '12H': { candle: '12H candle',     hold: '5 – 14 days',    check: 'twice daily',      trail: '12H swing',     noFollow: '3+ 12H candles (~1.5 days)',       be1: 'move SL to entry (breakeven)' },
-  '1D':  { candle: 'daily candle',   hold: '1 – 4 weeks',    check: 'daily at close',   trail: 'daily candle',  noFollow: '3+ daily candles (~3 days)',        be1: 'move SL to entry (breakeven)' },
-  '1W':  { candle: 'weekly candle',  hold: '1 – 3 months',   check: 'weekly at close',  trail: 'weekly candle', noFollow: '2+ weekly candles (~2 weeks)',      be1: 'move SL to entry (breakeven)' },
-  '2W':  { candle: '2W candle',      hold: '2 – 6 months',   check: 'every 2 weeks',    trail: '2W candle',     noFollow: '2+ 2W candles (~1 month)',          be1: 'move SL to entry — wide TF; be patient' },
-  '3W':  { candle: '3W candle',      hold: '2 – 6 months',   check: 'every 3 weeks',    trail: '3W candle',     noFollow: '2+ 3W candles (~6 weeks)',          be1: 'move SL to entry — wide TF; be patient' },
-  '1M':  { candle: 'monthly candle', hold: '3 – 12 months',  check: 'monthly at close', trail: 'monthly candle',noFollow: '2+ monthly candles (~2 months)',    be1: 'move SL to entry — macro trade; hold conviction' },
+  // candle       : close-trigger candle label
+  // hold         : expected trade duration
+  // check        : how often to review
+  // trail        : swing unit for trailing SL after TP2
+  // be1          : breakeven note after TP1
+  // sidewaysCount: consecutive sideways candles before escalating
+  // sidewaysDesc : human label for that count
+  // checkTF      : next higher timeframe to consult when sideways
+  '4H':  { candle: '4H candle',      hold: '1 – 5 days',     check: 'every 4 h',        trail: '4H swing',      be1: 'move SL to entry — short TF; protect quickly',       sidewaysCount: 3, sidewaysDesc: '3 consecutive sideways 4H candles (= 1 12H candle)', checkTF: '12H' },
+  '8H':  { candle: '8H candle',      hold: '3 – 10 days',    check: 'every 8 h',        trail: '8H swing',      be1: 'move SL to entry (breakeven)',                        sidewaysCount: 3, sidewaysDesc: '3 consecutive sideways 8H candles (= 1 day)',        checkTF: '1D'  },
+  '12H': { candle: '12H candle',     hold: '5 – 14 days',    check: 'twice daily',      trail: '12H swing',     be1: 'move SL to entry (breakeven)',                        sidewaysCount: 2, sidewaysDesc: '2 consecutive sideways 12H candles (= 1 day)',       checkTF: '1D'  },
+  '1D':  { candle: 'daily candle',   hold: '1 – 4 weeks',    check: 'daily at close',   trail: 'daily candle',  be1: 'move SL to entry (breakeven)',                        sidewaysCount: 3, sidewaysDesc: '3 consecutive sideways daily candles (= 3 days)',    checkTF: '1W'  },
+  '1W':  { candle: 'weekly candle',  hold: '1 – 3 months',   check: 'weekly at close',  trail: 'weekly candle', be1: 'move SL to entry (breakeven)',                        sidewaysCount: 2, sidewaysDesc: '2 consecutive sideways weekly candles (= 2 weeks)',  checkTF: '1M'  },
+  '2W':  { candle: '2W candle',      hold: '2 – 6 months',   check: 'every 2 weeks',    trail: '2W candle',     be1: 'move SL to entry — wide TF; be patient',              sidewaysCount: 2, sidewaysDesc: '2 consecutive sideways 2W candles (= 1 month)',      checkTF: '1M'  },
+  '3W':  { candle: '3W candle',      hold: '2 – 6 months',   check: 'every 3 weeks',    trail: '3W candle',     be1: 'move SL to entry — wide TF; be patient',              sidewaysCount: 2, sidewaysDesc: '2 consecutive sideways 3W candles (= 6 weeks)',      checkTF: '1M'  },
+  '1M':  { candle: 'monthly candle', hold: '3 – 12 months',  check: 'monthly at close', trail: 'monthly candle',be1: 'move SL to entry — macro trade; hold conviction',     sidewaysCount: 2, sidewaysDesc: '2 consecutive sideways monthly candles (= 2 months)', checkTF: 'Quarterly' },
 };
 
 function renderTradeManagement(a) {
@@ -690,8 +692,8 @@ function renderTradeManagement(a) {
         <div class="tm-rule active">
           <span class="tm-rule-icon">4.</span>
           <span>${matchFlag
-            ? `Flag ${isLong ? 'breakout' : 'breakdown'} fails after ${matchFlag.consolidation_bars + 3}+ ${tf} bars`
-            : `${rule.noFollow} with no follow-through`} → re-evaluate, reduce size by 50%</span>
+            ? `Flag ${isLong ? 'breakout' : 'breakdown'} fails after ${matchFlag.consolidation_bars + 3}+ ${tf} bars → re-evaluate, reduce size by 50%`
+            : `${rule.sidewaysDesc} with no follow-through → check ${rule.checkTF} chart; if ${rule.checkTF} also sideways or ${isLong ? 'bearish' : 'bullish'} → reduce size by 50% or exit`}</span>
         </div>
         <div class="tm-divider"></div>
         <div class="tm-section-title" style="margin-top:4px">Timing</div>
@@ -785,7 +787,7 @@ function logTrade() {
     rule3: `${rule.candle} closes ${isLong ? 'below' : 'above'} ${fp(triggerPrice)}${matchFlag ? ' (back inside flag)' : ' (stop loss)'} → full exit`,
     rule4: matchFlag
       ? `Flag ${isLong ? 'breakout' : 'breakdown'} fails after ${matchFlag.consolidation_bars + 3}+ ${tf} bars → re-evaluate, reduce size by 50%`
-      : `${rule.noFollow} with no follow-through → re-evaluate, reduce size by 50%`,
+      : `${rule.sidewaysDesc} with no follow-through → check ${rule.checkTF} chart; if ${rule.checkTF} also sideways or ${isLong ? 'bearish' : 'bullish'} → reduce size by 50% or exit`,
     timing: `Review position ${rule.check} — only act on closed ${rule.candle}s`,
     hold:   `Expected hold: ${rule.hold}`,
     reminder: `Never close mid-candle on wicks — wait for the ${rule.candle} to fully close`,
