@@ -456,6 +456,41 @@ a:hover { color: var(--gold2); }
 .tm-rule.active { color: var(--text); }
 .tm-divider { height: 1px; background: var(--border); margin: 4px 0; }
 
+/* Active trade monitor overrides */
+.tm-active-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.2);
+  border-radius: 8px; padding: 8px 14px; margin-bottom: 12px;
+}
+.tm-active-label { font-size: .75rem; font-weight: 700; color: var(--gold); }
+.tm-active-meta  { font-size: .72rem; color: var(--muted2); flex: 1; }
+.tm-pnl { font-size: .85rem; font-weight: 800; font-family: var(--mono); }
+.tm-pnl.bull { color: var(--bull); }
+.tm-pnl.bear { color: var(--bear); }
+.tm-pnl.muted { color: var(--muted2); }
+.tm-sig-row { font-size: .75rem; margin-bottom: 12px; }
+.tm-sig-warn { color: var(--gold); }
+.tm-sig-ok   { color: var(--bull); }
+.tm-active-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 640px) { .tm-active-grid { grid-template-columns: 1fr; } }
+.tm-lvl-badge {
+  font-size: .62rem; font-weight: 700; padding: 1px 6px; border-radius: 100px;
+  background: rgba(99,102,241,.12); color: var(--muted2); white-space: nowrap;
+}
+.tm-lvl-badge.hit-tp  { background: rgba(16,185,129,.15); color: var(--bull); }
+.tm-lvl-badge.near-tp { background: rgba(16,185,129,.08); color: var(--bull); }
+.tm-lvl-badge.hit-sl  { background: rgba(239,68,68,.15);  color: var(--bear); }
+.tm-lvl-badge.near-sl { background: rgba(239,68,68,.08);  color: var(--bear); }
+.tm-er-details { margin-top: 8px; }
+.tm-er-details summary { font-size: .72rem; color: var(--muted2); cursor: pointer; user-select: none; }
+.tm-er-details summary:hover { color: var(--text); }
+.tm-er-list { margin: 6px 0 6px 16px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tm-er-list li { font-size: .72rem; color: var(--text); line-height: 1.5; }
+.tm-er-timing { display: flex; flex-direction: column; gap: 3px; padding-top: 6px;
+                border-top: 1px solid var(--border); margin-top: 4px; }
+.tm-er-timing span { font-size: .72rem; color: var(--muted2); }
+.tm-active-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+
 /* ─── Row 5: Wave + Confluence ─────────────────────────────────────────────── */
 .row-wave { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 

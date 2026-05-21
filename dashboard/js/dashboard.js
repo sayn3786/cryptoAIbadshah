@@ -433,6 +433,124 @@ function renderFVGTable(fvgs) {
   }).join('');
 }
 
+/* ─── Active Trade Monitor ────────────────────────────────────────────────── */
+function renderActiveTrade(a, t) {
+  const isLong  = t.direction === 'LONG';
+  const cur     = a.candles?.length ? a.candles[a.candles.length - 1].close : null;
+  const fmt     = v => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+  const days    = Math.floor((Date.now() - t.timestamp) / 86400000);
+  const dated   = new Date(t.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+
+  // Live P&L
+  let pnlHtml = '<span class="tm-pnl muted">—</span>';
+  if (cur) {
+    const pnl = isLong ? (cur - t.entry) / t.entry * 100 : (t.entry - cur) / t.entry * 100;
+    const cls = pnl >= 0 ? 'bull' : 'bear';
+    pnlHtml = `<span class="tm-pnl ${cls}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span>`;
+  }
+
+  // Level status: hit / approaching / open
+  function levelStatus(target, label) {
+    if (!cur || !target) return { cls: '', badge: '' };
+    const dist = isLong ? (target - cur) / cur * 100 : (cur - target) / cur * 100;
+    if (label === 'SL') {
+      // SL is bad when hit (for longs: cur < sl)
+      const hit = isLong ? cur <= target : cur >= target;
+      if (hit) return { cls: 'bear', badge: '<span class="tm-lvl-badge hit-sl">⚠ Hit</span>' };
+      if (Math.abs(dist) < 3) return { cls: 'bear', badge: '<span class="tm-lvl-badge near-sl">Near</span>' };
+      return { cls: 'bear', badge: `<span class="tm-lvl-badge">${Math.abs(dist).toFixed(1)}% away</span>` };
+    } else {
+      // TP is good when hit (for longs: cur >= tp)
+      const hit = isLong ? cur >= target : cur <= target;
+      if (hit) return { cls: 'bull', badge: '<span class="tm-lvl-badge hit-tp">✓ Hit</span>' };
+      if (Math.abs(dist) < 3) return { cls: 'bull', badge: '<span class="tm-lvl-badge near-tp">Close</span>' };
+      return { cls: 'bull', badge: `<span class="tm-lvl-badge">${Math.abs(dist).toFixed(1)}% away</span>` };
+    }
+  }
+
+  const sl  = levelStatus(t.sl,  'SL');
+  const tp1 = levelStatus(t.tp1, 'TP1');
+  const tp2 = levelStatus(t.tp2, 'TP2');
+  const tp3 = levelStatus(t.tp3, 'TP3');
+
+  // Signal change indicator
+  const curDir = a.signal?.direction || 'NEUTRAL';
+  const curStr = a.signal?.strength  || 0;
+  const sigChanged = curDir !== t.direction;
+  const sigCls  = curDir === 'LONG' ? 'bull' : curDir === 'SHORT' ? 'bear' : 'muted';
+  const sigHtml = sigChanged
+    ? `<span class="tm-sig-warn">⚠ Signal now <span class="${sigCls}">${curDir} (${curStr}/100)</span> — was ${t.direction} (${t.strength}/100) when entered</span>`
+    : `<span class="tm-sig-ok">✓ Signal still ${curDir} (${curStr}/100)</span>`;
+
+  // Exit rules from snapshot
+  const er = t.exit_rules || {};
+  const exitRulesHtml = er.rule1 ? `
+    <details class="tm-er-details">
+      <summary>Your Exit Rules</summary>
+      <ol class="tm-er-list">
+        <li>${er.rule1}</li>
+        <li>${er.rule2}</li>
+        <li>${er.rule3}</li>
+        <li>${er.rule4}</li>
+      </ol>
+      <div class="tm-er-timing">
+        <span>⏱ ${er.timing}</span>
+        <span>📅 ${er.hold}</span>
+      </div>
+    </details>` : '';
+
+  return `
+    <div class="tm-active-banner">
+      <span class="tm-active-label">📌 Active Trade</span>
+      <span class="tm-active-meta">Entered ${dated} · ${days} day${days !== 1 ? 's' : ''} open</span>
+      ${pnlHtml}
+    </div>
+    <div class="tm-sig-row">${sigHtml}</div>
+    <div class="tm-active-grid">
+      <div class="tm-col">
+        <div class="tm-section-title">Your Levels</div>
+        <div class="tm-row">
+          <span class="tm-label">Entry</span>
+          <span class="tm-val">${fmt(t.entry)}</span>
+        </div>
+        ${cur ? `<div class="tm-row">
+          <span class="tm-label">Current Price</span>
+          <span class="tm-val">${fmt(cur)}</span>
+        </div>` : ''}
+        <div class="tm-divider"></div>
+        <div class="tm-row">
+          <span class="tm-label">Stop Loss</span>
+          <span class="tm-val ${sl.cls}">${fmt(t.sl)} ${sl.badge}</span>
+        </div>
+        <div class="tm-row">
+          <span class="tm-label">TP 1 <span style="color:var(--muted);font-size:.68rem">50%</span></span>
+          <span class="tm-val ${tp1.cls}">${fmt(t.tp1)} ${tp1.badge}</span>
+        </div>
+        <div class="tm-row">
+          <span class="tm-label">TP 2 <span style="color:var(--muted);font-size:.68rem">30%</span></span>
+          <span class="tm-val ${tp2.cls}">${fmt(t.tp2)} ${tp2.badge}</span>
+        </div>
+        <div class="tm-row">
+          <span class="tm-label">TP 3 <span style="color:var(--muted);font-size:.68rem">20%</span></span>
+          <span class="tm-val ${tp3.cls}">${fmt(t.tp3)} ${tp3.badge}</span>
+        </div>
+        ${t.rr ? `<div class="tm-divider"></div>
+        <div class="tm-row"><span class="tm-label">R/R at entry</span><span class="tm-val">${t.rr}:1</span></div>` : ''}
+      </div>
+      <div class="tm-col">
+        ${exitRulesHtml}
+        <div class="tm-active-actions">
+          <button class="btn-tc btn-tc-close" onclick="showCloseForm('${t.id}');renderMyTrades()">Close Trade</button>
+          <div id="cf-tm-${t.id}" class="tc-close-form" style="display:none">
+            <input id="cp-tm-${t.id}" class="tc-price-input" type="number" placeholder="Exit price" step="any"/>
+            <button class="btn-tc btn-tc-confirm" onclick="confirmCloseTM('${t.id}')">Confirm</button>
+            <button class="btn-tc" onclick="document.getElementById('cf-tm-${t.id}').style.display='none'">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
 /* ─── Trade Management ────────────────────────────────────────────────────── */
 const TF_CLOSE_RULES = {
   // candle  : close-trigger candle label
@@ -452,21 +570,37 @@ const TF_CLOSE_RULES = {
 };
 
 function renderTradeManagement(a) {
-  const body   = document.getElementById('tradeMgmtBody');
-  const dirEl  = document.getElementById('tradeMgmtDir');
-  const tfEl   = document.getElementById('tradeMgmtTf');
+  const body  = document.getElementById('tradeMgmtBody');
+  const dirEl = document.getElementById('tradeMgmtDir');
+  const tfEl  = document.getElementById('tradeMgmtTf');
+  const logBtn = document.getElementById('logTradeBtn');
   if (!body) return;
 
   const sig = a.signal || {};
-  const dir = sig.direction || 'NEUTRAL';
-  const tf  = a.timeframe  || '1W';
+  const tf  = a.timeframe || '1W';
+
+  // ── Check for an open logged trade for this symbol + timeframe ─────────────
+  const activeTrade = getTrades().find(t =>
+    t.status === 'open' && t.symbol === a.symbol && t.timeframe === tf
+  );
+
+  if (activeTrade) {
+    // Active trade monitor mode
+    dirEl.textContent = activeTrade.direction;
+    dirEl.className   = 'trade-mgmt-dir ' + activeTrade.direction.toLowerCase();
+    tfEl.textContent  = tf;
+    if (logBtn) logBtn.style.display = 'none';
+    body.innerHTML = renderActiveTrade(a, activeTrade);
+    return;
+  }
+
+  // ── No active trade — show fresh signal ────────────────────────────────────
+  const dir  = sig.direction || 'NEUTRAL';
   const rule = TF_CLOSE_RULES[tf] || TF_CLOSE_RULES['1W'];
 
   dirEl.textContent = dir;
   dirEl.className   = 'trade-mgmt-dir ' + dir.toLowerCase();
   tfEl.textContent  = tf;
-
-  const logBtn = document.getElementById('logTradeBtn');
   if (logBtn) logBtn.style.display = (dir === 'NEUTRAL' || !sig.entry) ? 'none' : '';
 
   if (dir === 'NEUTRAL' || !sig.entry) {
@@ -702,8 +836,8 @@ function showCloseForm(id) {
   if (f) f.style.display = f.style.display === 'none' ? 'flex' : 'none';
 }
 
-function confirmClose(id) {
-  const input = document.getElementById('cp-' + id);
+function _doClose(id, inputId) {
+  const input = document.getElementById(inputId);
   const price = parseFloat(input?.value);
   if (!price || price <= 0) { if (input) input.style.outline = '1px solid var(--bear)'; return; }
   const trades = getTrades();
@@ -714,6 +848,16 @@ function confirmClose(id) {
   t.exit_timestamp = Date.now();
   saveTrades(trades);
   renderMyTrades();
+  // Re-render trade management so it switches back to fresh signal view
+  if (S.analysis) renderTradeManagement(S.analysis);
+}
+
+function confirmClose(id)   { _doClose(id, 'cp-'    + id); }
+function confirmCloseTM(id) {
+  _doClose(id, 'cp-tm-' + id);
+  // Toggle the TM close form visibility after closing
+  const f = document.getElementById('cf-tm-' + id);
+  if (f) f.style.display = 'none';
 }
 
 function renderMyTrades() {
