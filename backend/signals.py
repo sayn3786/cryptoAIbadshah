@@ -196,35 +196,40 @@ def generate_signal(analysis: Dict) -> Dict:
     }
     sl_m, tp1_m, tp2_m, tp3_m = TF_MULT.get(timeframe, (1.5, 2.0, 3.5, 5.5))
 
-    # Per-TF maximum SL as a fraction of entry price. Prevents absurd stops on
-    # volatile assets where ATR × multiplier can exceed 50-75% of price.
+    # Per-TF caps as a fraction of entry price.
+    # SL cap: prevents absurd stops on volatile assets.
+    # TP3 cap: prevents TP3 scaling past 100% (below zero for shorts).
+    # TP1/TP2 preserve their ratio relative to TP3.
     TF_MAX_SL_PCT = {
-        "4H":  0.05,
-        "8H":  0.07,
-        "12H": 0.08,
-        "1D":  0.10,
-        "1W":  0.15,
-        "2W":  0.20,
-        "3W":  0.22,
-        "1M":  0.25,
+        "4H":  0.05, "8H":  0.07, "12H": 0.08, "1D":  0.10,
+        "1W":  0.15, "2W":  0.20, "3W":  0.22, "1M":  0.25,
     }
-    max_sl_pct = TF_MAX_SL_PCT.get(timeframe, 0.15)
+    TF_MAX_TP3_PCT = {
+        "4H":  0.12, "8H":  0.18, "12H": 0.22, "1D":  0.28,
+        "1W":  0.40, "2W":  0.50, "3W":  0.55, "1M":  0.60,
+    }
+    max_sl_pct  = TF_MAX_SL_PCT.get(timeframe, 0.15)
+    max_tp3_pct = TF_MAX_TP3_PCT.get(timeframe, 0.40)
 
     if candles and len(candles) >= 14 and current_price > 0:
         atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
         entry = round(current_price, 8)
 
-        # Scale all distances proportionally if ATR-based SL would exceed cap.
-        raw_sl_dist = atr * sl_m
-        max_sl_dist = current_price * max_sl_pct
-        if raw_sl_dist > max_sl_dist and raw_sl_dist > 0:
-            scale = max_sl_dist / raw_sl_dist
-        else:
-            scale = 1.0
-        sl_dist  = raw_sl_dist  * scale
-        tp1_dist = atr * tp1_m * scale
-        tp2_dist = atr * tp2_m * scale
-        tp3_dist = atr * tp3_m * scale
+        # Step 1: cap SL distance
+        raw_sl_dist  = atr * sl_m
+        max_sl_dist  = current_price * max_sl_pct
+        sl_scale     = min(1.0, max_sl_dist / raw_sl_dist) if raw_sl_dist > 0 else 1.0
+
+        # Step 2: cap TP3 distance (may be tighter than SL scale on wide-multiplier TFs)
+        raw_tp3_dist = atr * tp3_m
+        max_tp3_dist = current_price * max_tp3_pct
+        tp_scale     = min(sl_scale, max_tp3_dist / raw_tp3_dist) if raw_tp3_dist > 0 else sl_scale
+
+        # Apply the stricter of the two scales to all TP distances so ratios are preserved
+        sl_dist  = raw_sl_dist  * sl_scale
+        tp1_dist = atr * tp1_m  * tp_scale
+        tp2_dist = atr * tp2_m  * tp_scale
+        tp3_dist = raw_tp3_dist * tp_scale
 
         if direction == "LONG":
             sl = round(max(current_price * 0.001, current_price - sl_dist), 8)
