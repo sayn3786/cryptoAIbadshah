@@ -182,54 +182,49 @@ def generate_signal(analysis: Dict) -> Dict:
     rr_ratio = None
 
     timeframe = analysis.get("timeframe", "1W")
-    # SL/TP multipliers scale with timeframe so levels feel proportional.
-    # Shorter TFs use tighter stops; longer TFs allow wider swings.
+    # SL/TP multipliers — ratios between levels stay consistent per TF.
+    # TP3 multipliers are kept at 4× SL so the max implied TP3% stays bounded
+    # (max_atr_pct × 4 gives a clean ceiling — see TF_MAX_ATR_PCT below).
     TF_MULT = {
-        "4H":  (1.0, 1.5, 2.5, 4.0),
-        "8H":  (1.0, 1.8, 3.0, 4.5),
-        "12H": (1.2, 2.0, 3.5, 5.0),
-        "1D":  (1.3, 2.0, 3.5, 5.5),
-        "1W":  (1.5, 2.0, 3.5, 5.5),
-        "2W":  (1.5, 2.5, 4.0, 6.0),
-        "3W":  (1.5, 2.5, 4.0, 6.5),
-        "1M":  (1.5, 2.5, 4.5, 7.0),
+        "4H":  (1.0, 1.5, 2.5, 3.5),
+        "8H":  (1.0, 1.8, 2.8, 4.0),
+        "12H": (1.2, 1.8, 3.0, 4.0),
+        "1D":  (1.3, 1.8, 3.0, 4.0),
+        "1W":  (1.5, 2.0, 3.0, 4.0),
+        "2W":  (1.5, 2.0, 3.0, 4.0),
+        "3W":  (1.5, 2.0, 3.0, 4.0),
+        "1M":  (1.5, 2.0, 3.0, 4.0),
     }
-    sl_m, tp1_m, tp2_m, tp3_m = TF_MULT.get(timeframe, (1.5, 2.0, 3.5, 5.5))
+    sl_m, tp1_m, tp2_m, tp3_m = TF_MULT.get(timeframe, (1.5, 2.0, 3.0, 4.0))
 
-    # Per-TF caps as a fraction of entry price.
-    # SL cap: prevents absurd stops on volatile assets.
-    # TP3 cap: prevents TP3 scaling past 100% (below zero for shorts).
-    # TP1/TP2 preserve their ratio relative to TP3.
-    TF_MAX_SL_PCT = {
-        "4H":  0.05, "8H":  0.07, "12H": 0.08, "1D":  0.10,
-        "1W":  0.15, "2W":  0.20, "3W":  0.22, "1M":  0.25,
+    # Dynamic ATR cap: clamp the effective ATR to at most X% of price.
+    # This is the primary volatility normaliser — a high-ATR asset (HYPE, TAO)
+    # gets the same *proportional* risk structure as a low-ATR asset (BTC),
+    # without needing any per-symbol hardcoding.
+    # Implied max SL  = max_atr_pct × sl_m
+    # Implied max TP3 = max_atr_pct × tp3_m (= 4× sl_m, always ≤ 60%)
+    TF_MAX_ATR_PCT = {
+        "4H":  0.030,   # max SL ~3%,  max TP3 ~10.5%
+        "8H":  0.045,   # max SL ~4.5%, max TP3 ~18%
+        "12H": 0.055,   # max SL ~6.6%, max TP3 ~22%
+        "1D":  0.070,   # max SL ~9%,  max TP3 ~28%
+        "1W":  0.100,   # max SL ~15%, max TP3 ~40%
+        "2W":  0.130,   # max SL ~19%, max TP3 ~52%
+        "3W":  0.150,   # max SL ~22%, max TP3 ~60%
+        "1M":  0.150,   # max SL ~22%, max TP3 ~60%
     }
-    TF_MAX_TP3_PCT = {
-        "4H":  0.12, "8H":  0.18, "12H": 0.22, "1D":  0.28,
-        "1W":  0.40, "2W":  0.50, "3W":  0.55, "1M":  0.60,
-    }
-    max_sl_pct  = TF_MAX_SL_PCT.get(timeframe, 0.15)
-    max_tp3_pct = TF_MAX_TP3_PCT.get(timeframe, 0.40)
+    max_atr_abs = current_price * TF_MAX_ATR_PCT.get(timeframe, 0.10)
 
     if candles and len(candles) >= 14 and current_price > 0:
         atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
         entry = round(current_price, 8)
 
-        # Step 1: cap SL distance
-        raw_sl_dist  = atr * sl_m
-        max_sl_dist  = current_price * max_sl_pct
-        sl_scale     = min(1.0, max_sl_dist / raw_sl_dist) if raw_sl_dist > 0 else 1.0
-
-        # Step 2: cap TP3 distance (may be tighter than SL scale on wide-multiplier TFs)
-        raw_tp3_dist = atr * tp3_m
-        max_tp3_dist = current_price * max_tp3_pct
-        tp_scale     = min(sl_scale, max_tp3_dist / raw_tp3_dist) if raw_tp3_dist > 0 else sl_scale
-
-        # Apply the stricter of the two scales to all TP distances so ratios are preserved
-        sl_dist  = raw_sl_dist  * sl_scale
-        tp1_dist = atr * tp1_m  * tp_scale
-        tp2_dist = atr * tp2_m  * tp_scale
-        tp3_dist = raw_tp3_dist * tp_scale
+        # Compress ATR if it exceeds the per-TF ceiling; all distances scale together
+        eff_atr  = min(atr, max_atr_abs)
+        sl_dist  = eff_atr * sl_m
+        tp1_dist = eff_atr * tp1_m
+        tp2_dist = eff_atr * tp2_m
+        tp3_dist = eff_atr * tp3_m
 
         if direction == "LONG":
             sl = round(max(current_price * 0.001, current_price - sl_dist), 8)
