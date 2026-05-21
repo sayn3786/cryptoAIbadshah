@@ -1,6 +1,18 @@
 from typing import List, Dict, Optional, Tuple
 
 
+def _line_slope(values: list) -> float:
+    """Linear regression slope (units per bar)."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    x_mean = (n - 1) / 2.0
+    y_mean = sum(values) / n
+    num = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
+    den = sum((i - x_mean) ** 2 for i in range(n))
+    return num / den if den > 0 else 0.0
+
+
 # ── Flag pattern detection ─────────────────────────────────────────────────────
 
 def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
@@ -68,6 +80,38 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 else:
                     target = round(max(fl_ - pole_height, pole_low * 0.5), 8)
 
+                # ── Channel slope classification ──────────────────────────
+                flag_highs = [c["high"] for c in flag]
+                flag_lows  = [c["low"]  for c in flag]
+                h_slope    = _line_slope(flag_highs)
+                l_slope    = _line_slope(flag_lows)
+                mid_slope  = (h_slope + l_slope) / 2.0
+                mid_price  = (fh + fl_) / 2.0
+                thresh     = mid_price * 0.001   # 0.1% per bar
+                if mid_slope > thresh:
+                    flag_slope = "ascending"
+                elif mid_slope < -thresh:
+                    flag_slope = "descending"
+                else:
+                    flag_slope = "neutral"
+                slope_pct_per_bar = round(mid_slope / mid_price * 100, 4) if mid_price > 0 else 0.0
+
+                # ── Confirmation: post-flag candle closed beyond flag boundary
+                post = candles[pe + fl:]
+                confirmed    = False
+                breakout_dir = None
+                if post:
+                    if is_bull:
+                        if any(c["close"] > fh  for c in post):
+                            confirmed = True; breakout_dir = "up"
+                        elif any(c["close"] < fl_ for c in post):
+                            confirmed = True; breakout_dir = "down"
+                    else:
+                        if any(c["close"] < fl_ for c in post):
+                            confirmed = True; breakout_dir = "down"
+                        elif any(c["close"] > fh  for c in post):
+                            confirmed = True; breakout_dir = "up"
+
                 strength = pole_pct * (1.0 - retrace) * recency * tf_weight
 
                 if strength > best_strength:
@@ -87,6 +131,10 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                         "target":             target,
                         "strength":           round(strength, 3),
                         "consolidation_bars": fl,
+                        "flag_slope":         flag_slope,
+                        "slope_pct_per_bar":  slope_pct_per_bar,
+                        "confirmed":          confirmed,
+                        "breakout_dir":       breakout_dir,
                         "pole_start_ts":      candles[ps]["timestamp"],
                         "flag_end_ts":        flag[-1]["timestamp"],
                         "is_active":          (pe + fl) >= n - 3,

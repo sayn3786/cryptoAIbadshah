@@ -727,24 +727,42 @@ function renderFlags(flags) {
   badge.textContent = flags.length;
   const p = (v, d = 4) => Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
   el.innerHTML = flags.map(f => {
-    const cls       = f.direction === 'bullish' ? 'bull' : 'bear';
-    const domCls    = f.dominant ? ' dominant' : '';
-    const icon      = f.direction === 'bullish' ? '▲' : '▼';
+    const cls        = f.direction === 'bullish' ? 'bull' : 'bear';
+    const domCls     = f.dominant ? ' dominant' : '';
+    const isBull     = f.direction === 'bullish';
+    const icon       = isBull ? '▲' : '▼';
+
+    // Flag type label includes slope when present
+    const slopeWord  = f.flag_slope === 'ascending'  ? ' Ascending'
+                     : f.flag_slope === 'descending' ? ' Descending' : '';
+    const flagLabel  = `${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag`;
+
     const activeBadge = f.is_active
       ? '<span class="flag-active">Active</span>' : '';
-    const domBadge  = f.dominant
+    const domBadge   = f.dominant
       ? '<span class="flag-active" style="background:rgba(245,158,11,.15);color:var(--gold)">Dominant</span>' : '';
+    const confirmBadge = f.confirmed
+      ? `<span class="flag-confirmed">${f.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>` : '';
+
+    const slopeIcon  = f.flag_slope === 'ascending'  ? '↗'
+                     : f.flag_slope === 'descending' ? '↘' : '→';
+    const slopeCls   = f.flag_slope === 'ascending'  ? 'bull'
+                     : f.flag_slope === 'descending' ? 'bear' : '';
+    const slopeStat  = f.flag_slope && f.flag_slope !== 'neutral'
+      ? `<span class="flag-stat">Channel <span class="${slopeCls}">${slopeIcon} ${f.flag_slope} (${f.slope_pct_per_bar > 0 ? '+' : ''}${f.slope_pct_per_bar}%/bar)</span></span>` : '';
+
     return `<div class="flag-item ${cls}${domCls}">
       <div class="flag-top">
-        <span class="flag-name ${cls}">${icon} ${f.direction === 'bullish' ? 'Bullish' : 'Bearish'} Flag</span>
+        <span class="flag-name ${cls}">${icon} ${flagLabel}</span>
         <span class="flag-tf">${f.timeframe}</span>
-        ${activeBadge}${domBadge}
+        ${activeBadge}${domBadge}${confirmBadge}
       </div>
       <div class="flag-stats">
-        <span class="flag-stat">Pole <span>${f.direction === 'bullish' ? '+' : ''}${f.pole_pct}%</span></span>
+        <span class="flag-stat">Pole <span>${isBull ? '+' : ''}${f.pole_pct}%</span></span>
         <span class="flag-stat">Retrace <span>${f.retrace_pct}%</span></span>
         <span class="flag-stat">Bars <span>${f.consolidation_bars}</span></span>
         <span class="flag-stat">Strength <span>${f.strength}</span></span>
+        ${slopeStat}
       </div>
       <div class="flag-target">Target: <span>$${p(f.target)}</span>
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}

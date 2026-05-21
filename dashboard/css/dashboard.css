@@ -309,8 +309,10 @@ a:hover { color: var(--gold2); }
 .flag-name { font-weight: 700; font-size: .84rem; font-family: var(--mono); }
 .flag-tf { font-size: .66rem; font-weight: 700; padding: 1px 6px; border-radius: 100px;
            background: rgba(99,102,241,.15); color: var(--neutral); }
-.flag-active { font-size: .66rem; font-weight: 700; padding: 1px 6px; border-radius: 100px;
-               background: rgba(245,158,11,.15); color: var(--gold); }
+.flag-active    { font-size: .66rem; font-weight: 700; padding: 1px 6px; border-radius: 100px;
+                  background: rgba(245,158,11,.15); color: var(--gold); }
+.flag-confirmed { font-size: .66rem; font-weight: 700; padding: 1px 6px; border-radius: 100px;
+                  background: rgba(16,185,129,.15); color: var(--bull); }
 .flag-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
 .flag-stat { font-size: .7rem; color: var(--muted2); font-family: var(--mono); }
 .flag-stat span { color: var(--text); font-weight: 600; }
