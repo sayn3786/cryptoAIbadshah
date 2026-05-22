@@ -36,7 +36,8 @@ CG_IDS = {
     "ONDOUSDT": "ondo-finance",
     "AAVEUSDT": "aave",
     "RENDERUSDT": "render-token",
-    "BNBUSDT":   "binancecoin",
+    "BNBUSDT":    "binancecoin",
+    "BLURUSDT":   "blur",
 }
 
 # Kraken pairs (weekly interval = 10080 min)
@@ -54,6 +55,7 @@ KRAKEN_PAIRS = {
     "AAVEUSDT": "AAVEUSD",
     "RENDERUSDT": "RENDERUSD",
     "BNBUSDT":    "BNBUSD",
+    "BLURUSDT":   "BLURUSD",
 }
 
 # Gate.io currency pairs
@@ -74,6 +76,7 @@ GATE_PAIRS = {
     "AAVEUSDT":   "AAVE_USDT",
     "RENDERUSDT": "RENDER_USDT",
     "BNBUSDT":    "BNB_USDT",
+    "BLURUSDT":   "BLUR_USDT",
 }
 
 OKX_PAIRS = {
@@ -92,6 +95,7 @@ OKX_PAIRS = {
     "AAVEUSDT":   "AAVE-USDT",
     "RENDERUSDT": "RENDER-USDT",
     "BNBUSDT":    "BNB-USDT",
+    "BLURUSDT":   "BLUR-USDT",
 }
 
 BYBIT_PAIRS = {
@@ -110,6 +114,7 @@ BYBIT_PAIRS = {
     "AAVEUSDT":   "AAVEUSDT",
     "RENDERUSDT": "RENDERUSDT",
     "BNBUSDT":    "BNBUSDT",
+    "BLURUSDT":   "BLURUSDT",
 }
 
 # KuCoin trading pairs
@@ -130,6 +135,7 @@ KUCOIN_PAIRS = {
     "AAVEUSDT":   "AAVE-USDT",
     "RENDERUSDT": "RENDER-USDT",
     "BNBUSDT":    "BNB-USDT",
+    "BLURUSDT":   "BLUR-USDT",
 }
 
 

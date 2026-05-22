@@ -45,6 +45,7 @@ SYMBOLS = {
     "AAVE":   "AAVEUSDT",
     "RENDER": "RENDERUSDT",
     "BNB":    "BNBUSDT",
+    "BLUR":   "BLURUSDT",
 }
 TF_INTERVAL = {
     "1H": "1h", "2H": "2h",

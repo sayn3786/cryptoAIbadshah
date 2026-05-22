@@ -28,6 +28,7 @@ COIN_ALIASES = {
     "AAVEUSDT":   ["AAVE", "Aave", "aave"],
     "RENDERUSDT": ["RENDER", "Render", "render", "Render Network"],
     "BNBUSDT":    ["BNB", "Binance Coin", "Binance coin"],
+    "BLURUSDT":   ["BLUR", "Blur", "blur", "Blur NFT"],
 }
 
 CP_CURRENCIES = {
@@ -37,6 +38,7 @@ CP_CURRENCIES = {
     "XMRUSDT":    "XMR",    "XRPUSDT":    "XRP",    "TONUSDT":    "TON",
     "SOLUSDT":    "SOL",    "AAVEUSDT":   "AAVE",
     "RENDERUSDT": "RENDER", "BNBUSDT":    "BNB",
+    "BLURUSDT":   "BLUR",
 }
 
 # Keywords that shift a neutral headline toward bullish or bearish
