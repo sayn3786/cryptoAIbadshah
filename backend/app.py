@@ -117,6 +117,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     spot    = client.get_spot_klines(bs, interval, limit)
     spot_source = client.data_source
     futures = client.get_futures_klines(bs, interval, limit)
+    futures_real = client.futures_real   # False → perp market unavailable for this token
 
     if timeframe in TF_AGG:
         n       = TF_AGG[timeframe]
@@ -142,8 +143,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     rsi_series = calculate_rsi_series(closes)
     current_rsi = next((v for v in reversed(rsi_series) if v is not None), None)
 
-    spot_cvd      = calculate_cvd(spot, "spot")
-    fut_cvd       = calculate_cvd(futures, "futures")
+    spot_cvd = calculate_cvd(spot, "spot")
+    # Only compute futures CVD when we have real perp candles — if get_futures_klines
+    # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
+    fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None
     agg_cvd       = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
     volume_spikes = find_volume_spikes(spot)
     market_cap    = client.get_market_cap(bs)
@@ -188,6 +191,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "upcoming_holidays": get_upcoming_holidays(),
         "data_source":       spot_source,
         "demo_mode":         spot_source == "demo",
+        "futures_available": futures_real,
         "coinglass_enabled": cg_client.enabled,
         "cvd_divergence":    detect_cvd_divergence(spot_cvd, fut_cvd, spot),
         "macd":          macd,

@@ -147,6 +147,7 @@ class BinanceClient:
         self._mcap_cache: dict = {}   # symbol -> (value, fetched_at)
         self.last_binance_error = None
         self._mcap_ttl = 300          # 5-minute cache — avoids hammering CoinGecko
+        self.futures_real = True      # False when futures fell back to spot klines
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
@@ -481,7 +482,11 @@ class BinanceClient:
     def get_futures_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
         result = self._binance_futures_klines(symbol, interval, limit)
         if result:
+            self.futures_real = True
             return result
+        # Real perpetual data unavailable — fall back to spot candles for OHLCV
+        # purposes but flag it so callers can skip futures-specific metrics (CVD).
+        self.futures_real = False
         current_source = self.data_source
         result = self.get_spot_klines(symbol, interval, limit)
         self.data_source = current_source

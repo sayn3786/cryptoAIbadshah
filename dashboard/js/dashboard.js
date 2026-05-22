@@ -171,7 +171,7 @@ function renderAll(a) {
   renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs);
   renderRSIChart(a.rsi_series);
-  renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd);
+  renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
   renderFVGTable(a.fvgs);
   renderFlags(a.flags);
@@ -419,9 +419,18 @@ function renderRSIChart(rsiSeries) {
 }
 
 /* ─── CVD charts ──────────────────────────────────────────────────────────── */
-function renderCVDCharts(spot, fut) {
-  renderCVDPanel('spot', spot, S.spotCvdSeries, 'spotCvdVal', 'spotCvdTrend');
-  renderCVDPanel('fut', fut, S.futCvdSeries, 'futCvdVal', 'futCvdTrend');
+function renderCVDCharts(spot, fut, futuresAvailable) {
+  renderCVDPanel('spot', spot, S.spotCvdSeries, 'spotCvdVal', 'spotCvdTrend', true);
+  if (futuresAvailable === false && !fut) {
+    // Token has no perpetual market — show clear N/A instead of a copy of spot CVD
+    document.getElementById('futCvdVal').textContent   = 'N/A';
+    document.getElementById('futCvdVal').style.color   = 'var(--muted)';
+    document.getElementById('futCvdTrend').textContent = 'No perp market';
+    document.getElementById('futCvdTrend').className   = 'cvd-trend neutral';
+    S.futCvdSeries.setData([]);
+  } else {
+    renderCVDPanel('fut', fut, S.futCvdSeries, 'futCvdVal', 'futCvdTrend', false);
+  }
 }
 
 function renderCVDDivergence(div) {
