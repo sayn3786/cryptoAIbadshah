@@ -42,8 +42,8 @@ TF_AGG = {"2W": 2, "3W": 3}
 # Candle limits per timeframe — more candles for shorter bars so the chart
 # covers enough history to be useful.
 TF_LIMIT = {
-    "4H": 180, "8H": 180, "12H": 150, "1D": 120,
-    "1W": 120, "2W": 250, "3W":  250, "1M": 120,
+    "4H": 100, "8H": 120, "12H": 120, "1D": 100,
+    "1W": 100, "2W": 150, "3W":  150, "1M": 100,
 }
 
 # Minimum pole size (%) required for flag detection per TF.
