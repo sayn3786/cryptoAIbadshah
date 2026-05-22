@@ -136,22 +136,31 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                             confirmed = True; breakout_dir = "up"
 
                 # is_active: price must still be INSIDE or just outside the flag zone.
-                # A bullish flag is only relevant while price is above the flag low
-                # (not already broken down through it). A bearish flag is only relevant
-                # while price is below the flag high (not already broken out above it).
-                # 8% buffer allows for minor wicks below/above the zone boundary.
+                # A bullish flag is only relevant while price is above the flag low.
+                # A bearish flag is only relevant while price is below the flag high.
+                # 3% buffer covers minor wicks; >3% means price has genuinely exited
+                # the zone in the wrong direction and the pattern is invalidated.
                 flag_ended_recently = (pe + fl) >= n - 3
                 if is_bull:
-                    # Price should be at or above flag low (not crashed through)
-                    price_near_flag = current_price >= fl_ * 0.92
+                    # Price must not have crashed more than 3% below flag low
+                    price_near_flag = current_price >= fl_ * 0.97
                 else:
-                    # Price should be at or below flag high (not surged through)
-                    price_near_flag = current_price <= fh * 1.08
+                    # Price must not have surged more than 3% above flag high
+                    price_near_flag = current_price <= fh * 1.03
                 is_active = flag_ended_recently and price_near_flag
 
-                # Skip stale patterns entirely — no point surfacing a flag where
-                # price has already moved far away from the zone
+                # Skip invalidated patterns — price has already moved through the
+                # zone in the wrong direction, so the setup no longer applies.
                 if not price_near_flag:
+                    continue
+
+                # Also skip a confirmed flag whose breakout went the wrong way:
+                # a bearish flag that broke UP is invalidated; a bullish that broke DOWN too.
+                wrong_breakout = (confirmed and (
+                    (is_bull and breakout_dir == "down") or
+                    (not is_bull and breakout_dir == "up")
+                ))
+                if wrong_breakout:
                     continue
 
                 strength = pole_pct * (1.0 - retrace) * recency * tf_weight
