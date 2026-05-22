@@ -31,9 +31,14 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
     Strength = pole_pct × (1 – retrace_fraction) × recency_bonus × tf_weight.
     The highest-strength flag per unique pole start is returned (max 6 total).
     """
-    n = len(candles)
+    # Only work with fully closed candles — the last candle is still forming and
+    # must never be used for pole, flag, or post-flag confirmation logic.
+    closed = candles[:-1]
+    n = len(closed)
     if n < 10:
         return []
+
+    current_price = candles[-1]["close"]  # live price for proximity checks
 
     # How much of the pole height to project for the target, per TF.
     # Shorter TFs use Fibonacci fractions so the target stays in a realistic range.
@@ -50,21 +55,21 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
 
     for ps in range(earliest_pole_start, n - 4):       # pole start index
         for pe in range(ps + 2, min(ps + 9, n)):        # pole end (exclusive)
-            pole_open  = candles[ps]["open"]
-            pole_close = candles[pe - 1]["close"]
+            pole_open  = closed[ps]["open"]
+            pole_close = closed[pe - 1]["close"]
             pole_move  = (pole_close - pole_open) / (pole_open + 1e-12)
 
             if abs(pole_move) * 100 < min_pole_pct:
                 continue
 
-            pole_high   = max(c["high"] for c in candles[ps:pe])
-            pole_low    = min(c["low"]  for c in candles[ps:pe])
+            pole_high   = max(c["high"] for c in closed[ps:pe])
+            pole_low    = min(c["low"]  for c in closed[ps:pe])
             pole_height = pole_high - pole_low
             if pole_height < 1e-12:
                 continue
 
             is_bull   = pole_move > 0
-            remaining = candles[pe:]
+            remaining = closed[pe:]
             if len(remaining) < 3:
                 continue
 
@@ -90,7 +95,6 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 direction = "bullish" if is_bull else "bearish"
                 pole_pct  = round(abs(pole_move) * 100, 2)
 
-                current_price = candles[-1]["close"]
                 proj = pole_height * proj_frac
                 if is_bull:
                     raw_target = fh + proj
@@ -116,7 +120,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 slope_pct_per_bar = round(mid_slope / mid_price * 100, 4) if mid_price > 0 else 0.0
 
                 # ── Confirmation: post-flag candle closed beyond flag boundary ──
-                post = candles[pe + fl:]
+                post = closed[pe + fl:]
                 confirmed    = False
                 breakout_dir = None
                 if post:
@@ -174,7 +178,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                         "slope_pct_per_bar":  slope_pct_per_bar,
                         "confirmed":          confirmed,
                         "breakout_dir":       breakout_dir,
-                        "pole_start_ts":      candles[ps]["timestamp"],
+                        "pole_start_ts":      closed[ps]["timestamp"],
                         "flag_end_ts":        flag[-1]["timestamp"],
                         "is_active":          is_active,
                     }
