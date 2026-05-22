@@ -276,7 +276,22 @@ def detect_engulfing(candles: List[Dict], lookback: int = 4) -> List[Dict]:
                 and curr_body > prev_body):
             patterns.append({**base, "type": "bearish_engulfing", "direction": "bearish"})
 
-    return patterns
+    # Keep only the strongest per direction (highest body_ratio, tie-broken by recency).
+    # Two bearish engulfings in the same lookback window is noise — only the best matters.
+    best: Dict[str, dict] = {}
+    for p in patterns:
+        d = p["direction"]
+        if d not in best:
+            best[d] = p
+        else:
+            existing = best[d]
+            # Prefer more recent; if same recency prefer larger body ratio
+            if p["candles_ago"] < existing["candles_ago"]:
+                best[d] = p
+            elif p["candles_ago"] == existing["candles_ago"] and p["body_ratio"] > existing["body_ratio"]:
+                best[d] = p
+
+    return list(best.values())
 
 
 def find_pivots(
