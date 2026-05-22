@@ -14,6 +14,7 @@ const S = {
   journalData: null,
   spotCvdSource: 'auto',
   futCvdSource: 'auto',
+  fvgPriceLines: [],   // track FVG overlays so they can be cleared on token/TF switch
 };
 
 const API = location.port === '' || location.port === '80' || location.port === '443'
@@ -363,21 +364,33 @@ function renderMarketCap(mcap) {
 function renderMainChart(candles, fvgs) {
   if (!candles?.length || !S.candleSeries) return;
 
+  // Always clear old FVG price lines first — stale lines from a previous
+  // token force the Y-axis to the wrong price range, making candles invisible.
+  S.fvgPriceLines.forEach(pl => { try { S.candleSeries.removePriceLine(pl); } catch (_) {} });
+  S.fvgPriceLines = [];
+
   const data = candles.map(c => ({
     time: Math.floor(c.timestamp / 1000),
     open: c.open, high: c.high, low: c.low, close: c.close,
   }));
-  // Deduplicate by time (just in case)
   const unique = [...new Map(data.map(d => [d.time, d])).values()].sort((a, b) => a.time - b.time);
   S.candleSeries.setData(unique);
 
-  // FVG overlays as price lines
-  if (fvgs?.length && S.mainChart) {
-    const unfilled = fvgs.filter(f => !f.filled).slice(0, 8);
+  // FVG overlays — draw after setData so Y-axis is already anchored to real prices.
+  // Each FVG is shown as three lines: top boundary, midpoint (labelled), bottom boundary.
+  if (fvgs?.length) {
+    const unfilled = fvgs.filter(f => !f.filled).slice(0, 6);
     unfilled.forEach(f => {
-      const color = f.type === 'bullish' ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)';
-      S.candleSeries.createPriceLine({ price: f.midpoint, color, lineWidth: 1, lineStyle: 3,
-        title: `${f.type === 'bullish' ? '↑' : '↓'} FVG ${f.size_pct.toFixed(2)}%` });
+      const isBull = f.type === 'bullish';
+      const color  = isBull ? 'rgba(16,185,129,0.6)' : 'rgba(239,68,68,0.6)';
+      const dimCol = isBull ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)';
+      const arrow  = isBull ? '↑' : '↓';
+      // Top boundary
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,      color: dimCol, lineWidth: 1, lineStyle: 2, title: '' }));
+      // Midpoint — labelled
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color,         lineWidth: 1, lineStyle: 3, title: `${arrow} FVG ${f.size_pct.toFixed(1)}%` }));
+      // Bottom boundary
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: 1, lineStyle: 2, title: '' }));
     });
   }
 
