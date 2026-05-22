@@ -674,9 +674,12 @@ class BinanceClient:
 
     @staticmethod
     def aggregate_candles(candles: List[Dict], n: int) -> List[Dict]:
+        if not candles or n < 2:
+            return candles
         result = []
-        for i in range(0, len(candles) - n + 1, n):
-            chunk = candles[i: i + n]
+        num_complete = len(candles) // n
+        for i in range(num_complete):
+            chunk = candles[i * n: (i + 1) * n]
             result.append({
                 "timestamp":        chunk[0]["timestamp"],
                 "open":             chunk[0]["open"],
@@ -684,6 +687,19 @@ class BinanceClient:
                 "low":              min(c["low"]  for c in chunk),
                 "close":            chunk[-1]["close"],
                 "volume":           sum(c["volume"] for c in chunk),
-                "taker_buy_volume": sum(c["taker_buy_volume"] for c in chunk),
+                "taker_buy_volume": sum(c.get("taker_buy_volume", 0) for c in chunk),
+            })
+        # Always include the partial (forming) period at the end so the current
+        # price is never dropped due to an odd/misaligned candle count.
+        remainder = candles[num_complete * n:]
+        if remainder:
+            result.append({
+                "timestamp":        remainder[0]["timestamp"],
+                "open":             remainder[0]["open"],
+                "high":             max(c["high"] for c in remainder),
+                "low":              min(c["low"]  for c in remainder),
+                "close":            remainder[-1]["close"],
+                "volume":           sum(c["volume"] for c in remainder),
+                "taker_buy_volume": sum(c.get("taker_buy_volume", 0) for c in remainder),
             })
         return result
