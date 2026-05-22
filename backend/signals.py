@@ -1,6 +1,38 @@
 from typing import Dict, List
 
 
+# ── Market-cap volatility tier ────────────────────────────────────────────────
+# Smaller caps move more per candle — BTC rarely does 5% in 1H but HYPE can.
+# We scale the ATR cap (not the SL multiplier) so stops are sized to each
+# asset's actual volatility range rather than one-size-fits-all.
+#
+# Tier thresholds (USD market cap) and their ATR cap multipliers:
+#   Mega  (>$100 B) — BTC, ETH          → 1.0×  (base)
+#   Large ($10B-100B) — SOL, BNB, XRP   → 1.5×
+#   Mid   ($1B-10B)  — LINK, ALGO, AAVE → 2.0×
+#   Small ($200M-1B) — KAS, SUI, HYPE   → 3.0×
+#   Micro (<$200M)   — tiny alts        → 4.0×
+#
+# Typical 1H ATR %: Mega 0.5-1.5 | Large 1-3 | Mid 2-5 | Small 4-10 | Micro 8-20
+
+_MCAP_TIERS = [
+    (100_000_000_000, "mega",  "Mega Cap (>$100 B)",     1.0),
+    ( 10_000_000_000, "large", "Large Cap ($10B-$100B)", 1.5),
+    (  1_000_000_000, "mid",   "Mid Cap ($1B-$10B)",     2.0),
+    (    200_000_000, "small", "Small Cap ($200M-$1B)",  3.0),
+    (              0, "micro", "Micro Cap (<$200M)",     4.0),
+]
+
+def _mcap_tier(market_cap):
+    """Return (tier_id, tier_label, atr_mult) for the given market cap (USD)."""
+    if market_cap is None:
+        return "mid", "Unknown Cap", 2.0   # safe default
+    for threshold, tid, label, mult in _MCAP_TIERS:
+        if market_cap >= threshold:
+            return tid, label, mult
+    return "micro", "Micro Cap (<$200M)", 4.0
+
+
 def generate_signal(analysis: Dict) -> Dict:
     score = 0
     bull_reasons: List[str] = []
@@ -366,13 +398,19 @@ def generate_signal(analysis: Dict) -> Dict:
         tier = "Confirmed"
         size_guide = "Full position — maximum confluence, can consider scaling"
 
+    # ── Market-cap volatility tier — dynamic ATR cap ──────────────────────────
+    market_cap = analysis.get("market_cap")
+    vol_tier_id, vol_tier_label, atr_mult = _mcap_tier(market_cap)
+
     # ── Entry / SL / TP ───────────────────────────────────────────────────────
     entry = sl = None
     tp_targets: List[float] = []
     rr_ratio = None
+    sl_pct = tp1_pct = tp2_pct = tp3_pct = None
 
     timeframe = analysis.get("timeframe", "1W")
 
+    # SL distance multiplier — same across market caps; wider ATR cap does the work
     TF_SL_MULT = {
         "1H":  0.8, "2H":  0.9,
         "4H":  1.0, "8H":  1.0, "12H": 1.2,
@@ -386,19 +424,19 @@ def generate_signal(analysis: Dict) -> Dict:
     tp2_m = sl_m * TP2_RR
     tp3_m = sl_m * TP3_RR
 
-    TF_MAX_ATR_PCT = {
-        "1H":  0.015,
-        "2H":  0.022,
-        "4H":  0.030,
-        "8H":  0.040,
-        "12H": 0.050,
-        "1D":  0.065,
-        "1W":  0.090,
-        "2W":  0.100,
-        "3W":  0.100,
-        "1M":  0.100,
+    # Base ATR cap per timeframe — calibrated for mega-cap (BTC/ETH level).
+    # Scaled up by atr_mult so smaller caps get room matching their true volatility:
+    #   1H BTC cap: 1.5%  |  1H HYPE (small) cap: 1.5% × 3.0 = 4.5%
+    #   1W BTC cap: 9.0%  |  1W HYPE cap: 9.0% × 3.0 = 27%
+    TF_BASE_ATR_PCT = {
+        "1H":  0.015, "2H":  0.022,
+        "4H":  0.030, "8H":  0.040, "12H": 0.050,
+        "1D":  0.065, "1W":  0.090,
+        "2W":  0.100, "3W":  0.100, "1M":  0.100,
     }
-    max_atr_abs = current_price * TF_MAX_ATR_PCT.get(timeframe, 0.09)
+    base_pct     = TF_BASE_ATR_PCT.get(timeframe, 0.09)
+    max_atr_pct  = base_pct * atr_mult          # e.g. 0.015 × 3.0 = 0.045 (4.5%)
+    max_atr_abs  = current_price * max_atr_pct
 
     if candles and len(candles) >= 14 and current_price > 0:
         atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
@@ -427,6 +465,11 @@ def generate_signal(analysis: Dict) -> Dict:
 
         if sl and sl != entry and tp_targets:
             rr_ratio = round(abs(tp_targets[1] - entry) / abs(sl - entry), 2)
+            # Percentage distances from entry (always positive)
+            sl_pct  = round(abs(sl - entry) / entry * 100, 2)
+            tp1_pct = round(abs(tp_targets[0] - entry) / entry * 100, 2)
+            tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2)
+            tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2)
 
     return {
         "direction": direction,
@@ -434,10 +477,14 @@ def generate_signal(analysis: Dict) -> Dict:
         "strength": strength,
         "tier": tier,
         "size_guide": size_guide,
+        "vol_tier": vol_tier_id,
+        "vol_tier_label": vol_tier_label,
         "bullish_reasons": bull_reasons,
         "bearish_reasons": bear_reasons,
         "entry": entry,
         "sl": sl,
+        "sl_pct": sl_pct,
         "tp_targets": tp_targets,
+        "tp_pcts": [tp1_pct, tp2_pct, tp3_pct],
         "rr_ratio": rr_ratio,
     }

@@ -459,6 +459,13 @@ a:hover { color: var(--gold2); }
   font-size: .68rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: .8px; color: var(--muted); margin-bottom: 2px;
   padding-bottom: 4px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.vol-tier-badge {
+  font-size: .62rem; font-weight: 600; text-transform: none; letter-spacing: 0;
+  padding: 1px 7px; border-radius: 8px;
+  background: rgba(245,158,11,.15); color: var(--gold); border: 1px solid rgba(245,158,11,.3);
+  white-space: nowrap;
 }
 .tm-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .tm-label { font-size: .75rem; color: var(--muted2); white-space: nowrap; }

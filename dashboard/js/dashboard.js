@@ -835,11 +835,14 @@ function renderTradeManagement(a) {
     return;
   }
 
-  const isLong = dir === 'LONG';
-  const entry  = sig.entry;
-  const sl     = sig.sl;
-  const tps    = sig.tp_targets || [];
-  const rr     = sig.rr_ratio;
+  const isLong   = dir === 'LONG';
+  const entry    = sig.entry;
+  const sl       = sig.sl;
+  const tps      = sig.tp_targets || [];
+  const rr       = sig.rr_ratio;
+  const slPct    = sig.sl_pct;
+  const tpPcts   = sig.tp_pcts || [];
+  const volTier  = sig.vol_tier_label || '';
 
   // Best active flag for this direction
   const matchFlag = (a.flags || []).find(f =>
@@ -861,29 +864,35 @@ function renderTradeManagement(a) {
 
   const flagTarget = matchFlag ? matchFlag.target : null;
 
+  const pctTag = (v, good) => v != null
+    ? `<span class="tm-pct ${good ? 'bull' : 'bear'}">${good ? '+' : '-'}${v}%</span>` : '';
+
   const levelsHTML = `
     <div class="tm-col">
-      <div class="tm-section-title">Levels</div>
+      <div class="tm-section-title">
+        Levels
+        ${volTier ? `<span class="vol-tier-badge">${volTier}</span>` : ''}
+      </div>
       <div class="tm-row">
         <span class="tm-label">Entry</span>
         <span class="tm-val">${p(entry)}</span>
       </div>
       <div class="tm-row">
         <span class="tm-label">Stop Loss</span>
-        <span class="tm-val bear">${p(sl)} ${pctHtml(sl, entry, false)}</span>
+        <span class="tm-val bear">${p(sl)} ${pctTag(slPct, false)}</span>
       </div>
       <div class="tm-divider"></div>
       <div class="tm-row">
         <span class="tm-label">TP 1 <span style="color:var(--muted);font-size:.68rem">— sell 50%</span></span>
-        <span class="tm-val bull">${p(tps[0])} ${pctHtml(tps[0], entry, true)}</span>
+        <span class="tm-val bull">${p(tps[0])} ${pctTag(tpPcts[0], true)}</span>
       </div>
       <div class="tm-row">
         <span class="tm-label">TP 2 <span style="color:var(--muted);font-size:.68rem">— sell 30%</span></span>
-        <span class="tm-val bull">${p(tps[1])} ${pctHtml(tps[1], entry, true)}</span>
+        <span class="tm-val bull">${p(tps[1])} ${pctTag(tpPcts[1], true)}</span>
       </div>
       <div class="tm-row">
         <span class="tm-label">TP 3 <span style="color:var(--muted);font-size:.68rem">— sell 20%</span></span>
-        <span class="tm-val bull">${p(tps[2])} ${pctHtml(tps[2], entry, true)}</span>
+        <span class="tm-val bull">${p(tps[2])} ${pctTag(tpPcts[2], true)}</span>
       </div>
       ${flagTarget ? `
       <div class="tm-row">
