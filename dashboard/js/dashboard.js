@@ -1586,64 +1586,83 @@ function renderOrderBook(ob) {
   if (!buyEl || !sellEl) return;
 
   if (!ob || !ob.biggest_bid) {
-    const msg = '<p class="empty">Order book data unavailable — no supported exchange has depth data for this asset</p>';
+    const msg = '<p class="empty">Order book data unavailable</p>';
     buyEl.innerHTML = sellEl.innerHTML = msg;
-    if (buySrc)  buySrc.textContent  = 'Unavailable';
+    if (buySrc)  buySrc.textContent = 'Unavailable';
     if (sellSrc) sellSrc.textContent = 'Unavailable';
     return;
   }
 
-  const srcLabel = ob.source ? ob.source.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Live Order Book';
-  if (buySrc)  buySrc.textContent  = srcLabel;
+  const srcLabel = ob.source ? ob.source.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Live';
+  if (buySrc)  buySrc.textContent = srcLabel;
   if (sellSrc) sellSrc.textContent = srcLabel;
 
+  // ── Imbalance badge ────────────────────────────────────────────────────────
   const ratio = ob.bid_ask_ratio || 1;
-  const ratioLabel = ratio > 1.2 ? '🟢 Bid-heavy (bullish pressure)' :
-                     ratio < 0.8 ? '🔴 Ask-heavy (selling pressure)' :
-                     '⚪ Balanced';
+  const imb   = ob.imbalance || 'balanced';
+  const imbCfg = {
+    strong_bid: { color: '#10b981', bg: 'rgba(16,185,129,.15)', label: `▲▲ Strong Buy Pressure  ${ratio.toFixed(2)}×`, icon: '🟢' },
+    bid_heavy:  { color: '#34d399', bg: 'rgba(52,211,153,.12)', label: `▲ Bid-Heavy  ${ratio.toFixed(2)}×`,            icon: '🟢' },
+    balanced:   { color: 'var(--muted)', bg: 'transparent',    label: `Balanced  ${ratio.toFixed(2)}×`,               icon: '⚪' },
+    ask_heavy:  { color: '#f87171', bg: 'rgba(248,113,113,.12)',label: `▼ Ask-Heavy  ${(1/ratio).toFixed(2)}×`,        icon: '🔴' },
+    strong_ask: { color: '#ef4444', bg: 'rgba(239,68,68,.15)', label: `▼▼ Strong Sell Pressure  ${(1/ratio).toFixed(2)}×`, icon: '🔴' },
+  };
+  const ic = imbCfg[imb] || imbCfg.balanced;
+  const imbHTML = `<div class="ob-imbalance" style="background:${ic.bg};border-color:${ic.color};color:${ic.color}">
+    ${ic.icon} ${ic.label}
+    <span class="ob-imb-detail">${fmtK(ob.near_bid_usd)} bid vs ${fmtK(ob.near_ask_usd)} ask within ±2%</span>
+  </div>`;
 
-  const mcapStr = ob.market_cap
-    ? ob.market_cap >= 1e12 ? `$${(ob.market_cap/1e12).toFixed(2)}T`
-    : ob.market_cap >= 1e9  ? `$${(ob.market_cap/1e9).toFixed(1)}B`
-    : `$${(ob.market_cap/1e6).toFixed(0)}M`
-    : null;
-
-  function wallHTML(w, kind) {
-    const dist = w.distance_pct;
-    const distStr = dist === 0 ? 'at market' :
-                    dist > 0   ? `+${dist.toFixed(3)}% above` :
-                                 `${dist.toFixed(3)}% below`;
-    const usdVal = w.usd_value >= 1e9 ? `$${(w.usd_value/1e9).toFixed(2)}B`
-                 : w.usd_value >= 1e6 ? `$${(w.usd_value/1e6).toFixed(2)}M`
-                 : `$${(w.usd_value/1e3).toFixed(1)}K`;
-
-    const sigColors = { high: 'var(--bull)', medium: '#f59e0b', low: 'var(--muted)' };
-    const sigLabels = { high: '⚡ High impact', medium: '〰 Medium impact', low: '· Low impact' };
-    const sigColor  = sigColors[w.significance] || 'var(--muted)';
-    const sigLabel  = sigLabels[w.significance] || '—';
-
-    const mcapRow = w.mcap_pct != null ? `
-      <div class="spike-row">
-        <span class="spike-label">Market Cap impact</span>
-        <span class="spike-val" style="color:${sigColor}">${w.mcap_pct.toFixed(4)}% &nbsp;${sigLabel}</span>
-      </div>` : '';
-    const mcapRefRow = mcapStr ? `
-      <div class="spike-row">
-        <span class="spike-label">Market Cap</span>
-        <span class="spike-val" style="color:var(--muted)">${mcapStr}</span>
-      </div>` : '';
-
-    return `
-      <div class="spike-ratio ${kind}">${usdVal}</div>
-      <div class="spike-row"><span class="spike-label">Price Level</span><span class="spike-val">${fmtPrice(w.price)}</span></div>
-      <div class="spike-row"><span class="spike-label">Qty (coins)</span><span class="spike-val">${w.qty.toLocaleString('en-US', {maximumFractionDigits: 4})}</span></div>
-      <div class="spike-row"><span class="spike-label">Distance</span><span class="spike-val">${distStr}</span></div>
-      ${mcapRow}${mcapRefRow}
-    `;
+  // ── Wall renderer (depth bars) ─────────────────────────────────────────────
+  function wallsHTML(walls, kind) {
+    if (!walls || !walls.length) return '<p class="empty">—</p>';
+    const maxUsd = walls[0].usd_value;
+    return walls.map((w, i) => {
+      const barPct  = Math.round(w.usd_value / maxUsd * 100);
+      const usdVal  = w.usd_value >= 1e9 ? `$${(w.usd_value/1e9).toFixed(2)}B`
+                    : w.usd_value >= 1e6 ? `$${(w.usd_value/1e6).toFixed(2)}M`
+                    : `$${(w.usd_value/1e3).toFixed(1)}K`;
+      const distAbs = Math.abs(w.distance_pct);
+      const distStr = distAbs < 0.01 ? 'at market'
+                    : w.distance_pct > 0 ? `+${w.distance_pct.toFixed(2)}% above`
+                    :                      `${w.distance_pct.toFixed(2)}% below`;
+      const sigColors  = { high: '#10b981', medium: '#f59e0b', low: 'var(--muted2)' };
+      const barColor   = kind === 'buy' ? '#10b981' : '#ef4444';
+      const sigColor   = sigColors[w.significance] || 'var(--muted2)';
+      const dlabColors = { Immediate: '#f59e0b', Near: 'var(--muted2)', Far: 'var(--muted2)' };
+      const dlabColor  = dlabColors[w.dist_label] || 'var(--muted2)';
+      const mcapStr    = w.mcap_pct != null
+        ? `<span style="color:${sigColor}">${w.mcap_pct >= 0.01 ? '⚡' : w.mcap_pct >= 0.001 ? '〰' : '·'} ${w.mcap_pct.toFixed(3)}% mcap</span>` : '';
+      const topWall    = i === 0 ? ' ob-wall-top' : '';
+      return `<div class="ob-wall${topWall}">
+        <div class="ob-wall-header">
+          <span class="ob-wall-price">${fmtPrice(w.price)}</span>
+          <span class="ob-wall-usd">${usdVal}</span>
+          <span class="ob-wall-dlabel" style="color:${dlabColor}">${w.dist_label} · ${distStr}</span>
+        </div>
+        <div class="ob-bar-track">
+          <div class="ob-bar-fill" style="width:${barPct}%;background:${barColor}"></div>
+        </div>
+        ${mcapStr ? `<div class="ob-wall-mcap">${mcapStr}</div>` : ''}
+      </div>`;
+    }).join('');
   }
 
-  buyEl.innerHTML  = wallHTML(ob.biggest_bid, 'buy')  + `<div class="spike-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span class="spike-label">±2% Imbalance</span><span class="spike-val" style="font-size:.8rem">${ratioLabel}</span></div>`;
-  sellEl.innerHTML = wallHTML(ob.biggest_ask, 'sell') + `<div class="spike-row" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span class="spike-label">Bid vs Ask (±2%)</span><span class="spike-val">${fmtK(ob.near_bid_usd)} <span style="color:var(--muted)">vs</span> ${fmtK(ob.near_ask_usd)}</span></div>`;
+  // ── Air pocket warnings ────────────────────────────────────────────────────
+  function airHTML(pocket, side) {
+    if (!pocket) return '';
+    const dir = side === 'below' ? '📉 below' : '📈 above';
+    return `<div class="ob-air-pocket">
+      ⚠ Air pocket ${dir}: <strong>${pocket.gap_pct.toFixed(1)}% gap</strong>
+      ${fmtPrice(pocket.price_from)} → ${fmtPrice(pocket.price_to)} — thin liquidity, fast move risk
+    </div>`;
+  }
+
+  buyEl.innerHTML  = imbHTML
+    + wallsHTML(ob.top_bids, 'buy')
+    + airHTML(ob.air_pocket_below, 'below');
+  sellEl.innerHTML = wallsHTML(ob.top_asks, 'sell')
+    + airHTML(ob.air_pocket_above, 'above');
 }
 
 /* ─── Holiday Banner ──────────────────────────────────────────────────────── */

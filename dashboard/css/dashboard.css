@@ -870,3 +870,31 @@ a:hover { color: var(--gold2); }
   #rsiGauge, #fngGauge { width: 76px; height: 46px; }
 }
 
+/* ── Order Book Wall Cards ───────────────────────────────────────────────── */
+.ob-imbalance {
+  display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid; border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 10px;
+  font-size: .78rem; font-weight: 700; letter-spacing: .02em;
+}
+.ob-imb-detail { font-weight: 400; font-size: .68rem; color: inherit; opacity: .8; }
+
+.ob-wall { margin-bottom: 8px; }
+.ob-wall-top { margin-bottom: 10px; }
+.ob-wall-header {
+  display: flex; align-items: baseline; gap: 6px;
+  flex-wrap: wrap; margin-bottom: 3px;
+}
+.ob-wall-price { font-family: var(--mono); font-size: .8rem; font-weight: 700; color: var(--text); }
+.ob-wall-usd   { font-family: var(--mono); font-size: .8rem; font-weight: 700; color: var(--accent); }
+.ob-wall-dlabel { font-size: .65rem; color: var(--muted); margin-left: auto; }
+.ob-bar-track  { height: 5px; background: var(--card2); border-radius: 3px; overflow: hidden; }
+.ob-bar-fill   { height: 100%; border-radius: 3px; transition: width .4s ease; }
+.ob-wall-mcap  { font-size: .65rem; margin-top: 2px; }
+
+.ob-air-pocket {
+  margin-top: 8px; padding: 6px 8px; border-radius: 6px;
+  background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3);
+  color: #f59e0b; font-size: .7rem; line-height: 1.4;
+}
+

@@ -657,55 +657,132 @@ class BinanceClient:
                 return {}
 
             current     = bids[0][0]
-            bucket_size = current * 0.001
+            bucket_pct  = 0.001          # 0.1% buckets for fine clustering
+            bucket_size = current * bucket_pct
+            zone_size   = current * 0.005  # 0.5% zones for grouping nearby walls
 
-            def cluster_wall(orders):
+            mcap = market_cap if market_cap is not None else self._get_market_cap(symbol)
+
+            def cluster_side(orders, top_n=5):
+                """Cluster into 0.1% buckets, merge into 0.5% zones, return top N by USD."""
                 buckets: Dict[float, dict] = {}
                 for price, qty in orders:
-                    key = round(round(price / bucket_size) * bucket_size, 2)
+                    key = round(round(price / bucket_size) * bucket_size, 8)
                     if key not in buckets:
                         buckets[key] = {"price": key, "qty": 0.0, "usd": 0.0}
                     buckets[key]["qty"] += qty
                     buckets[key]["usd"] += price * qty
-                return max(buckets.values(), key=lambda x: x["usd"]) if buckets else None
 
-            big_bid = cluster_wall(bids)
-            big_ask = cluster_wall(asks)
+                # Merge adjacent buckets within 0.5% into zones
+                sorted_prices = sorted(buckets.keys())
+                zones = []
+                for p in sorted_prices:
+                    b = buckets[p]
+                    if zones and abs(p - zones[-1]["price"]) <= zone_size:
+                        zones[-1]["usd"] += b["usd"]
+                        zones[-1]["qty"] += b["qty"]
+                        # Keep price of heaviest bucket in zone
+                        if b["usd"] > zones[-1]["_peak_usd"]:
+                            zones[-1]["price"]     = b["price"]
+                            zones[-1]["_peak_usd"] = b["usd"]
+                    else:
+                        zones.append({"price": b["price"], "qty": b["qty"],
+                                      "usd": b["usd"], "_peak_usd": b["usd"]})
+
+                zones.sort(key=lambda x: x["usd"], reverse=True)
+                return zones[:top_n]
+
+            def air_pocket(zones, side):
+                """Largest price gap between consecutive wall zones within 5% of current."""
+                limit = current * (0.95 if side == "bid" else 1.05)
+                nearby = [z for z in sorted(zones, key=lambda x: x["price"])
+                          if (side == "bid" and z["price"] >= limit) or
+                             (side == "ask" and z["price"] <= limit)]
+                if len(nearby) < 2:
+                    return None
+                max_gap = 0.0
+                gap_info = None
+                for i in range(len(nearby) - 1):
+                    gap = abs(nearby[i+1]["price"] - nearby[i]["price"])
+                    gap_pct = gap / current * 100
+                    if gap_pct > max_gap:
+                        max_gap = gap_pct
+                        gap_info = {
+                            "gap_pct":    round(gap_pct, 2),
+                            "price_from": round(nearby[i]["price"],   8),
+                            "price_to":   round(nearby[i+1]["price"], 8),
+                        }
+                return gap_info if (gap_info and gap_info["gap_pct"] >= 1.5) else None
+
+            def wall_dict(w):
+                dist_pct = (w["price"] - current) / current * 100
+                mcap_pct = round(w["usd"] / mcap * 100, 6) if mcap else None
+                if mcap_pct is None:          sig = None
+                elif mcap_pct >= 0.01:        sig = "high"
+                elif mcap_pct >= 0.001:       sig = "medium"
+                else:                         sig = "low"
+                abs_dist = abs(dist_pct)
+                if abs_dist < 1.0:            dist_label = "Immediate"
+                elif abs_dist < 3.0:          dist_label = "Near"
+                else:                         dist_label = "Far"
+                return {
+                    "price":        w["price"],
+                    "qty":          round(w["qty"], 4),
+                    "usd_value":    round(w["usd"], 2),
+                    "distance_pct": round(dist_pct, 3),
+                    "dist_label":   dist_label,
+                    "mcap_pct":     mcap_pct,
+                    "significance": sig,
+                }
+
+            bid_zones = cluster_side(bids)
+            ask_zones = cluster_side(asks)
+
+            # All clustered buckets for air pocket detection
+            all_bid_buckets: Dict[float, dict] = {}
+            for price, qty in bids:
+                key = round(round(price / bucket_size) * bucket_size, 8)
+                if key not in all_bid_buckets:
+                    all_bid_buckets[key] = {"price": key, "qty": 0.0, "usd": 0.0}
+                all_bid_buckets[key]["qty"] += qty
+                all_bid_buckets[key]["usd"] += price * qty
+            all_ask_buckets: Dict[float, dict] = {}
+            for price, qty in asks:
+                key = round(round(price / bucket_size) * bucket_size, 8)
+                if key not in all_ask_buckets:
+                    all_ask_buckets[key] = {"price": key, "qty": 0.0, "usd": 0.0}
+                all_ask_buckets[key]["qty"] += qty
+                all_ask_buckets[key]["usd"] += price * qty
 
             near_bids = [(p, q) for p, q in bids if p >= current * 0.98]
             near_asks = [(p, q) for p, q in asks if p <= current * 1.02]
             bid_usd   = sum(p * q for p, q in near_bids)
             ask_usd   = sum(p * q for p, q in near_asks)
 
-            mcap = market_cap if market_cap is not None else self._get_market_cap(symbol)
+            # Imbalance signal
+            ratio = bid_usd / (ask_usd + 1e-9)
+            if   ratio >= 2.0:  imbalance = "strong_bid"
+            elif ratio >= 1.5:  imbalance = "bid_heavy"
+            elif ratio <= 0.5:  imbalance = "strong_ask"
+            elif ratio <= 0.67: imbalance = "ask_heavy"
+            else:               imbalance = "balanced"
 
-            def wall_dict(w):
-                mcap_pct = round(w["usd"] / mcap * 100, 6) if mcap else None
-                if mcap_pct is None:
-                    sig = None
-                elif mcap_pct >= 0.005:
-                    sig = "high"
-                elif mcap_pct >= 0.0005:
-                    sig = "medium"
-                else:
-                    sig = "low"
-                return {
-                    "price":          round(w["price"], 2),
-                    "qty":            round(w["qty"], 4),
-                    "usd_value":      round(w["usd"], 2),
-                    "distance_pct":   round((w["price"] - current) / current * 100, 3),
-                    "mcap_pct":       mcap_pct,
-                    "significance":   sig,
-                }
+            top_bids = [wall_dict(z) for z in bid_zones]
+            top_asks = [wall_dict(z) for z in ask_zones]
 
             return {
-                "biggest_bid":   wall_dict(big_bid) if big_bid else None,
-                "biggest_ask":   wall_dict(big_ask) if big_ask else None,
-                "bid_ask_ratio": round(bid_usd / (ask_usd + 1e-9), 3),
-                "near_bid_usd":  round(bid_usd, 2),
-                "near_ask_usd":  round(ask_usd, 2),
-                "current_price": round(current, 2),
-                "market_cap":    round(mcap, 0) if mcap else None,
+                "biggest_bid":      top_bids[0] if top_bids else None,
+                "biggest_ask":      top_asks[0] if top_asks else None,
+                "top_bids":         top_bids,
+                "top_asks":         top_asks,
+                "bid_ask_ratio":    round(ratio, 3),
+                "imbalance":        imbalance,
+                "near_bid_usd":     round(bid_usd, 2),
+                "near_ask_usd":     round(ask_usd, 2),
+                "air_pocket_below": air_pocket(list(all_bid_buckets.values()), "bid"),
+                "air_pocket_above": air_pocket(list(all_ask_buckets.values()), "ask"),
+                "current_price":    current,
+                "market_cap":       round(mcap, 0) if mcap else None,
             }
 
         # 1. Binance futures
