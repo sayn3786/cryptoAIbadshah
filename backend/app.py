@@ -17,6 +17,7 @@ from binance import BinanceClient
 from coinglass import CoinGlassClient
 from cvd_sources import fetch_cvd_from_source
 from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence, calculate_macd, calculate_ema_trend
+from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
 from signals import generate_signal
@@ -123,6 +124,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     ema_trend    = calculate_ema_trend(closes)
     long_short   = client.get_long_short_ratio(bs)
     fear_greed   = _fetch_fear_greed()
+    news         = fetch_news_sentiment(bs)
     rsi_series = calculate_rsi_series(closes)
     current_rsi = next((v for v in reversed(rsi_series) if v is not None), None)
 
@@ -178,6 +180,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "ema_trend":     ema_trend,
         "long_short":    long_short,
         "fear_greed":    fear_greed,
+        "news":          news,
     }
     analysis["signal"] = generate_signal(analysis)
     return analysis

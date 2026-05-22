@@ -292,6 +292,29 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= 12
             bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market greedy, contrarian bearish lean")
 
+    # ── News Sentiment ────────────────────────────────────────────────────────
+    # CryptoPanic community votes + keyword analysis (CoinDesk / CoinTelegraph RSS).
+    # Major events (ETF approval, exchange hack, govt ban) move markets 10-30%;
+    # routine news is noise. Capped at ±20 — confirmation role, not a trigger.
+    news        = analysis.get("news") or {}
+    news_signal = news.get("signal", "neutral")
+    news_bull   = news.get("bullish", 0)
+    news_bear   = news.get("bearish", 0)
+    if news_signal == "bullish":
+        pts = min(20, max(8, news_bull * 5))
+        score += pts
+        bull_reasons.append(
+            f"News sentiment bullish — {news_bull} bullish vs {news_bear} bearish "
+            f"articles in last 48h (CryptoPanic/CoinDesk/CoinTelegraph)"
+        )
+    elif news_signal == "bearish":
+        pts = min(20, max(8, news_bear * 5))
+        score -= pts
+        bear_reasons.append(
+            f"News sentiment bearish — {news_bear} bearish vs {news_bull} bullish "
+            f"articles in last 48h (CryptoPanic/CoinDesk/CoinTelegraph)"
+        )
+
     # ── Elliott Wave ──────────────────────────────────────────────────────────
     # Lowest-reliability signal in this system. EW is highly subjective even
     # for expert humans; algorithmic labelling has multiple valid interpretations.
@@ -311,7 +334,7 @@ def generate_signal(analysis: Dict) -> Dict:
     #   CVD div spot-led already counted above (mutually exclusive with confirmed),
     #   RSI +22, OI +12, Flags +20, FVGs +20, Futures CVD +8, Elliott +8 = ~191
     # In practice signals are partially overlapping so 140 is a realistic ceiling.
-    MAX_SCORE = 185.0
+    MAX_SCORE = 205.0
     if score >= 30:
         direction = "LONG"
         strength = min(int(score / MAX_SCORE * 100), 100)

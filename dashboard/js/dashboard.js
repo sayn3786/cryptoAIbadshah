@@ -159,6 +159,7 @@ function renderAll(a) {
   renderPrice(a);
   renderSignal(a.signal);
   renderMACDCard(a.macd);
+  renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
   renderLSCard(a.long_short);
   renderFNGCard(a.fear_greed);
@@ -533,6 +534,57 @@ function renderFNGCard(fg) {
   ctx.moveTo(cx, cy);
   ctx.lineTo(cx + (r - 4) * Math.cos(angle), cy + (r - 4) * Math.sin(angle));
   ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+}
+
+function renderNewsCard(news) {
+  const card    = document.getElementById('newsCard');
+  const badge   = document.getElementById('newsSignalBadge');
+  const counts  = document.getElementById('newsCounts');
+  const list    = document.getElementById('newsList');
+  const srcEl   = document.getElementById('newsSource');
+  if (!card || !news) return;
+
+  const signal = news.signal || 'neutral';
+  const sigLabels = { bullish: 'Bullish', bearish: 'Bearish', neutral: 'Neutral' };
+  const sigCls    = { bullish: 'bull',    bearish: 'bear',    neutral: 'muted2' };
+  badge.textContent = sigLabels[signal] || 'Neutral';
+  badge.className   = `news-signal-badge news-sig-${signal}`;
+
+  const b = news.bullish || 0, bear = news.bearish || 0, n = news.neutral || 0;
+  counts.textContent = `${b} bullish · ${bear} bearish · ${n} neutral (last 48h)`;
+
+  if (srcEl) {
+    srcEl.textContent = news.source === 'cryptopanic' ? 'CryptoPanic' : news.source === 'rss' ? 'RSS' : '';
+  }
+
+  const articles = news.articles || [];
+  if (!articles.length) {
+    list.innerHTML = '<div class="news-empty">No recent news found for this coin.</div>';
+    return;
+  }
+
+  const timeAgo = (iso) => {
+    try {
+      const diff = (Date.now() - new Date(iso).getTime()) / 60000;
+      if (diff < 60)   return `${Math.round(diff)}m ago`;
+      if (diff < 1440) return `${Math.round(diff / 60)}h ago`;
+      return `${Math.round(diff / 1440)}d ago`;
+    } catch { return ''; }
+  };
+
+  list.innerHTML = articles.slice(0, 6).map(a => {
+    const sc  = a.sentiment === 'bullish' ? 'bull' : a.sentiment === 'bearish' ? 'bear' : 'muted2';
+    const dot = a.sentiment === 'bullish' ? '▲' : a.sentiment === 'bearish' ? '▼' : '·';
+    const src = (a.source || '').replace('www.', '');
+    const href = a.url ? `href="${a.url}" target="_blank" rel="noopener"` : '';
+    return `<div class="news-item">
+      <span class="news-dot ${sc}">${dot}</span>
+      <div class="news-body">
+        <a class="news-title ${href ? '' : 'no-link'}" ${href}>${a.title}</a>
+        <span class="news-meta">${src} · ${timeAgo(a.published_at)}</span>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function renderCVDPanel(id, cvd, series, valId, trendId) {
