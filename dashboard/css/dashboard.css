@@ -815,4 +815,22 @@ a:hover { color: var(--gold2); }
   }
   .journal-tabs { grid-template-columns: 1fr; }
   .btn-primary, .copy-btn { width: 100%; }
+  .row-indicators { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── New indicator row ───────────────────────────────────────────────────── */
+.row-indicators { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+
+.macd-bars { display: flex; align-items: flex-end; gap: 2px; height: 36px; margin-top: 6px; }
+.macd-hist-bar { width: 14px; border-radius: 2px 2px 0 0; }
+.macd-hist-bar.bull { background: var(--bull); }
+.macd-hist-bar.bear { background: var(--bear); }
+
+.ema-rows  { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.ema-row   { display: flex; justify-content: space-between; font-size: .72rem; }
+.ema-label { color: var(--muted2); }
+
+.ls-bar-wrap { margin: 6px 0 3px; }
+.ls-bar-bg   { height: 6px; background: var(--bear); border-radius: 3px; overflow: hidden; }
+.ls-bar-fill { height: 100%; border-radius: 3px 0 0 3px; transition: width .5s ease; }
+.ls-labels   { display: flex; justify-content: space-between; font-size: .68rem; margin-bottom: 4px; }

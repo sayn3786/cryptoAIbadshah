@@ -2,6 +2,8 @@
 import os
 import sys
 import json
+import time
+from typing import Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -14,7 +16,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from cvd_sources import fetch_cvd_from_source
-from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence
+from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence, calculate_macd, calculate_ema_trend
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
 from signals import generate_signal
@@ -67,6 +69,30 @@ def options(_p):
     return Response(status=204)
 
 
+import threading as _threading
+
+_fng_cache: Dict = {"value": None, "label": None, "ts": 0}
+_fng_lock = _threading.Lock()
+
+def _fetch_fear_greed() -> Dict:
+    """Fear & Greed Index from Alternative.me (free, updates daily). Cached 1 h."""
+    with _fng_lock:
+        if time.time() - _fng_cache["ts"] < 3600 and _fng_cache["value"] is not None:
+            return dict(_fng_cache)
+    try:
+        import urllib.request, json as _json
+        with urllib.request.urlopen("https://api.alternative.me/fng/?limit=1", timeout=5) as r:
+            d = _json.loads(r.read())["data"][0]
+            result = {"value": int(d["value"]), "label": d["value_classification"]}
+        with _fng_lock:
+            _fng_cache.update(result)
+            _fng_cache["ts"] = time.time()
+        return result
+    except Exception:
+        with _fng_lock:
+            return {"value": _fng_cache.get("value"), "label": _fng_cache.get("label")}
+
+
 # ── Core analysis ─────────────────────────────────────────────────────────────
 def build_analysis(symbol: str, timeframe: str) -> dict:
     bs       = SYMBOLS[symbol]
@@ -93,6 +119,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         liq     = client.get_liquidations(bs)
 
     closes     = [c["close"] for c in spot]
+    macd         = calculate_macd(closes)
+    ema_trend    = calculate_ema_trend(closes)
+    long_short   = client.get_long_short_ratio(bs)
+    fear_greed   = _fetch_fear_greed()
     rsi_series = calculate_rsi_series(closes)
     current_rsi = next((v for v in reversed(rsi_series) if v is not None), None)
 
@@ -144,6 +174,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "demo_mode":         spot_source == "demo",
         "coinglass_enabled": cg_client.enabled,
         "cvd_divergence":    detect_cvd_divergence(spot_cvd, fut_cvd, spot),
+        "macd":          macd,
+        "ema_trend":     ema_trend,
+        "long_short":    long_short,
+        "fear_greed":    fear_greed,
     }
     analysis["signal"] = generate_signal(analysis)
     return analysis

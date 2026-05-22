@@ -158,6 +158,10 @@ function renderAll(a) {
 
   renderPrice(a);
   renderSignal(a.signal);
+  renderMACDCard(a.macd);
+  renderEMACard(a.ema_trend);
+  renderLSCard(a.long_short);
+  renderFNGCard(a.fear_greed);
   renderRSICard(a.rsi);
   renderFunding(a.funding_rate);
   renderOI(a.open_interest);
@@ -418,6 +422,117 @@ function renderCVDDivergence(div) {
     <span class="cvd-div-icon">${icons[div.type] || '·'}</span>
     <span class="cvd-div-label ${sigCls}">${div.label}</span>
     <span class="cvd-div-detail">${div.detail}</span>`;
+}
+
+function renderMACDCard(m) {
+  if (!m) return;
+  const trendEl = document.getElementById('macdTrend');
+  const crossEl = document.getElementById('macdCross');
+  const barsEl  = document.getElementById('macdHistBars');
+  if (!trendEl) return;
+  const trend = m.trend || 'neutral';
+  trendEl.textContent = trend.charAt(0).toUpperCase() + trend.slice(1);
+  trendEl.style.color = trend === 'bullish' ? 'var(--bull)' : trend === 'bearish' ? 'var(--bear)' : 'var(--neutral)';
+
+  let crossText = '—', crossColor = 'var(--muted2)';
+  if (m.cross === 'bullish' || m.zero_cross === 'bullish') {
+    crossText  = '▲ Bullish cross — momentum turning up';
+    crossColor = 'var(--bull)';
+  } else if (m.cross === 'bearish' || m.zero_cross === 'bearish') {
+    crossText  = '▼ Bearish cross — momentum turning down';
+    crossColor = 'var(--bear)';
+  } else if (m.histogram != null) {
+    const sign = m.histogram > 0 ? '+' : '';
+    crossText = `Histogram ${sign}${Number(m.histogram).toFixed(5)}`;
+    crossColor = m.histogram > 0 ? 'var(--bull)' : 'var(--bear)';
+  }
+  crossEl.textContent  = crossText;
+  crossEl.style.color  = crossColor;
+
+  if (barsEl && m.histogram != null) {
+    const h    = m.histogram;
+    const barH = Math.min(Math.abs(h) / (Math.abs(h) + 1e-9) * 28 + 4, 32);
+    barsEl.innerHTML = `<div class="macd-hist-bar ${h >= 0 ? 'bull' : 'bear'}" style="height:${barH}px"></div>`;
+  }
+}
+
+function renderEMACard(ema) {
+  if (!ema) return;
+  const trendEl = document.getElementById('emaTrendVal');
+  const rowsEl  = document.getElementById('emaRows');
+  if (!trendEl) return;
+  const trend  = ema.trend || 'neutral';
+  const labels = { bullish: 'Uptrend', bearish: 'Downtrend', mixed_bullish: 'Mixed ↑', mixed_bearish: 'Mixed ↓', neutral: 'Neutral' };
+  trendEl.textContent = labels[trend] || trend;
+  trendEl.style.color = trend.includes('bull') ? 'var(--bull)' : trend.includes('bear') ? 'var(--bear)' : 'var(--neutral)';
+
+  const above = ema.above || [];
+  const fmt   = n => n != null ? `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 6 })}` : 'N/A';
+  const rows  = [{ p: 20, v: ema.ema20 }, { p: 50, v: ema.ema50 }, { p: 200, v: ema.ema200 }].filter(r => r.v != null);
+  rowsEl.innerHTML = rows.map(r => {
+    const up  = above.includes(r.p);
+    const cls = up ? 'bull' : 'bear';
+    return `<div class="ema-row"><span class="ema-label">EMA${r.p}</span><span class="${cls}">${up ? '▲' : '▼'} ${fmt(r.v)}</span></div>`;
+  }).join('');
+}
+
+function renderLSCard(ls) {
+  const el    = document.getElementById('lsRatio');
+  const sigEl = document.getElementById('lsSignal');
+  const lpEl  = document.getElementById('lsLongPct');
+  const spEl  = document.getElementById('lsShortPct');
+  const barEl = document.getElementById('lsLongBar');
+  if (!el) return;
+  if (!ls || !ls.ratio) {
+    el.textContent  = 'N/A';
+    if (sigEl) sigEl.textContent = 'Unavailable for this pair';
+    return;
+  }
+  const { ratio, long_pct, short_pct } = ls;
+  el.textContent = ratio.toFixed(2);
+  let sig = 'Neutral positioning', sigColor = 'var(--muted2)';
+  if      (ratio < 0.65) { sig = 'Crowd max short — contrarian LONG signal';  sigColor = 'var(--bull)'; }
+  else if (ratio < 0.85) { sig = 'Moderate short bias — lean long';            sigColor = 'var(--bull)'; }
+  else if (ratio > 2.5)  { sig = 'Crowd max long — contrarian SHORT signal';   sigColor = 'var(--bear)'; }
+  else if (ratio > 1.5)  { sig = 'Crowd long-heavy — late-cycle caution';      sigColor = 'var(--bear)'; }
+  if (sigEl) { sigEl.textContent = sig; sigEl.style.color = sigColor; }
+  if (lpEl)  lpEl.textContent = `Long ${long_pct.toFixed(1)}%`;
+  if (spEl)  spEl.textContent = `Short ${short_pct.toFixed(1)}%`;
+  if (barEl) barEl.style.width = `${long_pct}%`;
+}
+
+function renderFNGCard(fg) {
+  const valEl = document.getElementById('fngValue');
+  const lblEl = document.getElementById('fngLabel');
+  if (!valEl) return;
+  if (!fg || fg.value == null) { valEl.textContent = '—'; return; }
+  const val = fg.value;
+  valEl.textContent = val;
+  if (lblEl) lblEl.textContent = fg.label || '';
+  let color = '#6366f1';
+  if      (val <= 25) color = '#10b981';
+  else if (val <= 45) color = '#f59e0b';
+  else if (val <= 55) color = '#6366f1';
+  else if (val <= 75) color = '#f59e0b';
+  else                color = '#ef4444';
+  valEl.style.color = color;
+
+  const canvas = document.getElementById('fngGauge');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H - 8, r = Math.min(W, H * 2) / 2 - 6;
+  ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, 0);
+  ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 10; ctx.stroke();
+  const frac  = val / 100;
+  ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, Math.PI + frac * Math.PI);
+  ctx.strokeStyle = color; ctx.lineWidth = 10; ctx.stroke();
+  const angle = Math.PI + frac * Math.PI;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + (r - 4) * Math.cos(angle), cy + (r - 4) * Math.sin(angle));
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
 }
 
 function renderCVDPanel(id, cvd, series, valId, trendId) {

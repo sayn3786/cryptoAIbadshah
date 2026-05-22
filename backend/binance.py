@@ -479,6 +479,25 @@ class BinanceClient:
         from mock_data import mock_liquidations
         return mock_liquidations(symbol)
 
+    def get_long_short_ratio(self, symbol: str) -> Dict:
+        """Global long/short account ratio from Binance futures (free endpoint)."""
+        try:
+            data = self._get(f"{FUTURES_BASE}/futures/data/globalLongShortAccountRatio",
+                             {"symbol": symbol, "period": "1h", "limit": 1})
+            if data:
+                d = data[-1] if isinstance(data, list) else data
+                ratio     = float(d["longShortRatio"])
+                long_pct  = float(d["longAccount"])  * 100
+                short_pct = float(d["shortAccount"]) * 100
+                return {
+                    "ratio":     round(ratio,     4),
+                    "long_pct":  round(long_pct,  2),
+                    "short_pct": round(short_pct, 2),
+                }
+        except Exception:
+            pass
+        return {}
+
     def get_market_cap(self, symbol: str) -> Optional[float]:
         return self._get_market_cap(symbol)
 

@@ -200,6 +200,98 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= pts
             bear_reasons.append(label)
 
+    # ── MACD ─────────────────────────────────────────────────────────────────
+    # Momentum crossover — documented by Van Tharp and Larry Connors backtests.
+    # Fresh cross > histogram direction alone. Zero-cross (histogram flipping
+    # sign) is the strongest MACD signal.
+    macd = analysis.get("macd") or {}
+    m_cross     = macd.get("cross")
+    m_zero      = macd.get("zero_cross")
+    m_hist      = macd.get("histogram")
+    m_trend     = macd.get("trend", "neutral")
+    if m_cross == "bullish" or m_zero == "bullish":
+        score += 20
+        bull_reasons.append("MACD bullish cross — momentum flipping bullish, strong early signal")
+    elif m_trend == "bullish" and m_hist is not None and m_hist > 0:
+        score += 10
+        bull_reasons.append(f"MACD histogram positive ({m_hist:+.4f}) — bullish momentum sustained")
+    if m_cross == "bearish" or m_zero == "bearish":
+        score -= 20
+        bear_reasons.append("MACD bearish cross — momentum flipping bearish, strong early signal")
+    elif m_trend == "bearish" and m_hist is not None and m_hist < 0:
+        score -= 10
+        bear_reasons.append(f"MACD histogram negative ({m_hist:+.4f}) — bearish momentum sustained")
+
+    # ── EMA Trend ─────────────────────────────────────────────────────────────
+    # Most institutional algos use 50/200 EMA as a trend filter.
+    # Price above both = uptrend context; below both = downtrend context.
+    # A pullback to 20 EMA in an uptrend is the classic "ride the trend" setup.
+    ema = analysis.get("ema_trend") or {}
+    ema_above  = ema.get("above", [])
+    ema_below  = ema.get("below", [])
+    ema_trend  = ema.get("trend", "neutral")
+    if 50 in ema_above and 200 in ema_above:
+        score += 18
+        bull_reasons.append("Price above EMA50 & EMA200 — sustained uptrend structure confirmed")
+    elif 50 in ema_above and 200 in ema_below:
+        score += 8
+        bull_reasons.append("Price above EMA50 but below EMA200 — medium-term bullish, long-term still bearish")
+    elif 50 in ema_above:
+        score += 5
+        bull_reasons.append("Price above EMA50 — medium-term bullish momentum")
+    if 50 in ema_below and 200 in ema_below:
+        score -= 18
+        bear_reasons.append("Price below EMA50 & EMA200 — sustained downtrend structure confirmed")
+    elif 50 in ema_below and 200 in ema_above:
+        score -= 8
+        bear_reasons.append("Price below EMA50 but above EMA200 — medium-term bearish, long-term still bullish")
+    elif 50 in ema_below:
+        score -= 5
+        bear_reasons.append("Price below EMA50 — medium-term bearish pressure")
+
+    # ── Long / Short Ratio ────────────────────────────────────────────────────
+    # Contrarian indicator. When >65% of accounts are long, the crowd is max
+    # positioned — historically a bearish signal. Same principle as funding rate
+    # but measures account count instead of funding payment.
+    ls = analysis.get("long_short") or {}
+    ls_ratio   = ls.get("ratio")
+    ls_long    = ls.get("long_pct", 50)
+    ls_short   = ls.get("short_pct", 50)
+    if ls_ratio is not None:
+        if ls_ratio < 0.65:
+            score += 22
+            bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — crowd heavily short, contrarian long signal")
+        elif ls_ratio < 0.85:
+            score += 12
+            bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — moderate short bias, favours longs")
+        elif ls_ratio > 2.5:
+            score -= 22
+            bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd extremely long, contrarian short signal")
+        elif ls_ratio > 1.5:
+            score -= 12
+            bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd long-heavy, late-cycle caution")
+
+    # ── Fear & Greed Index ────────────────────────────────────────────────────
+    # Composite sentiment — same contrarian principle as funding rate but macro.
+    # Extreme Fear historically marks the best buying opportunities across cycles.
+    # Alternative.me index; rivals funding rate for macro contrarian reliability.
+    fg = analysis.get("fear_greed") or {}
+    fg_val = fg.get("value")
+    fg_lbl = fg.get("label", "")
+    if fg_val is not None:
+        if fg_val <= 15:
+            score += 25
+            bull_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — extreme fear historically marks best buying zones")
+        elif fg_val <= 30:
+            score += 12
+            bull_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market fearful, contrarian bullish lean")
+        elif fg_val >= 80:
+            score -= 25
+            bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — extreme greed historically marks market tops")
+        elif fg_val >= 65:
+            score -= 12
+            bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market greedy, contrarian bearish lean")
+
     # ── Elliott Wave ──────────────────────────────────────────────────────────
     # Lowest-reliability signal in this system. EW is highly subjective even
     # for expert humans; algorithmic labelling has multiple valid interpretations.
@@ -219,7 +311,7 @@ def generate_signal(analysis: Dict) -> Dict:
     #   CVD div spot-led already counted above (mutually exclusive with confirmed),
     #   RSI +22, OI +12, Flags +20, FVGs +20, Futures CVD +8, Elliott +8 = ~191
     # In practice signals are partially overlapping so 140 is a realistic ceiling.
-    MAX_SCORE = 140.0
+    MAX_SCORE = 185.0
     if score >= 30:
         direction = "LONG"
         strength = min(int(score / MAX_SCORE * 100), 100)

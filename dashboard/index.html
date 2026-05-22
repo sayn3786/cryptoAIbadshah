@@ -157,6 +157,46 @@
     </div>
   </section>
 
+  <!-- Row 1b: 4 new indicator metric cards -->
+  <section class="row-indicators">
+    <div class="card metric-card" id="macdCard">
+      <h3 class="card-title">MACD</h3>
+      <div class="metric-value" id="macdTrend">—</div>
+      <div class="metric-label" id="macdCross">—</div>
+      <div class="macd-bars" id="macdHistBars"></div>
+    </div>
+
+    <div class="card metric-card" id="emaTrendCard">
+      <h3 class="card-title">EMA Trend</h3>
+      <div class="metric-value" id="emaTrendVal">—</div>
+      <div class="ema-rows" id="emaRows"></div>
+    </div>
+
+    <div class="card metric-card" id="lsCard">
+      <h3 class="card-title">Long / Short Ratio</h3>
+      <div class="metric-value" id="lsRatio">—</div>
+      <div class="ls-bar-wrap">
+        <div class="ls-bar-bg">
+          <div class="ls-bar-fill bull" id="lsLongBar" style="width:50%"></div>
+        </div>
+      </div>
+      <div class="ls-labels">
+        <span class="bull" id="lsLongPct">Long —%</span>
+        <span class="bear" id="lsShortPct">Short —%</span>
+      </div>
+      <div class="metric-label" id="lsSignal">—</div>
+    </div>
+
+    <div class="card metric-card" id="fngCard">
+      <h3 class="card-title">Fear &amp; Greed</h3>
+      <div class="gauge-wrap">
+        <canvas id="fngGauge" width="120" height="70"></canvas>
+      </div>
+      <div class="metric-value" id="fngValue">—</div>
+      <div class="metric-label" id="fngLabel">—</div>
+    </div>
+  </section>
+
   <!-- Row 2: Chart + CVD panels -->
   <section class="row-chart">
     <div class="card chart-card">

@@ -311,3 +311,124 @@ def find_pivots(
             pl.append({"index": i, "price": lows[i], "timestamp": candles[i]["timestamp"]})
 
     return ph, pl
+
+
+def calculate_macd(closes: List[float], fast: int = 12, slow: int = 26, signal_period: int = 9) -> Dict:
+    """MACD = EMA(fast) - EMA(slow). Signal = EMA(signal_period) of MACD. Histogram = MACD - Signal."""
+    def _ema(values: List[float], period: int) -> List[Optional[float]]:
+        out: List[Optional[float]] = [None] * len(values)
+        if len(values) < period:
+            return out
+        out[period - 1] = sum(values[:period]) / period
+        k = 2.0 / (period + 1)
+        for i in range(period, len(values)):
+            out[i] = values[i] * k + out[i - 1] * (1 - k)
+        return out
+
+    if len(closes) < slow + signal_period:
+        return {"macd": None, "signal_line": None, "histogram": None, "cross": None, "trend": "neutral"}
+
+    ema_fast = _ema(closes, fast)
+    ema_slow = _ema(closes, slow)
+
+    macd_line: List[Optional[float]] = [
+        (f - s) if f is not None and s is not None else None
+        for f, s in zip(ema_fast, ema_slow)
+    ]
+
+    # Build signal line as EMA of macd_line values
+    valid_pairs = [(i, v) for i, v in enumerate(macd_line) if v is not None]
+    if len(valid_pairs) < signal_period:
+        return {"macd": None, "signal_line": None, "histogram": None, "cross": None, "trend": "neutral"}
+
+    sig_line: List[Optional[float]] = [None] * len(macd_line)
+    start_idx = valid_pairs[signal_period - 1][0]
+    sig_line[start_idx] = sum(v for _, v in valid_pairs[:signal_period]) / signal_period
+    k_sig = 2.0 / (signal_period + 1)
+    for i in range(start_idx + 1, len(macd_line)):
+        if macd_line[i] is not None and sig_line[i - 1] is not None:
+            sig_line[i] = macd_line[i] * k_sig + sig_line[i - 1] * (1 - k_sig)
+
+    cur_macd = macd_line[-1]
+    cur_sig  = sig_line[-1]
+    prev_macd = next((v for v in reversed(macd_line[:-1]) if v is not None), None)
+    prev_sig  = next((v for v in reversed(sig_line[:-1])  if v is not None), None)
+
+    histogram = round(cur_macd - cur_sig, 8) if cur_macd is not None and cur_sig is not None else None
+
+    cross = None
+    if all(v is not None for v in [cur_macd, cur_sig, prev_macd, prev_sig]):
+        if prev_macd <= prev_sig and cur_macd > cur_sig:
+            cross = "bullish"
+        elif prev_macd >= prev_sig and cur_macd < cur_sig:
+            cross = "bearish"
+
+    # Also detect histogram zero-cross (more bars back)
+    prev_hist = (prev_macd - prev_sig) if prev_macd is not None and prev_sig is not None else None
+    zero_cross = None
+    if histogram is not None and prev_hist is not None:
+        if prev_hist <= 0 and histogram > 0:
+            zero_cross = "bullish"
+        elif prev_hist >= 0 and histogram < 0:
+            zero_cross = "bearish"
+
+    trend = "neutral"
+    if histogram is not None:
+        trend = "bullish" if histogram > 0 else "bearish"
+
+    return {
+        "macd":       round(cur_macd, 8) if cur_macd is not None else None,
+        "signal_line": round(cur_sig,  8) if cur_sig  is not None else None,
+        "histogram":  histogram,
+        "cross":      cross,
+        "zero_cross": zero_cross,
+        "trend":      trend,
+    }
+
+
+def calculate_ema_trend(closes: List[float]) -> Dict:
+    """Compute EMA20, EMA50, EMA200 and classify where price sits relative to each."""
+    def _ema_val(values: List[float], period: int) -> Optional[float]:
+        if len(values) < period:
+            return None
+        k = 2.0 / (period + 1)
+        val = sum(values[:period]) / period
+        for v in values[period:]:
+            val = v * k + val * (1 - k)
+        return val
+
+    if not closes:
+        return {}
+
+    price  = closes[-1]
+    ema20  = _ema_val(closes, 20)
+    ema50  = _ema_val(closes, 50)
+    ema200 = _ema_val(closes, 200)
+
+    above, below = [], []
+    for period, val in [(20, ema20), (50, ema50), (200, ema200)]:
+        if val is None:
+            continue
+        (above if price > val else below).append(period)
+
+    # Overall trend classification
+    if 50 in above and (200 in above or 200 not in (above + below)):
+        trend = "bullish"
+    elif 50 in below and (200 in below or 200 not in (above + below)):
+        trend = "bearish"
+    elif 50 in above:
+        trend = "mixed_bullish"
+    elif 50 in below:
+        trend = "mixed_bearish"
+    else:
+        trend = "neutral"
+
+    return {
+        "price":  round(price, 8),
+        "ema20":  round(ema20,  8) if ema20  is not None else None,
+        "ema50":  round(ema50,  8) if ema50  is not None else None,
+        "ema200": round(ema200, 8) if ema200 is not None else None,
+        "above":  above,
+        "below":  below,
+        "trend":  trend,
+    }
