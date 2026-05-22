@@ -107,6 +107,7 @@ BYBIT_PAIRS = {
     "HYPEUSDT": "HYPEUSDT",
     "KASUSDT":  "KASUSDT",
     "ALGOUSDT": "ALGOUSDT",
+    "XMRUSDT":  "XMRUSDT",
     "XRPUSDT":  "XRPUSDT",
     "TONUSDT":  "TONUSDT",
     "SOLUSDT":  "SOLUSDT",
@@ -306,19 +307,59 @@ class BinanceClient:
         except Exception:
             return None
 
-    def _bybit_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+    # Bybit interval codes for kline endpoint
+    _BYBIT_IV = {
+        "1h": "60",  "2h": "120", "4h": "240",  "8h": "480",
+        "12h": "720", "1d": "D",  "1w": "W",    "1W": "W", "1M": "M",
+    }
+
+    def _bybit_candles(self, symbol: str, interval: str, limit: int = 100,
+                       category: str = "spot") -> Optional[List[Dict]]:
         pair = BYBIT_PAIRS.get(symbol)
         if not pair:
             return None
-        bybit_interval = "M" if interval == "1M" else "W"
+        bybit_interval = self._BYBIT_IV.get(interval, "W")
         try:
             data = self._get(f"{BYBIT_BASE}/v5/market/kline", {
-                "category": "spot",
-                "symbol": pair,
+                "category": category,
+                "symbol":   pair,
                 "interval": bybit_interval,
-                "limit": min(limit, 1000),
+                "limit":    min(limit, 1000),
             })
             rows = data.get("result", {}).get("list") if isinstance(data, dict) else None
+            if not rows:
+                return None
+            out = []
+            for k in reversed(rows):
+                vol = float(k[5])
+                out.append({
+                    "timestamp":        int(k[0]),
+                    "open":             float(k[1]),
+                    "high":             float(k[2]),
+                    "low":              float(k[3]),
+                    "close":            float(k[4]),
+                    "volume":           vol,
+                    "taker_buy_volume": vol * 0.5,
+                })
+            return out[-limit:] if out else None
+        except Exception:
+            return None
+
+    def _okx_futures_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        """OKX perpetual swap candles — instId = BTC-USDT-SWAP format."""
+        spot_id = OKX_PAIRS.get(symbol)
+        if not spot_id:
+            return None
+        inst_id = spot_id + "-SWAP"   # BTC-USDT → BTC-USDT-SWAP
+        _OKX_BAR = {
+            "1h": "1H", "2h": "2H", "4h": "4H",  "8h": "8H",
+            "12h": "12H", "1d": "1D", "1w": "1W", "1W": "1W", "1M": "1M",
+        }
+        bar = _OKX_BAR.get(interval, "1W")
+        try:
+            data = self._get(f"{OKX_BASE}/api/v5/market/candles",
+                             {"instId": inst_id, "bar": bar, "limit": min(limit, 300)})
+            rows = data.get("data") if isinstance(data, dict) else None
             if not rows:
                 return None
             out = []
@@ -480,12 +521,25 @@ class BinanceClient:
         return mock_spot_klines(symbol, interval, limit)
 
     def get_futures_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
+        # 1. Binance perpetual futures
         result = self._binance_futures_klines(symbol, interval, limit)
         if result:
             self.futures_real = True
             return result
-        # Real perpetual data unavailable — fall back to spot candles for OHLCV
-        # purposes but flag it so callers can skip futures-specific metrics (CVD).
+
+        # 2. Bybit linear perpetuals (USDT-margined)
+        result = self._bybit_candles(symbol, interval, limit, category="linear")
+        if result:
+            self.futures_real = True
+            return result
+
+        # 3. OKX perpetual swaps (BTC-USDT-SWAP)
+        result = self._okx_futures_candles(symbol, interval, limit)
+        if result:
+            self.futures_real = True
+            return result
+
+        # 4. Fall back to spot candles — flag so callers skip futures-only metrics
         self.futures_real = False
         current_source = self.data_source
         result = self.get_spot_klines(symbol, interval, limit)
