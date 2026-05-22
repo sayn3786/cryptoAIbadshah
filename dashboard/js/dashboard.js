@@ -212,6 +212,20 @@ function renderSignal(s) {
   bar.className = `signal-bar ${dir === 'LONG' ? 'bull' : dir === 'SHORT' ? 'bear' : ''}`;
   document.getElementById('signalStrength').textContent = `${str}/100`;
 
+  // Tier badge + position size guide
+  const tierWrap  = document.getElementById('signalTierWrap');
+  const tierBadge = document.getElementById('signalTierBadge');
+  const sizeGuide = document.getElementById('signalSizeGuide');
+  if (s.tier && dir !== 'NEUTRAL') {
+    const tierCls = { Weak: 'tier-weak', Moderate: 'tier-moderate', Strong: 'tier-strong', Confirmed: 'tier-confirmed' };
+    tierBadge.textContent  = s.tier;
+    tierBadge.className    = `signal-tier-badge ${tierCls[s.tier] || ''}`;
+    sizeGuide.textContent  = s.size_guide || '';
+    tierWrap.style.display = '';
+  } else {
+    tierWrap.style.display = 'none';
+  }
+
   const price = (n) => n ? `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
   document.getElementById('lvlEntry').textContent = price(s.entry);
   document.getElementById('lvlSL').textContent    = price(s.sl);

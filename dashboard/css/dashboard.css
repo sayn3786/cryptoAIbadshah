@@ -189,6 +189,14 @@ a:hover { color: var(--gold2); }
 .signal-bar.bear { background: var(--bear); }
 .signal-strength-val { font-size: .75rem; font-family: var(--mono); color: var(--muted2); white-space: nowrap; }
 
+.signal-tier-wrap { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.signal-tier-badge { font-size: .7rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.tier-weak      { background: rgba(245,158,11,.15); color: #f59e0b; border: 1px solid rgba(245,158,11,.35); }
+.tier-moderate  { background: rgba(99,102,241,.15);  color: #818cf8; border: 1px solid rgba(99,102,241,.35); }
+.tier-strong    { background: rgba(16,185,129,.15);  color: #10b981; border: 1px solid rgba(16,185,129,.35); }
+.tier-confirmed { background: rgba(16,185,129,.25);  color: #10b981; border: 1px solid rgba(16,185,129,.5); font-weight: 900; }
+.signal-size-guide { font-size: .7rem; color: var(--muted2); }
+
 .trade-levels { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .level { display: flex; justify-content: space-between; font-size: .75rem; padding: 4px 8px; border-radius: 6px; background: var(--bg2); }
 .level span:first-child { color: var(--muted); }

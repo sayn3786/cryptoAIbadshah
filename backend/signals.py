@@ -198,6 +198,27 @@ def generate_signal(analysis: Dict) -> Dict:
         direction = "NEUTRAL"
         strength = int(abs(score) / 30 * 50)
 
+    # Strength tier: how many indicators are in confluence.
+    # Weak   (< 38) → score 30–49  → only 2–3 mild signals; use 25% size
+    # Moderate (38–57) → score 50–74 → several aligned; use 50% size
+    # Strong (58–76) → score 75–99  → good confluence; use full size
+    # Confirmed (77+) → score 100+  → maximum confluence; can scale
+    if direction == "NEUTRAL":
+        tier = "Neutral"
+        size_guide = "No trade"
+    elif strength < 38:
+        tier = "Weak"
+        size_guide = "25% position — low confluence, minimal indicators aligned"
+    elif strength < 58:
+        tier = "Moderate"
+        size_guide = "50% position — several signals aligned, manage risk carefully"
+    elif strength < 77:
+        tier = "Strong"
+        size_guide = "Full position — good multi-indicator confluence"
+    else:
+        tier = "Confirmed"
+        size_guide = "Full position — maximum confluence, can consider scaling"
+
     # ── Entry / SL / TP ───────────────────────────────────────────────────────
     entry = sl = None
     tp_targets: List[float] = []
@@ -272,6 +293,8 @@ def generate_signal(analysis: Dict) -> Dict:
         "direction": direction,
         "score": score,
         "strength": strength,
+        "tier": tier,
+        "size_guide": size_guide,
         "bullish_reasons": bull_reasons,
         "bearish_reasons": bear_reasons,
         "entry": entry,
