@@ -21,8 +21,12 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
     Detect bullish and bearish flag patterns in a candle list.
 
     A flag has two parts:
-      Pole  — a sharp directional move (≥ min_pole_pct%) over 2-8 bars.
+      Pole  — a sharp directional move (≥ min_pole_pct%) over 2-8 bars,
+              starting within the most-recent 50% of candles.
       Flag  — a consolidation channel (3-20 bars) that retraces 15-62% of the pole.
+
+    Target projection is scaled by timeframe so shorter TFs don't inherit
+    multi-month pole distances (4H→38%, up to 1W+→100%).
 
     Strength = pole_pct × (1 – retrace_fraction) × recency_bonus × tf_weight.
     The highest-strength flag per unique pole start is returned (max 6 total).
@@ -31,10 +35,21 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
     if n < 10:
         return []
 
+    # How much of the pole height to project for the target, per TF.
+    # Shorter TFs use Fibonacci fractions so the target stays in a realistic range.
+    proj_frac = {
+        "4H": 0.382, "8H": 0.50, "12H": 0.618,
+        "1D": 0.75,  "1W": 1.0,  "2W": 1.0, "3W": 1.0, "1M": 1.0,
+    }.get(tf_label, 1.0)
+
     candidates: List[Dict] = []
 
-    for ps in range(n - 4):                       # pole start index
-        for pe in range(ps + 2, min(ps + 9, n)):  # pole end (exclusive)
+    # Pole must start in the second half of the candle set — prevents ancient
+    # history poles (e.g. a 60% rally from 18 months ago) appearing on short TFs.
+    earliest_pole_start = n // 2
+
+    for ps in range(earliest_pole_start, n - 4):       # pole start index
+        for pe in range(ps + 2, min(ps + 9, n)):        # pole end (exclusive)
             pole_open  = candles[ps]["open"]
             pole_close = candles[pe - 1]["close"]
             pole_move  = (pole_close - pole_open) / (pole_open + 1e-12)
@@ -42,13 +57,13 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             if abs(pole_move) * 100 < min_pole_pct:
                 continue
 
-            pole_high  = max(c["high"] for c in candles[ps:pe])
-            pole_low   = min(c["low"]  for c in candles[ps:pe])
+            pole_high   = max(c["high"] for c in candles[ps:pe])
+            pole_low    = min(c["low"]  for c in candles[ps:pe])
             pole_height = pole_high - pole_low
             if pole_height < 1e-12:
                 continue
 
-            is_bull = pole_move > 0
+            is_bull   = pole_move > 0
             remaining = candles[pe:]
             if len(remaining) < 3:
                 continue
@@ -76,13 +91,12 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 pole_pct  = round(abs(pole_move) * 100, 2)
 
                 current_price = candles[-1]["close"]
+                proj = pole_height * proj_frac
                 if is_bull:
-                    raw_target = fh + pole_height
-                    # Cap at 2× current price — keeps target in a plausible range
+                    raw_target = fh + proj
                     target = round(min(raw_target, current_price * 2.0), 8)
                 else:
-                    raw_target = fl_ - pole_height
-                    # Floor at 20% of current price
+                    raw_target = fl_ - proj
                     target = round(max(raw_target, current_price * 0.20, pole_low * 0.5), 8)
 
                 # ── Channel slope classification ──────────────────────────
@@ -92,7 +106,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 l_slope    = _line_slope(flag_lows)
                 mid_slope  = (h_slope + l_slope) / 2.0
                 mid_price  = (fh + fl_) / 2.0
-                thresh     = mid_price * 0.001   # 0.1% per bar
+                thresh     = mid_price * 0.001
                 if mid_slope > thresh:
                     flag_slope = "ascending"
                 elif mid_slope < -thresh:
@@ -101,7 +115,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                     flag_slope = "neutral"
                 slope_pct_per_bar = round(mid_slope / mid_price * 100, 4) if mid_price > 0 else 0.0
 
-                # ── Confirmation: post-flag candle closed beyond flag boundary
+                # ── Confirmation: post-flag candle closed beyond flag boundary ──
                 post = candles[pe + fl:]
                 confirmed    = False
                 breakout_dir = None
@@ -116,6 +130,12 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                             confirmed = True; breakout_dir = "down"
                         elif any(c["close"] > fh  for c in post):
                             confirmed = True; breakout_dir = "up"
+
+                # is_active: flag ended recently AND current price is within 30%
+                # of the flag zone (avoids showing stale flags far from current price)
+                flag_ended_recently = (pe + fl) >= n - 3
+                price_near_flag = (fl_ * 0.70 <= current_price <= fh * 1.30)
+                is_active = flag_ended_recently and price_near_flag
 
                 strength = pole_pct * (1.0 - retrace) * recency * tf_weight
 
@@ -134,6 +154,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                         "flag_low":           round(fl_, 8),
                         "retrace_pct":        round(retrace * 100, 2),
                         "target":             target,
+                        "proj_frac":          proj_frac,
                         "strength":           round(strength, 3),
                         "consolidation_bars": fl,
                         "flag_slope":         flag_slope,
@@ -142,7 +163,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                         "breakout_dir":       breakout_dir,
                         "pole_start_ts":      candles[ps]["timestamp"],
                         "flag_end_ts":        flag[-1]["timestamp"],
-                        "is_active":          (pe + fl) >= n - 3,
+                        "is_active":          is_active,
                     }
 
             if best:
