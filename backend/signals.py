@@ -19,82 +19,101 @@ def generate_signal(analysis: Dict) -> Dict:
     current_price = candles[-1]["close"] if candles else 0.0
 
     # ── RSI ──────────────────────────────────────────────────────────────────
+    # RSI alone has ~55% accuracy in crypto (barely above random in trending
+    # markets). Only extreme readings carry real edge; mid-range RSI is noise.
+    # Source: Aronson "Evidence-Based Technical Analysis"; crypto quant backtests.
     if rsi is not None:
         if rsi < 25:
-            score += 30
-            bull_reasons.append(f"RSI extremely oversold ({rsi})")
+            score += 22
+            bull_reasons.append(f"RSI extremely oversold ({rsi}) — historically rare, high mean-reversion probability")
         elif rsi < 35:
-            score += 18
-            bull_reasons.append(f"RSI oversold ({rsi})")
+            score += 12
+            bull_reasons.append(f"RSI oversold ({rsi}) — selling pressure elevated, watch for reversal")
         elif rsi < 45:
-            score += 8
-            bull_reasons.append(f"RSI approaching oversold ({rsi})")
+            score += 4
+            bull_reasons.append(f"RSI below midline ({rsi}) — mild bearish lean, low conviction alone")
         elif rsi > 75:
-            score -= 30
-            bear_reasons.append(f"RSI extremely overbought ({rsi})")
+            score -= 22
+            bear_reasons.append(f"RSI extremely overbought ({rsi}) — historically rare, high mean-reversion probability")
         elif rsi > 65:
-            score -= 18
-            bear_reasons.append(f"RSI overbought ({rsi})")
+            score -= 12
+            bear_reasons.append(f"RSI overbought ({rsi}) — buying pressure elevated, watch for reversal")
         elif rsi > 55:
-            score -= 8
-            bear_reasons.append(f"RSI elevated ({rsi})")
+            score -= 4
+            bear_reasons.append(f"RSI above midline ({rsi}) — mild bullish lean, low conviction alone")
 
     # ── Spot CVD ─────────────────────────────────────────────────────────────
+    # One of the highest-quality short-term signals — directly measures real
+    # buying vs selling pressure from actual spot transactions, not price-derived.
+    # Rated highly by Willy Woo, Glassnode, Laevitas for its leading quality.
     cvd_trend = spot_cvd.get("trend", "neutral")
     if cvd_trend == "bullish":
-        score += 15
-        bull_reasons.append("Spot CVD trending up — net buying pressure")
+        score += 18
+        bull_reasons.append("Spot CVD rising — real buying pressure confirmed in spot market")
     elif cvd_trend == "bearish":
-        score -= 15
-        bear_reasons.append("Spot CVD trending down — net selling pressure")
+        score -= 18
+        bear_reasons.append("Spot CVD falling — real selling pressure confirmed in spot market")
 
     # ── Futures CVD ──────────────────────────────────────────────────────────
+    # Noisier than spot — perp market dominated by speculators and hedgers.
+    # Useful as context/confirmation but lower standalone reliability.
     f_cvd_trend = futures_cvd.get("trend", "neutral")
     if f_cvd_trend == "bullish":
-        score += 10
-        bull_reasons.append("Futures CVD bullish — institutional demand")
+        score += 8
+        bull_reasons.append("Futures CVD bullish — speculative demand increasing")
     elif f_cvd_trend == "bearish":
-        score -= 10
-        bear_reasons.append("Futures CVD bearish — institutional supply")
+        score -= 8
+        bear_reasons.append("Futures CVD bearish — speculative selling increasing")
 
     # ── CVD Divergence ───────────────────────────────────────────────────────
+    # Spot vs futures CVD divergence is one of the most sophisticated setups
+    # used by prop desks — distinguishes organic moves from leveraged speculation.
+    # Spot-led = real conviction; futures-led = leveraged speculative money.
     cvd_div = analysis.get("cvd_divergence") or {}
     div_type = cvd_div.get("type", "neutral")
     if div_type == "futures_led_up":
-        score -= 15
-        bear_reasons.append("Futures-driven rally — spot CVD falling, no real demand; move may fade")
+        score -= 18
+        bear_reasons.append("Futures-driven rally — spot CVD falling, no real demand; leveraged pump likely to fade")
     elif div_type == "spot_led_up":
-        score += 20
-        bull_reasons.append("Spot-driven rally — genuine buying, futures not chasing; healthier move")
+        score += 22
+        bull_reasons.append("Spot-driven rally — genuine organic buying, futures not leading; more sustainable")
     elif div_type == "confirmed_up":
-        score += 25
-        bull_reasons.append("Confirmed rally — both spot and futures CVD bullish")
+        score += 28
+        bull_reasons.append("Fully confirmed rally — both spot and futures CVD rising; strongest bullish confluence")
     elif div_type == "futures_led_down":
-        score += 15
-        bull_reasons.append("Futures-driven selloff — spot CVD rising, no real selling; short squeeze risk")
+        score += 18
+        bull_reasons.append("Futures-driven selloff — spot CVD rising, no real selling; high short squeeze risk")
     elif div_type == "spot_led_down":
-        score -= 20
-        bear_reasons.append("Spot-driven selloff — genuine distribution, spot sellers dominate")
+        score -= 22
+        bear_reasons.append("Spot-driven selloff — genuine distribution by real holders; more sustainable decline")
     elif div_type == "confirmed_down":
-        score -= 25
-        bear_reasons.append("Confirmed selloff — both spot and futures CVD bearish")
+        score -= 28
+        bear_reasons.append("Fully confirmed selloff — both spot and futures CVD falling; strongest bearish confluence")
 
     # ── Funding Rate ─────────────────────────────────────────────────────────
+    # THE highest-reliability crypto-specific signal. Extreme negative funding
+    # means shorts are paying longs — the market is max short, creating intense
+    # squeeze risk. Documented by BitMEX traders, Arthur Hayes, Cobie, and
+    # multiple quant studies on perpetual swap funding as a contrarian indicator.
+    # Consistently the strongest mean-reversion signal in crypto markets.
     fr = funding.get("current", 0.0) or 0.0
     if fr < -0.02:
-        score += 25
-        bull_reasons.append(f"Very negative funding ({fr:.4f}%) — shorts overextended")
+        score += 30
+        bull_reasons.append(f"Funding extremely negative ({fr:.4f}%) — market max short, very high squeeze probability")
     elif fr < -0.005:
-        score += 12
-        bull_reasons.append(f"Negative funding ({fr:.4f}%) — favours longs")
+        score += 15
+        bull_reasons.append(f"Funding negative ({fr:.4f}%) — shorts paying longs, structurally favours longs")
     elif fr > 0.04:
-        score -= 25
-        bear_reasons.append(f"Very high funding ({fr:.4f}%) — longs overextended")
+        score -= 30
+        bear_reasons.append(f"Funding extremely high ({fr:.4f}%) — market max long, very high flush probability")
     elif fr > 0.015:
-        score -= 12
-        bear_reasons.append(f"Elevated funding ({fr:.4f}%) — caution for longs")
+        score -= 15
+        bear_reasons.append(f"Funding elevated ({fr:.4f}%) — longs overextended, late-cycle caution")
 
     # ── Open Interest ─────────────────────────────────────────────────────────
+    # Rising OI + rising price = new longs entering (bullish conviction).
+    # Rising OI + falling price = new shorts entering (bearish conviction).
+    # Widely used by futures-focused traders; works best as a confirmation filter.
     oi_change = oi.get("change_pct", 0.0) or 0.0
     if len(candles) >= 5:
         prev_price = candles[-5]["close"]
@@ -102,10 +121,10 @@ def generate_signal(analysis: Dict) -> Dict:
         if oi_change > 5:
             if price_up:
                 score += 12
-                bull_reasons.append(f"OI +{oi_change:.1f}% with rising price — bullish")
+                bull_reasons.append(f"OI +{oi_change:.1f}% with rising price — new longs opening, trend conviction")
             else:
                 score -= 12
-                bear_reasons.append(f"OI +{oi_change:.1f}% with falling price — bearish")
+                bear_reasons.append(f"OI +{oi_change:.1f}% with falling price — new shorts entering, bearish conviction")
         elif oi_change < -5:
             if price_up:
                 score += 8
@@ -115,6 +134,9 @@ def generate_signal(analysis: Dict) -> Dict:
                 bear_reasons.append(f"OI declining ({oi_change:.1f}%) with falling price — longs capitulating")
 
     # ── Fair Value Gaps ───────────────────────────────────────────────────────
+    # ICT concept — price tends to return to fill gaps ~70% of the time.
+    # Useful as magnet zones and dynamic support/resistance. Moderate standalone
+    # signal strength; works best combined with CVD or funding confirmation.
     unfilled = [f for f in fvgs if not f["filled"]]
     below = [f for f in unfilled if f["type"] == "bullish" and f["midpoint"] < current_price]
     above = [f for f in unfilled if f["type"] == "bearish" and f["midpoint"] > current_price]
@@ -122,25 +144,25 @@ def generate_signal(analysis: Dict) -> Dict:
     if below:
         score += min(len(below) * 8, 20)
         bull_reasons.append(
-            f"{len(below)} bullish FVG(s) acting as support (nearest: ${below[0]['midpoint']:,.4f})"
+            f"{len(below)} bullish FVG(s) acting as support below (nearest: ${below[0]['midpoint']:,.4f})"
         )
     if above:
         score -= min(len(above) * 8, 20)
         bear_reasons.append(
-            f"{len(above)} bearish FVG(s) as resistance (nearest: ${above[0]['midpoint']:,.4f})"
+            f"{len(above)} bearish FVG(s) as resistance above (nearest: ${above[0]['midpoint']:,.4f})"
         )
 
     # ── Flag Patterns — one strongest per direction ───────────────────────────
-    # flags are already deduplicated per (direction × timeframe) by pick_dominant_flags;
-    # here we further limit to the single strongest bull and single strongest bear
-    # so the confluence list stays concise.
+    # Bulkowski's "Encyclopedia of Chart Patterns" gives confirmed bull flags
+    # ~67% success rate — one of the stronger chart pattern signals.
+    # Dominant (highest-TF) flag scores more; secondary TF flag scores less.
     scored_dirs: set = set()
     for f in flags:
         if not f.get("is_active"):
             continue
         d = f["direction"]
         if d in scored_dirs:
-            continue          # already scored a flag for this direction
+            continue
         scored_dirs.add(d)
         bonus = 20 if f.get("dominant") else 10
         if d == "bullish":
@@ -157,18 +179,20 @@ def generate_signal(analysis: Dict) -> Dict:
             )
 
     # ── Engulfing Patterns ────────────────────────────────────────────────────
+    # Bulkowski research + HTF studies show confirmed engulfing has 60-65%
+    # accuracy on daily+ timeframes, especially with volume confirmation.
+    # Most recent candle (ago=1) is significantly more reliable than older.
     engulfing = analysis.get("engulfing") or []
     for e in engulfing:
         if not e.get("confirmed"):
             continue
         ago = e.get("candles_ago", 99)
-        # Only score if within last 2 confirmed candles; most recent gets higher weight
         if ago > 2:
             continue
         pts = 25 if ago == 1 else 15
         ratio = e.get("body_ratio", 1.0)
         label = f"{'Bearish' if e['direction'] == 'bearish' else 'Bullish'} engulfing confirmed " \
-                f"({ago} candle ago, {ratio}× body) — high-TF reversal signal"
+                f"({ago} candle ago, {ratio}x body) — HTF reversal signal"
         if e["direction"] == "bullish":
             score += pts
             bull_reasons.append(label)
@@ -177,17 +201,25 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(label)
 
     # ── Elliott Wave ──────────────────────────────────────────────────────────
+    # Lowest-reliability signal in this system. EW is highly subjective even
+    # for expert humans; algorithmic labelling has multiple valid interpretations.
+    # Many prop traders don't use it at all. Kept as a weak tiebreaker only.
     wave_bias = elliott.get("bias", "neutral")
     wave_label = elliott.get("wave_count", "")
     if wave_bias == "bullish":
-        score += 15
-        bull_reasons.append(f"Elliott Wave: {wave_label} (bullish phase)")
+        score += 8
+        bull_reasons.append(f"Elliott Wave: {wave_label} (bullish phase) — weak supporting signal")
     elif wave_bias == "bearish":
-        score -= 15
-        bear_reasons.append(f"Elliott Wave: {wave_label} (bearish phase)")
+        score -= 8
+        bear_reasons.append(f"Elliott Wave: {wave_label} (bearish phase) — weak supporting signal")
 
     # ── Final direction ───────────────────────────────────────────────────────
-    MAX_SCORE = 130.0
+    # Max theoretical bull score:
+    #   Funding +30, CVD div confirmed +28, Engulfing +25, Spot CVD +18,
+    #   CVD div spot-led already counted above (mutually exclusive with confirmed),
+    #   RSI +22, OI +12, Flags +20, FVGs +20, Futures CVD +8, Elliott +8 = ~191
+    # In practice signals are partially overlapping so 140 is a realistic ceiling.
+    MAX_SCORE = 140.0
     if score >= 30:
         direction = "LONG"
         strength = min(int(score / MAX_SCORE * 100), 100)
@@ -199,10 +231,10 @@ def generate_signal(analysis: Dict) -> Dict:
         strength = int(abs(score) / 30 * 50)
 
     # Strength tier: how many indicators are in confluence.
-    # Weak   (< 38) → score 30–49  → only 2–3 mild signals; use 25% size
-    # Moderate (38–57) → score 50–74 → several aligned; use 50% size
-    # Strong (58–76) → score 75–99  → good confluence; use full size
-    # Confirmed (77+) → score 100+  → maximum confluence; can scale
+    # Weak   (< 38) → score 30–53  → only 2–3 mild signals; use 25% size
+    # Moderate (38–57) → score 53–80 → several aligned; use 50% size
+    # Strong (58–76) → score 81–106  → good confluence; use full size
+    # Confirmed (77+) → score 107+   → maximum confluence; can scale
     if direction == "NEUTRAL":
         tier = "Neutral"
         size_guide = "No trade"
@@ -226,7 +258,6 @@ def generate_signal(analysis: Dict) -> Dict:
 
     timeframe = analysis.get("timeframe", "1W")
 
-    # SL ATR multiplier per timeframe — wider candles need more breathing room.
     TF_SL_MULT = {
         "4H":  1.0, "8H":  1.0, "12H": 1.2,
         "1D":  1.3, "1W":  1.5, "2W":  1.5,
@@ -234,30 +265,20 @@ def generate_signal(analysis: Dict) -> Dict:
     }
     sl_m = TF_SL_MULT.get(timeframe, 1.5)
 
-    # TPs are derived from SL distance as R:R multiples — consistent across all TFs.
-    # Gaps increase deliberately: TP1→TP2 = +1R, TP2→TP3 = +1.5R.
-    #   TP1 = 1.5R  easy first target; enables moving SL to breakeven
-    #   TP2 = 2.5R  core profit target; main R:R justification
-    #   TP3 = 4.0R  runner; only hit on strong trend continuation
     TP1_RR, TP2_RR, TP3_RR = 1.5, 2.5, 4.0
     tp1_m = sl_m * TP1_RR
     tp2_m = sl_m * TP2_RR
     tp3_m = sl_m * TP3_RR
 
-    # Dynamic ATR cap: clamp effective ATR to at most X% of price so
-    # high-volatility assets (HYPE, TAO) get proportionally tighter distances
-    # without any per-symbol rules. All levels scale from the same eff_atr.
-    # Implied max SL  = max_atr_pct × sl_m
-    # Implied max TP3 = max_atr_pct × tp3_m  (always ≤ 60%)
     TF_MAX_ATR_PCT = {
-        "4H":  0.030,   # max SL  3%,  max TP3 18%
-        "8H":  0.040,   # max SL  4%,  max TP3 24%
-        "12H": 0.050,   # max SL  6%,  max TP3 30%
-        "1D":  0.065,   # max SL  8.5%, max TP3 39%
-        "1W":  0.090,   # max SL 13.5%, max TP3 54%
-        "2W":  0.100,   # max SL 15%,  max TP3 60%
-        "3W":  0.100,   # max SL 15%,  max TP3 60%
-        "1M":  0.100,   # max SL 15%,  max TP3 60%
+        "4H":  0.030,
+        "8H":  0.040,
+        "12H": 0.050,
+        "1D":  0.065,
+        "1W":  0.090,
+        "2W":  0.100,
+        "3W":  0.100,
+        "1M":  0.100,
     }
     max_atr_abs = current_price * TF_MAX_ATR_PCT.get(timeframe, 0.09)
 
