@@ -1048,7 +1048,7 @@ function logTrade() {
   const tf     = a.timeframe;
   const isLong = sig.direction === 'LONG';
   const rule   = TF_CLOSE_RULES[tf] || TF_CLOSE_RULES['1W'];
-  const fp     = v => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+  const fp     = fmtPrice;
 
   // Active flag matching the signal direction — same logic as renderTradeManagement
   const matchFlag = (a.flags || []).find(f =>
