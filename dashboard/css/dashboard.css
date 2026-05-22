@@ -665,6 +665,42 @@ a:hover { color: var(--gold2); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
+/* ── Indicator row (MACD / EMA / L:S / F&G) ─────────────────────────────── */
+.row-indicators { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+
+.macd-bars { display: flex; align-items: flex-end; gap: 2px; height: 36px; margin-top: 6px; }
+.macd-hist-bar { width: 14px; border-radius: 2px 2px 0 0; }
+.macd-hist-bar.bull { background: var(--bull); }
+.macd-hist-bar.bear { background: var(--bear); }
+
+.ema-rows  { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; width: 100%; }
+.ema-row   { display: flex; justify-content: space-between; font-size: .72rem; }
+.ema-label { color: var(--muted2); }
+
+.ls-bar-wrap { margin: 6px 0 3px; width: 100%; }
+.ls-bar-bg   { height: 6px; background: var(--bear); border-radius: 3px; overflow: hidden; }
+.ls-bar-fill { height: 100%; border-radius: 3px 0 0 3px; transition: width .5s ease; }
+.ls-labels   { display: flex; justify-content: space-between; font-size: .68rem; margin-bottom: 4px; }
+
+/* ── News sentiment card ─────────────────────────────────────────────────── */
+.news-card { margin-bottom: 12px; }
+.news-source-badge { font-size: .65rem; font-weight: 500; color: var(--muted2); background: var(--bg2); padding: 1px 7px; border-radius: 8px; margin-left: 6px; vertical-align: middle; }
+.news-summary { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
+.news-signal-badge { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 3px 10px; border-radius: 10px; }
+.news-sig-bullish { background: rgba(16,185,129,.15); color: #10b981; border: 1px solid rgba(16,185,129,.3); }
+.news-sig-bearish { background: rgba(239,68,68,.12);  color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
+.news-sig-neutral { background: rgba(99,102,241,.12); color: #818cf8; border: 1px solid rgba(99,102,241,.25); }
+.news-counts { font-size: .72rem; color: var(--muted2); }
+.news-list   { display: flex; flex-direction: column; gap: 8px; }
+.news-item   { display: flex; gap: 8px; align-items: flex-start; }
+.news-dot    { font-size: .8rem; margin-top: 1px; flex-shrink: 0; width: 14px; text-align: center; }
+.news-body   { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.news-title  { font-size: .78rem; color: var(--fg); text-decoration: none; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.news-title:hover { color: var(--gold); }
+.news-title.no-link { cursor: default; }
+.news-meta   { font-size: .65rem; color: var(--muted2); }
+.news-empty  { font-size: .75rem; color: var(--muted2); padding: 8px 0; }
+
 /* ─── Responsive ─────────────────────────────────────────────────────────────── */
 @media (max-width: 1200px) {
   .row-hero { grid-template-columns: 1fr 1fr 1fr; }
@@ -753,8 +789,16 @@ a:hover { color: var(--gold2); }
   }
   .mini-chart-container { height: 72px; }
   .rsi-chart { height: 110px; }
+  .row-indicators { grid-template-columns: repeat(2, 1fr); }
+  /* Shrink gauge canvas so Fear & Greed fits in a 2-col grid on narrow screens */
+  #rsiGauge, #fngGauge { width: 90px; height: 54px; }
   .row-analysis, .row-wave, .row-volume { grid-template-columns: 1fr; }
   .confluence-cols { grid-template-columns: 1fr; }
+  /* Compact cards that hold little content — no wasted whitespace on mobile */
+  .wave-card, .flag-card, .engulf-card { padding: 10px 12px; }
+  .wave-badge { font-size: 1rem; margin-bottom: 4px; }
+  .wave-desc  { font-size: .76rem; margin-bottom: 6px; }
+  .flag-list  { gap: 6px; }
   .fvg-card {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
@@ -821,40 +865,6 @@ a:hover { color: var(--gold2); }
   .journal-tabs { grid-template-columns: 1fr; }
   .btn-primary, .copy-btn { width: 100%; }
   .row-indicators { grid-template-columns: repeat(2, 1fr); }
+  #rsiGauge, #fngGauge { width: 76px; height: 46px; }
 }
 
-/* ── New indicator row ───────────────────────────────────────────────────── */
-.row-indicators { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
-
-.macd-bars { display: flex; align-items: flex-end; gap: 2px; height: 36px; margin-top: 6px; }
-.macd-hist-bar { width: 14px; border-radius: 2px 2px 0 0; }
-.macd-hist-bar.bull { background: var(--bull); }
-.macd-hist-bar.bear { background: var(--bear); }
-
-.ema-rows  { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-.ema-row   { display: flex; justify-content: space-between; font-size: .72rem; }
-.ema-label { color: var(--muted2); }
-
-.ls-bar-wrap { margin: 6px 0 3px; }
-.ls-bar-bg   { height: 6px; background: var(--bear); border-radius: 3px; overflow: hidden; }
-.ls-bar-fill { height: 100%; border-radius: 3px 0 0 3px; transition: width .5s ease; }
-.ls-labels   { display: flex; justify-content: space-between; font-size: .68rem; margin-bottom: 4px; }
-
-/* ── News sentiment card ─────────────────────────────────────────────────── */
-.news-card { margin-bottom: 12px; }
-.news-source-badge { font-size: .65rem; font-weight: 500; color: var(--muted2); background: var(--bg2); padding: 1px 7px; border-radius: 8px; margin-left: 6px; vertical-align: middle; }
-.news-summary { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
-.news-signal-badge { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 3px 10px; border-radius: 10px; }
-.news-sig-bullish { background: rgba(16,185,129,.15); color: #10b981; border: 1px solid rgba(16,185,129,.3); }
-.news-sig-bearish { background: rgba(239,68,68,.12);  color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
-.news-sig-neutral { background: rgba(99,102,241,.12); color: #818cf8; border: 1px solid rgba(99,102,241,.25); }
-.news-counts { font-size: .72rem; color: var(--muted2); }
-.news-list   { display: flex; flex-direction: column; gap: 8px; }
-.news-item   { display: flex; gap: 8px; align-items: flex-start; }
-.news-dot    { font-size: .8rem; margin-top: 1px; flex-shrink: 0; width: 14px; text-align: center; }
-.news-body   { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.news-title  { font-size: .78rem; color: var(--fg); text-decoration: none; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.news-title:hover { color: var(--gold); }
-.news-title.no-link { cursor: default; }
-.news-meta   { font-size: .65rem; color: var(--muted2); }
-.news-empty  { font-size: .75rem; color: var(--muted2); padding: 8px 0; }

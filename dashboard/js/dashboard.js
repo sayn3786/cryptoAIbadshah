@@ -257,7 +257,9 @@ function renderRSICard(rsi) {
 
   const canvas = document.getElementById('rsiGauge');
   const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
+  const W = Math.min(120, canvas.parentElement.clientWidth - 8);
+  const H = Math.round(W * 70 / 120);
+  canvas.width = W; canvas.height = H;
   ctx.clearRect(0, 0, W, H);
 
   const cx = W / 2, cy = H - 6, r = Math.min(cx, cy) - 4;
@@ -540,7 +542,9 @@ function renderFNGCard(fg) {
   const canvas = document.getElementById('fngGauge');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
+  const W = Math.min(120, canvas.parentElement.clientWidth - 8);
+  const H = Math.round(W * 70 / 120);
+  canvas.width = W; canvas.height = H;
   ctx.clearRect(0, 0, W, H);
   const cx = W / 2, cy = H - 8, r = Math.min(W, H * 2) / 2 - 6;
   ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, 0);
