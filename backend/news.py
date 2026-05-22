@@ -25,15 +25,18 @@ COIN_ALIASES = {
     "XRPUSDT":  ["XRP", "Ripple", "ripple"],
     "TONUSDT":  ["TON", "Toncoin", "toncoin", "The Open Network"],
     "SOLUSDT":  ["SOL", "Solana", "solana"],
-    "AAVEUSDT": ["AAVE", "Aave", "aave"],
+    "AAVEUSDT":   ["AAVE", "Aave", "aave"],
+    "RENDERUSDT": ["RENDER", "Render", "render", "Render Network"],
+    "BNBUSDT":    ["BNB", "Binance Coin", "Binance coin"],
 }
 
 CP_CURRENCIES = {
-    "BTCUSDT":  "BTC",  "ETHUSDT":  "ETH",  "LINKUSDT": "LINK",
-    "TAOUSDT":  "TAO",  "HYPEUSDT": "HYPE", "ONDOUSDT": "ONDO",
-    "SUIUSDT":  "SUI",  "KASUSDT":  "KAS",  "ALGOUSDT": "ALGO",
-    "XMRUSDT":  "XMR",  "XRPUSDT":  "XRP",  "TONUSDT":  "TON",
-    "SOLUSDT":  "SOL",  "AAVEUSDT": "AAVE",
+    "BTCUSDT":    "BTC",    "ETHUSDT":    "ETH",    "LINKUSDT":   "LINK",
+    "TAOUSDT":    "TAO",    "HYPEUSDT":   "HYPE",   "ONDOUSDT":   "ONDO",
+    "SUIUSDT":    "SUI",    "KASUSDT":    "KAS",    "ALGOUSDT":   "ALGO",
+    "XMRUSDT":    "XMR",    "XRPUSDT":    "XRP",    "TONUSDT":    "TON",
+    "SOLUSDT":    "SOL",    "AAVEUSDT":   "AAVE",
+    "RENDERUSDT": "RENDER", "BNBUSDT":    "BNB",
 }
 
 # Keywords that shift a neutral headline toward bullish or bearish

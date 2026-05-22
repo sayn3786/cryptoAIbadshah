@@ -41,8 +41,10 @@ SYMBOLS = {
     "XRP":  "XRPUSDT",
     "TON":  "TONUSDT",
     "SOL":  "SOLUSDT",
-    "ONDO": "ONDOUSDT",
-    "AAVE": "AAVEUSDT",
+    "ONDO":   "ONDOUSDT",
+    "AAVE":   "AAVEUSDT",
+    "RENDER": "RENDERUSDT",
+    "BNB":    "BNBUSDT",
 }
 TF_INTERVAL = {
     "4H": "4h", "8H": "8h", "12H": "12h", "1D": "1d",

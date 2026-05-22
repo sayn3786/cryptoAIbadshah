@@ -35,6 +35,8 @@ CG_IDS = {
     "SOLUSDT":  "solana",
     "ONDOUSDT": "ondo-finance",
     "AAVEUSDT": "aave",
+    "RENDERUSDT": "render-token",
+    "BNBUSDT":   "binancecoin",
 }
 
 # Kraken pairs (weekly interval = 10080 min)
@@ -50,6 +52,8 @@ KRAKEN_PAIRS = {
     "XRPUSDT":  "XRPUSD",
     "SOLUSDT":  "SOLUSD",
     "AAVEUSDT": "AAVEUSD",
+    "RENDERUSDT": "RENDERUSD",
+    "BNBUSDT":    "BNBUSD",
 }
 
 # Gate.io currency pairs
@@ -66,8 +70,10 @@ GATE_PAIRS = {
     "XRPUSDT":  "XRP_USDT",
     "TONUSDT":  "TON_USDT",
     "SOLUSDT":  "SOL_USDT",
-    "ONDOUSDT": "ONDO_USDT",
-    "AAVEUSDT": "AAVE_USDT",
+    "ONDOUSDT":   "ONDO_USDT",
+    "AAVEUSDT":   "AAVE_USDT",
+    "RENDERUSDT": "RENDER_USDT",
+    "BNBUSDT":    "BNB_USDT",
 }
 
 OKX_PAIRS = {
@@ -82,8 +88,10 @@ OKX_PAIRS = {
     "XRPUSDT":  "XRP-USDT",
     "TONUSDT":  "TON-USDT",
     "SOLUSDT":  "SOL-USDT",
-    "ONDOUSDT": "ONDO-USDT",
-    "AAVEUSDT": "AAVE-USDT",
+    "ONDOUSDT":   "ONDO-USDT",
+    "AAVEUSDT":   "AAVE-USDT",
+    "RENDERUSDT": "RENDER-USDT",
+    "BNBUSDT":    "BNB-USDT",
 }
 
 BYBIT_PAIRS = {
@@ -98,8 +106,10 @@ BYBIT_PAIRS = {
     "XRPUSDT":  "XRPUSDT",
     "TONUSDT":  "TONUSDT",
     "SOLUSDT":  "SOLUSDT",
-    "ONDOUSDT": "ONDOUSDT",
-    "AAVEUSDT": "AAVEUSDT",
+    "ONDOUSDT":   "ONDOUSDT",
+    "AAVEUSDT":   "AAVEUSDT",
+    "RENDERUSDT": "RENDERUSDT",
+    "BNBUSDT":    "BNBUSDT",
 }
 
 # KuCoin trading pairs
@@ -116,10 +126,11 @@ KUCOIN_PAIRS = {
     "XRPUSDT":  "XRP-USDT",
     "TONUSDT":  "TON-USDT",
     "SOLUSDT":  "SOL-USDT",
-    "ONDOUSDT": "ONDO-USDT",
-    "AAVEUSDT": "AAVE-USDT",
+    "ONDOUSDT":   "ONDO-USDT",
+    "AAVEUSDT":   "AAVE-USDT",
+    "RENDERUSDT": "RENDER-USDT",
+    "BNBUSDT":    "BNB-USDT",
 }
-
 
 
 class BinanceClient:
