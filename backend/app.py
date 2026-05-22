@@ -47,7 +47,7 @@ SYMBOLS = {
     "BNB":    "BNBUSDT",
 }
 TF_INTERVAL = {
-    "15M": "15m", "1H": "1h", "2H": "2h",
+    "1H": "1h", "2H": "2h",
     "4H": "4h", "8H": "8h", "12H": "12h", "1D": "1d",
     "1W": "1w", "2W": "1w", "3W":  "1w",  "1M": "1M",
 }
@@ -56,7 +56,7 @@ TF_AGG = {"2W": 2, "3W": 3}
 # Candle limits per timeframe — more candles for shorter bars so the chart
 # covers enough history to be useful.
 TF_LIMIT = {
-    "15M": 120, "1H": 120, "2H": 120,
+    "1H": 120, "2H": 120,
     "4H": 100, "8H": 120, "12H": 120, "1D": 100,
     "1W": 100, "2W": 150, "3W":  150, "1M": 100,
 }
@@ -64,7 +64,7 @@ TF_LIMIT = {
 # Minimum pole size (%) required for flag detection per TF.
 # Shorter bars need smaller thresholds — a 4H candle rarely moves 8%.
 TF_MIN_POLE_PCT = {
-    "15M": 1.5, "1H": 2.0, "2H": 2.5,
+    "1H": 2.0, "2H": 2.5,
     "4H": 3.0, "8H": 4.0, "12H": 5.0, "1D":  6.0,
     "1W": 8.0, "2W": 8.0, "3W":  8.0, "1M": 10.0,
 }
