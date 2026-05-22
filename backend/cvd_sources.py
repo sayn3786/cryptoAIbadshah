@@ -20,28 +20,65 @@ def _get(url: str, params: dict = None, headers: dict = None) -> dict | list:
 # ── Symbol maps ───────────────────────────────────────────────────────────────
 
 _OKX_CCY = {
-    "BTCUSDT": "BTC",   "ETHUSDT": "ETH",  "LINKUSDT": "LINK",
-    "TAOUSDT": "TAO",   "HYPEUSDT": "HYPE", "ONDOUSDT": "ONDO",
+    "BTCUSDT": "BTC",    "ETHUSDT": "ETH",   "LINKUSDT": "LINK",
+    "TAOUSDT": "TAO",    "HYPEUSDT": "HYPE", "ONDOUSDT": "ONDO",
 }
 _KUCOIN = {
-    "BTCUSDT": "BTC-USDT", "ETHUSDT": "ETH-USDT",  "LINKUSDT": "LINK-USDT",
-    "TAOUSDT": "TAO-USDT", "HYPEUSDT": "HYPE-USDT", "ONDOUSDT": "ONDO-USDT",
+    "BTCUSDT": "BTC-USDT",   "ETHUSDT": "ETH-USDT",   "LINKUSDT": "LINK-USDT",
+    "TAOUSDT": "TAO-USDT",   "HYPEUSDT": "HYPE-USDT", "ONDOUSDT": "ONDO-USDT",
 }
 _GATE = {
-    "BTCUSDT": "BTC_USDT", "ETHUSDT": "ETH_USDT",  "LINKUSDT": "LINK_USDT",
-    "TAOUSDT": "TAO_USDT", "HYPEUSDT": "HYPE_USDT", "ONDOUSDT": "ONDO_USDT",
+    "BTCUSDT": "BTC_USDT",   "ETHUSDT": "ETH_USDT",   "LINKUSDT": "LINK_USDT",
+    "TAOUSDT": "TAO_USDT",   "HYPEUSDT": "HYPE_USDT", "ONDOUSDT": "ONDO_USDT",
 }
 _LBANK = {
-    "BTCUSDT": "btc_usdt", "ETHUSDT": "eth_usdt",  "LINKUSDT": "link_usdt",
-    "TAOUSDT": "tao_usdt", "HYPEUSDT": "hype_usdt", "ONDOUSDT": "ondo_usdt",
+    "BTCUSDT": "btc_usdt",   "ETHUSDT": "eth_usdt",   "LINKUSDT": "link_usdt",
+    "TAOUSDT": "tao_usdt",   "HYPEUSDT": "hype_usdt", "ONDOUSDT": "ondo_usdt",
 }
 _CG_IDS = {
-    "BTCUSDT": "bitcoin",    "ETHUSDT": "ethereum",    "LINKUSDT": "chainlink",
-    "TAOUSDT": "bittensor",  "HYPEUSDT": "hyperliquid", "ONDOUSDT": "ondo-finance",
+    "BTCUSDT": "bitcoin",     "ETHUSDT": "ethereum",    "LINKUSDT": "chainlink",
+    "TAOUSDT": "bittensor",   "HYPEUSDT": "hyperliquid","ONDOUSDT": "ondo-finance",
 }
 _CMC_IDS = {
     "BTCUSDT": 1, "ETHUSDT": 1027, "LINKUSDT": 1975,
     "TAOUSDT": 22974, "HYPEUSDT": 32196, "ONDOUSDT": 21159,
+}
+
+# ── Interval translation tables ───────────────────────────────────────────────
+
+# OKX taker-volume endpoint supports: 5m 1H 4H 1D 1W 1M
+_OKX_PERIOD = {
+    "15m": "5m",  "30m": "1H", "1h": "1H", "2h": "4H",
+    "4h":  "4H",  "8h": "1D",  "12h": "1D", "1d": "1D",
+    "1w":  "1W",  "1W": "1W",  "1M": "1M",
+}
+
+# MEXC futures contract kline intervals
+_MEXC_FUT_IV = {
+    "15m": "Min15", "30m": "Min30", "1h":  "Hour1", "2h":  "Hour2",
+    "4h":  "Hour4", "8h":  "Hour8", "12h": "Hour12","1d":  "Day1",
+    "1w":  "Week1", "1W":  "Week1", "1M":  "Month1",
+}
+
+# KuCoin spot candle types
+_KUCOIN_IV = {
+    "15m": "15min", "30m": "30min", "1h": "1hour",  "2h": "2hour",
+    "4h":  "4hour", "8h":  "8hour", "12h": "12hour","1d": "1day",
+    "1w":  "1week", "1W":  "1week", "1M":  "1month",
+}
+
+# Gate.io spot candlestick intervals
+_GATE_IV = {
+    "15m": "15m", "30m": "30m", "1h": "1h",  "2h": "2h",
+    "4h":  "4h",  "8h":  "8h",  "12h": "12h","1d": "1d",
+    "1w":  "7d",  "1W":  "7d",  "1M":  "30d",
+}
+
+# LBank kline types
+_LBANK_IV = {
+    "15m": "15min", "30m": "30min", "1h": "1hr",  "2h": "2hr",
+    "4h":  "4hr",   "8h":  "8hr",   "12h": "12hr","1d": "day1",
+    "1w":  "week1", "1W":  "week1", "1M":  "month1",
 }
 
 
@@ -55,11 +92,12 @@ def _parse_binance_kline(k: list) -> Dict:
         "low":              float(k[3]),
         "close":            float(k[4]),
         "volume":           float(k[5]),
-        "taker_buy_volume": float(k[9]),
+        "taker_buy_volume": float(k[9]),   # real taker buy volume ✓
     }
 
 
 # ── Binance ───────────────────────────────────────────────────────────────────
+# Real taker_buy_volume available on both spot and futures endpoints.
 
 def fetch_binance_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     try:
@@ -80,9 +118,10 @@ def fetch_binance_futures_cvd(symbol: str, interval: str, limit: int) -> Optiona
 
 
 # ── MEXC ──────────────────────────────────────────────────────────────────────
+# Spot: Binance-compatible, index 9 = real taker_buy_base_asset_volume.
+# Futures: dedicated contract endpoint with buyVol field.
 
 def fetch_mexc_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
-    """MEXC spot API is Binance-compatible; index 9 = taker_buy_base_asset_volume."""
     try:
         data = _get("https://api.mexc.com/api/v3/klines",
                     {"symbol": symbol, "interval": interval, "limit": limit})
@@ -93,10 +132,10 @@ def fetch_mexc_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict
 
 def fetch_mexc_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     mexc_sym = symbol.replace("USDT", "_USDT")
-    iv_map   = {"1w": "Week1", "1M": "Month1"}
+    iv = _MEXC_FUT_IV.get(interval, "Day1")
     try:
         data = _get(f"https://futures.mexc.com/api/v1/contract/kline/{mexc_sym}",
-                    {"interval": iv_map.get(interval, "Week1"), "limit": limit})
+                    {"interval": iv, "limit": limit})
         d = data.get("data", {})
         times    = d.get("time",   [])
         opens    = d.get("open",   [])
@@ -105,6 +144,8 @@ def fetch_mexc_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[D
         closes   = d.get("close",  [])
         vols     = d.get("vol",    [])
         buy_vols = d.get("buyVol", [])
+        if not times:
+            return None
         candles = []
         for i, ts in enumerate(times):
             total = float(vols[i])     if i < len(vols)     else 0.0
@@ -124,18 +165,21 @@ def fetch_mexc_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[D
 
 
 # ── OKX ───────────────────────────────────────────────────────────────────────
+# Uses taker-volume endpoint which provides real buy/sell taker volumes for
+# both SPOT and CONTRACTS (futures/perpetuals).
 
-def _okx_taker_cvd(symbol: str, inst_type: str, period: str, label: str) -> Optional[Dict]:
+def _okx_taker_cvd(symbol: str, inst_type: str, interval: str, label: str) -> Optional[Dict]:
     ccy = _OKX_CCY.get(symbol)
     if not ccy:
         return None
+    period = _OKX_PERIOD.get(interval, "1D")
     try:
         data = _get("https://www.okx.com/api/v5/rubik/stat/taker-volume",
                     {"ccy": ccy, "instType": inst_type, "period": period, "limit": "100"})
         rows = data.get("data", []) if isinstance(data, dict) else []
         if not rows:
             return None
-        rows = list(reversed(rows))  # chronological order
+        rows = list(reversed(rows))   # oldest → newest
         cvd, series = 0.0, []
         for row in rows:
             ts    = int(row[0])
@@ -148,57 +192,69 @@ def _okx_taker_cvd(symbol: str, inst_type: str, period: str, label: str) -> Opti
         pct    = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9)
         trend  = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
         return {"current": round(cvd, 2), "trend": trend,
-                "series": series[-30:], "label": label, "source": "okx"}
+                "series": series[-30:], "label": label}
     except Exception:
         return None
 
 
 def fetch_okx_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
-    period = "1W" if interval in ("1w", "1W") else "1M"
-    return _okx_taker_cvd(symbol, "SPOT", period, "spot")
+    return _okx_taker_cvd(symbol, "SPOT", interval, "spot")
 
 
 def fetch_okx_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
-    period = "1W" if interval in ("1w", "1W") else "1M"
-    return _okx_taker_cvd(symbol, "CONTRACTS", period, "futures")
+    return _okx_taker_cvd(symbol, "CONTRACTS", interval, "futures")
 
 
 # ── KuCoin ────────────────────────────────────────────────────────────────────
+# Spot only — no real futures taker volume available.
+# Returns None for futures requests so the caller can fall back gracefully.
 
-def fetch_kucoin_cvd(symbol: str, interval: str, limit: int, label: str) -> Optional[Dict]:
+def fetch_kucoin_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     pair = _KUCOIN.get(symbol)
     if not pair:
         return None
+    iv = _KUCOIN_IV.get(interval, "1week")
     try:
         data = _get("https://api.kucoin.com/api/v1/market/candles",
-                    {"type": "1week", "symbol": pair})
+                    {"type": iv, "symbol": pair})
         raw = (data.get("data") or []) if isinstance(data, dict) else []
+        if not raw:
+            return None
         candles = []
         for k in reversed(raw[-limit:]):
-            vol = float(k[5])
             candles.append({
                 "timestamp":        int(k[0]) * 1000,
                 "open":             float(k[1]),
                 "high":             float(k[3]),
                 "low":              float(k[4]),
                 "close":            float(k[2]),
-                "volume":           vol,
-                "taker_buy_volume": None,
+                "volume":           float(k[5]),
+                "taker_buy_volume": None,   # not available; price-estimate used
             })
-        return calculate_cvd(candles, label) if candles else None
+        return calculate_cvd(candles, "spot") if candles else None
     except Exception:
         return None
 
 
-# ── Gate.io ───────────────────────────────────────────────────────────────────
+def fetch_kucoin_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+    # KuCoin futures API requires auth for taker volume; return None so caller
+    # falls back to another source rather than returning misleading spot data.
+    return None
 
-def fetch_gate_cvd(symbol: str, interval: str, limit: int, label: str) -> Optional[Dict]:
+
+# ── Gate.io ───────────────────────────────────────────────────────────────────
+# Spot only — Gate futures taker volume requires separate authenticated endpoint.
+
+def fetch_gate_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     pair = _GATE.get(symbol)
     if not pair:
         return None
+    iv = _GATE_IV.get(interval, "7d")
     try:
         data = _get("https://api.gateio.ws/api/v4/spot/candlesticks",
-                    {"currency_pair": pair, "interval": "1w", "limit": limit})
+                    {"currency_pair": pair, "interval": iv, "limit": limit})
+        if not data:
+            return None
         candles = []
         for k in data:
             candles.append({
@@ -210,21 +266,29 @@ def fetch_gate_cvd(symbol: str, interval: str, limit: int, label: str) -> Option
                 "volume":           float(k[1]),
                 "taker_buy_volume": None,
             })
-        return calculate_cvd(candles, label) if candles else None
+        return calculate_cvd(candles, "spot") if candles else None
     except Exception:
         return None
 
 
-# ── LBank ─────────────────────────────────────────────────────────────────────
+def fetch_gate_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+    return None   # no unauthenticated futures taker volume on Gate.io
 
-def fetch_lbank_cvd(symbol: str, interval: str, limit: int, label: str) -> Optional[Dict]:
+
+# ── LBank ─────────────────────────────────────────────────────────────────────
+# Spot only — no futures taker volume available without auth.
+
+def fetch_lbank_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     pair = _LBANK.get(symbol)
     if not pair:
         return None
+    iv = _LBANK_IV.get(interval, "week1")
     try:
         data = _get("https://api.lbank.com/v2/kline.do",
-                    {"symbol": pair, "size": min(limit, 100), "type": "week1"})
+                    {"symbol": pair, "size": min(limit, 100), "type": iv})
         rows = data.get("data", []) if isinstance(data, dict) else []
+        if not rows:
+            return None
         candles = []
         for k in rows:
             candles.append({
@@ -236,14 +300,20 @@ def fetch_lbank_cvd(symbol: str, interval: str, limit: int, label: str) -> Optio
                 "volume":           float(k[5]),
                 "taker_buy_volume": None,
             })
-        return calculate_cvd(candles, label) if candles else None
+        return calculate_cvd(candles, "spot") if candles else None
     except Exception:
         return None
 
 
-# ── CoinGecko ─────────────────────────────────────────────────────────────────
+def fetch_lbank_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+    return None   # no futures taker volume on LBank
 
-def fetch_coingecko_cvd(symbol: str, interval: str, limit: int, label: str) -> Optional[Dict]:
+
+# ── CoinGecko ─────────────────────────────────────────────────────────────────
+# Market chart data only — no taker volume, no futures data.
+# Spot price-estimate CVD only.
+
+def fetch_coingecko_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     cg_id = _CG_IDS.get(symbol)
     if not cg_id:
         return None
@@ -251,8 +321,8 @@ def fetch_coingecko_cvd(symbol: str, interval: str, limit: int, label: str) -> O
         days = min(limit * 7 + 60, 730)
         data = _get(f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart",
                     {"vs_currency": "usd", "days": str(days), "interval": "daily"})
-        prices  = data.get("prices",         [])
-        volumes = data.get("total_volumes",  [])
+        prices  = data.get("prices",        [])
+        volumes = data.get("total_volumes", [])
         if not prices:
             return None
 
@@ -289,14 +359,15 @@ def fetch_coingecko_cvd(symbol: str, interval: str, limit: int, label: str) -> O
                 "close": round(w["close"], 8), "volume": round(vol, 2),
                 "taker_buy_volume": None,
             })
-        return calculate_cvd(candles, label) if candles else None
+        return calculate_cvd(candles, "spot") if candles else None
     except Exception:
         return None
 
 
 # ── CoinMarketCap ─────────────────────────────────────────────────────────────
+# OHLCV historical, no taker buy volume, spot only.
 
-def fetch_coinmarketcap_cvd(symbol: str, interval: str, limit: int, label: str) -> Optional[Dict]:
+def fetch_coinmarketcap_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     cmc_id  = _CMC_IDS.get(symbol)
     api_key = os.getenv("CMC_API_KEY", "")
     if not cmc_id or not api_key:
@@ -312,6 +383,8 @@ def fetch_coinmarketcap_cvd(symbol: str, interval: str, limit: int, label: str) 
         )
         quotes = (data.get("data", {}).get("quotes", [])
                   if isinstance(data, dict) else [])
+        if not quotes:
+            return None
         candles = []
         for q in quotes:
             ohlcv  = q.get("quote", {}).get("USD", {})
@@ -327,7 +400,7 @@ def fetch_coinmarketcap_cvd(symbol: str, interval: str, limit: int, label: str) 
                 "volume":           float(ohlcv.get("volume", 0)),
                 "taker_buy_volume": None,
             })
-        return calculate_cvd(candles, label) if candles else None
+        return calculate_cvd(candles, "spot") if candles else None
     except Exception:
         return None
 
@@ -341,6 +414,37 @@ def fetch_coinglass_cvd(symbol: str, cg_client) -> Optional[Dict]:
 
 
 # ── Dispatcher ────────────────────────────────────────────────────────────────
+# Sources with real taker buy volume (marked ✓):
+#   Binance spot ✓, Binance futures ✓
+#   MEXC spot ✓, MEXC futures ✓ (buyVol field)
+#   OKX spot ✓, OKX futures ✓ (taker-volume endpoint)
+#   CoinGlass ✓ (aggregated)
+#
+# Sources with price-estimate CVD only (spot data, no futures):
+#   KuCoin, Gate.io, LBank, CoinGecko, CoinMarketCap
+#   → futures requests from these return None
+
+_SPOT_DISPATCH = {
+    "binance":       fetch_binance_spot_cvd,
+    "mexc":          fetch_mexc_spot_cvd,
+    "okx":           fetch_okx_spot_cvd,
+    "kucoin":        fetch_kucoin_spot_cvd,
+    "gateio":        fetch_gate_spot_cvd,
+    "lbank":         fetch_lbank_spot_cvd,
+    "coingecko":     fetch_coingecko_cvd,
+    "coinmarketcap": fetch_coinmarketcap_cvd,
+}
+
+_FUTURES_DISPATCH = {
+    "binance":   fetch_binance_futures_cvd,
+    "mexc":      fetch_mexc_futures_cvd,
+    "okx":       fetch_okx_futures_cvd,
+    "kucoin":    fetch_kucoin_futures_cvd,    # returns None
+    "gateio":    fetch_gate_futures_cvd,      # returns None
+    "lbank":     fetch_lbank_futures_cvd,     # returns None
+    "coinglass": None,  # handled separately
+}
+
 
 def fetch_cvd_from_source(
     symbol: str,
@@ -350,28 +454,22 @@ def fetch_cvd_from_source(
     limit: int,
     cg_client=None,
 ) -> Optional[Dict]:
-    label = cvd_type  # "spot" or "futures"
 
-    dispatch = {
-        "binance":       (fetch_binance_futures_cvd if cvd_type == "futures" else fetch_binance_spot_cvd,
-                          [symbol, interval, limit]),
-        "mexc":          (fetch_mexc_futures_cvd    if cvd_type == "futures" else fetch_mexc_spot_cvd,
-                          [symbol, interval, limit]),
-        "okx":           (fetch_okx_futures_cvd     if cvd_type == "futures" else fetch_okx_spot_cvd,
-                          [symbol, interval, limit]),
-        "kucoin":        (fetch_kucoin_cvd,    [symbol, interval, limit, label]),
-        "gateio":        (fetch_gate_cvd,      [symbol, interval, limit, label]),
-        "lbank":         (fetch_lbank_cvd,     [symbol, interval, limit, label]),
-        "coingecko":     (fetch_coingecko_cvd, [symbol, interval, limit, label]),
-        "coinmarketcap": (fetch_coinmarketcap_cvd, [symbol, interval, limit, label]),
-        "coinglass":     (fetch_coinglass_cvd, [symbol, cg_client]),
-    }
+    if source == "coinglass":
+        result = fetch_coinglass_cvd(symbol, cg_client)
+        if result:
+            result["source"] = "coinglass"
+        return result
 
-    entry = dispatch.get(source)
-    if not entry:
+    if cvd_type == "futures":
+        fn = _FUTURES_DISPATCH.get(source)
+    else:
+        fn = _SPOT_DISPATCH.get(source)
+
+    if fn is None:
         return None
-    fn, args = entry
-    result = fn(*args)
+
+    result = fn(symbol, interval, limit)
     if result:
         result["source"] = source
     return result
