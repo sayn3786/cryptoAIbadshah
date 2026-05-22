@@ -909,15 +909,15 @@ function renderTradeManagement(a) {
       <div class="tm-divider"></div>
       <div class="tm-row">
         <span class="tm-label">TP 1 <span style="color:var(--muted);font-size:.68rem">— sell 50%</span></span>
-        <span class="tm-val bull">${p(tps[0])} ${pctTag(tpPcts[0], true)}</span>
+        <span class="tm-val bull">${tps[0] != null ? p(tps[0]) : '<span class="muted">N/A</span>'} ${pctTag(tpPcts[0], true)}</span>
       </div>
       <div class="tm-row">
         <span class="tm-label">TP 2 <span style="color:var(--muted);font-size:.68rem">— sell 30%</span></span>
-        <span class="tm-val bull">${p(tps[1])} ${pctTag(tpPcts[1], true)}</span>
+        <span class="tm-val bull">${tps[1] != null ? p(tps[1]) : '<span class="muted">N/A</span>'} ${pctTag(tpPcts[1], true)}</span>
       </div>
       <div class="tm-row">
         <span class="tm-label">TP 3 <span style="color:var(--muted);font-size:.68rem">— sell 20%</span></span>
-        <span class="tm-val bull">${p(tps[2])} ${pctTag(tpPcts[2], true)}</span>
+        <span class="tm-val bull">${tps[2] != null ? p(tps[2]) : '<span class="muted">N/A</span>'} ${pctTag(tpPcts[2], true)}</span>
       </div>
       ${flagTarget ? `
       <div class="tm-row">

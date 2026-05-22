@@ -448,6 +448,13 @@ def generate_signal(analysis: Dict) -> Dict:
         tp2_dist = eff_atr * tp2_m
         tp3_dist = eff_atr * tp3_m
 
+        def _tp_short(dist):
+            """Return TP price for a SHORT, or None if it would require >95% drop."""
+            target = current_price - dist
+            if target <= current_price * 0.05:   # >95% drop — not achievable
+                return None
+            return round(target, 8)
+
         if direction == "LONG":
             sl = round(max(current_price * 0.001, current_price - sl_dist), 8)
             tp_targets = [
@@ -458,18 +465,18 @@ def generate_signal(analysis: Dict) -> Dict:
         elif direction == "SHORT":
             sl = round(current_price + sl_dist, 8)
             tp_targets = [
-                round(max(current_price * 0.001, current_price - tp1_dist), 8),
-                round(max(current_price * 0.001, current_price - tp2_dist), 8),
-                round(max(current_price * 0.001, current_price - tp3_dist), 8),
+                _tp_short(tp1_dist),
+                _tp_short(tp2_dist),
+                _tp_short(tp3_dist),
             ]
 
-        if sl and sl != entry and tp_targets:
-            rr_ratio = round(abs(tp_targets[1] - entry) / abs(sl - entry), 2)
+        if sl and sl != entry and tp_targets and tp_targets[0] is not None:
+            rr_ratio = round(abs((tp_targets[1] or tp_targets[0]) - entry) / abs(sl - entry), 2)
             # Percentage distances from entry (always positive)
             sl_pct  = round(abs(sl - entry) / entry * 100, 2)
-            tp1_pct = round(abs(tp_targets[0] - entry) / entry * 100, 2)
-            tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2)
-            tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2)
+            tp1_pct = round(abs(tp_targets[0] - entry) / entry * 100, 2) if tp_targets[0] else None
+            tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
+            tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
 
     return {
         "direction": direction,
