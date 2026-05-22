@@ -14,7 +14,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from cvd_sources import fetch_cvd_from_source
-from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing
+from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
 from signals import generate_signal
@@ -143,6 +143,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "data_source":       spot_source,
         "demo_mode":         spot_source == "demo",
         "coinglass_enabled": cg_client.enabled,
+        "cvd_divergence":    detect_cvd_divergence(spot_cvd, fut_cvd, spot),
     }
     analysis["signal"] = generate_signal(analysis)
     return analysis

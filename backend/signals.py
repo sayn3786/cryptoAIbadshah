@@ -57,6 +57,28 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= 10
         bear_reasons.append("Futures CVD bearish — institutional supply")
 
+    # ── CVD Divergence ───────────────────────────────────────────────────────
+    cvd_div = analysis.get("cvd_divergence") or {}
+    div_type = cvd_div.get("type", "neutral")
+    if div_type == "futures_led_up":
+        score -= 15
+        bear_reasons.append("Futures-driven rally — spot CVD falling, no real demand; move may fade")
+    elif div_type == "spot_led_up":
+        score += 20
+        bull_reasons.append("Spot-driven rally — genuine buying, futures not chasing; healthier move")
+    elif div_type == "confirmed_up":
+        score += 25
+        bull_reasons.append("Confirmed rally — both spot and futures CVD bullish")
+    elif div_type == "futures_led_down":
+        score += 15
+        bull_reasons.append("Futures-driven selloff — spot CVD rising, no real selling; short squeeze risk")
+    elif div_type == "spot_led_down":
+        score -= 20
+        bear_reasons.append("Spot-driven selloff — genuine distribution, spot sellers dominate")
+    elif div_type == "confirmed_down":
+        score -= 25
+        bear_reasons.append("Confirmed selloff — both spot and futures CVD bearish")
+
     # ── Funding Rate ─────────────────────────────────────────────────────────
     fr = funding.get("current", 0.0) or 0.0
     if fr < -0.02:

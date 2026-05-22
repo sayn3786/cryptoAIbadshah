@@ -68,6 +68,78 @@ def calculate_cvd(candles: List[Dict], label: str = "spot") -> Dict:
     return {"current": round(cvd, 2), "trend": trend, "series": series[-30:], "label": label}
 
 
+def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) -> Dict:
+    """
+    Compare price direction vs spot/futures CVD trend to detect who is actually
+    driving the move — spot buyers/sellers or futures speculators.
+
+    Returns a dict with: type, label, detail, signal ("bullish"|"bearish"|"neutral")
+    """
+    if not spot_cvd or not fut_cvd or not candles or len(candles) < 5:
+        return {}
+
+    closes = [c["close"] for c in candles[-5:]]
+    price_chg = (closes[-1] - closes[0]) / (closes[0] + 1e-9)
+    if price_chg > 0.005:
+        price_trend = "up"
+    elif price_chg < -0.005:
+        price_trend = "down"
+    else:
+        return {"type": "neutral", "label": "Price ranging", "detail": "No clear price trend to compare CVDs against.", "signal": "neutral"}
+
+    spot_trend = spot_cvd.get("trend", "neutral")
+    fut_trend  = fut_cvd.get("trend",  "neutral")
+
+    if price_trend == "up":
+        if spot_trend == "bearish" and fut_trend == "bullish":
+            return {
+                "type":   "futures_led_up",
+                "label":  "Futures-driven rally",
+                "detail": "Price rising but spot CVD falling — futures buyers are pushing price up with no real spot demand. Rally may be unsustainable.",
+                "signal": "bearish",
+            }
+        if spot_trend == "bullish" and fut_trend == "bearish":
+            return {
+                "type":   "spot_led_up",
+                "label":  "Spot-driven rally",
+                "detail": "Price rising with spot CVD confirming — genuine buying pressure. Futures are not chasing, suggesting a healthier, more sustained move.",
+                "signal": "bullish",
+            }
+        if spot_trend == "bullish" and fut_trend == "bullish":
+            return {
+                "type":   "confirmed_up",
+                "label":  "Confirmed rally",
+                "detail": "Both spot and futures CVD rising with price — strong confluence of real and speculative buying.",
+                "signal": "bullish",
+            }
+
+    if price_trend == "down":
+        if spot_trend == "bullish" and fut_trend == "bearish":
+            return {
+                "type":   "futures_led_down",
+                "label":  "Futures-driven selloff",
+                "detail": "Price falling but spot CVD rising — futures sellers are pushing price down with no real spot selling. Short squeeze risk.",
+                "signal": "bullish",
+            }
+        if spot_trend == "bearish" and fut_trend == "bullish":
+            return {
+                "type":   "spot_led_down",
+                "label":  "Spot-driven selloff",
+                "detail": "Price falling with spot CVD confirming — genuine distribution. Futures are not selling but spot sellers dominate.",
+                "signal": "bearish",
+            }
+        if spot_trend == "bearish" and fut_trend == "bearish":
+            return {
+                "type":   "confirmed_down",
+                "label":  "Confirmed selloff",
+                "detail": "Both spot and futures CVD falling with price — strong confluence of real and speculative selling.",
+                "signal": "bearish",
+            }
+
+    return {"type": "neutral", "label": "CVDs aligned with price", "detail": "No significant divergence between spot and futures CVD.", "signal": "neutral"}
+
+
+
 def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
     fvgs: List[Dict] = []
     if len(candles) < 3:

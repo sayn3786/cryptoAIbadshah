@@ -166,6 +166,7 @@ function renderAll(a) {
   renderMainChart(a.candles, a.fvgs);
   renderRSIChart(a.rsi_series);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd);
+  renderCVDDivergence(a.cvd_divergence);
   renderFVGTable(a.fvgs);
   renderFlags(a.flags);
   renderEngulfing(a.engulfing, a.timeframe);
@@ -381,6 +382,28 @@ function renderRSIChart(rsiSeries) {
 function renderCVDCharts(spot, fut) {
   renderCVDPanel('spot', spot, S.spotCvdSeries, 'spotCvdVal', 'spotCvdTrend');
   renderCVDPanel('fut', fut, S.futCvdSeries, 'futCvdVal', 'futCvdTrend');
+}
+
+function renderCVDDivergence(div) {
+  const el = document.getElementById('cvdDivBanner');
+  if (!el) return;
+  if (!div || !div.type || div.type === 'neutral') { el.style.display = 'none'; return; }
+
+  const icons = {
+    futures_led_up:   '⚠',
+    spot_led_up:      '✓',
+    confirmed_up:     '✓✓',
+    futures_led_down: '⚠',
+    spot_led_down:    '↓',
+    confirmed_down:   '↓↓',
+  };
+  const sigCls = div.signal === 'bullish' ? 'bull' : div.signal === 'bearish' ? 'bear' : '';
+  el.style.display = '';
+  el.className = `cvd-div-banner cvd-div-${div.signal}`;
+  el.innerHTML = `
+    <span class="cvd-div-icon">${icons[div.type] || '·'}</span>
+    <span class="cvd-div-label ${sigCls}">${div.label}</span>
+    <span class="cvd-div-detail">${div.detail}</span>`;
 }
 
 function renderCVDPanel(id, cvd, series, valId, trendId) {

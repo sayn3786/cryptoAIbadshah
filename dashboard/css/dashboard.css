@@ -261,6 +261,16 @@ a:hover { color: var(--gold2); }
 .cvd-trend.neutral { background: rgba(99,102,241,.15); color: var(--neutral); }
 .mini-chart-container { flex: 1; height: 80px; }
 
+/* CVD divergence banner */
+.cvd-div-banner { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px;
+  border-radius: 8px; margin-top: 10px; font-size: .8rem; line-height: 1.4; }
+.cvd-div-bullish { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.25); }
+.cvd-div-bearish { background: rgba(239,68,68,.08);  border: 1px solid rgba(239,68,68,.25); }
+.cvd-div-neutral { background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.2); }
+.cvd-div-icon  { font-size: .95rem; flex-shrink: 0; margin-top: 1px; }
+.cvd-div-label { font-weight: 700; white-space: nowrap; flex-shrink: 0; }
+.cvd-div-detail { color: var(--muted2); }
+
 /* ─── Row 3: RSI sub-chart ──────────────────────────────────────────────────── */
 .rsi-chart-card { padding: 16px; }
 .rsi-chart { height: 120px; }
