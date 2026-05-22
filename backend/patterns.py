@@ -144,14 +144,18 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 if is_bull:
                     # Price must not have crashed more than 3% below flag low
                     price_near_flag = current_price >= fl_ * 0.97
+                    # Target already hit: price has already reached or exceeded the target
+                    target_hit = current_price >= target
                 else:
                     # Price must not have surged more than 3% above flag high
                     price_near_flag = current_price <= fh * 1.03
-                is_active = flag_ended_recently and price_near_flag
+                    # Target already hit: price has already reached or gone below the target
+                    target_hit = current_price <= target
+                is_active = flag_ended_recently and price_near_flag and not target_hit
 
                 # Skip invalidated patterns — price has already moved through the
-                # zone in the wrong direction, so the setup no longer applies.
-                if not price_near_flag:
+                # zone in the wrong direction, or has already reached the target.
+                if not price_near_flag or target_hit:
                     continue
 
                 # Also skip a confirmed flag whose breakout went the wrong way:
