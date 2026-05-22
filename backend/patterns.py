@@ -75,10 +75,15 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 direction = "bullish" if is_bull else "bearish"
                 pole_pct  = round(abs(pole_move) * 100, 2)
 
+                current_price = candles[-1]["close"]
                 if is_bull:
-                    target = round(fh + pole_height, 8)
+                    raw_target = fh + pole_height
+                    # Cap at 2× current price — keeps target in a plausible range
+                    target = round(min(raw_target, current_price * 2.0), 8)
                 else:
-                    target = round(max(fl_ - pole_height, pole_low * 0.5), 8)
+                    raw_target = fl_ - pole_height
+                    # Floor at 20% of current price
+                    target = round(max(raw_target, current_price * 0.20, pole_low * 0.5), 8)
 
                 # ── Channel slope classification ──────────────────────────
                 flag_highs = [c["high"] for c in flag]

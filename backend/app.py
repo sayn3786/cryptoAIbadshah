@@ -46,31 +46,11 @@ TF_LIMIT = {
     "1W": 120, "2W": 250, "3W":  250, "1M": 120,
 }
 
-# Sub-timeframes for flag detection: (interval, limit, agg_factor, label, tf_weight)
-# tf_weight grows with timeframe size — highest weight = dominant tier
-TF_FLAG_SUBS = {
-    "4H":  [("15m", 200, 1, "15m", 1.0),
-            ("30m", 200, 1, "30m", 1.5),
-            ("1h",  150, 1, "1H",  2.0)],
-    "8H":  [("30m", 200, 1, "30m", 1.0),
-            ("1h",  150, 1, "1H",  1.5),
-            ("2h",  120, 1, "2H",  2.0)],
-    "12H": [("1h",  150, 1, "1H",  1.0),
-            ("2h",  120, 1, "2H",  1.5),
-            ("4h",  100, 1, "4H",  2.0)],
-    "1D":  [("2h",  150, 1, "2H",  1.0),
-            ("4h",  120, 1, "4H",  1.5),
-            ("8h",  100, 1, "8H",  2.0)],
-    "1W":  [("4h",  200, 1, "4H",  1.0),
-            ("8h",  150, 1, "8H",  1.5),
-            ("12h", 120, 1, "12H", 2.0)],
-    "2W":  [("1d",   90, 1, "1D",  1.0),
-            ("1w",   60, 1, "1W",  2.0)],
-    "3W":  [("1w",   60, 1, "1W",  1.0),
-            ("1w",  120, 2, "2W",  2.0)],
-    "1M":  [("1w",   60, 1, "1W",  1.0),
-            ("1w",  120, 2, "2W",  1.5),
-            ("1w",  180, 3, "3W",  2.0)],
+# Minimum pole size (%) required for flag detection per TF.
+# Shorter bars need smaller thresholds — a 4H candle rarely moves 8%.
+TF_MIN_POLE_PCT = {
+    "4H": 3.0, "8H": 4.0, "12H": 5.0, "1D":  6.0,
+    "1W": 8.0, "2W": 8.0, "3W":  8.0, "1M": 10.0,
 }
 
 
@@ -129,18 +109,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     ph, pl = find_pivots(spot, window=2)
     elliott = analyze_elliott_wave(spot, ph, pl)
 
-    # Flag patterns — fetch sub-timeframe candles and run detection on each tier
-    all_flags = []
-    for sub_iv, sub_limit, agg_n, label, weight in TF_FLAG_SUBS.get(timeframe, []):
-        try:
-            sub_candles = client.get_spot_klines(bs, sub_iv, sub_limit)
-            if agg_n > 1:
-                sub_candles = client.aggregate_candles(sub_candles, agg_n)
-            if len(sub_candles) >= 10:
-                all_flags.extend(detect_flags(sub_candles, label, weight))
-        except Exception:
-            pass
-    flags = pick_dominant_flags(all_flags)
+    # Flag patterns — detect on the same candles already fetched for this TF.
+    # One flag set per timeframe, no cross-TF duplication.
+    min_pole = TF_MIN_POLE_PCT.get(timeframe, 5.0)
+    flags = pick_dominant_flags(detect_flags(spot, timeframe, 1.0, min_pole_pct=min_pole))
 
     rsi_with_ts = [
         {"timestamp": spot[i]["timestamp"], "rsi": v}
