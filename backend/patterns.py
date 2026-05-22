@@ -299,6 +299,13 @@ def analyze_elliott_wave(
                 if t < current_price:
                     targets.append(t)
 
+    # Expose the last 10 pivots (with timestamps) so the frontend can
+    # draw numbered wave markers on the candlestick chart.
+    pivot_markers = [
+        {"time": p["timestamp"], "type": p["type"], "price": p["price"]}
+        for p in all_pivots[-10:]
+    ]
+
     return {
         "wave_count":   label,
         "current_wave": pos,
@@ -307,6 +314,7 @@ def analyze_elliott_wave(
         "description":  desc,
         "targets":      targets,
         "pivot_count":  len(all_pivots),
+        "pivots":       pivot_markers,
     }
 
 

@@ -366,10 +366,10 @@ function renderMarketCap(mcap) {
 function renderMainChart(candles, fvgs) {
   if (!candles?.length || !S.candleSeries) return;
 
-  // Always clear old FVG price lines first — stale lines from a previous
-  // token force the Y-axis to the wrong price range, making candles invisible.
+  // Clear FVG price lines and wave markers from the previous token/TF.
   S.fvgPriceLines.forEach(pl => { try { S.candleSeries.removePriceLine(pl); } catch (_) {} });
   S.fvgPriceLines = [];
+  S.candleSeries.setMarkers([]);   // wave markers — replaced later by renderElliottWave
 
   // Show hours on the time axis for intraday TFs; dates only for daily+
   const intraday = ['1H', '2H', '4H', '8H', '12H'].includes(S.timeframe);
@@ -1278,16 +1278,52 @@ function renderElliottWave(e) {
   document.getElementById('waveLabel').textContent = e.wave_count || '—';
   document.getElementById('waveDesc').textContent  = e.description || '';
 
-  const tEl = document.getElementById('waveTargets');
+  const tEl  = document.getElementById('waveTargets');
   const bias = e.bias || 'neutral';
-  const targets = (e.targets || []);
+  const targets = e.targets || [];
   if (!targets.length) {
     tEl.innerHTML = `<span style="color:var(--muted);font-size:.82rem">No targets ahead of current price</span>`;
   } else {
     tEl.innerHTML = targets.map((t, i) =>
-      `<div class="wave-target ${bias}">Target ${i + 1}: $${Number(t).toLocaleString('en-US', { maximumFractionDigits: 4 })}</div>`
+      `<div class="wave-target ${bias}">T${i + 1}: $${Number(t).toLocaleString('en-US', { maximumFractionDigits: 4 })}</div>`
     ).join('');
   }
+
+  // ── Wave markers on the main candlestick chart ──────────────────────────
+  if (!S.candleSeries || !e.pivots?.length) return;
+
+  // Wave label sequence: 1 2 3 4 5 A B C cycling every 8 swings.
+  // The last pivot corresponds to the current wave position (e.current_wave).
+  const WAVE_NAMES = ['1','2','3','4','5','A','B','C'];
+  const pivots   = e.pivots;
+  const n        = pivots.length;
+  const curIdx   = ((e.current_wave || 1) - 1 + 8) % 8;  // 0-based index in WAVE_NAMES
+
+  const markers = pivots.map((p, i) => {
+    // Walk backwards from the current wave label for older pivots
+    const labelIdx = ((curIdx - (n - 1 - i)) % 8 + 8) % 8;
+    const label    = WAVE_NAMES[labelIdx];
+    const isHigh   = p.type === 'H';
+
+    // Impulse waves (1,3,5,B) get gold; corrective (2,4,A,C) get muted purple
+    const impulse  = ['1','3','5','B'].includes(label);
+    const color    = isHigh
+      ? (impulse ? '#ef4444' : '#f59e0b')
+      : (impulse ? '#10b981' : '#6366f1');
+
+    return {
+      time:     Math.floor(p.time / 1000),
+      position: isHigh ? 'aboveBar' : 'belowBar',
+      color,
+      shape:    isHigh ? 'arrowDown' : 'arrowUp',
+      text:     label,
+      size:     1,
+    };
+  }).sort((a, b) => a.time - b.time);
+
+  // Deduplicate by time (LightweightCharts requires unique timestamps per series)
+  const unique = [...new Map(markers.map(m => [m.time, m])).values()];
+  S.candleSeries.setMarkers(unique);
 }
 
 /* ─── Confluence lists ────────────────────────────────────────────────────── */
