@@ -20,28 +20,51 @@ def _get(url: str, params: dict = None, headers: dict = None) -> dict | list:
 # ── Symbol maps ───────────────────────────────────────────────────────────────
 
 _OKX_CCY = {
-    "BTCUSDT": "BTC",    "ETHUSDT": "ETH",   "LINKUSDT": "LINK",
-    "TAOUSDT": "TAO",    "HYPEUSDT": "HYPE", "ONDOUSDT": "ONDO",
+    "BTCUSDT":    "BTC",    "ETHUSDT":    "ETH",    "LINKUSDT":   "LINK",
+    "SUIUSDT":    "SUI",    "TAOUSDT":    "TAO",    "HYPEUSDT":   "HYPE",
+    "KASUSDT":    "KAS",    "ALGOUSDT":   "ALGO",   "XRPUSDT":    "XRP",
+    "TONUSDT":    "TON",    "SOLUSDT":    "SOL",    "ONDOUSDT":   "ONDO",
+    "AAVEUSDT":   "AAVE",   "RENDERUSDT": "RENDER", "BNBUSDT":    "BNB",
+    "BLURUSDT":   "BLUR",
 }
 _KUCOIN = {
-    "BTCUSDT": "BTC-USDT",   "ETHUSDT": "ETH-USDT",   "LINKUSDT": "LINK-USDT",
-    "TAOUSDT": "TAO-USDT",   "HYPEUSDT": "HYPE-USDT", "ONDOUSDT": "ONDO-USDT",
+    "BTCUSDT":    "BTC-USDT",    "ETHUSDT":    "ETH-USDT",    "LINKUSDT":   "LINK-USDT",
+    "SUIUSDT":    "SUI-USDT",    "TAOUSDT":    "TAO-USDT",    "HYPEUSDT":   "HYPE-USDT",
+    "KASUSDT":    "KAS-USDT",    "ALGOUSDT":   "ALGO-USDT",   "XMRUSDT":    "XMR-USDT",
+    "XRPUSDT":    "XRP-USDT",    "TONUSDT":    "TON-USDT",    "SOLUSDT":    "SOL-USDT",
+    "ONDOUSDT":   "ONDO-USDT",   "AAVEUSDT":   "AAVE-USDT",   "RENDERUSDT": "RENDER-USDT",
+    "BNBUSDT":    "BNB-USDT",    "BLURUSDT":   "BLUR-USDT",
 }
 _GATE = {
-    "BTCUSDT": "BTC_USDT",   "ETHUSDT": "ETH_USDT",   "LINKUSDT": "LINK_USDT",
-    "TAOUSDT": "TAO_USDT",   "HYPEUSDT": "HYPE_USDT", "ONDOUSDT": "ONDO_USDT",
+    "BTCUSDT":    "BTC_USDT",    "ETHUSDT":    "ETH_USDT",    "LINKUSDT":   "LINK_USDT",
+    "SUIUSDT":    "SUI_USDT",    "TAOUSDT":    "TAO_USDT",    "HYPEUSDT":   "HYPE_USDT",
+    "KASUSDT":    "KAS_USDT",    "ALGOUSDT":   "ALGO_USDT",   "XMRUSDT":    "XMR_USDT",
+    "XRPUSDT":    "XRP_USDT",    "TONUSDT":    "TON_USDT",    "SOLUSDT":    "SOL_USDT",
+    "ONDOUSDT":   "ONDO_USDT",   "AAVEUSDT":   "AAVE_USDT",   "RENDERUSDT": "RENDER_USDT",
+    "BNBUSDT":    "BNB_USDT",    "BLURUSDT":   "BLUR_USDT",
 }
 _LBANK = {
-    "BTCUSDT": "btc_usdt",   "ETHUSDT": "eth_usdt",   "LINKUSDT": "link_usdt",
-    "TAOUSDT": "tao_usdt",   "HYPEUSDT": "hype_usdt", "ONDOUSDT": "ondo_usdt",
+    "BTCUSDT":    "btc_usdt",    "ETHUSDT":    "eth_usdt",    "LINKUSDT":   "link_usdt",
+    "SUIUSDT":    "sui_usdt",    "TAOUSDT":    "tao_usdt",    "HYPEUSDT":   "hype_usdt",
+    "KASUSDT":    "kas_usdt",    "ALGOUSDT":   "algo_usdt",   "XRPUSDT":    "xrp_usdt",
+    "SOLUSDT":    "sol_usdt",    "ONDOUSDT":   "ondo_usdt",   "AAVEUSDT":   "aave_usdt",
+    "BNBUSDT":    "bnb_usdt",    "BLURUSDT":   "blur_usdt",
 }
 _CG_IDS = {
-    "BTCUSDT": "bitcoin",     "ETHUSDT": "ethereum",    "LINKUSDT": "chainlink",
-    "TAOUSDT": "bittensor",   "HYPEUSDT": "hyperliquid","ONDOUSDT": "ondo-finance",
+    "BTCUSDT":    "bitcoin",       "ETHUSDT":    "ethereum",      "LINKUSDT":   "chainlink",
+    "SUIUSDT":    "sui",           "TAOUSDT":    "bittensor",     "HYPEUSDT":   "hyperliquid",
+    "KASUSDT":    "kaspa",         "ALGOUSDT":   "algorand",      "XMRUSDT":    "monero",
+    "XRPUSDT":    "ripple",        "TONUSDT":    "the-open-network", "SOLUSDT":  "solana",
+    "ONDOUSDT":   "ondo-finance",  "AAVEUSDT":   "aave",          "RENDERUSDT": "render-token",
+    "BNBUSDT":    "binancecoin",   "BLURUSDT":   "blur",
 }
 _CMC_IDS = {
-    "BTCUSDT": 1, "ETHUSDT": 1027, "LINKUSDT": 1975,
-    "TAOUSDT": 22974, "HYPEUSDT": 32196, "ONDOUSDT": 21159,
+    "BTCUSDT": 1,      "ETHUSDT": 1027,   "LINKUSDT": 1975,
+    "SUIUSDT": 20947,  "TAOUSDT": 22974,  "HYPEUSDT": 32196,
+    "KASUSDT": 20396,  "ALGOUSDT": 4030,  "XMRUSDT":  328,
+    "XRPUSDT": 52,     "TONUSDT":  11419, "SOLUSDT":  5426,
+    "ONDOUSDT": 21159, "AAVEUSDT": 7278,  "RENDERUSDT": 22118,
+    "BNBUSDT":  1839,  "BLURUSDT": 23121,
 }
 
 # ── Interval translation tables ───────────────────────────────────────────────

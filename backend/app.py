@@ -147,7 +147,15 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
     # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
     fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None
-    agg_cvd       = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
+
+    # CoinGlass aggregated CVD: covers tokens absent from Binance futures (BLUR, XMR, KAS…)
+    # by aggregating taker volume across Binance + Bybit + OKX + others.
+    # Takes priority over Binance-only futures CVD when CoinGlass key is configured.
+    agg_cvd = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
+    # When Binance futures aren't real and CoinGlass has data, promote agg_cvd to fut_cvd
+    if agg_cvd and not futures_real:
+        fut_cvd = agg_cvd
+        agg_cvd = None   # avoid double-counting in the CVD divergence calc
     volume_spikes = find_volume_spikes(spot)
     market_cap    = client.get_market_cap(bs)
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)

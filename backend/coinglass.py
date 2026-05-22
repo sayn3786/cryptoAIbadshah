@@ -12,14 +12,28 @@ from typing import Dict, List, Optional
 CG_BASE = "https://open-api.coinglass.com/public/v2"
 TIMEOUT = 15
 
-# CoinGlass uses short symbol names
+# CoinGlass uses short symbol names.
+# CoinGlass aggregates across Binance/Bybit/OKX/etc, so tokens absent from
+# Binance futures (XMR, BLUR, HYPE, KAS…) are still covered if they trade
+# on any other major perp exchange. Unknown/unlisted symbols return None.
 CG_SYMBOLS = {
-    "BTCUSDT":  "BTC",
-    "ETHUSDT":  "ETH",
-    "LINKUSDT": "LINK",
-    "TAOUSDT":  "TAO",
-    "HYPEUSDT": "HYPE",
-    "ONDOUSDT": "ONDO",
+    "BTCUSDT":    "BTC",
+    "ETHUSDT":    "ETH",
+    "LINKUSDT":   "LINK",
+    "SUIUSDT":    "SUI",
+    "TAOUSDT":    "TAO",
+    "HYPEUSDT":   "HYPE",
+    "KASUSDT":    "KAS",
+    "ALGOUSDT":   "ALGO",
+    "XMRUSDT":    "XMR",
+    "XRPUSDT":    "XRP",
+    "TONUSDT":    "TON",
+    "SOLUSDT":    "SOL",
+    "ONDOUSDT":   "ONDO",
+    "AAVEUSDT":   "AAVE",
+    "RENDERUSDT": "RENDER",
+    "BNBUSDT":    "BNB",
+    "BLURUSDT":   "BLUR",
 }
 
 
