@@ -93,12 +93,13 @@ a:hover { color: var(--gold2); }
 
 /* ─── Controls ──────────────────────────────────────────────────────────────── */
 .controls {
-  display: flex; align-items: center; gap: 16px;
-  padding: 12px 24px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  padding: 10px 24px;
   background: var(--bg2);
   border-bottom: 1px solid var(--border);
 }
-.asset-tabs, .tf-tabs { display: flex; gap: 4px; }
+.asset-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.tf-tabs    { display: flex; gap: 4px; }
 
 .asset-tab, .tf-tab {
   background: none;
@@ -118,8 +119,6 @@ a:hover { color: var(--gold2); }
   border-color: var(--gold);
   color: #000;
 }
-
-.tf-tabs { margin-left: auto; }
 
 /* ─── Loading Overlay ────────────────────────────────────────────────────────── */
 .loading-overlay {
@@ -693,24 +692,23 @@ a:hover { color: var(--gold2); }
     font-size: .75rem;
   }
   .controls {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-    padding: 10px 14px;
+    gap: 8px;
+    padding: 8px 14px;
   }
-  .asset-tabs, .tf-tabs {
+  .asset-tabs {
     display: grid;
-    gap: 6px;
-    width: 100%;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 5px;
   }
-  .asset-tabs { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .tf-tabs {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    margin-left: 0;
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 5px;
   }
   .asset-tab, .tf-tab {
-    min-height: 38px;
-    padding: 7px 6px;
+    min-height: 36px;
+    padding: 6px 4px;
+    font-size: .76rem;
   }
   .dashboard {
     gap: 12px;
@@ -789,7 +787,7 @@ a:hover { color: var(--gold2); }
   .hdr { position: static; }
   .row-hero { grid-template-columns: 1fr; }
   .asset-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .tf-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tf-tabs    { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .metric-card {
     align-items: stretch;
     text-align: left;
