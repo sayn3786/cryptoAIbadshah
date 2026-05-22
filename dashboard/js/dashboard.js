@@ -23,6 +23,18 @@ const API = location.port === '' || location.port === '80' || location.port === 
 
 /* ─── Formatting helpers ──────────────────────────────────────────────────── */
 const fmt = (v, d = 4) => v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+// Smart price formatter: adapts decimal places to price magnitude
+const fmtPrice = v => {
+  if (v == null) return '—';
+  const n = Math.abs(Number(v));
+  let d;
+  if      (n >= 1000) d = 2;
+  else if (n >= 1)    d = 4;
+  else if (n >= 0.1)  d = 5;
+  else if (n >= 0.01) d = 6;
+  else                d = 8;
+  return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+};
 const fmtK = (v) => {
   if (v == null) return '—';
   const n = Number(v);
@@ -194,12 +206,12 @@ function renderPrice(a) {
   const up = chg >= 0;
 
   document.getElementById('priceSymbol').textContent = `${a.symbol}/USDT`;
-  document.getElementById('priceValue').textContent = `$${last.close.toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
+  document.getElementById('priceValue').textContent = fmtPrice(last.close);
   const chgEl = document.getElementById('priceChange');
   chgEl.textContent = `${up ? '▲' : '▼'} ${pct(chg)}`;
   chgEl.className = `price-change ${up ? 'up' : 'dn'}`;
-  document.getElementById('priceHigh').textContent = `H: $${last.high.toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
-  document.getElementById('priceLow').textContent  = `L: $${last.low.toLocaleString('en-US',  { maximumFractionDigits: 4 })}`;
+  document.getElementById('priceHigh').textContent = `H: ${fmtPrice(last.high)}`;
+  document.getElementById('priceLow').textContent  = `L: ${fmtPrice(last.low)}`;
   document.getElementById('priceVol').textContent  = `Vol: ${fmtK(last.volume)}`;
 }
 
@@ -673,7 +685,7 @@ function renderFVGTable(fvgs) {
 function renderActiveTrade(a, t) {
   const isLong  = t.direction === 'LONG';
   const cur     = a.candles?.length ? a.candles[a.candles.length - 1].close : null;
-  const fmt     = v => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+  const fmt     = fmtPrice;
   const days    = Math.floor((Date.now() - t.timestamp) / 86400000);
   const dated   = new Date(t.timestamp).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
 
@@ -862,7 +874,7 @@ function renderTradeManagement(a) {
     f.is_active && f.direction === (isLong ? 'bullish' : 'bearish')
   );
 
-  const p  = (v, d = 2) => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: d }) : '—';
+  const p  = fmtPrice;
   const pct = (a, b)    => b ? ((a - b) / b * 100).toFixed(1) + '%' : '';
   const pctHtml = (v, ref, good) => {
     const s = pct(v, ref);
@@ -1145,7 +1157,7 @@ function renderMyTrades() {
     curPrices[S.analysis.symbol] = c[c.length - 1].close;
   }
 
-  const fmt  = v => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+  const fmt  = fmtPrice;
   const fmtPct = (v, ref, isLong) => {
     if (v == null || ref == null) return '';
     const pct = isLong ? (v - ref) / ref * 100 : (ref - v) / ref * 100;
