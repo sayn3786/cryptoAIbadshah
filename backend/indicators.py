@@ -228,6 +228,8 @@ def detect_engulfing(candles: List[Dict], lookback: int = 4) -> List[Dict]:
     if len(closed) < 2:
         return patterns
 
+    current_price = candles[-1]["close"]
+
     start = max(1, len(closed) - lookback)
     for i in range(start, len(closed)):
         prev = closed[i - 1]
@@ -236,6 +238,13 @@ def detect_engulfing(candles: List[Dict], lookback: int = 4) -> List[Dict]:
         prev_body = abs(prev["close"] - prev["open"])
         curr_body = abs(curr["close"] - curr["open"])
         if prev_body < 1e-9 or curr_body < 1e-9:
+            continue
+
+        # Skip if the engulfing candle's price range is more than 20% away from
+        # current price — avoids showing stale patterns from weeks/months ago
+        # when price has already moved significantly
+        candle_mid = (curr["high"] + curr["low"]) / 2.0
+        if current_price > 0 and abs(candle_mid - current_price) / current_price > 0.20:
             continue
 
         candles_ago = len(closed) - i  # 1 = most recent confirmed candle
