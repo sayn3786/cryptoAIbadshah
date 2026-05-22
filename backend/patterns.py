@@ -131,11 +131,24 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                         elif any(c["close"] > fh  for c in post):
                             confirmed = True; breakout_dir = "up"
 
-                # is_active: flag ended recently AND current price is within 30%
-                # of the flag zone (avoids showing stale flags far from current price)
+                # is_active: price must still be INSIDE or just outside the flag zone.
+                # A bullish flag is only relevant while price is above the flag low
+                # (not already broken down through it). A bearish flag is only relevant
+                # while price is below the flag high (not already broken out above it).
+                # 8% buffer allows for minor wicks below/above the zone boundary.
                 flag_ended_recently = (pe + fl) >= n - 3
-                price_near_flag = (fl_ * 0.70 <= current_price <= fh * 1.30)
+                if is_bull:
+                    # Price should be at or above flag low (not crashed through)
+                    price_near_flag = current_price >= fl_ * 0.92
+                else:
+                    # Price should be at or below flag high (not surged through)
+                    price_near_flag = current_price <= fh * 1.08
                 is_active = flag_ended_recently and price_near_flag
+
+                # Skip stale patterns entirely — no point surfacing a flag where
+                # price has already moved far away from the zone
+                if not price_near_flag:
+                    continue
 
                 strength = pole_pct * (1.0 - retrace) * recency * tf_weight
 
