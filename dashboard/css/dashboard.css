@@ -702,7 +702,7 @@ a:hover { color: var(--gold2); }
   }
   .tf-tabs {
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(11, minmax(0, 1fr));
     gap: 5px;
   }
   .asset-tab, .tf-tab {
@@ -787,7 +787,7 @@ a:hover { color: var(--gold2); }
   .hdr { position: static; }
   .row-hero { grid-template-columns: 1fr; }
   .asset-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .tf-tabs    { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tf-tabs    { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .metric-card {
     align-items: stretch;
     text-align: left;
