@@ -24,17 +24,32 @@ CG_IDS = {
     "BTCUSDT":  "bitcoin",
     "ETHUSDT":  "ethereum",
     "LINKUSDT": "chainlink",
+    "SUIUSDT":  "sui",
     "TAOUSDT":  "bittensor",
     "HYPEUSDT": "hyperliquid",
+    "KASUSDT":  "kaspa",
+    "ALGOUSDT": "algorand",
+    "XMRUSDT":  "monero",
+    "XRPUSDT":  "ripple",
+    "TONUSDT":  "the-open-network",
+    "SOLUSDT":  "solana",
     "ONDOUSDT": "ondo-finance",
+    "AAVEUSDT": "aave",
 }
 
 # Kraken pairs (weekly interval = 10080 min)
+# Note: XMR is delisted from Binance/OKX — Kraken is the primary fallback
 KRAKEN_PAIRS = {
     "BTCUSDT":  "XBTUSD",
     "ETHUSDT":  "ETHUSD",
     "LINKUSDT": "LINKUSD",
+    "SUIUSDT":  "SUIUSD",
     "TAOUSDT":  "TAOUSD",
+    "ALGOUSDT": "ALGOUSD",
+    "XMRUSDT":  "XMRUSD",
+    "XRPUSDT":  "XRPUSD",
+    "SOLUSDT":  "SOLUSD",
+    "AAVEUSDT": "AAVEUSD",
 }
 
 # Gate.io currency pairs
@@ -42,27 +57,49 @@ GATE_PAIRS = {
     "BTCUSDT":  "BTC_USDT",
     "ETHUSDT":  "ETH_USDT",
     "LINKUSDT": "LINK_USDT",
+    "SUIUSDT":  "SUI_USDT",
     "TAOUSDT":  "TAO_USDT",
     "HYPEUSDT": "HYPE_USDT",
+    "KASUSDT":  "KAS_USDT",
+    "ALGOUSDT": "ALGO_USDT",
+    "XMRUSDT":  "XMR_USDT",
+    "XRPUSDT":  "XRP_USDT",
+    "TONUSDT":  "TON_USDT",
+    "SOLUSDT":  "SOL_USDT",
     "ONDOUSDT": "ONDO_USDT",
+    "AAVEUSDT": "AAVE_USDT",
 }
 
 OKX_PAIRS = {
     "BTCUSDT":  "BTC-USDT",
     "ETHUSDT":  "ETH-USDT",
     "LINKUSDT": "LINK-USDT",
+    "SUIUSDT":  "SUI-USDT",
     "TAOUSDT":  "TAO-USDT",
     "HYPEUSDT": "HYPE-USDT",
+    "KASUSDT":  "KAS-USDT",
+    "ALGOUSDT": "ALGO-USDT",
+    "XRPUSDT":  "XRP-USDT",
+    "TONUSDT":  "TON-USDT",
+    "SOLUSDT":  "SOL-USDT",
     "ONDOUSDT": "ONDO-USDT",
+    "AAVEUSDT": "AAVE-USDT",
 }
 
 BYBIT_PAIRS = {
     "BTCUSDT":  "BTCUSDT",
     "ETHUSDT":  "ETHUSDT",
     "LINKUSDT": "LINKUSDT",
+    "SUIUSDT":  "SUIUSDT",
     "TAOUSDT":  "TAOUSDT",
     "HYPEUSDT": "HYPEUSDT",
+    "KASUSDT":  "KASUSDT",
+    "ALGOUSDT": "ALGOUSDT",
+    "XRPUSDT":  "XRPUSDT",
+    "TONUSDT":  "TONUSDT",
+    "SOLUSDT":  "SOLUSDT",
     "ONDOUSDT": "ONDOUSDT",
+    "AAVEUSDT": "AAVEUSDT",
 }
 
 # KuCoin trading pairs
@@ -70,9 +107,17 @@ KUCOIN_PAIRS = {
     "BTCUSDT":  "BTC-USDT",
     "ETHUSDT":  "ETH-USDT",
     "LINKUSDT": "LINK-USDT",
+    "SUIUSDT":  "SUI-USDT",
     "TAOUSDT":  "TAO-USDT",
     "HYPEUSDT": "HYPE-USDT",
+    "KASUSDT":  "KAS-USDT",
+    "ALGOUSDT": "ALGO-USDT",
+    "XMRUSDT":  "XMR-USDT",
+    "XRPUSDT":  "XRP-USDT",
+    "TONUSDT":  "TON-USDT",
+    "SOLUSDT":  "SOL-USDT",
     "ONDOUSDT": "ONDO-USDT",
+    "AAVEUSDT": "AAVE-USDT",
 }
 
 

@@ -703,7 +703,7 @@ a:hover { color: var(--gold2); }
     gap: 6px;
     width: 100%;
   }
-  .asset-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .asset-tabs { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .tf-tabs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     margin-left: 0;
@@ -788,7 +788,7 @@ a:hover { color: var(--gold2); }
 @media (max-width: 430px) {
   .hdr { position: static; }
   .row-hero { grid-template-columns: 1fr; }
-  .asset-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .asset-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .tf-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .metric-card {
     align-items: stretch;
