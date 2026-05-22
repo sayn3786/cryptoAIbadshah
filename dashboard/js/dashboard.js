@@ -369,6 +369,12 @@ function renderMainChart(candles, fvgs) {
   S.fvgPriceLines.forEach(pl => { try { S.candleSeries.removePriceLine(pl); } catch (_) {} });
   S.fvgPriceLines = [];
 
+  // Show hours on the time axis for intraday TFs; dates only for daily+
+  const intraday = ['1H', '2H', '4H', '8H', '12H'].includes(S.timeframe);
+  S.mainChart.applyOptions({
+    timeScale: { borderColor: '#1e2d44', timeVisible: intraday, secondsVisible: false },
+  });
+
   const data = candles.map(c => ({
     time: Math.floor(c.timestamp / 1000),
     open: c.open, high: c.high, low: c.low, close: c.close,
@@ -778,6 +784,8 @@ const TF_CLOSE_RULES = {
   // sidewaysCount: consecutive sideways candles before escalating
   // sidewaysDesc : human label for that count
   // checkTF      : next higher timeframe to consult when sideways
+  '1H':  { candle: '1H candle',      hold: '4 – 24 hours',   check: 'every 1 h',        trail: '1H swing',      be1: 'move SL to entry quickly — intraday trade',          sidewaysCount: 4, sidewaysDesc: '4 consecutive sideways 1H candles (= 4 hours)',          checkTF: '4H'  },
+  '2H':  { candle: '2H candle',      hold: '8 – 48 hours',   check: 'every 2 h',        trail: '2H swing',      be1: 'move SL to entry — short-term trade; protect quickly',sidewaysCount: 3, sidewaysDesc: '3 consecutive sideways 2H candles (= 6 hours)',          checkTF: '4H'  },
   '4H':  { candle: '4H candle',      hold: '1 – 5 days',     check: 'every 4 h',        trail: '4H swing',      be1: 'move SL to entry — short TF; protect quickly',       sidewaysCount: 3, sidewaysDesc: '3 consecutive sideways 4H candles (= 1 12H candle)', checkTF: '12H' },
   '8H':  { candle: '8H candle',      hold: '3 – 10 days',    check: 'every 8 h',        trail: '8H swing',      be1: 'move SL to entry (breakeven)',                        sidewaysCount: 3, sidewaysDesc: '3 consecutive sideways 8H candles (= 1 day)',        checkTF: '1D'  },
   '12H': { candle: '12H candle',     hold: '5 – 14 days',    check: 'twice daily',      trail: '12H swing',     be1: 'move SL to entry (breakeven)',                        sidewaysCount: 2, sidewaysDesc: '2 consecutive sideways 12H candles (= 1 day)',       checkTF: '1D'  },

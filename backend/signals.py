@@ -374,6 +374,7 @@ def generate_signal(analysis: Dict) -> Dict:
     timeframe = analysis.get("timeframe", "1W")
 
     TF_SL_MULT = {
+        "1H":  0.8, "2H":  0.9,
         "4H":  1.0, "8H":  1.0, "12H": 1.2,
         "1D":  1.3, "1W":  1.5, "2W":  1.5,
         "3W":  1.5, "1M":  1.5,
@@ -386,6 +387,8 @@ def generate_signal(analysis: Dict) -> Dict:
     tp3_m = sl_m * TP3_RR
 
     TF_MAX_ATR_PCT = {
+        "1H":  0.015,
+        "2H":  0.022,
         "4H":  0.030,
         "8H":  0.040,
         "12H": 0.050,
