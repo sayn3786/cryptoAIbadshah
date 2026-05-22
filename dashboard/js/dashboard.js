@@ -119,7 +119,7 @@ async function loadTicker() {
       const cls = chg >= 0 ? 'up' : 'dn';
       return `<div class="ticker-item">
         <span class="ticker-sym">${sym}</span>
-        <span class="ticker-price">$${Number(d.price || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>
+        <span class="ticker-price">${fmtPrice(d.price || 0)}</span>
         <span class="ticker-chg ${cls}">${pct(chg)}</span>
       </div>`;
     }).join('');
@@ -1263,7 +1263,7 @@ function renderEngulfing(patterns, timeframe) {
   }
 
   badge.textContent = patterns.length;
-  const fmt = v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const fmt = fmtPrice;
 
   el.innerHTML = patterns.map(p => {
     const isBull  = p.direction === 'bullish';
@@ -1279,8 +1279,8 @@ function renderEngulfing(patterns, timeframe) {
         ${fresh ? '<span class="engulf-badge engulf-new">Latest</span>' : ''}
       </div>
       <div class="engulf-stats">
-        <span class="engulf-stat">Prev candle <span>${fmt(p.prev_open)} → ${fmt(p.prev_close)}</span></span>
-        <span class="engulf-stat">Engulf candle <span>${fmt(p.engulf_open)} → ${fmt(p.engulf_close)}</span></span>
+        <span class="engulf-stat">Prev candle <span>${fmtPrice(p.prev_open)} → ${fmtPrice(p.prev_close)}</span></span>
+        <span class="engulf-stat">Engulf candle <span>${fmtPrice(p.engulf_open)} → ${fmtPrice(p.engulf_close)}</span></span>
         <span class="engulf-stat">Body ratio <span>${p.body_ratio}×</span></span>
         <span class="engulf-stat">When <span>${agoText}</span></span>
       </div>
@@ -1635,7 +1635,7 @@ function renderOrderBook(ob) {
 
     return `
       <div class="spike-ratio ${kind}">${usdVal}</div>
-      <div class="spike-row"><span class="spike-label">Price Level</span><span class="spike-val">$${w.price.toLocaleString('en-US', {maximumFractionDigits: 2})}</span></div>
+      <div class="spike-row"><span class="spike-label">Price Level</span><span class="spike-val">${fmtPrice(w.price)}</span></div>
       <div class="spike-row"><span class="spike-label">Qty (coins)</span><span class="spike-val">${w.qty.toLocaleString('en-US', {maximumFractionDigits: 4})}</span></div>
       <div class="spike-row"><span class="spike-label">Distance</span><span class="spike-val">${distStr}</span></div>
       ${mcapRow}${mcapRefRow}
