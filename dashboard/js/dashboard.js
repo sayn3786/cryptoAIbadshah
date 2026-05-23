@@ -1572,6 +1572,85 @@ function wireSelectors() {
   });
 }
 
+/* ─── Recommended Trades ─────────────────────────────────────────────────── */
+async function loadRecommendations() {
+  const section = document.getElementById('recSection');
+  const cards   = document.getElementById('recCards');
+  const dateEl  = document.getElementById('recDateLabel');
+  const valEl   = document.getElementById('recValidity');
+  if (!section || !cards) return;
+
+  try {
+    const res  = await fetch(`${API}/recommendations`);
+    const data = await res.json();
+    if (!data.recommendations?.length) return;
+
+    if (dateEl) dateEl.textContent = data.date_label || '';
+    if (valEl && data.valid_until) {
+      const until = new Date(data.valid_until);
+      valEl.textContent = `Valid until ${until.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} tomorrow`;
+    }
+
+    cards.innerHTML = data.recommendations.map((r, i) => {
+      const isLong  = r.direction === 'LONG';
+      const dirCls  = isLong ? 'bull' : 'bear';
+      const dirIcon = isLong ? '▲' : '▼';
+      const tps     = r.tp_targets || [];
+      const tpPcts  = r.tp_pcts   || [];
+
+      const strengthBar = `<div class="rec-str-track">
+        <div class="rec-str-fill ${dirCls}" style="width:${Math.min(r.strength,100)}%"></div>
+      </div>`;
+
+      const reasons = (r.reasons || []).slice(0, 2).map(rx => {
+        const isBull = rx.startsWith('▲');
+        return `<li class="${isBull ? 'bull' : 'bear'}">${rx}</li>`;
+      }).join('');
+
+      const tp1 = tps[0] != null ? fmtPrice(tps[0]) : 'N/A';
+      const tp2 = tps[1] != null ? fmtPrice(tps[1]) : 'N/A';
+      const tp1p = tpPcts[0] != null ? `+${tpPcts[0]}%` : '';
+      const tp2p = tpPcts[1] != null ? `+${tpPcts[1]}%` : '';
+
+      return `<div class="rec-card rec-card-${dirCls}">
+        <div class="rec-card-top">
+          <span class="rec-rank">#${i+1}</span>
+          <span class="rec-sym">${r.symbol}/USDT</span>
+          <span class="rec-tf">${r.timeframe}</span>
+          <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
+          <span class="rec-strength">${r.strength}/100</span>
+        </div>
+        ${strengthBar}
+        <div class="rec-levels">
+          <div class="rec-lvl"><span class="rec-lbl">Entry</span><span class="rec-val">${fmtPrice(r.entry)}</span></div>
+          <div class="rec-lvl"><span class="rec-lbl">Stop Loss</span><span class="rec-val bear">${fmtPrice(r.sl)} ${r.sl_pct ? `<small>-${r.sl_pct}%</small>` : ''}</span></div>
+          <div class="rec-lvl"><span class="rec-lbl">TP 1</span><span class="rec-val bull">${tp1} ${tp1p ? `<small>${tp1p}</small>` : ''}</span></div>
+          <div class="rec-lvl"><span class="rec-lbl">TP 2</span><span class="rec-val bull">${tp2} ${tp2p ? `<small>${tp2p}</small>` : ''}</span></div>
+          ${r.rr_ratio ? `<div class="rec-lvl"><span class="rec-lbl">R/R</span><span class="rec-val">${r.rr_ratio} : 1</span></div>` : ''}
+        </div>
+        ${reasons ? `<ul class="rec-reasons">${reasons}</ul>` : ''}
+        ${r.vol_tier_label ? `<span class="vol-tier-badge" style="margin-top:4px">${r.vol_tier_label}</span>` : ''}
+        <button class="rec-go-btn" onclick="jumpTo('${r.symbol}','${r.timeframe}')">View Analysis →</button>
+      </div>`;
+    }).join('');
+
+    section.classList.remove('hidden');
+  } catch (_) {}
+}
+
+function jumpTo(sym, tf) {
+  document.querySelectorAll('.asset-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.sym === sym);
+  });
+  document.querySelectorAll('.tf-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tf === tf);
+  });
+  S.symbol    = sym;
+  S.timeframe = tf;
+  loadAnalysis();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 async function refresh() {
   await loadAnalysis();
   await loadTicker();
@@ -1695,6 +1774,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderMyTrades();
   loadTicker();
   loadAnalysis();
+  loadRecommendations();
 
   // Auto-refresh every 5 minutes
   setInterval(loadTicker, 5 * 60 * 1000);

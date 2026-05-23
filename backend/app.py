@@ -85,9 +85,13 @@ def options(_p):
 
 
 import threading as _threading
+from datetime import datetime, timezone, timedelta
 
 _fng_cache: Dict = {"value": None, "label": None, "ts": 0}
 _fng_lock = _threading.Lock()
+
+_rec_cache: Dict = {"key": None, "data": None}
+_rec_lock = _threading.Lock()
 
 def _fetch_fear_greed() -> Dict:
     """Fear & Greed Index from Alternative.me (free, updates daily). Cached 1 h."""
@@ -294,6 +298,87 @@ def api_dashboard():
             except Exception as e:
                 results[sym] = {"error": str(e)}
     return jsonify(results)
+
+
+@app.get("/api/recommendations")
+def api_recommendations():
+    """
+    Top 3 trades across all tokens at 1H + 2H, scored by signal strength.
+    Refreshes once per day at 08:00 UTC; cached until 07:59 UTC next day.
+    """
+    now           = datetime.now(timezone.utc)
+    session_start = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if now < session_start:
+        session_start -= timedelta(days=1)
+    cache_key = session_start.strftime("%Y%m%d")
+
+    with _rec_lock:
+        if _rec_cache["key"] == cache_key and _rec_cache["data"]:
+            return jsonify(_rec_cache["data"])
+
+    candidates = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
+                for sym in SYMBOLS for tf in ("1H", "2H")}
+        for future in as_completed(fmap):
+            sym, tf = fmap[future]
+            try:
+                data = future.result()
+                sig  = data.get("signal", {})
+                if sig.get("direction", "NEUTRAL") == "NEUTRAL":
+                    continue
+                strength = sig.get("strength", 0) or 0
+                candidates.append({
+                    "symbol":        sym,
+                    "timeframe":     tf,
+                    "direction":     sig.get("direction"),
+                    "strength":      round(strength, 1),
+                    "score":         sig.get("score", 0),
+                    "tier":          sig.get("tier"),
+                    "entry":         sig.get("entry"),
+                    "sl":            sig.get("sl"),
+                    "sl_pct":        sig.get("sl_pct"),
+                    "tp_targets":    sig.get("tp_targets", []),
+                    "tp_pcts":       sig.get("tp_pcts", []),
+                    "rr_ratio":      sig.get("rr_ratio"),
+                    "vol_tier_label":sig.get("vol_tier_label"),
+                    "rsi":           data.get("rsi"),
+                    "reasons":       sig.get("reasons", [])[:3],
+                })
+            except Exception:
+                pass
+
+    # Sort by strength; ensure direction diversity (max 2 of same side)
+    candidates.sort(key=lambda x: x["strength"], reverse=True)
+    top, seen = [], {"LONG": 0, "SHORT": 0}
+    for c in candidates:
+        if len(top) == 3:
+            break
+        d = c["direction"]
+        if seen[d] < 2:
+            top.append(c)
+            seen[d] += 1
+    if len(top) < 3:
+        used = set(id(x) for x in top)
+        for c in candidates:
+            if len(top) == 3:
+                break
+            if id(c) not in used:
+                top.append(c)
+
+    valid_until = (session_start + timedelta(days=1)).replace(
+        hour=7, minute=59, second=0).isoformat()
+
+    result = {
+        "generated_at":    session_start.isoformat(),
+        "valid_until":     valid_until,
+        "date_label":      session_start.strftime("%b %d, %Y"),
+        "recommendations": top[:3],
+    }
+    with _rec_lock:
+        _rec_cache["key"]  = cache_key
+        _rec_cache["data"] = result
+    return jsonify(result)
 
 
 @app.route("/api/journal/<symbol>", methods=["POST"])
