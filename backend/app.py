@@ -90,7 +90,7 @@ from datetime import datetime, timezone, timedelta
 _fng_cache: Dict = {"value": None, "label": None, "ts": 0}
 _fng_lock = _threading.Lock()
 
-_rec_cache: Dict = {"key": None, "data": None}
+_rec_cache: Dict = {"key": None, "data": None, "version": 2}
 _rec_lock = _threading.Lock()
 
 def _fetch_fear_greed() -> Dict:
@@ -348,8 +348,22 @@ def api_recommendations():
             except Exception:
                 pass
 
+    # Deduplicate by symbol: same token on 1H and 2H → keep 2H (higher TF wins)
+    TF_RANK = {"2H": 2, "1H": 1}
+    best_per_sym: dict = {}
+    for c in candidates:
+        sym = c["symbol"]
+        existing = best_per_sym.get(sym)
+        if existing is None:
+            best_per_sym[sym] = c
+        else:
+            # Prefer higher timeframe; on tie prefer higher strength
+            if (TF_RANK.get(c["timeframe"], 0), c["strength"]) > \
+               (TF_RANK.get(existing["timeframe"], 0), existing["strength"]):
+                best_per_sym[sym] = c
+    candidates = sorted(best_per_sym.values(), key=lambda x: x["strength"], reverse=True)
+
     # Sort by strength; ensure direction diversity (max 2 of same side)
-    candidates.sort(key=lambda x: x["strength"], reverse=True)
     top, seen = [], {"LONG": 0, "SHORT": 0}
     for c in candidates:
         if len(top) == 3:
