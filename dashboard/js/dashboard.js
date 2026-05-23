@@ -108,13 +108,15 @@ function initCharts() {
 
 /* ─── Fetch dashboard overview ────────────────────────────────────────────── */
 async function loadTicker() {
+  const TICKER_SYMS = ['BTC', 'ETH', 'LINK', 'TAO', 'HYPE', 'ONDO'];
   try {
     const res = await fetch(`${API}/dashboard`);
     if (!res.ok) return;
     const data = await res.json();
     const bar = document.getElementById('tickerBar');
-    bar.innerHTML = Object.entries(data).map(([sym, d]) => {
-      if (d.error) return '';
+    bar.innerHTML = TICKER_SYMS.map(sym => {
+      const d = data[sym];
+      if (!d || d.error) return '';
       const chg = d.change_pct ?? 0;
       const cls = chg >= 0 ? 'up' : 'dn';
       return `<div class="ticker-item">
