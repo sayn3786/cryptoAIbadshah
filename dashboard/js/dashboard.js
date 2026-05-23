@@ -1572,6 +1572,74 @@ function wireSelectors() {
   });
 }
 
+/* ─── Engulfing Alert Notifications (1W) ─────────────────────────────────── */
+const _ENGULF_SEEN_KEY = 'engulf_seen_v1';
+
+function _getSeenAlerts() {
+  try { return JSON.parse(localStorage.getItem(_ENGULF_SEEN_KEY) || '{}'); }
+  catch (_) { return {}; }
+}
+function _markSeen(id) {
+  const seen = _getSeenAlerts();
+  seen[id] = Date.now();
+  // Prune entries older than 3 weeks so localStorage doesn't grow unbounded
+  const cutoff = Date.now() - 21 * 86400 * 1000;
+  Object.keys(seen).forEach(k => { if (seen[k] < cutoff) delete seen[k]; });
+  localStorage.setItem(_ENGULF_SEEN_KEY, JSON.stringify(seen));
+}
+
+function _showEngulfToast(alert) {
+  const stack = document.getElementById('engulfToastStack');
+  if (!stack) return;
+  const isBull = alert.direction === 'bullish';
+  const cls    = isBull ? 'bull' : 'bear';
+  const icon   = isBull ? '🟢' : '🔴';
+  const label  = isBull ? 'Bullish Engulfing' : 'Bearish Engulfing';
+  const when   = alert.candles_ago === 1 ? 'current candle' : `${alert.candles_ago} candles ago`;
+  const id     = `engulf_${alert.symbol}_${alert.timestamp}`;
+
+  const toast = document.createElement('div');
+  toast.className = `engulf-toast engulf-toast-${cls}`;
+  toast.dataset.id = id;
+  toast.innerHTML = `
+    <div class="engulf-toast-icon">${icon}</div>
+    <div class="engulf-toast-body">
+      <div class="engulf-toast-title">${label} — <strong>${alert.symbol}/USDT</strong></div>
+      <div class="engulf-toast-sub">1W confirmed · ${when} · body ratio ${alert.body_ratio}×</div>
+      <div class="engulf-toast-msg">${isBull ? 'Bearish candle fully engulfed — potential bullish reversal' : 'Bullish candle fully engulfed — potential bearish reversal'}</div>
+    </div>
+    <div class="engulf-toast-actions">
+      <button class="engulf-toast-view" onclick="jumpTo('${alert.symbol}','1W');_dismissToast('${id}')">View →</button>
+      <button class="engulf-toast-close" onclick="_dismissToast('${id}')">✕</button>
+    </div>`;
+
+  stack.appendChild(toast);
+  // Animate in
+  requestAnimationFrame(() => toast.classList.add('engulf-toast-show'));
+}
+
+function _dismissToast(id) {
+  _markSeen(id);
+  const el = document.querySelector(`[data-id="${id}"]`);
+  if (!el) return;
+  el.classList.remove('engulf-toast-show');
+  el.classList.add('engulf-toast-hide');
+  setTimeout(() => el.remove(), 350);
+}
+
+async function loadEngulfAlerts() {
+  try {
+    const res  = await fetch(`${API}/engulf-alerts`);
+    const data = await res.json();
+    if (!data.alerts?.length) return;
+    const seen = _getSeenAlerts();
+    data.alerts.forEach(a => {
+      const id = `engulf_${a.symbol}_${a.timestamp}`;
+      if (!seen[id]) _showEngulfToast(a);
+    });
+  } catch (_) {}
+}
+
 /* ─── Recommended Trades ─────────────────────────────────────────────────── */
 async function loadRecommendations() {
   const section = document.getElementById('recSection');
@@ -1774,6 +1842,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadTicker();
   loadAnalysis();
   loadRecommendations();
+  loadEngulfAlerts();
 
   // Auto-refresh every 5 minutes
   setInterval(loadTicker, 5 * 60 * 1000);

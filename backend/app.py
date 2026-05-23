@@ -416,6 +416,62 @@ def api_recommendations():
     return jsonify(result)
 
 
+_engulf_cache: Dict = {"ts": 0, "data": None}
+_engulf_lock = _threading.Lock()
+_ENGULF_TTL  = 3600  # re-scan at most once per hour (1W candles don't change fast)
+
+@app.get("/api/engulf-alerts")
+def api_engulf_alerts():
+    """
+    Scan all tokens at 1W for confirmed engulfing patterns.
+    Returns alerts for patterns detected within the last 2 candles.
+    Cached 1 hour — no point scanning more often than weekly candle closes.
+    """
+    with _engulf_lock:
+        if _engulf_cache["data"] is not None and \
+                time.time() - _engulf_cache["ts"] < _ENGULF_TTL:
+            return jsonify(_engulf_cache["data"])
+
+    alerts = []
+    interval = TF_INTERVAL["1W"]
+    limit    = TF_LIMIT["1W"]
+
+    def _scan(sym):
+        try:
+            bs     = SYMBOLS[sym]
+            candles = client.get_spot_klines(bs, interval, limit)
+            patterns = detect_engulfing(candles, lookback=2)
+            results = []
+            for p in patterns:
+                if p.get("candles_ago", 99) <= 2:
+                    results.append({
+                        "symbol":     sym,
+                        "timeframe":  "1W",
+                        "direction":  p["direction"],
+                        "body_ratio": p["body_ratio"],
+                        "candles_ago": p["candles_ago"],
+                        "timestamp":  p["timestamp"],
+                        "engulf_open":  p.get("engulf_open"),
+                        "engulf_close": p.get("engulf_close"),
+                    })
+            return results
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for res in ex.map(_scan, SYMBOLS.keys()):
+            alerts.extend(res)
+
+    # Most recent first
+    alerts.sort(key=lambda x: (-x["candles_ago"], x["symbol"]))
+
+    data = {"alerts": alerts, "scanned_at": int(time.time())}
+    with _engulf_lock:
+        _engulf_cache["ts"]   = time.time()
+        _engulf_cache["data"] = data
+    return jsonify(data)
+
+
 @app.route("/api/journal/<symbol>", methods=["POST"])
 def api_journal(symbol):
     symbol    = symbol.upper()

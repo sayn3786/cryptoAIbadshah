@@ -963,3 +963,44 @@ a:hover { color: var(--gold2); }
   color: var(--muted2); transition: background .2s, color .2s;
 }
 .rec-go-btn:hover { background: var(--border); color: var(--text); }
+
+/* ── Engulfing Alert Toasts ──────────────────────────────────────────────── */
+.engulf-toast-stack {
+  position: fixed; bottom: 20px; right: 16px; z-index: 9999;
+  display: flex; flex-direction: column; gap: 10px;
+  max-width: 360px; width: calc(100vw - 32px);
+  pointer-events: none;
+}
+.engulf-toast {
+  background: var(--card); border-radius: 12px;
+  border-left: 4px solid transparent;
+  box-shadow: 0 8px 32px rgba(0,0,0,.7);
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 12px 12px 14px;
+  pointer-events: all;
+  opacity: 0; transform: translateX(30px);
+  transition: opacity .3s ease, transform .3s ease;
+}
+.engulf-toast-show  { opacity: 1; transform: translateX(0); }
+.engulf-toast-hide  { opacity: 0; transform: translateX(30px); }
+.engulf-toast-bull  { border-left-color: var(--bull); }
+.engulf-toast-bear  { border-left-color: var(--bear); }
+
+.engulf-toast-icon  { font-size: 1.3rem; line-height: 1; padding-top: 1px; }
+.engulf-toast-body  { flex: 1; min-width: 0; }
+.engulf-toast-title { font-size: .8rem; font-weight: 600; color: var(--text); }
+.engulf-toast-title strong { color: var(--gold); }
+.engulf-toast-sub   { font-size: .68rem; color: var(--muted2); margin: 2px 0; }
+.engulf-toast-msg   { font-size: .7rem; color: var(--muted); font-style: italic; }
+
+.engulf-toast-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.engulf-toast-view {
+  padding: 3px 8px; border-radius: 5px; border: none; cursor: pointer;
+  background: var(--card2); color: var(--accent); font-size: .7rem; font-weight: 600;
+}
+.engulf-toast-close {
+  padding: 3px 7px; border-radius: 5px; border: none; cursor: pointer;
+  background: transparent; color: var(--muted); font-size: .75rem;
+}
+.engulf-toast-view:hover  { background: var(--border); }
+.engulf-toast-close:hover { color: var(--text); }
