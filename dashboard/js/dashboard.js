@@ -1669,6 +1669,35 @@ async function loadEngulfAlerts() {
 }
 
 /* ─── Recommended Trades ─────────────────────────────────────────────────── */
+
+// SGT date key: "rec_YYYYMMDD" in UTC+8 timezone.
+// This is the primary cache — stored in localStorage so it survives server
+// restarts, cold starts, and page refreshes without re-scanning.
+function _recCacheKey() {
+  const sgt = new Date(Date.now() + 8 * 3600 * 1000); // shift to SGT (UTC+8)
+  const y   = sgt.getUTCFullYear();
+  const m   = String(sgt.getUTCMonth() + 1).padStart(2, '0');
+  const d   = String(sgt.getUTCDate()).padStart(2, '0');
+  return `rec_${y}${m}${d}`;
+}
+
+function _recCacheGet() {
+  try {
+    const raw = localStorage.getItem(_recCacheKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+
+function _recCacheSet(data) {
+  try {
+    // Prune any old rec_ keys from previous days
+    Object.keys(localStorage)
+      .filter(k => k.startsWith('rec_') && k !== _recCacheKey())
+      .forEach(k => localStorage.removeItem(k));
+    localStorage.setItem(_recCacheKey(), JSON.stringify(data));
+  } catch (_) {}
+}
+
 async function loadRecommendations() {
   const section = document.getElementById('recSection');
   const cards   = document.getElementById('recCards');
@@ -1677,8 +1706,13 @@ async function loadRecommendations() {
   if (!section || !cards) return;
 
   try {
-    const res  = await fetch(`${API}/recommendations`);
-    const data = await res.json();
+    // Use localStorage cache if available for today (SGT) — never re-fetches mid-day
+    let data = _recCacheGet();
+    if (!data) {
+      const res = await fetch(`${API}/recommendations`);
+      data = await res.json();
+      if (data.recommendations?.length) _recCacheSet(data);
+    }
     if (!data.recommendations?.length) return;
 
     if (dateEl) dateEl.textContent = data.date_label || '';
