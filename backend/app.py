@@ -90,7 +90,7 @@ from datetime import datetime, timezone, timedelta
 _fng_cache: Dict = {"value": None, "label": None, "ts": 0}
 _fng_lock = _threading.Lock()
 
-_rec_cache: Dict = {"key": None, "data": None, "version": 2}
+_rec_cache: Dict = {"key": None, "data": None, "version": 3}
 _rec_lock = _threading.Lock()
 
 def _fetch_fear_greed() -> Dict:
@@ -304,13 +304,13 @@ def api_dashboard():
 def api_recommendations():
     """
     Top 3 trades across all tokens at 1H + 2H, scored by signal strength.
-    Refreshes once per day at 08:00 UTC; cached until 07:59 UTC next day.
+    Refreshes daily at 08:00 SGT (= 00:00 UTC). Valid until 07:59 SGT next day.
+    SGT = UTC+8, so the session window is exactly one UTC calendar day.
     """
     now           = datetime.now(timezone.utc)
-    session_start = now.replace(hour=8, minute=0, second=0, microsecond=0)
-    if now < session_start:
-        session_start -= timedelta(days=1)
-    cache_key = session_start.strftime("%Y%m%d")
+    # 8:00 AM SGT == 00:00 UTC, so each UTC calendar day IS one trading session
+    session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    cache_key     = session_start.strftime("%Y%m%d")
 
     with _rec_lock:
         if _rec_cache["key"] == cache_key and _rec_cache["data"]:
@@ -380,13 +380,17 @@ def api_recommendations():
             if id(c) not in used:
                 top.append(c)
 
-    valid_until = (session_start + timedelta(days=1)).replace(
-        hour=7, minute=59, second=0).isoformat()
+    SGT = timezone(timedelta(hours=8))
+    session_start_sgt = session_start.astimezone(SGT)
+    # Session ends at 07:59 SGT next day = 23:59 UTC same day
+    valid_until_utc   = session_start + timedelta(hours=23, minutes=59)
+    valid_until_sgt   = valid_until_utc.astimezone(SGT)
 
     result = {
-        "generated_at":    session_start.isoformat(),
-        "valid_until":     valid_until,
-        "date_label":      session_start.strftime("%b %d, %Y"),
+        "generated_at":    session_start_sgt.isoformat(),
+        "valid_until":     valid_until_sgt.isoformat(),
+        "valid_until_fmt": valid_until_sgt.strftime("7:59 AM SGT, %b %d"),
+        "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
         "recommendations": top[:3],
     }
     with _rec_lock:

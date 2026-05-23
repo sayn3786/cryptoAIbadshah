@@ -1586,9 +1586,8 @@ async function loadRecommendations() {
     if (!data.recommendations?.length) return;
 
     if (dateEl) dateEl.textContent = data.date_label || '';
-    if (valEl && data.valid_until) {
-      const until = new Date(data.valid_until);
-      valEl.textContent = `Valid until ${until.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} tomorrow`;
+    if (valEl && data.valid_until_fmt) {
+      valEl.textContent = `Valid until ${data.valid_until_fmt}`;
     }
 
     cards.innerHTML = data.recommendations.map((r, i) => {
