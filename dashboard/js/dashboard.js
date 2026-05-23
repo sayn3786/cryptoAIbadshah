@@ -1572,8 +1572,9 @@ function wireSelectors() {
   });
 }
 
-/* ─── Engulfing Alert Notifications (1W) ─────────────────────────────────── */
-const _ENGULF_SEEN_KEY = 'engulf_seen_v1';
+/* ─── Engulfing Alert Notification Panel (1W) ────────────────────────────── */
+const _ENGULF_SEEN_KEY = 'engulf_seen_v2';
+let   _engulfAlerts    = [];
 
 function _getSeenAlerts() {
   try { return JSON.parse(localStorage.getItem(_ENGULF_SEEN_KEY) || '{}'); }
@@ -1582,61 +1583,88 @@ function _getSeenAlerts() {
 function _markSeen(id) {
   const seen = _getSeenAlerts();
   seen[id] = Date.now();
-  // Prune entries older than 3 weeks so localStorage doesn't grow unbounded
   const cutoff = Date.now() - 21 * 86400 * 1000;
   Object.keys(seen).forEach(k => { if (seen[k] < cutoff) delete seen[k]; });
   localStorage.setItem(_ENGULF_SEEN_KEY, JSON.stringify(seen));
 }
 
-function _showEngulfToast(alert) {
-  const stack = document.getElementById('engulfToastStack');
-  if (!stack) return;
-  const isBull = alert.direction === 'bullish';
-  const cls    = isBull ? 'bull' : 'bear';
-  const icon   = isBull ? '🟢' : '🔴';
-  const label  = isBull ? 'Bullish Engulfing' : 'Bearish Engulfing';
-  const when   = alert.candles_ago === 1 ? 'current candle' : `${alert.candles_ago} candles ago`;
-  const id     = `engulf_${alert.symbol}_${alert.timestamp}`;
-
-  const toast = document.createElement('div');
-  toast.className = `engulf-toast engulf-toast-${cls}`;
-  toast.dataset.id = id;
-  toast.innerHTML = `
-    <div class="engulf-toast-icon">${icon}</div>
-    <div class="engulf-toast-body">
-      <div class="engulf-toast-title">${label} — <strong>${alert.symbol}/USDT</strong></div>
-      <div class="engulf-toast-sub">1W confirmed · ${when} · body ratio ${alert.body_ratio}×</div>
-      <div class="engulf-toast-msg">${isBull ? 'Bearish candle fully engulfed — potential bullish reversal' : 'Bullish candle fully engulfed — potential bearish reversal'}</div>
-    </div>
-    <div class="engulf-toast-actions">
-      <button class="engulf-toast-view" onclick="jumpTo('${alert.symbol}','1W');_dismissToast('${id}')">View →</button>
-      <button class="engulf-toast-close" onclick="_dismissToast('${id}')">✕</button>
-    </div>`;
-
-  stack.appendChild(toast);
-  // Animate in
-  requestAnimationFrame(() => toast.classList.add('engulf-toast-show'));
+function toggleNotifPanel() {
+  const panel   = document.getElementById('notifPanel');
+  const overlay = document.getElementById('notifOverlay');
+  const bell    = document.getElementById('notifBell');
+  if (!panel) return;
+  const open = panel.classList.toggle('notif-panel-open');
+  panel.classList.toggle('hidden', !open);
+  overlay.classList.toggle('hidden', !open);
+  if (open) {
+    // Mark all current alerts as seen when panel is opened
+    const seen = _getSeenAlerts();
+    _engulfAlerts.forEach(a => {
+      const id = `engulf_${a.symbol}_${a.timestamp}`;
+      if (!seen[id]) _markSeen(id);
+    });
+    _updateBadge(0);
+  }
 }
 
-function _dismissToast(id) {
-  _markSeen(id);
-  const el = document.querySelector(`[data-id="${id}"]`);
-  if (!el) return;
-  el.classList.remove('engulf-toast-show');
-  el.classList.add('engulf-toast-hide');
-  setTimeout(() => el.remove(), 350);
+function clearAllAlerts() {
+  _engulfAlerts.forEach(a => _markSeen(`engulf_${a.symbol}_${a.timestamp}`));
+  _renderNotifList([]);
+  _updateBadge(0);
+}
+
+function _updateBadge(count) {
+  const badge = document.getElementById('notifBadge');
+  const bell  = document.getElementById('notifBell');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count;
+    badge.classList.remove('hidden');
+    bell?.classList.add('notif-bell-active');
+  } else {
+    badge.classList.add('hidden');
+    bell?.classList.remove('notif-bell-active');
+  }
+}
+
+function _renderNotifList(alerts) {
+  const list = document.getElementById('notifList');
+  if (!list) return;
+  if (!alerts.length) {
+    list.innerHTML = '<p class="notif-empty">No confirmed 1W engulfing patterns detected.</p>';
+    return;
+  }
+  const seen = _getSeenAlerts();
+  list.innerHTML = alerts.map(a => {
+    const isBull = a.direction === 'bullish';
+    const cls    = isBull ? 'bull' : 'bear';
+    const icon   = isBull ? '🟢' : '🔴';
+    const label  = isBull ? 'Bullish Engulfing' : 'Bearish Engulfing';
+    const when   = a.candles_ago === 1 ? 'current candle' : `${a.candles_ago} candles ago`;
+    const id     = `engulf_${a.symbol}_${a.timestamp}`;
+    const isNew  = !seen[id];
+    return `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+      <span class="notif-item-icon">${icon}</span>
+      <div class="notif-item-body">
+        <div class="notif-item-title">${label} — <strong>${a.symbol}/USDT</strong></div>
+        <div class="notif-item-sub">1W confirmed · ${when} · body ${a.body_ratio}×</div>
+        <div class="notif-item-msg">${isBull ? 'Potential bullish reversal' : 'Potential bearish reversal'}</div>
+      </div>
+      <button class="notif-item-view" onclick="jumpTo('${a.symbol}','1W');toggleNotifPanel()">View →</button>
+    </div>`;
+  }).join('');
 }
 
 async function loadEngulfAlerts() {
   try {
     const res  = await fetch(`${API}/engulf-alerts`);
     const data = await res.json();
-    if (!data.alerts?.length) return;
-    const seen = _getSeenAlerts();
-    data.alerts.forEach(a => {
-      const id = `engulf_${a.symbol}_${a.timestamp}`;
-      if (!seen[id]) _showEngulfToast(a);
-    });
+    _engulfAlerts = data.alerts || [];
+    if (!_engulfAlerts.length) return;
+    _renderNotifList(_engulfAlerts);
+    const seen  = _getSeenAlerts();
+    const unread = _engulfAlerts.filter(a => !seen[`engulf_${a.symbol}_${a.timestamp}`]).length;
+    _updateBadge(unread);
   } catch (_) {}
 }
 

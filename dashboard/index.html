@@ -34,10 +34,26 @@
   </div>
   <div class="hdr-right">
     <span id="lastUpdated" class="last-updated">—</span>
+    <button class="btn-icon notif-bell" id="notifBell" onclick="toggleNotifPanel()" title="Alerts">
+      🔔<span id="notifBadge" class="notif-badge hidden">0</span>
+    </button>
     <button class="btn-icon" onclick="refresh()" title="Refresh">⟳</button>
     <a href="/" class="btn-outline">← Home</a>
   </div>
 </header>
+
+<!-- ── NOTIFICATION PANEL ──────────────────────────────────────────────────── -->
+<div id="notifPanel" class="notif-panel hidden">
+  <div class="notif-panel-hdr">
+    <span class="notif-panel-title">🔔 Engulfing Alerts <span class="notif-tf-tag">1W</span></span>
+    <button class="notif-clear-btn" onclick="clearAllAlerts()">Clear all</button>
+    <button class="notif-close-btn" onclick="toggleNotifPanel()">✕</button>
+  </div>
+  <div id="notifList" class="notif-list">
+    <p class="notif-empty">No confirmed 1W engulfing patterns detected.</p>
+  </div>
+</div>
+<div id="notifOverlay" class="notif-overlay hidden" onclick="toggleNotifPanel()"></div>
 
 <!-- ── ASSET + TIMEFRAME SELECTORS ────────────────────────────────────────── -->
 <div class="controls">
@@ -79,9 +95,6 @@
 
 <!-- ── HOLIDAY NOTIFICATION ────────────────────────────────────────────────── -->
 <div id="holidayBanner" class="holiday-banner hidden"></div>
-
-<!-- ── ENGULF ALERT TOASTS ─────────────────────────────────────────────────── -->
-<div id="engulfToastStack" class="engulf-toast-stack"></div>
 
 <!-- ── RECOMMENDED TRADES ──────────────────────────────────────────────────── -->
 <section id="recSection" class="rec-section hidden">
