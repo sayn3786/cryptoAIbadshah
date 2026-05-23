@@ -90,8 +90,24 @@ from datetime import datetime, timezone, timedelta
 _fng_cache: Dict = {"value": None, "label": None, "ts": 0}
 _fng_lock = _threading.Lock()
 
-_rec_cache: Dict = {"key": None, "data": None, "version": 3}
 _rec_lock = _threading.Lock()
+_REC_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".rec_cache.json")
+
+def _rec_cache_load() -> Dict:
+    """Load persisted recommendations cache from disk."""
+    try:
+        with open(_REC_CACHE_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {"key": None, "data": None}
+
+def _rec_cache_save(key: str, data: dict) -> None:
+    """Persist recommendations cache to disk so server restarts don't retrigger scans."""
+    try:
+        with open(_REC_CACHE_FILE, "w") as f:
+            json.dump({"key": key, "data": data}, f)
+    except Exception:
+        pass
 
 def _fetch_fear_greed() -> Dict:
     """Fear & Greed Index from Alternative.me (free, updates daily). Cached 1 h."""
@@ -312,9 +328,11 @@ def api_recommendations():
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     cache_key     = session_start.strftime("%Y%m%d")
 
+    # Check in-memory first (fastest), then fall back to disk (survives restarts)
     with _rec_lock:
-        if _rec_cache["key"] == cache_key and _rec_cache["data"]:
-            return jsonify(_rec_cache["data"])
+        mem = _rec_cache_load()
+        if mem.get("key") == cache_key and mem.get("data"):
+            return jsonify(mem["data"])
 
     candidates = []
     with ThreadPoolExecutor(max_workers=8) as ex:
@@ -394,8 +412,7 @@ def api_recommendations():
         "recommendations": top[:3],
     }
     with _rec_lock:
-        _rec_cache["key"]  = cache_key
-        _rec_cache["data"] = result
+        _rec_cache_save(cache_key, result)
     return jsonify(result)
 
 
