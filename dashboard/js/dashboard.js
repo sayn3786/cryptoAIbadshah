@@ -1672,14 +1672,13 @@ async function loadEngulfAlerts() {
 
 /* ─── Recommended Trades ─────────────────────────────────────────────────── */
 
-// SGT date key: "rec_YYYYMMDD" in UTC+8 timezone.
-// This is the primary cache — stored in localStorage so it survives server
-// restarts, cold starts, and page refreshes without re-scanning.
+// Session starts at 8AM SGT = 00:00 UTC exactly.
+// Use UTC date as key — matches server's cache_key and invalidates at the right time.
 function _recCacheKey() {
-  const sgt = new Date(Date.now() + 8 * 3600 * 1000); // shift to SGT (UTC+8)
-  const y   = sgt.getUTCFullYear();
-  const m   = String(sgt.getUTCMonth() + 1).padStart(2, '0');
-  const d   = String(sgt.getUTCDate()).padStart(2, '0');
+  const now = new Date();
+  const y   = now.getUTCFullYear();
+  const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d   = String(now.getUTCDate()).padStart(2, '0');
   return `rec_${y}${m}${d}`;
 }
 
