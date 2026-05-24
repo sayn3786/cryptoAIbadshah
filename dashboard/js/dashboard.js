@@ -1679,7 +1679,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec_${y}${m}${d}`;
+  return `rec3_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -1691,9 +1691,9 @@ function _recCacheGet() {
 
 function _recCacheSet(data) {
   try {
-    // Prune any old rec_ keys from previous days
+    // Prune any old rec_ / rec2_ / rec3_ keys from previous days
     Object.keys(localStorage)
-      .filter(k => k.startsWith('rec_') && k !== _recCacheKey())
+      .filter(k => (k.startsWith('rec_') || k.startsWith('rec2_') || k.startsWith('rec3_')) && k !== _recCacheKey())
       .forEach(k => localStorage.removeItem(k));
     localStorage.setItem(_recCacheKey(), JSON.stringify(data));
   } catch (_) {}
