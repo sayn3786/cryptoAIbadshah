@@ -884,10 +884,12 @@ function renderTradeManagement(a) {
     return s ? `<span class="tm-pct ${cls}">${s}</span>` : '';
   };
 
-  // Close-trigger price: flag_low for long, flag_high for short (or fallback to sl)
+  // Close-trigger price: whichever hits first (closer to entry wins)
+  // For LONG: stop fires when price drops — use the higher of flag_low vs SL
+  // For SHORT: stop fires when price rises — use the lower of flag_high vs SL
   const triggerPrice = isLong
-    ? (matchFlag ? matchFlag.flag_low  : sl)
-    : (matchFlag ? matchFlag.flag_high : sl);
+    ? (matchFlag ? Math.max(matchFlag.flag_low, sl)  : sl)
+    : (matchFlag ? Math.min(matchFlag.flag_high, sl) : sl);
 
   const flagTarget = matchFlag ? matchFlag.target : null;
 
@@ -948,7 +950,11 @@ function renderTradeManagement(a) {
         </div>
         <div class="tm-rule active">
           <span class="tm-rule-icon">3.</span>
-          <span><strong>${rule.candle}</strong> closes ${isLong ? 'below' : 'above'} <strong>${p(triggerPrice)}</strong>${matchFlag ? ' (back inside flag)' : ' (stop loss)'} → full exit</span>
+          <span><strong>${rule.candle}</strong> closes ${isLong ? 'below' : 'above'} <strong>${p(triggerPrice)}</strong>${(() => {
+              if (!matchFlag) return ' (stop loss)';
+              const slIsCloser = isLong ? sl >= matchFlag.flag_low : sl <= matchFlag.flag_high;
+              return slIsCloser ? ' (stop loss)' : ' (back inside flag)';
+            })()} → full exit</span>
         </div>
         <div class="tm-rule active">
           <span class="tm-rule-icon">4.</span>
@@ -1057,13 +1063,13 @@ function logTrade() {
     f.is_active && f.direction === (isLong ? 'bullish' : 'bearish')
   );
   const triggerPrice = isLong
-    ? (matchFlag ? matchFlag.flag_low  : sig.sl)
-    : (matchFlag ? matchFlag.flag_high : sig.sl);
+    ? (matchFlag ? Math.max(matchFlag.flag_low, sig.sl)  : sig.sl)
+    : (matchFlag ? Math.min(matchFlag.flag_high, sig.sl) : sig.sl);
 
   const exit_rules = {
     rule1: `Hit TP1 → close 50%, ${rule.be1} at ${fp(sig.entry)}`,
     rule2: `Hit TP2 → close 30%, trail remaining SL ${isLong ? 'below each new higher' : 'above each new lower'} ${rule.trail} ${isLong ? 'low' : 'high'}`,
-    rule3: `${rule.candle} closes ${isLong ? 'below' : 'above'} ${fp(triggerPrice)}${matchFlag ? ' (back inside flag)' : ' (stop loss)'} → full exit`,
+    rule3: `${rule.candle} closes ${isLong ? 'below' : 'above'} ${fp(triggerPrice)}${(() => { if (!matchFlag) return ' (stop loss)'; const slIsCloser = isLong ? sig.sl >= matchFlag.flag_low : sig.sl <= matchFlag.flag_high; return slIsCloser ? ' (stop loss)' : ' (back inside flag)'; })()} → full exit`,
     rule4: matchFlag
       ? `Flag ${isLong ? 'breakout' : 'breakdown'} fails after ${matchFlag.consolidation_bars + 3}+ ${tf} bars → re-evaluate, reduce size by 50%`
       : `${rule.sidewaysDesc} with no follow-through → check ${rule.checkTF} chart; if ${rule.checkTF} also sideways or ${isLong ? 'bearish' : 'bullish'} → reduce size by 50% or exit`,
