@@ -1580,6 +1580,88 @@ function wireSelectors() {
   });
 }
 
+/* ─── Strength Change Monitor ─────────────────────────────────────────────── */
+const ALL_TOKENS = ['BTC','ETH','LINK','SOL','XRP','TAO','HYPE','SUI','KAS','ALGO','XMR','TON','ONDO','AAVE','RENDER','BNB','BLUR'];
+const STRENGTH_THRESHOLD = 20;
+const _STRENGTH_SNAP_KEY  = 'strength_snap_v1';
+const _STRENGTH_SEEN_KEY  = 'strength_seen_v1';
+let   _strengthAlerts     = [];
+
+function _getStrengthSnap() {
+  try { return JSON.parse(localStorage.getItem(_STRENGTH_SNAP_KEY) || '{}'); }
+  catch (_) { return {}; }
+}
+function _saveStrengthSnap(snap) {
+  try { localStorage.setItem(_STRENGTH_SNAP_KEY, JSON.stringify(snap)); }
+  catch (_) {}
+}
+function _getStrengthSeen() {
+  try { return JSON.parse(localStorage.getItem(_STRENGTH_SEEN_KEY) || '{}'); }
+  catch (_) { return {}; }
+}
+function _markStrengthSeen(id) {
+  const seen = _getStrengthSeen();
+  seen[id] = Date.now();
+  const cutoff = Date.now() - 7 * 86400 * 1000;
+  Object.keys(seen).forEach(k => { if (seen[k] < cutoff) delete seen[k]; });
+  localStorage.setItem(_STRENGTH_SEEN_KEY, JSON.stringify(seen));
+}
+
+async function checkStrengthChanges() {
+  const snap = _getStrengthSnap();
+  const newAlerts = [];
+
+  for (const sym of ALL_TOKENS) {
+    try {
+      const res  = await fetch(`${API}/analysis?symbol=${sym}&timeframe=1H`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const sig  = data?.signal;
+      if (!sig || sig.direction === 'NEUTRAL' || sig.strength == null) continue;
+
+      const key      = `${sym}_1H`;
+      const prev     = snap[key];
+      const curr     = sig.strength;
+      const dir      = sig.direction;
+      const now      = Date.now();
+
+      // First run — just snapshot, no alert
+      if (prev == null) {
+        snap[key] = { strength: curr, dir, ts: now };
+        continue;
+      }
+
+      const delta = curr - prev.strength;
+      if (Math.abs(delta) >= STRENGTH_THRESHOLD) {
+        const alertId  = `str_${sym}_${now}`;
+        newAlerts.push({
+          id:       alertId,
+          symbol:   sym,
+          dir,
+          from:     prev.strength,
+          to:       curr,
+          delta,
+          ts:       now,
+        });
+        snap[key] = { strength: curr, dir, ts: now };
+      } else {
+        snap[key] = { strength: curr, dir, ts: now };
+      }
+    } catch (_) { /* network error for one token — skip */ }
+  }
+
+  _saveStrengthSnap(snap);
+
+  if (newAlerts.length) {
+    _strengthAlerts = [...newAlerts, ..._strengthAlerts].slice(0, 30);
+    _renderNotifList();
+    const seen   = _getStrengthSeen();
+    const unseen = _strengthAlerts.filter(a => !seen[a.id]).length;
+    const engulfUnseen = _engulfAlerts.filter(a => !_getSeenAlerts()[`engulf_${a.symbol}_${a.timestamp}`]).length;
+    _updateBadge(unseen + engulfUnseen);
+  }
+}
+
 /* ─── Engulfing Alert Notification Panel (1W) ────────────────────────────── */
 const _ENGULF_SEEN_KEY = 'engulf_seen_v2';
 let   _engulfAlerts    = [];
@@ -1605,19 +1687,17 @@ function toggleNotifPanel() {
   panel.classList.toggle('hidden', !open);
   overlay.classList.toggle('hidden', !open);
   if (open) {
-    // Mark all current alerts as seen when panel is opened
-    const seen = _getSeenAlerts();
-    _engulfAlerts.forEach(a => {
-      const id = `engulf_${a.symbol}_${a.timestamp}`;
-      if (!seen[id]) _markSeen(id);
-    });
+    _engulfAlerts.forEach(a => _markSeen(`engulf_${a.symbol}_${a.timestamp}`));
+    _strengthAlerts.forEach(a => _markStrengthSeen(a.id));
     _updateBadge(0);
   }
 }
 
 function clearAllAlerts() {
   _engulfAlerts.forEach(a => _markSeen(`engulf_${a.symbol}_${a.timestamp}`));
-  _renderNotifList([]);
+  _strengthAlerts.forEach(a => _markStrengthSeen(a.id));
+  _strengthAlerts = [];
+  _renderNotifList();
   _updateBadge(0);
 }
 
@@ -1635,23 +1715,43 @@ function _updateBadge(count) {
   }
 }
 
-function _renderNotifList(alerts) {
+function _renderNotifList() {
   const list = document.getElementById('notifList');
   if (!list) return;
-  if (!alerts.length) {
-    list.innerHTML = '<p class="notif-empty">No confirmed 1W engulfing patterns detected.</p>';
-    return;
-  }
-  const seen = _getSeenAlerts();
-  list.innerHTML = alerts.map(a => {
+
+  const engulfSeen   = _getSeenAlerts();
+  const strengthSeen = _getStrengthSeen();
+
+  // Build unified items list, newest first
+  const items = [];
+
+  _strengthAlerts.forEach(a => {
+    const isUp   = a.delta > 0;
+    const cls    = isUp ? 'bull' : 'bear';
+    const icon   = isUp ? '📈' : '📉';
+    const arrow  = isUp ? `+${a.delta}` : `${a.delta}`;
+    const dtStr  = new Date(a.ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+    const isNew  = !strengthSeen[a.id];
+    items.push({ ts: a.ts, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+      <span class="notif-item-icon">${icon}</span>
+      <div class="notif-item-body">
+        <div class="notif-item-title">Strength Jump — <strong>${a.symbol}/USDT</strong> <span class="notif-dir-tag">${a.dir}</span></div>
+        <div class="notif-item-sub">1H · ${a.from} → ${a.to} <span class="notif-delta ${cls}">(${arrow})</span></div>
+        <div class="notif-item-msg">Detected ${dtStr}</div>
+      </div>
+      <button class="notif-item-view" onclick="jumpTo('${a.symbol}','1H');toggleNotifPanel()">View →</button>
+    </div>` });
+  });
+
+  _engulfAlerts.forEach(a => {
     const isBull = a.direction === 'bullish';
     const cls    = isBull ? 'bull' : 'bear';
     const icon   = isBull ? '🟢' : '🔴';
     const label  = isBull ? 'Bullish Engulfing' : 'Bearish Engulfing';
     const when   = a.candles_ago === 1 ? 'current candle' : `${a.candles_ago} candles ago`;
     const id     = `engulf_${a.symbol}_${a.timestamp}`;
-    const isNew  = !seen[id];
-    return `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    const isNew  = !engulfSeen[id];
+    items.push({ ts: a.timestamp || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${label} — <strong>${a.symbol}/USDT</strong></div>
@@ -1659,8 +1759,16 @@ function _renderNotifList(alerts) {
         <div class="notif-item-msg">${isBull ? 'Potential bullish reversal' : 'Potential bearish reversal'}</div>
       </div>
       <button class="notif-item-view" onclick="jumpTo('${a.symbol}','1W');toggleNotifPanel()">View →</button>
-    </div>`;
-  }).join('');
+    </div>` });
+  });
+
+  if (!items.length) {
+    list.innerHTML = '<p class="notif-empty">No alerts yet. Strength checked hourly.</p>';
+    return;
+  }
+
+  items.sort((a, b) => b.ts - a.ts);
+  list.innerHTML = items.map(i => i.html).join('');
 }
 
 async function loadEngulfAlerts() {
@@ -1668,11 +1776,12 @@ async function loadEngulfAlerts() {
     const res  = await fetch(`${API}/engulf-alerts`);
     const data = await res.json();
     _engulfAlerts = data.alerts || [];
-    if (!_engulfAlerts.length) return;
-    _renderNotifList(_engulfAlerts);
-    const seen  = _getSeenAlerts();
-    const unread = _engulfAlerts.filter(a => !seen[`engulf_${a.symbol}_${a.timestamp}`]).length;
-    _updateBadge(unread);
+    _renderNotifList();
+    const seen   = _getSeenAlerts();
+    const strSeen = _getStrengthSeen();
+    const unreadE = _engulfAlerts.filter(a => !seen[`engulf_${a.symbol}_${a.timestamp}`]).length;
+    const unreadS = _strengthAlerts.filter(a => !strSeen[a.id]).length;
+    _updateBadge(unreadE + unreadS);
   } catch (_) {}
 }
 
@@ -1912,7 +2021,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAnalysis();
   loadRecommendations();
   loadEngulfAlerts();
+  checkStrengthChanges();
 
-  // Auto-refresh every 5 minutes
+  // Auto-refresh every 5 minutes (ticker); strength check every 60 minutes
   setInterval(loadTicker, 5 * 60 * 1000);
+  setInterval(checkStrengthChanges, 60 * 60 * 1000);
 });
