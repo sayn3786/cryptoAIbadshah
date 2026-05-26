@@ -271,6 +271,15 @@ def api_diagnostics():
     # Quick L/S ratio check for BTC to confirm which exchange is serving data
     ls = client.get_long_short_ratio("BTCUSDT")
     results["ls_ratio_btc"] = ls if ls else "empty — all exchanges failed"
+
+    # Raw OKX L/S probe so we can see exactly what the endpoint returns
+    try:
+        r = req.get("https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio",
+                    params={"ccy": "BTC", "period": "1H"}, timeout=8)
+        results["okx_ls_raw"] = {"status": r.status_code, "body": r.text[:300]}
+    except Exception as e:
+        results["okx_ls_raw"] = f"error: {e}"
+
     return jsonify(results)
 
 
