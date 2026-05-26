@@ -191,9 +191,32 @@ class BinanceClient:
         self._s = requests.Session()
         self._s.headers.update({"User-Agent": "Mozilla/5.0 CryptoBadshah/2.0"})
         self._mcap_cache: dict = {}   # symbol -> (value, fetched_at)
+        self._mcap_batch_fetched_at: float = 0
         self.last_binance_error = None
-        self._mcap_ttl = 300          # 5-minute cache — avoids hammering CoinGecko
+        self._mcap_ttl = 3600         # 1-hour cache — batch fetch, not per-token
         self.futures_real = True      # False when futures fell back to spot klines
+
+    def _refresh_mcap_batch(self):
+        """Fetch all market caps in one CoinGecko call to avoid rate limits."""
+        now = time.time()
+        if now - self._mcap_batch_fetched_at < self._mcap_ttl:
+            return  # Still fresh
+        try:
+            all_ids   = list(set(CG_IDS.values()))
+            id_to_sym = {v: k for k, v in CG_IDS.items()}
+            data = self._get(f"{CG_BASE}/simple/price", {
+                "ids":               ",".join(all_ids),
+                "vs_currencies":     "usd",
+                "include_market_cap": "true",
+            })
+            for cg_id, info in data.items():
+                mcap = info.get("usd_market_cap")
+                sym  = id_to_sym.get(cg_id)
+                if sym and mcap:
+                    self._mcap_cache[sym] = (mcap, now)
+            self._mcap_batch_fetched_at = now
+        except Exception:
+            pass
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
@@ -668,27 +691,12 @@ class BinanceClient:
         return self._get_market_cap(symbol)
 
     def _get_market_cap(self, symbol: str) -> Optional[float]:
+        # Refresh the whole batch if stale (one call covers all 26 tokens)
+        self._refresh_mcap_batch()
         cached = self._mcap_cache.get(symbol)
         if cached:
-            value, fetched_at = cached
-            if time.time() - fetched_at < self._mcap_ttl:
-                return value
-
-        cg_id = CG_IDS.get(symbol)
-        if not cg_id:
-            return None
-        try:
-            data = self._get(f"{CG_BASE}/simple/price", {
-                "ids": cg_id,
-                "vs_currencies": "usd",
-                "include_market_cap": "true",
-            })
-            value = data.get(cg_id, {}).get("usd_market_cap")
-            if value:
-                self._mcap_cache[symbol] = (value, time.time())
-            return value
-        except Exception:
-            return None
+            return cached[0]
+        return None
 
     def get_order_book_walls(self, symbol: str, market_cap: Optional[float] = None) -> Dict:
         """
