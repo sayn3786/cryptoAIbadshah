@@ -38,6 +38,15 @@ CG_IDS = {
     "RENDERUSDT": "render-token",
     "BNBUSDT":    "binancecoin",
     "BLURUSDT":   "blur",
+    "ZECUSDT":    "zcash",
+    "TRXUSDT":    "tron",
+    "ADAUSDT":    "cardano",
+    "XLMUSDT":    "stellar",
+    "AVAXUSDT":   "avalanche-2",
+    "HBARUSDT":   "hedera-hashgraph",
+    "QNTUSDT":    "quant-network",
+    "INJUSDT":    "injective-protocol",
+    "FETUSDT":    "fetch-ai",
 }
 
 # Kraken pairs (weekly interval = 10080 min)
@@ -56,6 +65,15 @@ KRAKEN_PAIRS = {
     "RENDERUSDT": "RENDERUSD",
     "BNBUSDT":    "BNBUSD",
     "BLURUSDT":   "BLURUSD",
+    "ZECUSDT":    "ZECUSD",
+    "TRXUSDT":    "TRXUSD",
+    "ADAUSDT":    "ADAUSD",
+    "XLMUSDT":    "XLMUSD",
+    "AVAXUSDT":   "AVAXUSD",
+    "HBARUSDT":   "HBARUSD",
+    "QNTUSDT":    "QNTUSD",
+    "INJUSDT":    "INJUSD",
+    "FETUSDT":    "FETUSD",
 }
 
 # Gate.io currency pairs
@@ -77,6 +95,15 @@ GATE_PAIRS = {
     "RENDERUSDT": "RENDER_USDT",
     "BNBUSDT":    "BNB_USDT",
     "BLURUSDT":   "BLUR_USDT",
+    "ZECUSDT":    "ZEC_USDT",
+    "TRXUSDT":    "TRX_USDT",
+    "ADAUSDT":    "ADA_USDT",
+    "XLMUSDT":    "XLM_USDT",
+    "AVAXUSDT":   "AVAX_USDT",
+    "HBARUSDT":   "HBAR_USDT",
+    "QNTUSDT":    "QNT_USDT",
+    "INJUSDT":    "INJ_USDT",
+    "FETUSDT":    "FET_USDT",
 }
 
 OKX_PAIRS = {
