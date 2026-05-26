@@ -1581,7 +1581,7 @@ function wireSelectors() {
 }
 
 /* ─── Strength Change Monitor ─────────────────────────────────────────────── */
-const ALL_TOKENS = ['BTC','ETH','LINK','SOL','XRP','TAO','HYPE','SUI','KAS','ALGO','XMR','TON','ONDO','AAVE','RENDER','BNB','BLUR'];
+const ALL_TOKENS = ['BTC','ETH','LINK','SOL','XRP','TAO','HYPE','SUI','KAS','ALGO','XMR','TON','ONDO','AAVE','RENDER','BNB','BLUR','ZEC','TRX','ADA','XLM','AVAX','HBAR','QNT','INJ','FET'];
 const STRENGTH_THRESHOLD = 20;
 const _STRENGTH_SNAP_KEY  = 'strength_snap_v1';
 const _STRENGTH_SEEN_KEY  = 'strength_seen_v1';

@@ -96,6 +96,15 @@ OKX_PAIRS = {
     "RENDERUSDT": "RENDER-USDT",
     "BNBUSDT":    "BNB-USDT",
     "BLURUSDT":   "BLUR-USDT",
+    "ZECUSDT":    "ZEC-USDT",
+    "TRXUSDT":    "TRX-USDT",
+    "ADAUSDT":    "ADA-USDT",
+    "XLMUSDT":    "XLM-USDT",
+    "AVAXUSDT":   "AVAX-USDT",
+    "HBARUSDT":   "HBAR-USDT",
+    "QNTUSDT":    "QNT-USDT",
+    "INJUSDT":    "INJ-USDT",
+    "FETUSDT":    "FET-USDT",
 }
 
 BYBIT_PAIRS = {
@@ -116,6 +125,15 @@ BYBIT_PAIRS = {
     "RENDERUSDT": "RENDERUSDT",
     "BNBUSDT":    "BNBUSDT",
     "BLURUSDT":   "BLURUSDT",
+    "ZECUSDT":    "ZECUSDT",
+    "TRXUSDT":    "TRXUSDT",
+    "ADAUSDT":    "ADAUSDT",
+    "XLMUSDT":    "XLMUSDT",
+    "AVAXUSDT":   "AVAXUSDT",
+    "HBARUSDT":   "HBARUSDT",
+    "QNTUSDT":    "QNTUSDT",
+    "INJUSDT":    "INJUSDT",
+    "FETUSDT":    "FETUSDT",
 }
 
 # KuCoin trading pairs

@@ -46,6 +46,15 @@ SYMBOLS = {
     "RENDER": "RENDERUSDT",
     "BNB":    "BNBUSDT",
     "BLUR":   "BLURUSDT",
+    "ZEC":    "ZECUSDT",
+    "TRX":    "TRXUSDT",
+    "ADA":    "ADAUSDT",
+    "XLM":    "XLMUSDT",
+    "AVAX":   "AVAXUSDT",
+    "HBAR":   "HBARUSDT",
+    "QNT":    "QNTUSDT",
+    "INJ":    "INJUSDT",
+    "FET":    "FETUSDT",
 }
 TF_INTERVAL = {
     "1H": "1h", "2H": "2h",
