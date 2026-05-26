@@ -1737,7 +1737,7 @@ function _renderNotifList() {
       <div class="notif-item-body">
         <div class="notif-item-title">Strength Jump — <strong>${a.symbol}/USDT</strong> <span class="notif-dir-tag">${a.dir}</span></div>
         <div class="notif-item-sub">1H · ${a.from} → ${a.to} <span class="notif-delta ${cls}">(${arrow})</span></div>
-        <div class="notif-item-msg">Detected ${dtStr}</div>
+        <div class="notif-item-time">🕐 Detected: ${dtStr}</div>
       </div>
       <button class="notif-item-view" onclick="jumpTo('${a.symbol}','1H');toggleNotifPanel()">View →</button>
     </div>` });
@@ -1757,6 +1757,7 @@ function _renderNotifList() {
         <div class="notif-item-title">${label} — <strong>${a.symbol}/USDT</strong></div>
         <div class="notif-item-sub">1W confirmed · ${when} · body ${a.body_ratio}×</div>
         <div class="notif-item-msg">${isBull ? 'Potential bullish reversal' : 'Potential bearish reversal'}</div>
+        ${a.detected_at ? `<div class="notif-item-time">🕐 Detected: ${a.detected_at}</div>` : ''}
       </div>
       <button class="notif-item-view" onclick="jumpTo('${a.symbol}','1W');toggleNotifPanel()">View →</button>
     </div>` });

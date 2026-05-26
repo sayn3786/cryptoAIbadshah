@@ -1064,6 +1064,7 @@ a:hover { color: var(--gold2); }
 .notif-item-title strong { color: var(--gold); }
 .notif-item-sub  { font-size: .65rem; color: var(--muted2); margin: 2px 0 1px; }
 .notif-item-msg  { font-size: .67rem; color: var(--muted); font-style: italic; }
+.notif-item-time { font-size: .62rem; color: var(--muted2); margin-top: 3px; }
 .notif-dir-tag   { display: inline-block; font-size: .6rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; background: var(--border); color: var(--muted); margin-left: 4px; letter-spacing: .04em; }
 .notif-delta     { font-weight: 700; }
 .notif-delta.bull { color: var(--bull); }

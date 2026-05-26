@@ -427,21 +427,26 @@ def api_engulf_alerts():
     interval = TF_INTERVAL["1W"]
     limit    = TF_LIMIT["1W"]
 
+    SGT = timezone(timedelta(hours=8))
+
     def _scan(sym):
         try:
             bs     = SYMBOLS[sym]
             candles = client.get_spot_klines(bs, interval, limit)
             patterns = detect_engulfing(candles, lookback=2)
             results = []
+            scan_ts   = datetime.now(timezone.utc)
+            scan_fmt  = scan_ts.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
             for p in patterns:
                 if p.get("candles_ago", 99) <= 2:
                     results.append({
-                        "symbol":     sym,
-                        "timeframe":  "1W",
-                        "direction":  p["direction"],
-                        "body_ratio": p["body_ratio"],
+                        "symbol":      sym,
+                        "timeframe":   "1W",
+                        "direction":   p["direction"],
+                        "body_ratio":  p["body_ratio"],
                         "candles_ago": p["candles_ago"],
-                        "timestamp":  p["timestamp"],
+                        "timestamp":   p["timestamp"],
+                        "detected_at": scan_fmt,
                         "engulf_open":  p.get("engulf_open"),
                         "engulf_close": p.get("engulf_close"),
                     })
