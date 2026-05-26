@@ -1076,3 +1076,21 @@ a:hover { color: var(--gold2); }
   align-self: center;
 }
 .notif-item-view:hover { background: var(--card); color: var(--text); }
+
+/* ── Card header (title + subtitle row) ─────────────────────────────────── */
+.card-hdr { display: flex; align-items: baseline; gap: 6px; font-size: .85rem; font-weight: 700; color: var(--text); margin-bottom: 10px; }
+
+/* ── Whale Activity ──────────────────────────────────────────────────────── */
+.whale-activity   { display: flex; flex-direction: column; gap: 8px; }
+.whale-empty      { color: var(--muted); font-size: .75rem; text-align: center; padding: 12px 0; }
+.whale-event      { border-left: 3px solid transparent; border-radius: 6px; padding: 10px 12px; background: var(--card2); }
+.whale-bull       { border-left-color: var(--bull); }
+.whale-bear       { border-left-color: var(--bear); }
+.whale-event-top  { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.whale-icon       { font-size: 1.1rem; }
+.whale-label      { font-size: .78rem; font-weight: 700; flex: 1; }
+.whale-ago        { font-size: .65rem; color: var(--muted2); }
+.whale-stats      { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.whale-stat       { font-size: .68rem; color: var(--muted2); }
+.whale-stat strong{ color: var(--text); }
+.whale-desc       { font-size: .65rem; color: var(--muted); font-style: italic; }

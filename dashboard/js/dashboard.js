@@ -522,6 +522,42 @@ function renderEMACard(ema) {
   }).join('');
 }
 
+function renderWhaleActivity(events) {
+  const el = document.getElementById('whaleActivity');
+  if (!el) return;
+  if (!events || !events.length) {
+    el.innerHTML = '<p class="whale-empty">No large trade detected in last 5 candles.</p>';
+    return;
+  }
+
+  const DIR_META = {
+    bullish:            { icon: '🐋', label: 'Bullish Whale',          cls: 'bull', desc: 'Aggressive buying — large long entry' },
+    bearish:            { icon: '🐻', label: 'Bearish Whale',          cls: 'bear', desc: 'Aggressive selling — large short entry' },
+    absorption_bull:    { icon: '🛡️', label: 'Bull Absorption',        cls: 'bull', desc: 'Heavy buying absorbed at resistance — price held up' },
+    absorption_bear:    { icon: '🛡️', label: 'Bear Absorption',        cls: 'bear', desc: 'Heavy selling absorbed at support — price defended' },
+    bullish_absorption: { icon: '💪', label: 'Bullish (Bears Failed)', cls: 'bull', desc: 'Large sell into buyers — sellers failed, bullish signal' },
+    bearish_rejection:  { icon: '❌', label: 'Bearish Rejection',      cls: 'bear', desc: 'Large buy rejected — failed breakout, bearish signal' },
+  };
+
+  el.innerHTML = events.map(e => {
+    const m    = DIR_META[e.direction] || { icon: '❓', label: e.direction, cls: '', desc: '' };
+    const when = e.candles_ago === 1 ? 'Last candle' : `${e.candles_ago} candles ago`;
+    return `<div class="whale-event whale-${m.cls}">
+      <div class="whale-event-top">
+        <span class="whale-icon">${m.icon}</span>
+        <span class="whale-label ${m.cls}">${m.label}</span>
+        <span class="whale-ago">${when}</span>
+      </div>
+      <div class="whale-stats">
+        <span class="whale-stat">Vol <strong>${e.vol_multiple}×</strong> avg</span>
+        <span class="whale-stat">Taker Buy <strong>${e.taker_ratio}%</strong></span>
+        <span class="whale-stat">Body <strong>${e.body_pct > 0 ? '+' : ''}${e.body_pct}%</strong></span>
+      </div>
+      <div class="whale-desc">${m.desc}</div>
+    </div>`;
+  }).join('');
+}
+
 function renderLSCard(ls) {
   const el    = document.getElementById('lsRatio');
   const sigEl = document.getElementById('lsSignal');
@@ -1587,6 +1623,7 @@ const STRENGTH_THRESHOLD = 20;
 const _STRENGTH_SNAP_KEY  = 'strength_snap_v1';
 const _STRENGTH_SEEN_KEY  = 'strength_seen_v1';
 let   _strengthAlerts     = [];
+let   _whaleAlerts        = [];
 
 function _getStrengthSnap() {
   try { return JSON.parse(localStorage.getItem(_STRENGTH_SNAP_KEY) || '{}'); }
@@ -1690,6 +1727,7 @@ function toggleNotifPanel() {
   if (open) {
     _engulfAlerts.forEach(a => _markSeen(`engulf_${a.symbol}_${a.timestamp}`));
     _strengthAlerts.forEach(a => _markStrengthSeen(a.id));
+    _whaleAlerts.forEach(a => _markStrengthSeen(`whale_${a.symbol}_${a.timestamp}`));
     _updateBadge(0);
   }
 }
@@ -1697,7 +1735,9 @@ function toggleNotifPanel() {
 function clearAllAlerts() {
   _engulfAlerts.forEach(a => _markSeen(`engulf_${a.symbol}_${a.timestamp}`));
   _strengthAlerts.forEach(a => _markStrengthSeen(a.id));
+  _whaleAlerts.forEach(a => _markStrengthSeen(`whale_${a.symbol}_${a.timestamp}`));
   _strengthAlerts = [];
+  _whaleAlerts = [];
   _renderNotifList();
   _updateBadge(0);
 }
@@ -1744,6 +1784,31 @@ function _renderNotifList() {
     </div>` });
   });
 
+  _whaleAlerts.forEach(a => {
+    const DIR_META = {
+      bullish:            { icon: '🐋', label: 'Bullish Whale',          cls: 'bull' },
+      bearish:            { icon: '🐻', label: 'Bearish Whale',          cls: 'bear' },
+      absorption_bull:    { icon: '🛡️', label: 'Bull Absorption',        cls: 'bull' },
+      absorption_bear:    { icon: '🛡️', label: 'Bear Absorption',        cls: 'bear' },
+      bullish_absorption: { icon: '💪', label: 'Bullish (Bears Failed)', cls: 'bull' },
+      bearish_rejection:  { icon: '❌', label: 'Bearish Rejection',      cls: 'bear' },
+    };
+    const m    = DIR_META[a.direction] || { icon: '❓', label: a.direction, cls: '' };
+    const id   = `whale_${a.symbol}_${a.timestamp}`;
+    const seen = _getStrengthSeen();
+    const isNew = !seen[id];
+    const when  = a.candles_ago === 1 ? 'Last 1H candle' : `${a.candles_ago} candles ago`;
+    items.push({ ts: a.timestamp, html: `<div class="notif-item notif-item-${m.cls}${isNew ? ' notif-item-new' : ''}">
+      <span class="notif-item-icon">${m.icon}</span>
+      <div class="notif-item-body">
+        <div class="notif-item-title">${m.label} — <strong>${a.symbol}/USDT</strong></div>
+        <div class="notif-item-sub">1H · ${a.vol_multiple}× vol · ${a.taker_ratio}% taker buy · ${when}</div>
+        <div class="notif-item-time">🕐 ${a.detected_at || ''}</div>
+      </div>
+      <button class="notif-item-view" onclick="jumpTo('${a.symbol}','1H');toggleNotifPanel()">View →</button>
+    </div>` });
+  });
+
   _engulfAlerts.forEach(a => {
     const isBull = a.direction === 'bullish';
     const cls    = isBull ? 'bull' : 'bear';
@@ -1784,6 +1849,20 @@ async function loadEngulfAlerts() {
     const unreadE = _engulfAlerts.filter(a => !seen[`engulf_${a.symbol}_${a.timestamp}`]).length;
     const unreadS = _strengthAlerts.filter(a => !strSeen[a.id]).length;
     _updateBadge(unreadE + unreadS);
+  } catch (_) {}
+}
+
+async function loadWhaleAlerts() {
+  try {
+    const res  = await fetch(`${API}/whale-alerts`);
+    const data = await res.json();
+    _whaleAlerts = data.alerts || [];
+    _renderNotifList();
+    const seen    = _getStrengthSeen();
+    const unseen  = _whaleAlerts.filter(a => !seen[`whale_${a.symbol}_${a.timestamp}`]).length;
+    const engulfU = _engulfAlerts.filter(a => !_getSeenAlerts()[`engulf_${a.symbol}_${a.timestamp}`]).length;
+    const strengthU = _strengthAlerts.filter(a => !seen[a.id]).length;
+    _updateBadge(unseen + engulfU + strengthU);
   } catch (_) {}
 }
 
@@ -2025,6 +2104,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadRecommendations();
   loadEngulfAlerts();
   checkStrengthChanges();
+  loadWhaleAlerts();
+  setInterval(loadWhaleAlerts, 5 * 60 * 1000);
 
   // Auto-refresh every 5 minutes (ticker); strength check every 60 minutes
   setInterval(loadTicker, 5 * 60 * 1000);
