@@ -699,11 +699,11 @@ class BinanceClient:
                 })
                 rows = (data or {}).get("result", {}).get("list", [])
                 if rows:
-                    d         = rows[0]
-                    buy_ratio = float(d.get("buyRatio", 0))
-                    sell_ratio= float(d.get("sellRatio", 0))
-                    total     = buy_ratio + sell_ratio or 1
-                    ratio     = round(buy_ratio / sell_ratio, 4) if sell_ratio else 0
+                    d          = rows[0]
+                    buy_ratio  = float(d.get("buyRatio",  0))
+                    sell_ratio = float(d.get("sellRatio", 0))
+                    total      = buy_ratio + sell_ratio or 1
+                    ratio      = round(buy_ratio / sell_ratio, 4) if sell_ratio else 0
                     return {
                         "ratio":     ratio,
                         "long_pct":  round(buy_ratio  / total * 100, 2),
@@ -713,6 +713,7 @@ class BinanceClient:
                 pass
 
         # ── OKX swap ─────────────────────────────────────────────────────────
+        # OKX returns {"data": [{"ts":"...", "longShortAcctRatio":"1.3"}, ...]}
         okx_base = symbol.replace("USDT", "")
         try:
             data = self._get(f"{OKX_BASE}/api/v5/rubik/stat/contracts/long-short-account-ratio", {
@@ -721,15 +722,16 @@ class BinanceClient:
             })
             rows = (data or {}).get("data", [])
             if rows:
-                d         = rows[0]
-                long_pct  = float(d[1]) * 100
-                short_pct = float(d[2]) * 100
-                ratio     = round(long_pct / short_pct, 4) if short_pct else 0
-                return {
-                    "ratio":     ratio,
-                    "long_pct":  round(long_pct,  2),
-                    "short_pct": round(short_pct, 2),
-                }
+                d     = rows[0]
+                ratio = float(d.get("longShortAcctRatio", 0))
+                if ratio > 0:
+                    long_pct  = round(ratio / (1 + ratio) * 100, 2)
+                    short_pct = round(100 - long_pct, 2)
+                    return {
+                        "ratio":     round(ratio, 4),
+                        "long_pct":  long_pct,
+                        "short_pct": short_pct,
+                    }
         except Exception:
             pass
 

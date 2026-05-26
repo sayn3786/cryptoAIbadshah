@@ -267,6 +267,10 @@ def api_diagnostics():
             results[name] = f"error: {type(e).__name__}"
     results["current_source"] = client.data_source
     results["binance_last_error"] = client.last_binance_error
+
+    # Quick L/S ratio check for BTC to confirm which exchange is serving data
+    ls = client.get_long_short_ratio("BTCUSDT")
+    results["ls_ratio_btc"] = ls if ls else "empty — all exchanges failed"
     return jsonify(results)
 
 
