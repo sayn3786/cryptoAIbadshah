@@ -432,3 +432,76 @@ def calculate_ema_trend(closes: List[float]) -> Dict:
         "below":  below,
         "trend":  trend,
     }
+
+
+def detect_whale_activity(candles: List[Dict], lookback: int = 20,
+                           vol_threshold: float = 2.5,
+                           taker_threshold: float = 0.65,
+                           detect_window: int = 5) -> List[Dict]:
+    """
+    Detect candles with abnormally high volume — potential whale entries.
+    Checks last detect_window closed candles against a lookback average.
+    Direction is determined by taker buy/sell ratio + price action.
+    """
+    if len(candles) < lookback + 2:
+        return []
+
+    closed = candles[:-1]  # exclude current forming candle
+    if len(closed) < lookback + 1:
+        return []
+
+    results = []
+    start = max(lookback, len(closed) - detect_window)
+
+    for i in range(start, len(closed)):
+        c       = closed[i]
+        vol     = c.get("volume", 0)
+        if vol == 0:
+            continue
+        avg_vol = sum(x.get("volume", 0) for x in closed[i - lookback:i]) / lookback
+        if avg_vol == 0:
+            continue
+        multiple = vol / avg_vol
+        if multiple < vol_threshold:
+            continue
+
+        taker_buy   = c.get("taker_buy_volume", vol * 0.5)
+        taker_ratio = taker_buy / vol
+
+        open_p  = c.get("open",  0)
+        close_p = c.get("close", 0)
+        body_pct = (close_p - open_p) / open_p * 100 if open_p else 0
+
+        bull_taker = taker_ratio >= taker_threshold
+        bear_taker = taker_ratio <= (1 - taker_threshold)
+        is_doji    = abs(body_pct) < 0.5  # tiny body = absorption / indecision
+
+        if is_doji and bull_taker:
+            direction = "absorption_bull"   # heavy buying but price pinned → defending resistance or absorbed by sellers
+        elif is_doji and bear_taker:
+            direction = "absorption_bear"   # heavy selling but price held → defending support or absorbed by buyers
+        elif bull_taker and body_pct > 0:
+            direction = "bullish"
+        elif bear_taker and body_pct < 0:
+            direction = "bearish"
+        elif bull_taker and body_pct < 0:
+            direction = "bearish_rejection" # bought hard but price rejected — failed breakout
+        elif bear_taker and body_pct > 0:
+            direction = "bullish_absorption"# sold hard but buyers absorbed it — bullish signal
+        elif body_pct > 0:
+            direction = "bullish"
+        else:
+            direction = "bearish"
+
+        results.append({
+            "timestamp":    c["timestamp"],
+            "direction":    direction,
+            "vol_multiple": round(multiple, 1),
+            "taker_ratio":  round(taker_ratio * 100, 1),
+            "price_impact": round(abs(body_pct), 2),
+            "body_pct":     round(body_pct, 2),
+            "candles_ago":  len(closed) - i,
+            "close":        round(close_p, 8),
+        })
+
+    return sorted(results, key=lambda x: x["candles_ago"])

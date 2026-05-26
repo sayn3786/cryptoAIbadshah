@@ -16,7 +16,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from cvd_sources import fetch_cvd_from_source
-from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence, calculate_macd, calculate_ema_trend
+from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence, calculate_macd, calculate_ema_trend, detect_whale_activity
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
@@ -186,6 +186,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         fut_cvd = agg_cvd
         agg_cvd = None   # avoid double-counting in the CVD divergence calc
     volume_spikes = find_volume_spikes(spot)
+    whale_activity = detect_whale_activity(spot)
     market_cap    = client.get_market_cap(bs)
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
     fvgs = detect_fvg(spot)
@@ -224,6 +225,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "elliott_wave": elliott,
         "market_cap":        market_cap,
         "volume_spikes":     volume_spikes,
+        "whale_activity":    whale_activity,
         "order_book":        order_book,
         "upcoming_holidays": get_upcoming_holidays(),
         "data_source":       spot_source,
@@ -487,6 +489,45 @@ def api_engulf_alerts():
     with _engulf_lock:
         _engulf_cache["ts"]   = time.time()
         _engulf_cache["data"] = data
+    return jsonify(data)
+
+
+_whale_cache: Dict = {"ts": 0, "data": None}
+_whale_lock  = _threading.Lock()
+_WHALE_TTL   = 300  # re-scan every 5 minutes
+
+@app.get("/api/whale-alerts")
+def api_whale_alerts():
+    """Scan all tokens at 1H for recent whale activity (last 3 candles)."""
+    with _whale_lock:
+        if _whale_cache["data"] and time.time() - _whale_cache["ts"] < _WHALE_TTL:
+            return jsonify(_whale_cache["data"])
+
+    alerts = []
+    def _scan(sym):
+        try:
+            bs      = SYMBOLS[sym]
+            candles = client.get_spot_klines(bs, "1h", 60)
+            events  = detect_whale_activity(candles, detect_window=3)
+            SGT     = timezone(timedelta(hours=8))
+            result  = []
+            for e in events:
+                dt_sgt  = datetime.fromtimestamp(e["timestamp"] / 1000, tz=SGT)
+                result.append({**e, "symbol": sym,
+                                "detected_at": dt_sgt.strftime("%b %d · %I:%M %p SGT")})
+            return result
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for res in ex.map(_scan, SYMBOLS.keys()):
+            alerts.extend(res)
+
+    alerts.sort(key=lambda x: x["candles_ago"])
+    data = {"alerts": alerts, "scanned_at": int(time.time())}
+    with _whale_lock:
+        _whale_cache["ts"]   = time.time()
+        _whale_cache["data"] = data
     return jsonify(data)
 
 

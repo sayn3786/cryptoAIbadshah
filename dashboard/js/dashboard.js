@@ -177,6 +177,7 @@ function renderAll(a) {
   renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
   renderLSCard(a.long_short);
+  renderWhaleActivity(a.whale_activity || []);
   renderFNGCard(a.fear_greed);
   renderRSICard(a.rsi);
   renderFunding(a.funding_rate);
