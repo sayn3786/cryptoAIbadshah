@@ -713,7 +713,7 @@ class BinanceClient:
                 pass
 
         # ── OKX swap ─────────────────────────────────────────────────────────
-        # OKX returns {"data": [{"ts":"...", "longShortAcctRatio":"1.3"}, ...]}
+        # OKX returns {"data": [["timestamp", "ratio"], ...]} — index 1 is the ratio
         okx_base = symbol.replace("USDT", "")
         try:
             data = self._get(f"{OKX_BASE}/api/v5/rubik/stat/contracts/long-short-account-ratio", {
@@ -722,8 +722,7 @@ class BinanceClient:
             })
             rows = (data or {}).get("data", [])
             if rows:
-                d     = rows[0]
-                ratio = float(d.get("longShortAcctRatio", 0))
+                ratio = float(rows[0][1])
                 if ratio > 0:
                     long_pct  = round(ratio / (1 + ratio) * 100, 2)
                     short_pct = round(100 - long_pct, 2)
