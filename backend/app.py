@@ -334,6 +334,11 @@ def api_recommendations():
         if mem.get("key") == cache_key and mem.get("data"):
             return jsonify(mem["data"])
 
+    scan_time = datetime.now(timezone.utc)
+    SGT = timezone(timedelta(hours=8))
+    scan_time_sgt = scan_time.astimezone(SGT)
+    detected_at_fmt = scan_time_sgt.strftime("%b %d, %Y · %I:%M %p SGT")
+
     candidates = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
@@ -354,6 +359,7 @@ def api_recommendations():
                     "score":         sig.get("score", 0),
                     "tier":          sig.get("tier"),
                     "entry":         sig.get("entry"),
+                    "detected_at":   detected_at_fmt,
                     "sl":            sig.get("sl"),
                     "sl_pct":        sig.get("sl_pct"),
                     "tp_targets":    sig.get("tp_targets", []),
@@ -384,7 +390,6 @@ def api_recommendations():
     # Top 3 by strength, no direction cap — market may genuinely be all-bullish or all-bearish
     top = candidates[:3]
 
-    SGT = timezone(timedelta(hours=8))
     session_start_sgt = session_start.astimezone(SGT)
     # Session ends at 07:59 SGT next day = 23:59 UTC same day
     valid_until_utc   = session_start + timedelta(hours=23, minutes=59)

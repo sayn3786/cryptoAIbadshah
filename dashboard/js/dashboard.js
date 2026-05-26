@@ -1794,7 +1794,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec3_${y}${m}${d}`;
+  return `rec4_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -1808,7 +1808,7 @@ function _recCacheSet(data) {
   try {
     // Prune any old rec_ / rec2_ / rec3_ keys from previous days
     Object.keys(localStorage)
-      .filter(k => (k.startsWith('rec_') || k.startsWith('rec2_') || k.startsWith('rec3_')) && k !== _recCacheKey())
+      .filter(k => (k.startsWith('rec_') || k.startsWith('rec2_') || k.startsWith('rec3_') || k.startsWith('rec4_')) && k !== _recCacheKey())
       .forEach(k => localStorage.removeItem(k));
     localStorage.setItem(_recCacheKey(), JSON.stringify(data));
   } catch (_) {}
@@ -1865,6 +1865,7 @@ async function loadRecommendations() {
           <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
           <span class="rec-strength">${r.strength}/100</span>
         </div>
+        ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
         ${strengthBar}
         <div class="rec-levels">
           <div class="rec-lvl"><span class="rec-lbl">Entry</span><span class="rec-val">${fmtPrice(r.entry)}</span></div>
