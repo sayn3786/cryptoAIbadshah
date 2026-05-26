@@ -381,22 +381,8 @@ def api_recommendations():
                 best_per_sym[sym] = c
     candidates = sorted(best_per_sym.values(), key=lambda x: x["strength"], reverse=True)
 
-    # Sort by strength; ensure direction diversity (max 2 of same side)
-    top, seen = [], {"LONG": 0, "SHORT": 0}
-    for c in candidates:
-        if len(top) == 3:
-            break
-        d = c["direction"]
-        if seen[d] < 2:
-            top.append(c)
-            seen[d] += 1
-    if len(top) < 3:
-        used = set(id(x) for x in top)
-        for c in candidates:
-            if len(top) == 3:
-                break
-            if id(c) not in used:
-                top.append(c)
+    # Top 3 by strength, no direction cap — market may genuinely be all-bullish or all-bearish
+    top = candidates[:3]
 
     SGT = timezone(timedelta(hours=8))
     session_start_sgt = session_start.astimezone(SGT)
