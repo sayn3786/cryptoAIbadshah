@@ -669,7 +669,8 @@ class BinanceClient:
         return mock_liquidations(symbol)
 
     def get_long_short_ratio(self, symbol: str) -> Dict:
-        """Global long/short account ratio from Binance futures (free endpoint)."""
+        """Global long/short account ratio — Binance fapi → Bybit → OKX fallback."""
+        # ── Binance fapi ─────────────────────────────────────────────────────
         try:
             data = self._get(f"{FUTURES_BASE}/futures/data/globalLongShortAccountRatio",
                              {"symbol": symbol, "period": "1h", "limit": 1})
@@ -685,6 +686,53 @@ class BinanceClient:
                 }
         except Exception:
             pass
+
+        # ── Bybit linear ─────────────────────────────────────────────────────
+        bybit_sym = BYBIT_PAIRS.get(symbol)
+        if bybit_sym:
+            try:
+                data = self._get(f"{BYBIT_BASE}/v5/market/account-ratio", {
+                    "category": "linear",
+                    "symbol":   bybit_sym,
+                    "period":   "1h",
+                    "limit":    1,
+                })
+                rows = (data or {}).get("result", {}).get("list", [])
+                if rows:
+                    d         = rows[0]
+                    buy_ratio = float(d.get("buyRatio", 0))
+                    sell_ratio= float(d.get("sellRatio", 0))
+                    total     = buy_ratio + sell_ratio or 1
+                    ratio     = round(buy_ratio / sell_ratio, 4) if sell_ratio else 0
+                    return {
+                        "ratio":     ratio,
+                        "long_pct":  round(buy_ratio  / total * 100, 2),
+                        "short_pct": round(sell_ratio / total * 100, 2),
+                    }
+            except Exception:
+                pass
+
+        # ── OKX swap ─────────────────────────────────────────────────────────
+        okx_base = symbol.replace("USDT", "")
+        try:
+            data = self._get(f"{OKX_BASE}/api/v5/rubik/stat/contracts/long-short-account-ratio", {
+                "ccy":    okx_base,
+                "period": "1H",
+            })
+            rows = (data or {}).get("data", [])
+            if rows:
+                d         = rows[0]
+                long_pct  = float(d[1]) * 100
+                short_pct = float(d[2]) * 100
+                ratio     = round(long_pct / short_pct, 4) if short_pct else 0
+                return {
+                    "ratio":     ratio,
+                    "long_pct":  round(long_pct,  2),
+                    "short_pct": round(short_pct, 2),
+                }
+        except Exception:
+            pass
+
         return {}
 
     def get_market_cap(self, symbol: str) -> Optional[float]:
