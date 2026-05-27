@@ -429,31 +429,36 @@ def generate_signal(analysis: Dict) -> Dict:
     #   SuperTrend flip +20, Ichimoku price+cloud+TK = +35 → total ~246
     # In practice signals are partially overlapping so 160 is a realistic ceiling.
     MAX_SCORE = 260.0
+
+    # Single consistent strength formula across ALL directions.
+    # strength = what % of max possible confluence is present.
+    # A NEUTRAL token with score 24 = strength 9 — correctly low.
+    # Old NEUTRAL formula (score/30*50) inflated numbers and confused users.
+    strength = min(int(abs(score) / MAX_SCORE * 100), 100)
+
     if score >= 30:
         direction = "LONG"
-        strength = min(int(score / MAX_SCORE * 100), 100)
     elif score <= -30:
         direction = "SHORT"
-        strength = min(int(abs(score) / MAX_SCORE * 100), 100)
     else:
         direction = "NEUTRAL"
-        strength = int(abs(score) / 30 * 50)
 
-    # Strength tier: how many indicators are in confluence.
-    # Weak   (< 38) → score 30–53  → only 2–3 mild signals; use 25% size
-    # Moderate (38–57) → score 53–80 → several aligned; use 50% size
-    # Strong (58–76) → score 81–106  → good confluence; use full size
-    # Confirmed (77+) → score 107+   → maximum confluence; can scale
+    # Strength tiers — calibrated against the consistent MAX_SCORE formula.
+    # Threshold to trigger LONG/SHORT = score 30 = strength 11.
+    # Weak     (11–30): score 30–78   — 2-3 mild signals, 25% size
+    # Moderate (31–50): score 81–130  — several aligned,  50% size
+    # Strong   (51–69): score 133–179 — good confluence,  full size
+    # Confirmed  (70+): score 182+    — maximum confluence, can scale
     if direction == "NEUTRAL":
         tier = "Neutral"
         size_guide = "No trade"
-    elif strength < 38:
+    elif strength < 31:
         tier = "Weak"
         size_guide = "25% position — low confluence, minimal indicators aligned"
-    elif strength < 58:
+    elif strength < 51:
         tier = "Moderate"
         size_guide = "50% position — several signals aligned, manage risk carefully"
-    elif strength < 77:
+    elif strength < 70:
         tier = "Strong"
         size_guide = "Full position — good multi-indicator confluence"
     else:
