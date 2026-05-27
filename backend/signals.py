@@ -47,8 +47,19 @@ def generate_signal(analysis: Dict) -> Dict:
     flags       = analysis.get("flags") or []
     elliott     = analysis.get("elliott_wave") or {}
     candles     = analysis.get("candles") or []
+    timeframe   = analysis.get("timeframe", "1H")
 
     current_price = candles[-1]["close"] if candles else 0.0
+
+    # ── Timeframe weight for macro/sentiment indicators ───────────────────────
+    # Fear & Greed and News update at most once per day. Applying their full
+    # weight on a 1H chart is misleading — they carry no 1H-specific edge.
+    # Scale linearly from 30% on 1H up to 100% on 1D+.
+    _TF_MACRO_W = {
+        "1H": 0.30, "2H": 0.40, "4H": 0.50, "8H": 0.65, "12H": 0.80,
+        "1D": 1.00, "1W": 1.00, "2W": 1.00, "3W": 1.00,  "1M": 1.00,
+    }
+    tf_macro_w = _TF_MACRO_W.get(timeframe, 1.0)
 
     # ── RSI ──────────────────────────────────────────────────────────────────
     # RSI alone has ~55% accuracy in crypto (barely above random in trending
@@ -254,32 +265,31 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= 10
         bear_reasons.append(f"MACD histogram negative ({m_hist:+.4f}) — bearish momentum sustained")
 
-    # ── EMA Trend ─────────────────────────────────────────────────────────────
-    # Most institutional algos use 50/200 EMA as a trend filter.
-    # Price above both = uptrend context; below both = downtrend context.
-    # A pullback to 20 EMA in an uptrend is the classic "ride the trend" setup.
+    # ── Trend indicators — EMA + SuperTrend + Ichimoku (capped bucket) ────────
+    # These three all measure the same thing: "is the market in an uptrend?"
+    # Letting them each score independently can add 50+ pts from one idea.
+    # Cap the combined trend contribution at ±35 so they confirm each other
+    # without triple-counting. Individual reasons still shown in confluence list.
+    TREND_CAP = 35
+    t_bull = 0; t_bear = 0
+    t_bull_r: List[str] = []; t_bear_r: List[str] = []
+
+    # EMA
     ema = analysis.get("ema_trend") or {}
-    ema_above  = ema.get("above", [])
-    ema_below  = ema.get("below", [])
-    ema_trend  = ema.get("trend", "neutral")
+    ema_above = ema.get("above", [])
+    ema_below = ema.get("below", [])
     if 50 in ema_above and 200 in ema_above:
-        score += 18
-        bull_reasons.append("Price above EMA50 & EMA200 — sustained uptrend structure confirmed")
+        t_bull += 18; t_bull_r.append("Price above EMA50 & EMA200 — sustained uptrend structure confirmed")
     elif 50 in ema_above and 200 in ema_below:
-        score += 8
-        bull_reasons.append("Price above EMA50 but below EMA200 — medium-term bullish, long-term still bearish")
+        t_bull += 8;  t_bull_r.append("Price above EMA50 but below EMA200 — medium-term bullish, long-term still bearish")
     elif 50 in ema_above:
-        score += 5
-        bull_reasons.append("Price above EMA50 — medium-term bullish momentum")
+        t_bull += 5;  t_bull_r.append("Price above EMA50 — medium-term bullish momentum")
     if 50 in ema_below and 200 in ema_below:
-        score -= 18
-        bear_reasons.append("Price below EMA50 & EMA200 — sustained downtrend structure confirmed")
+        t_bear += 18; t_bear_r.append("Price below EMA50 & EMA200 — sustained downtrend structure confirmed")
     elif 50 in ema_below and 200 in ema_above:
-        score -= 8
-        bear_reasons.append("Price below EMA50 but above EMA200 — medium-term bearish, long-term still bullish")
+        t_bear += 8;  t_bear_r.append("Price below EMA50 but above EMA200 — medium-term bearish, long-term still bullish")
     elif 50 in ema_below:
-        score -= 5
-        bear_reasons.append("Price below EMA50 — medium-term bearish pressure")
+        t_bear += 5;  t_bear_r.append("Price below EMA50 — medium-term bearish pressure")
 
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator. When >65% of accounts are long, the crowd is max
@@ -311,18 +321,23 @@ def generate_signal(analysis: Dict) -> Dict:
     fg_val = fg.get("value")
     fg_lbl = fg.get("label", "")
     if fg_val is not None:
+        tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
         if fg_val <= 15:
-            score += 25
-            bull_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — extreme fear historically marks best buying zones")
+            pts = round(25 * tf_macro_w)
+            score += pts
+            bull_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — extreme fear, best buying zones{tf_note}")
         elif fg_val <= 30:
-            score += 12
-            bull_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market fearful, contrarian bullish lean")
+            pts = round(12 * tf_macro_w)
+            score += pts
+            bull_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market fearful, contrarian bullish lean{tf_note}")
         elif fg_val >= 80:
-            score -= 25
-            bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — extreme greed historically marks market tops")
+            pts = round(25 * tf_macro_w)
+            score -= pts
+            bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — extreme greed, historically marks tops{tf_note}")
         elif fg_val >= 65:
-            score -= 12
-            bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market greedy, contrarian bearish lean")
+            pts = round(12 * tf_macro_w)
+            score -= pts
+            bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market greedy, contrarian bearish lean{tf_note}")
 
     # ── News Sentiment ────────────────────────────────────────────────────────
     # CryptoPanic community votes + keyword analysis (CoinDesk / CoinTelegraph RSS).
@@ -333,18 +348,22 @@ def generate_signal(analysis: Dict) -> Dict:
     news_bull   = news.get("bullish", 0)
     news_bear   = news.get("bearish", 0)
     if news_signal == "bullish":
-        pts = min(20, max(8, news_bull * 5))
+        raw = min(15, max(6, news_bull * 4))   # cap lowered 20→15, base 8→6
+        pts = round(raw * tf_macro_w)
         score += pts
+        tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
         bull_reasons.append(
             f"News sentiment bullish — {news_bull} bullish vs {news_bear} bearish "
-            f"articles in last 48h (CryptoPanic/CoinDesk/CoinTelegraph)"
+            f"articles in last 48h{tf_note}"
         )
     elif news_signal == "bearish":
-        pts = min(20, max(8, news_bear * 5))
+        raw = min(15, max(6, news_bear * 4))
+        pts = round(raw * tf_macro_w)
         score -= pts
+        tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
         bear_reasons.append(
             f"News sentiment bearish — {news_bear} bearish vs {news_bull} bullish "
-            f"articles in last 48h (CryptoPanic/CoinDesk/CoinTelegraph)"
+            f"articles in last 48h{tf_note}"
         )
 
     # ── Elliott Wave ──────────────────────────────────────────────────────────
@@ -412,67 +431,58 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= 12
         bear_reasons.append(f"Price below Bollinger lower band {fmt_p(bb_lower)} — strong bearish momentum")
 
-    # ── SuperTrend (22, 3) ────────────────────────────────────────────────────
-    # ATR-based trend follower — one of the most reliable trend indicators in
-    # crypto. Filters noise via volatility-adjusted bands. A fresh flip is a
-    # high-quality signal; sustained direction is a strong trend filter.
+    # SuperTrend — flip scores outside the trend cap (it's a momentum event,
+    # not just a trend state), sustained direction goes into the cap bucket
     st = analysis.get("supertrend") or {}
     st_dir     = st.get("direction")
     st_flipped = st.get("flipped", False)
     st_val     = st.get("value")
     if st_dir == "bullish":
         if st_flipped:
-            score += 20
+            score += 20   # fresh flip = momentum event → outside trend cap
             bull_reasons.append(f"SuperTrend flipped BULLISH — fresh BUY signal, trend just reversed up (support ${st_val:,.4f})" if st_val else "SuperTrend flipped BULLISH — fresh BUY signal")
         else:
-            score += 12
-            bull_reasons.append(f"SuperTrend bullish — price above dynamic support (${st_val:,.4f}), uptrend intact" if st_val else "SuperTrend bullish — uptrend intact")
+            t_bull += 12; t_bull_r.append(f"SuperTrend bullish — price above dynamic support (${st_val:,.4f}), uptrend intact" if st_val else "SuperTrend bullish — uptrend intact")
     elif st_dir == "bearish":
         if st_flipped:
-            score -= 20
+            score -= 20   # fresh flip = momentum event → outside trend cap
             bear_reasons.append(f"SuperTrend flipped BEARISH — fresh SELL signal, trend just reversed down (resistance ${st_val:,.4f})" if st_val else "SuperTrend flipped BEARISH — fresh SELL signal")
         else:
-            score -= 12
-            bear_reasons.append(f"SuperTrend bearish — price below dynamic resistance (${st_val:,.4f}), downtrend intact" if st_val else "SuperTrend bearish — downtrend intact")
+            t_bear += 12; t_bear_r.append(f"SuperTrend bearish — price below dynamic resistance (${st_val:,.4f}), downtrend intact" if st_val else "SuperTrend bearish — downtrend intact")
 
-    # ── Ichimoku Cloud ────────────────────────────────────────────────────────
-    # A complete trend system — cloud gives support/resistance zones, TK cross
-    # gives momentum signals. Price above a green cloud is one of the strongest
-    # multi-confirmation setups in Japanese technical analysis.
-    # Score in three layers: cloud color, price position, TK cross.
+    # Ichimoku — all three layers into the trend bucket
     ichi = analysis.get("ichimoku") or {}
     cloud_color    = ichi.get("cloud_color")
     price_vs_cloud = ichi.get("price_vs_cloud")
     tk_cross       = ichi.get("tk_cross")
     tenkan         = ichi.get("tenkan")
     kijun          = ichi.get("kijun")
-
-    # Cloud color — trend bias
     if cloud_color == "green":
-        score += 8
-        bull_reasons.append("Ichimoku cloud green (Span A > Span B) — bullish trend territory")
+        t_bull += 8;  t_bull_r.append("Ichimoku cloud green (Span A > Span B) — bullish trend territory")
     elif cloud_color == "red":
-        score -= 8
-        bear_reasons.append("Ichimoku cloud red (Span A < Span B) — bearish trend territory")
-
-    # Price vs cloud — strongest Ichimoku signal
+        t_bear += 8;  t_bear_r.append("Ichimoku cloud red (Span A < Span B) — bearish trend territory")
     if price_vs_cloud == "above":
-        score += 15
-        bull_reasons.append("Price above Ichimoku cloud — cloud acting as support, bullish structure")
+        t_bull += 15; t_bull_r.append("Price above Ichimoku cloud — cloud acting as support, bullish structure")
     elif price_vs_cloud == "below":
-        score -= 15
-        bear_reasons.append("Price below Ichimoku cloud — cloud acting as resistance, bearish structure")
-    # price_vs_cloud == "inside" → no score; indecision zone
-
-    # TK cross — momentum confirmation
+        t_bear += 15; t_bear_r.append("Price below Ichimoku cloud — cloud acting as resistance, bearish structure")
     if tk_cross == "bullish":
-        score += 12
         tk_desc = f"Tenkan (${tenkan:,.4f}) crossed above Kijun (${kijun:,.4f})" if (tenkan and kijun) else "Tenkan crossed above Kijun"
-        bull_reasons.append(f"Ichimoku TK bullish cross — {tk_desc}, short-term momentum turning up")
+        t_bull += 12; t_bull_r.append(f"Ichimoku TK bullish cross — {tk_desc}, short-term momentum turning up")
     elif tk_cross == "bearish":
-        score -= 12
         tk_desc = f"Tenkan (${tenkan:,.4f}) crossed below Kijun (${kijun:,.4f})" if (tenkan and kijun) else "Tenkan crossed below Kijun"
-        bear_reasons.append(f"Ichimoku TK bearish cross — {tk_desc}, short-term momentum turning down")
+        t_bear += 12; t_bear_r.append(f"Ichimoku TK bearish cross — {tk_desc}, short-term momentum turning down")
+
+    # Apply trend cap and flush reasons into main lists
+    eff_t_bull = min(t_bull, TREND_CAP)
+    eff_t_bear = min(t_bear, TREND_CAP)
+    score += eff_t_bull
+    score -= eff_t_bear
+    bull_reasons += t_bull_r
+    bear_reasons += t_bear_r
+    if t_bull > TREND_CAP:
+        bull_reasons.append(f"⚡ Trend cap applied — raw trend score {t_bull} capped at {TREND_CAP} (EMA/SuperTrend/Ichimoku all agree, preventing triple-counting)")
+    if t_bear > TREND_CAP:
+        bear_reasons.append(f"⚡ Trend cap applied — raw trend score {t_bear} capped at {TREND_CAP} (EMA/SuperTrend/Ichimoku all agree, preventing triple-counting)")
 
     # ── Final direction ───────────────────────────────────────────────────────
     # Max theoretical bull score:
@@ -527,8 +537,6 @@ def generate_signal(analysis: Dict) -> Dict:
     tp_targets: List[float] = []
     rr_ratio = None
     sl_pct = tp1_pct = tp2_pct = tp3_pct = None
-
-    timeframe = analysis.get("timeframe", "1W")
 
     # SL distance multiplier — same across market caps; wider ATR cap does the work
     TF_SL_MULT = {
