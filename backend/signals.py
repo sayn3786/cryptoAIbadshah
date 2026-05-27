@@ -481,14 +481,79 @@ def generate_signal(analysis: Dict) -> Dict:
     if t_bear > TREND_CAP:
         bear_reasons.append(f"⚡ Trend cap applied — raw trend score {t_bear} capped at {TREND_CAP} (EMA/SuperTrend/Ichimoku all agree, preventing triple-counting)")
 
+    # ── VWAP ─────────────────────────────────────────────────────────────────
+    # Most widely used institutional intraday indicator. Price above rising VWAP
+    # = institutions accumulating. Fresh cross = high-quality entry signal.
+    vwap_data      = analysis.get("vwap") or {}
+    vwap_pos       = vwap_data.get("price_vs_vwap")
+    vwap_slope     = vwap_data.get("slope")
+    vwap_cross     = vwap_data.get("vwap_cross")
+    vwap_val       = vwap_data.get("vwap")
+    fmt_v = lambda v: f"${v:,.4f}" if v else ""
+    if vwap_cross == "bullish":
+        score += 14
+        bull_reasons.append(f"VWAP bullish cross — price just crossed above VWAP {fmt_v(vwap_val)}, institutional momentum shift")
+    elif vwap_cross == "bearish":
+        score -= 14
+        bear_reasons.append(f"VWAP bearish cross — price just crossed below VWAP {fmt_v(vwap_val)}, institutional selling pressure")
+    elif vwap_pos == "above":
+        pts = 10 if vwap_slope == "rising" else 6
+        score += pts
+        slope_note = " + VWAP rising" if vwap_slope == "rising" else ""
+        bull_reasons.append(f"Price above VWAP{slope_note} {fmt_v(vwap_val)} — institutional buy-side structure intact")
+    elif vwap_pos == "below":
+        pts = 10 if vwap_slope == "falling" else 6
+        score -= pts
+        slope_note = " + VWAP falling" if vwap_slope == "falling" else ""
+        bear_reasons.append(f"Price below VWAP{slope_note} {fmt_v(vwap_val)} — institutional sell-side pressure dominant")
+
+    # ── Stochastic RSI ────────────────────────────────────────────────────────
+    # More sensitive than plain RSI — oscillates faster and gives earlier signals.
+    # Cross from oversold/overbought zone is highest quality; zone alone is weaker.
+    srsi           = analysis.get("stoch_rsi") or {}
+    srsi_signal    = srsi.get("signal")
+    srsi_k         = srsi.get("k")
+    srsi_d         = srsi.get("d")
+    if srsi_signal == "bull_cross_oversold":
+        score += 20
+        bull_reasons.append(f"Stoch RSI bullish cross from oversold (K:{srsi_k} D:{srsi_d}) — high-quality reversal signal")
+    elif srsi_signal == "oversold":
+        score += 12
+        bull_reasons.append(f"Stoch RSI oversold (K:{srsi_k} D:{srsi_d}) — momentum deeply oversold, bounce likely")
+    elif srsi_signal == "near_oversold":
+        score += 6
+        bull_reasons.append(f"Stoch RSI near oversold (K:{srsi_k}) — mild oversold lean")
+    elif srsi_signal == "bear_cross_overbought":
+        score -= 20
+        bear_reasons.append(f"Stoch RSI bearish cross from overbought (K:{srsi_k} D:{srsi_d}) — high-quality reversal signal")
+    elif srsi_signal == "overbought":
+        score -= 12
+        bear_reasons.append(f"Stoch RSI overbought (K:{srsi_k} D:{srsi_d}) — momentum deeply overbought, pullback likely")
+    elif srsi_signal == "near_overbought":
+        score -= 6
+        bear_reasons.append(f"Stoch RSI near overbought (K:{srsi_k}) — mild overbought lean")
+
+    # ── Volume Confirmation ───────────────────────────────────────────────────
+    # Elevated volume on a directional candle validates the move — price action
+    # without volume is weak; with volume it's conviction. Keeps whale activity
+    # (2.5×) separate — this covers the 1.3-2.4× range (elevated but not whale).
+    vol            = analysis.get("vol_signal") or {}
+    vol_sig        = vol.get("signal")
+    vol_ratio      = vol.get("ratio", 0) or 0
+    vol_desc       = vol.get("description", "")
+    if vol_sig == "bullish":
+        pts = 12 if vol_ratio >= 2.0 else 8
+        score += pts
+        bull_reasons.append(vol_desc or f"Volume confirmation bullish ({vol_ratio:.1f}× avg)")
+    elif vol_sig == "bearish":
+        pts = 12 if vol_ratio >= 2.0 else 8
+        score -= pts
+        bear_reasons.append(vol_desc or f"Volume confirmation bearish ({vol_ratio:.1f}× avg)")
+
     # ── Final direction ───────────────────────────────────────────────────────
-    # Adjusted max theoretical bull score after calibration:
-    #   Funding +30, CVD div confirmed +28, Engulfing +25, Spot CVD +18,
-    #   RSI +22, OI +12, Flags +20, FVGs +20, Futures CVD +8, Elliott +8,
-    #   SuperTrend flip +20, Trend cap (EMA+ST+Ichi) +35,
-    #   RSI divergence +18, BB squeeze breakout +16, L/S +14 → total ~274
-    # In practice signals overlap — realistic ceiling ~170.
-    MAX_SCORE = 280.0
+    #   VWAP cross +14, Stoch RSI bull cross +20, Volume +12 → total ~320
+    # In practice signals overlap — realistic ceiling ~200.
+    MAX_SCORE = 330.0
 
     strength = min(int(abs(score) / MAX_SCORE * 100), 100)
 

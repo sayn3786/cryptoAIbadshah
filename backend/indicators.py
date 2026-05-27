@@ -713,64 +713,159 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
 
 
 def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]],
-                           lookback: int = 14) -> Dict:
-    """Detect classic bullish/bearish RSI divergence in the last `lookback` candles.
-
-    Bullish divergence: price makes a lower low but RSI makes a higher low.
-    Bearish divergence: price makes a higher high but RSI makes a lower high.
-
-    Returns the strongest divergence found (or None).
-    """
+                           lookback: int = 30, pivot_window: int = 3) -> Dict:
+    """Pivot-based RSI divergence. Finds actual swing lows/highs rather than
+    splitting the window in half — more accurate and fewer false positives."""
     empty = {"type": None, "strength": None, "description": None}
     if len(candles) < lookback or len(rsi_series) < lookback:
         return empty
 
-    # Work with the last `lookback` candles and their RSI values (aligned)
-    recent_c   = candles[-lookback:]
-    recent_rsi = rsi_series[-lookback:]
-
-    # Filter to bars that have valid RSI
-    valid = [(c, r) for c, r in zip(recent_c, recent_rsi) if r is not None]
-    if len(valid) < 4:
+    pairs = [(c, r) for c, r in zip(candles[-lookback:], rsi_series[-lookback:]) if r is not None]
+    if len(pairs) < pivot_window * 2 + 4:
         return empty
 
-    # Split into first half (left pivot) and second half (right pivot)
-    mid    = len(valid) // 2
-    left   = valid[:mid]
-    right  = valid[mid:]
+    lows  = [c["low"]  for c, _ in pairs]
+    highs = [c["high"] for c, _ in pairs]
+    rsi_v = [r         for _, r in pairs]
+    n     = len(pairs)
+    pw    = pivot_window
 
-    # Price pivot values
-    left_low   = min(c["low"]  for c, _ in left)
-    right_low  = min(c["low"]  for c, _ in right)
-    left_high  = max(c["high"] for c, _ in left)
-    right_high = max(c["high"] for c, _ in right)
+    swing_lows  = [(i, lows[i],  rsi_v[i]) for i in range(pw, n - pw)
+                   if lows[i]  == min(lows[i - pw: i + pw + 1])]
+    swing_highs = [(i, highs[i], rsi_v[i]) for i in range(pw, n - pw)
+                   if highs[i] == max(highs[i - pw: i + pw + 1])]
 
-    # RSI pivot values
-    left_rsi_low  = min(r for _, r in left)
-    right_rsi_low = min(r for _, r in right)
-    left_rsi_high = max(r for _, r in left)
-    right_rsi_high= max(r for _, r in right)
+    if len(swing_lows) >= 2:
+        _, p_price, p_rsi = swing_lows[-2]
+        _, c_price, c_rsi = swing_lows[-1]
+        if (p_price - c_price) / (p_price + 1e-12) > 0.005 and c_rsi - p_rsi > 2:
+            return {"type": "bullish", "strength": round(c_rsi - p_rsi, 1),
+                    "description": f"Bullish RSI divergence — price lower low but RSI rising (+{c_rsi - p_rsi:.1f} pts), classic reversal setup"}
 
-    # Bullish divergence: price lower low, RSI higher low
-    bull_price_drop = left_low - right_low          # positive = price dropped
-    bull_rsi_rise   = right_rsi_low - left_rsi_low  # positive = RSI rose
-    if bull_price_drop > left_low * 0.005 and bull_rsi_rise > 2:
-        mag = round(min(bull_price_drop / left_low * 100, 10.0), 1)
-        return {
-            "type":        "bullish",
-            "strength":    round(bull_rsi_rise, 1),
-            "description": f"Bullish RSI divergence — price made lower low but RSI rising ({bull_rsi_rise:+.1f} pts), classic reversal setup",
-        }
-
-    # Bearish divergence: price higher high, RSI lower high
-    bear_price_rise = right_high - left_high        # positive = price rose
-    bear_rsi_drop   = left_rsi_high - right_rsi_high# positive = RSI fell
-    if bear_price_rise > left_high * 0.005 and bear_rsi_drop > 2:
-        return {
-            "type":        "bearish",
-            "strength":    round(bear_rsi_drop, 1),
-            "description": f"Bearish RSI divergence — price made higher high but RSI falling ({-bear_rsi_drop:+.1f} pts), classic reversal setup",
-        }
+    if len(swing_highs) >= 2:
+        _, p_price, p_rsi = swing_highs[-2]
+        _, c_price, c_rsi = swing_highs[-1]
+        if (c_price - p_price) / (p_price + 1e-12) > 0.005 and p_rsi - c_rsi > 2:
+            return {"type": "bearish", "strength": round(p_rsi - c_rsi, 1),
+                    "description": f"Bearish RSI divergence — price higher high but RSI falling (-{p_rsi - c_rsi:.1f} pts), classic reversal setup"}
 
     return empty
+
+
+def calculate_vwap(candles: List[Dict], period: int = 50) -> Dict:
+    """Rolling VWAP over `period` candles with slope and cross detection."""
+    if len(candles) < 5:
+        return {"vwap": None, "slope": None, "price_vs_vwap": None, "vwap_cross": None}
+
+    window = candles[-period:] if len(candles) >= period else candles
+    total_vol = sum(c["volume"] for c in window)
+    if total_vol <= 0:
+        return {"vwap": None, "slope": None, "price_vs_vwap": None, "vwap_cross": None}
+
+    vwap = sum((c["high"] + c["low"] + c["close"]) / 3 * c["volume"] for c in window) / total_vol
+
+    # Slope: compare to VWAP calculated on the window shifted 5 candles back
+    slope = "flat"
+    if len(candles) >= period + 5:
+        prev_w = candles[-(period + 5):-5]
+        prev_vol = sum(c["volume"] for c in prev_w)
+        if prev_vol > 0:
+            prev_vwap = sum((c["high"] + c["low"] + c["close"]) / 3 * c["volume"] for c in prev_w) / prev_vol
+            if vwap > prev_vwap * 1.001:
+                slope = "rising"
+            elif vwap < prev_vwap * 0.999:
+                slope = "falling"
+
+    close     = candles[-1]["close"]
+    prev_close = candles[-2]["close"] if len(candles) >= 2 else close
+    price_vs_vwap = "above" if close > vwap else "below"
+
+    vwap_cross = None
+    if prev_close <= vwap and close > vwap:
+        vwap_cross = "bullish"
+    elif prev_close >= vwap and close < vwap:
+        vwap_cross = "bearish"
+
+    return {
+        "vwap":          round(vwap, 8),
+        "slope":         slope,
+        "price_vs_vwap": price_vs_vwap,
+        "vwap_cross":    vwap_cross,
+    }
+
+
+def calculate_stoch_rsi(closes: List[float], rsi_period: int = 14,
+                         stoch_period: int = 14, k_period: int = 3,
+                         d_period: int = 3) -> Dict:
+    """Stochastic RSI — RSI of RSI, more sensitive for short-term momentum."""
+    min_len = rsi_period + stoch_period + k_period + d_period + 2
+    if len(closes) < min_len:
+        return {"k": None, "d": None, "signal": None, "zone": None}
+
+    rsi_vals = [r for r in calculate_rsi_series(closes, rsi_period) if r is not None]
+    if len(rsi_vals) < stoch_period:
+        return {"k": None, "d": None, "signal": None, "zone": None}
+
+    raw_k = []
+    for i in range(stoch_period - 1, len(rsi_vals)):
+        w = rsi_vals[i - stoch_period + 1: i + 1]
+        lo, hi = min(w), max(w)
+        raw_k.append((rsi_vals[i] - lo) / (hi - lo) * 100 if hi > lo else 50.0)
+
+    def _sma(vals, n):
+        return [sum(vals[i: i + n]) / n for i in range(len(vals) - n + 1)]
+
+    k_line = _sma(raw_k, k_period)
+    if len(k_line) < d_period:
+        return {"k": None, "d": None, "signal": None, "zone": None}
+    d_line = _sma(k_line, d_period)
+
+    k, d           = round(k_line[-1], 2), round(d_line[-1], 2)
+    prev_k, prev_d = (round(k_line[-2], 2), round(d_line[-2], 2)) if len(k_line) >= 2 and len(d_line) >= 2 else (k, d)
+
+    if k < 20 and d < 20:
+        signal = "bull_cross_oversold" if prev_k <= prev_d and k > d else "oversold"
+    elif k > 80 and d > 80:
+        signal = "bear_cross_overbought" if prev_k >= prev_d and k < d else "overbought"
+    elif k < 30:
+        signal = "near_oversold"
+    elif k > 70:
+        signal = "near_overbought"
+    else:
+        signal = "neutral"
+
+    zone = "oversold" if k < 20 else ("overbought" if k > 80 else "neutral")
+    return {"k": k, "d": d, "signal": signal, "zone": zone}
+
+
+def calculate_volume_signal(candles: List[Dict], lookback: int = 20) -> Dict:
+    """Volume confirmation — elevated volume on directional candles."""
+    if len(candles) < lookback + 2:
+        return {"signal": None, "ratio": None, "description": None}
+
+    closed  = candles[:-1]
+    avg_vol = sum(c["volume"] for c in closed[-lookback:]) / lookback
+    if avg_vol <= 0:
+        return {"signal": None, "ratio": None, "description": None}
+
+    best_ratio, best_signal, best_desc = 0.0, None, None
+    for c in reversed(closed[-3:]):
+        ratio = c["volume"] / avg_vol
+        if ratio < 1.3:
+            continue
+        body    = c["close"] - c["open"]
+        rng     = c["high"]  - c["low"]
+        body_pct = body / rng if rng > 0 else 0
+        if abs(body_pct) < 0.4:
+            continue          # indecision candle — skip
+        direction = "bullish" if body_pct > 0 else "bearish"
+        if ratio > best_ratio:
+            best_ratio  = ratio
+            best_signal = direction
+            label = "Strong" if ratio >= 2.0 else "Elevated"
+            best_desc = f"{label} volume ({ratio:.1f}× avg) on {direction} candle — confirms move"
+
+    if not best_signal:
+        return {"signal": None, "ratio": None, "description": None}
+    return {"signal": best_signal, "ratio": round(best_ratio, 2), "description": best_desc}
 

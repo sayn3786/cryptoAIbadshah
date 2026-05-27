@@ -180,6 +180,9 @@ function renderAll(a) {
   renderIchimokuCard(a.ichimoku);
   renderBollingerCard(a.bollinger);
   renderRsiDivCard(a.rsi_divergence);
+  renderVwapCard(a.vwap);
+  renderStochRsiCard(a.stoch_rsi);
+  renderVolSignalCard(a.vol_signal);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
   renderFNGCard(a.fear_greed);
@@ -640,6 +643,81 @@ function renderRsiDivCard(div) {
   typeEl.textContent = bull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence';
   typeEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
   descEl.textContent = div.description || '';
+  descEl.style.color = 'var(--muted2)';
+}
+
+function renderVwapCard(vwap) {
+  const posEl   = document.getElementById('vwapPos');
+  const slopeEl = document.getElementById('vwapSlope');
+  const rowsEl  = document.getElementById('vwapRows');
+  if (!posEl) return;
+  if (!vwap || vwap.vwap == null) {
+    posEl.textContent = '—'; slopeEl.textContent = '—'; rowsEl.innerHTML = '';
+    return;
+  }
+  const above = vwap.price_vs_vwap === 'above';
+  const cross = vwap.vwap_cross;
+  if (cross === 'bullish') {
+    posEl.textContent = '🔀 Bullish Cross';
+    posEl.style.color = 'var(--bull)';
+  } else if (cross === 'bearish') {
+    posEl.textContent = '🔀 Bearish Cross';
+    posEl.style.color = 'var(--bear)';
+  } else {
+    posEl.textContent = above ? '▲ Above VWAP' : '▼ Below VWAP';
+    posEl.style.color = above ? 'var(--bull)' : 'var(--bear)';
+  }
+  const slopeIcon = vwap.slope === 'rising' ? '↗' : vwap.slope === 'falling' ? '↘' : '→';
+  slopeEl.textContent = `Slope: ${slopeIcon} ${vwap.slope || '—'}`;
+  slopeEl.style.color = 'var(--muted2)';
+  const fmt = v => v != null ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '—';
+  rowsEl.innerHTML = `<div class="vwap-row"><span class="vwap-label">VWAP</span><span>${fmt(vwap.vwap)}</span></div>`;
+}
+
+function renderStochRsiCard(srsi) {
+  const sigEl  = document.getElementById('srsiSignal');
+  const zoneEl = document.getElementById('srsiZone');
+  const rowsEl = document.getElementById('srsiRows');
+  if (!sigEl) return;
+  if (!srsi || srsi.k == null) {
+    sigEl.textContent = '—'; zoneEl.textContent = '—'; rowsEl.innerHTML = '';
+    return;
+  }
+  const SIG_LABELS = {
+    bull_cross_oversold:  ['🔼 Bull Cross (Oversold)', 'var(--bull)'],
+    oversold:             ['⬇ Oversold',               'var(--bull)'],
+    near_oversold:        ['↓ Near Oversold',           'var(--bull)'],
+    bear_cross_overbought:['🔽 Bear Cross (Overbought)','var(--bear)'],
+    overbought:           ['⬆ Overbought',              'var(--bear)'],
+    near_overbought:      ['↑ Near Overbought',         'var(--bear)'],
+    neutral:              ['◆ Neutral',                 'var(--muted)'],
+  };
+  const [label, color] = SIG_LABELS[srsi.signal] || ['—', 'var(--muted)'];
+  sigEl.textContent = label;
+  sigEl.style.color = color;
+  const zone = srsi.zone || 'neutral';
+  zoneEl.textContent = `Zone: ${zone.charAt(0).toUpperCase() + zone.slice(1)}`;
+  zoneEl.style.color = zone === 'oversold' ? 'var(--bull)' : zone === 'overbought' ? 'var(--bear)' : 'var(--muted2)';
+  rowsEl.innerHTML = `
+    <div class="srsi-row"><span class="srsi-label">K</span><span>${srsi.k ?? '—'}</span></div>
+    <div class="srsi-row"><span class="srsi-label">D</span><span>${srsi.d ?? '—'}</span></div>`;
+}
+
+function renderVolSignalCard(vol) {
+  const dirEl  = document.getElementById('volSigDir');
+  const descEl = document.getElementById('volSigDesc');
+  if (!dirEl) return;
+  if (!vol || !vol.signal) {
+    dirEl.textContent  = 'No signal';
+    dirEl.style.color  = 'var(--muted)';
+    descEl.textContent = 'Volume within normal range';
+    descEl.style.color = 'var(--muted2)';
+    return;
+  }
+  const bull = vol.signal === 'bullish';
+  dirEl.textContent = bull ? `▲ Bullish ${vol.ratio}×` : `▼ Bearish ${vol.ratio}×`;
+  dirEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+  descEl.textContent = vol.description || '';
   descEl.style.color = 'var(--muted2)';
 }
 

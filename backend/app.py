@@ -16,7 +16,12 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from cvd_sources import fetch_cvd_from_source
-from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence, calculate_macd, calculate_ema_trend, detect_whale_activity, calculate_supertrend, calculate_ichimoku, calculate_bollinger_bands, detect_rsi_divergence
+from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
+    find_volume_spikes, detect_engulfing, detect_cvd_divergence,
+    calculate_macd, calculate_ema_trend, detect_whale_activity,
+    calculate_supertrend, calculate_ichimoku,
+    calculate_bollinger_bands, detect_rsi_divergence,
+    calculate_vwap, calculate_stoch_rsi, calculate_volume_signal)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
@@ -211,6 +216,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     ichimoku      = calculate_ichimoku(spot)
     bollinger     = calculate_bollinger_bands(spot)
     rsi_div       = detect_rsi_divergence(spot, rsi_series)
+    vwap          = calculate_vwap(spot)
+    stoch_rsi     = calculate_stoch_rsi([c["close"] for c in spot])
+    vol_signal    = calculate_volume_signal(spot)
 
     analysis = {
         "symbol":       symbol,
@@ -247,6 +255,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "ichimoku":      ichimoku,
         "bollinger":     bollinger,
         "rsi_divergence": rsi_div,
+        "vwap":          vwap,
+        "stoch_rsi":     stoch_rsi,
+        "vol_signal":    vol_signal,
     }
     analysis["signal"] = generate_signal(analysis)
     return analysis
