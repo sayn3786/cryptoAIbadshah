@@ -694,6 +694,11 @@ a:hover { color: var(--gold2); }
 .ichi-label { color: var(--muted2); }
 .ichi-tk    { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
 
+/* Bollinger Bands card */
+.bb-rows  { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; width: 100%; }
+.bb-row   { display: flex; justify-content: space-between; font-size: .72rem; }
+.bb-label { color: var(--muted2); }
+
 .ls-bar-wrap { margin: 6px 0 3px; width: 100%; }
 .ls-bar-bg   { height: 6px; background: var(--bear); border-radius: 3px; overflow: hidden; }
 .ls-bar-fill { height: 100%; border-radius: 3px 0 0 3px; transition: width .5s ease; }

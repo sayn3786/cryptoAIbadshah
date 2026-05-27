@@ -651,3 +651,126 @@ def calculate_ichimoku(candles: List[Dict],
         "price_vs_cloud": price_vs_cloud,
         "tk_cross":      tk_cross,
     }
+
+
+def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: float = 2.0) -> Dict:
+    """Bollinger Bands with squeeze and breakout detection.
+
+    Squeeze: bandwidth is below its own 50-candle average — price compressed,
+             explosive move likely imminent.
+    Breakout: close above upper band after a squeeze = bullish momentum burst.
+    Breakdown: close below lower band after a squeeze = bearish momentum burst.
+    """
+    if len(candles) < period:
+        return {
+            "upper": None, "middle": None, "lower": None,
+            "bandwidth": None, "squeeze": False,
+            "breakout": None, "pct_b": None,
+        }
+
+    closes = [c["close"] for c in candles]
+
+    def _sma_std(window):
+        sma = sum(window) / len(window)
+        variance = sum((x - sma) ** 2 for x in window) / len(window)
+        return sma, variance ** 0.5
+
+    # Current band
+    sma, sd = _sma_std(closes[-period:])
+    upper  = sma + std_dev * sd
+    lower  = sma - std_dev * sd
+    bw     = (upper - lower) / sma if sma > 0 else 0.0   # normalised bandwidth
+
+    # Rolling bandwidth history for squeeze detection (last 50 candles)
+    bw_series = []
+    for i in range(max(0, len(closes) - 50), len(closes) - period + 1):
+        s, d_ = _sma_std(closes[i: i + period])
+        if s > 0:
+            bw_series.append((s + std_dev * d_ - (s - std_dev * d_)) / s)
+
+    squeeze = bool(bw_series and bw < sum(bw_series) / len(bw_series) * 0.85)
+
+    # %B: where current price sits within the band (0 = lower, 1 = upper)
+    price  = closes[-1]
+    pct_b  = (price - lower) / (upper - lower) if (upper - lower) > 0 else 0.5
+
+    # Breakout / breakdown on the last candle
+    breakout = None
+    if price > upper:
+        breakout = "bullish"
+    elif price < lower:
+        breakout = "bearish"
+
+    return {
+        "upper":     round(upper, 8),
+        "middle":    round(sma,   8),
+        "lower":     round(lower, 8),
+        "bandwidth": round(bw,    6),
+        "squeeze":   squeeze,
+        "breakout":  breakout,
+        "pct_b":     round(pct_b, 4),
+    }
+
+
+def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]],
+                           lookback: int = 14) -> Dict:
+    """Detect classic bullish/bearish RSI divergence in the last `lookback` candles.
+
+    Bullish divergence: price makes a lower low but RSI makes a higher low.
+    Bearish divergence: price makes a higher high but RSI makes a lower high.
+
+    Returns the strongest divergence found (or None).
+    """
+    empty = {"type": None, "strength": None, "description": None}
+    if len(candles) < lookback or len(rsi_series) < lookback:
+        return empty
+
+    # Work with the last `lookback` candles and their RSI values (aligned)
+    recent_c   = candles[-lookback:]
+    recent_rsi = rsi_series[-lookback:]
+
+    # Filter to bars that have valid RSI
+    valid = [(c, r) for c, r in zip(recent_c, recent_rsi) if r is not None]
+    if len(valid) < 4:
+        return empty
+
+    # Split into first half (left pivot) and second half (right pivot)
+    mid    = len(valid) // 2
+    left   = valid[:mid]
+    right  = valid[mid:]
+
+    # Price pivot values
+    left_low   = min(c["low"]  for c, _ in left)
+    right_low  = min(c["low"]  for c, _ in right)
+    left_high  = max(c["high"] for c, _ in left)
+    right_high = max(c["high"] for c, _ in right)
+
+    # RSI pivot values
+    left_rsi_low  = min(r for _, r in left)
+    right_rsi_low = min(r for _, r in right)
+    left_rsi_high = max(r for _, r in left)
+    right_rsi_high= max(r for _, r in right)
+
+    # Bullish divergence: price lower low, RSI higher low
+    bull_price_drop = left_low - right_low          # positive = price dropped
+    bull_rsi_rise   = right_rsi_low - left_rsi_low  # positive = RSI rose
+    if bull_price_drop > left_low * 0.005 and bull_rsi_rise > 2:
+        mag = round(min(bull_price_drop / left_low * 100, 10.0), 1)
+        return {
+            "type":        "bullish",
+            "strength":    round(bull_rsi_rise, 1),
+            "description": f"Bullish RSI divergence — price made lower low but RSI rising ({bull_rsi_rise:+.1f} pts), classic reversal setup",
+        }
+
+    # Bearish divergence: price higher high, RSI lower high
+    bear_price_rise = right_high - left_high        # positive = price rose
+    bear_rsi_drop   = left_rsi_high - right_rsi_high# positive = RSI fell
+    if bear_price_rise > left_high * 0.005 and bear_rsi_drop > 2:
+        return {
+            "type":        "bearish",
+            "strength":    round(bear_rsi_drop, 1),
+            "description": f"Bearish RSI divergence — price made higher high but RSI falling ({-bear_rsi_drop:+.1f} pts), classic reversal setup",
+        }
+
+    return empty
+

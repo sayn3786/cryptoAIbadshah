@@ -360,6 +360,58 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= 8
         bear_reasons.append(f"Elliott Wave: {wave_label} (bearish phase) — weak supporting signal")
 
+    # ── RSI Divergence ────────────────────────────────────────────────────────
+    # One of the most reliable reversal signals — price and momentum disagree.
+    # Bullish divergence (price lower low, RSI higher low) precedes many of the
+    # biggest altcoin pumps including XLM-style consolidation breakouts.
+    # Detected over a 14-candle window to avoid noise on very short timeframes.
+    rsi_div = analysis.get("rsi_divergence") or {}
+    div_type = rsi_div.get("type")
+    div_desc = rsi_div.get("description", "")
+    div_str  = rsi_div.get("strength", 0) or 0
+    if div_type == "bullish":
+        pts = 18 if div_str >= 5 else 12   # stronger divergence = more points
+        score += pts
+        bull_reasons.append(div_desc or "Bullish RSI divergence — price lower low, RSI higher low")
+    elif div_type == "bearish":
+        pts = 18 if div_str >= 5 else 12
+        score -= pts
+        bear_reasons.append(div_desc or "Bearish RSI divergence — price higher high, RSI lower high")
+
+    # ── Bollinger Bands ───────────────────────────────────────────────────────
+    # Squeeze (tight bands) = coiled spring, explosive move imminent.
+    # Breakout above upper band after a squeeze = high-probability momentum burst.
+    # Breakdown below lower band after a squeeze = high-probability dump.
+    # %B position also gives context on where price sits within the range.
+    bb = analysis.get("bollinger") or {}
+    bb_squeeze   = bb.get("squeeze", False)
+    bb_breakout  = bb.get("breakout")
+    bb_pct_b     = bb.get("pct_b", 0.5)
+    bb_upper     = bb.get("upper")
+    bb_lower     = bb.get("lower")
+
+    fmt_p = lambda v: f"${v:,.4f}" if v else ""
+    if bb_squeeze and bb_breakout == "bullish":
+        score += 22
+        bull_reasons.append(f"Bollinger squeeze breakout BULLISH — price closed above upper band {fmt_p(bb_upper)} after compression; explosive move signal")
+    elif bb_squeeze and bb_breakout == "bearish":
+        score -= 22
+        bear_reasons.append(f"Bollinger squeeze breakdown BEARISH — price closed below lower band {fmt_p(bb_lower)} after compression; explosive move signal")
+    elif bb_squeeze:
+        # Squeeze without breakout yet — add mild bias based on %B position
+        if bb_pct_b > 0.6:
+            score += 8
+            bull_reasons.append(f"Bollinger squeeze active — bands compressed, price upper half (%B {bb_pct_b:.2f}); breakout likely imminent")
+        elif bb_pct_b < 0.4:
+            score -= 8
+            bear_reasons.append(f"Bollinger squeeze active — bands compressed, price lower half (%B {bb_pct_b:.2f}); breakdown risk elevated")
+    elif bb_breakout == "bullish":
+        score += 12
+        bull_reasons.append(f"Price above Bollinger upper band {fmt_p(bb_upper)} — strong bullish momentum")
+    elif bb_breakout == "bearish":
+        score -= 12
+        bear_reasons.append(f"Price below Bollinger lower band {fmt_p(bb_lower)} — strong bearish momentum")
+
     # ── SuperTrend (22, 3) ────────────────────────────────────────────────────
     # ATR-based trend follower — one of the most reliable trend indicators in
     # crypto. Filters noise via volatility-adjusted bands. A fresh flip is a
@@ -426,9 +478,10 @@ def generate_signal(analysis: Dict) -> Dict:
     # Max theoretical bull score:
     #   Funding +30, CVD div confirmed +28, Engulfing +25, Spot CVD +18,
     #   RSI +22, OI +12, Flags +20, FVGs +20, Futures CVD +8, Elliott +8,
-    #   SuperTrend flip +20, Ichimoku price+cloud+TK = +35 → total ~246
-    # In practice signals are partially overlapping so 160 is a realistic ceiling.
-    MAX_SCORE = 260.0
+    #   SuperTrend flip +20, Ichimoku price+cloud+TK = +35,
+    #   RSI divergence +18, BB squeeze breakout +22 → total ~286
+    # In practice signals are partially overlapping so 180 is a realistic ceiling.
+    MAX_SCORE = 300.0
 
     # Single consistent strength formula across ALL directions.
     # strength = what % of max possible confluence is present.

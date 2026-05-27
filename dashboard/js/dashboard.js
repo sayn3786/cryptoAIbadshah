@@ -178,6 +178,8 @@ function renderAll(a) {
   renderEMACard(a.ema_trend);
   renderSupertrendCard(a.supertrend);
   renderIchimokuCard(a.ichimoku);
+  renderBollingerCard(a.bollinger);
+  renderRsiDivCard(a.rsi_divergence);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
   renderFNGCard(a.fear_greed);
@@ -579,6 +581,66 @@ function renderIchimokuCard(ichi) {
     <div class="ichi-row"><span class="ichi-label">Span A</span><span>${fmt(ichi.span_a)}</span></div>
     <div class="ichi-row"><span class="ichi-label">Span B</span><span>${fmt(ichi.span_b)}</span></div>
     <div class="ichi-row ichi-tk"><span class="ichi-label">TK Cross</span><span style="color:${tkColor}">${tkLabel}</span></div>`;
+}
+
+function renderBollingerCard(bb) {
+  const statusEl  = document.getElementById('bbStatus');
+  const squeezeEl = document.getElementById('bbSqueeze');
+  const rowsEl    = document.getElementById('bbRows');
+  if (!statusEl) return;
+  if (!bb || bb.upper == null) {
+    statusEl.textContent = '—'; squeezeEl.textContent = '—'; rowsEl.innerHTML = '';
+    return;
+  }
+  const fmt = v => v != null ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '—';
+
+  const bo = bb.breakout;
+  if (bb.squeeze && bo === 'bullish') {
+    statusEl.textContent = '💥 Squeeze Breakout ↑';
+    statusEl.style.color = 'var(--bull)';
+  } else if (bb.squeeze && bo === 'bearish') {
+    statusEl.textContent = '💥 Squeeze Breakdown ↓';
+    statusEl.style.color = 'var(--bear)';
+  } else if (bb.squeeze) {
+    statusEl.textContent = '🔄 Squeeze Active';
+    statusEl.style.color = 'var(--neutral)';
+  } else if (bo === 'bullish') {
+    statusEl.textContent = '▲ Above Upper Band';
+    statusEl.style.color = 'var(--bull)';
+  } else if (bo === 'bearish') {
+    statusEl.textContent = '▼ Below Lower Band';
+    statusEl.style.color = 'var(--bear)';
+  } else {
+    statusEl.textContent = 'Inside Bands';
+    statusEl.style.color = 'var(--muted)';
+  }
+
+  const pctB = bb.pct_b != null ? (bb.pct_b * 100).toFixed(1) : '—';
+  squeezeEl.textContent = `%B: ${pctB}% · BW: ${bb.bandwidth != null ? (bb.bandwidth * 100).toFixed(2) : '—'}%`;
+  squeezeEl.style.color = 'var(--muted2)';
+
+  rowsEl.innerHTML = `
+    <div class="bb-row"><span class="bb-label">Upper</span><span class="bull">${fmt(bb.upper)}</span></div>
+    <div class="bb-row"><span class="bb-label">Middle</span><span>${fmt(bb.middle)}</span></div>
+    <div class="bb-row"><span class="bb-label">Lower</span><span class="bear">${fmt(bb.lower)}</span></div>`;
+}
+
+function renderRsiDivCard(div) {
+  const typeEl = document.getElementById('rsiDivType');
+  const descEl = document.getElementById('rsiDivDesc');
+  if (!typeEl) return;
+  if (!div || !div.type) {
+    typeEl.textContent = 'No divergence';
+    typeEl.style.color = 'var(--muted)';
+    descEl.textContent = 'Price and RSI moving in sync';
+    descEl.style.color = 'var(--muted2)';
+    return;
+  }
+  const bull = div.type === 'bullish';
+  typeEl.textContent = bull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence';
+  typeEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+  descEl.textContent = div.description || '';
+  descEl.style.color = 'var(--muted2)';
 }
 
 function renderWhaleActivity(events) {
