@@ -349,7 +349,7 @@ def api_recommendations():
     """
     now           = datetime.now(timezone.utc)
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    cache_key     = session_start.strftime("%Y%m%d")
+    cache_key     = "v3_" + session_start.strftime("%Y%m%d")
 
     with _rec_lock:
         mem = _rec_cache_load()
