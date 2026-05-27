@@ -343,75 +343,84 @@ def api_dashboard():
 @app.get("/api/recommendations")
 def api_recommendations():
     """
-    Top 3 trades across all tokens at 1H + 2H, scored by signal strength.
+    Top 3 trades where 1H, 2H and 1D all agree on direction.
+    Signal levels are taken from the 1H timeframe.
     Refreshes daily at 08:00 SGT (= 00:00 UTC). Valid until 07:59 SGT next day.
-    SGT = UTC+8, so the session window is exactly one UTC calendar day.
     """
     now           = datetime.now(timezone.utc)
-    # 8:00 AM SGT == 00:00 UTC, so each UTC calendar day IS one trading session
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     cache_key     = session_start.strftime("%Y%m%d")
 
-    # Check in-memory first (fastest), then fall back to disk (survives restarts)
     with _rec_lock:
         mem = _rec_cache_load()
         if mem.get("key") == cache_key and mem.get("data"):
             return jsonify(mem["data"])
 
-    scan_time = datetime.now(timezone.utc)
-    SGT = timezone(timedelta(hours=8))
-    scan_time_sgt = scan_time.astimezone(SGT)
-    detected_at_fmt = scan_time_sgt.strftime("%b %d, %Y · %I:%M %p SGT")
+    scan_time       = datetime.now(timezone.utc)
+    SGT             = timezone(timedelta(hours=8))
+    detected_at_fmt = scan_time.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
-    candidates = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    # Scan each token at 1H, 2H, 1D in parallel
+    raw: dict = {}   # sym -> {tf -> {direction, strength, sig, data}}
+    with ThreadPoolExecutor(max_workers=12) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
-                for sym in SYMBOLS for tf in ("1H", "2H")}
+                for sym in SYMBOLS for tf in ("1H", "2H", "1D")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
             try:
                 data = future.result()
                 sig  = data.get("signal", {})
-                if sig.get("direction", "NEUTRAL") == "NEUTRAL":
+                direction = sig.get("direction", "NEUTRAL")
+                if direction == "NEUTRAL":
                     continue
-                strength = sig.get("strength", 0) or 0
-                candidates.append({
-                    "symbol":        sym,
-                    "timeframe":     tf,
-                    "direction":     sig.get("direction"),
-                    "strength":      round(strength, 1),
-                    "score":         sig.get("score", 0),
-                    "tier":          sig.get("tier"),
-                    "entry":         sig.get("entry"),
-                    "detected_at":   detected_at_fmt,
-                    "sl":            sig.get("sl"),
-                    "sl_pct":        sig.get("sl_pct"),
-                    "tp_targets":    sig.get("tp_targets", []),
-                    "tp_pcts":       sig.get("tp_pcts", []),
-                    "rr_ratio":      sig.get("rr_ratio"),
-                    "vol_tier_label":sig.get("vol_tier_label"),
-                    "rsi":           data.get("rsi"),
-                    "reasons":       sig.get("reasons", [])[:3],
-                })
+                raw.setdefault(sym, {})[tf] = {
+                    "direction": direction,
+                    "strength":  sig.get("strength", 0) or 0,
+                    "sig":       sig,
+                    "rsi":       data.get("rsi"),
+                }
             except Exception:
                 pass
 
-    # Deduplicate by symbol: same token on 1H and 2H → keep 2H (higher TF wins)
-    TF_RANK = {"2H": 2, "1H": 1}
-    best_per_sym: dict = {}
-    for c in candidates:
-        sym = c["symbol"]
-        existing = best_per_sym.get(sym)
-        if existing is None:
-            best_per_sym[sym] = c
-        else:
-            # Prefer higher timeframe; on tie prefer higher strength
-            if (TF_RANK.get(c["timeframe"], 0), c["strength"]) > \
-               (TF_RANK.get(existing["timeframe"], 0), existing["strength"]):
-                best_per_sym[sym] = c
-    candidates = sorted(best_per_sym.values(), key=lambda x: x["strength"], reverse=True)
+    # Only keep tokens where 1H + 2H + 1D all agree on direction
+    candidates = []
+    for sym, tfs in raw.items():
+        h1 = tfs.get("1H")
+        h2 = tfs.get("2H")
+        d1 = tfs.get("1D")
+        if not (h1 and h2 and d1):
+            continue  # missing one of the required timeframes
+        if not (h1["direction"] == h2["direction"] == d1["direction"]):
+            continue  # directions don't align
 
-    # Top 3 by strength, no direction cap — market may genuinely be all-bullish or all-bearish
+        # Signal levels from 1H; strength = average of all 3 TFs
+        sig      = h1["sig"]
+        strength = round((h1["strength"] + h2["strength"] + d1["strength"]) / 3, 1)
+
+        candidates.append({
+            "symbol":         sym,
+            "timeframe":      "1H",
+            "aligned_tfs":    f"1H·2H·1D",
+            "direction":      h1["direction"],
+            "strength":       strength,
+            "h1_strength":    round(h1["strength"], 1),
+            "h2_strength":    round(h2["strength"], 1),
+            "d1_strength":    round(d1["strength"], 1),
+            "score":          sig.get("score", 0),
+            "tier":           sig.get("tier"),
+            "entry":          sig.get("entry"),
+            "detected_at":    detected_at_fmt,
+            "sl":             sig.get("sl"),
+            "sl_pct":         sig.get("sl_pct"),
+            "tp_targets":     sig.get("tp_targets", []),
+            "tp_pcts":        sig.get("tp_pcts", []),
+            "rr_ratio":       sig.get("rr_ratio"),
+            "vol_tier_label": sig.get("vol_tier_label"),
+            "rsi":            h1["rsi"],
+            "reasons":        sig.get("reasons", [])[:3],
+        })
+
+    candidates.sort(key=lambda x: x["strength"], reverse=True)
     top = candidates[:3]
 
     session_start_sgt = session_start.astimezone(SGT)

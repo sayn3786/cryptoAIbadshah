@@ -1875,7 +1875,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec4_${y}${m}${d}`;
+  return `rec5_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -1889,7 +1889,7 @@ function _recCacheSet(data) {
   try {
     // Prune any old rec_ / rec2_ / rec3_ keys from previous days
     Object.keys(localStorage)
-      .filter(k => (k.startsWith('rec_') || k.startsWith('rec2_') || k.startsWith('rec3_') || k.startsWith('rec4_')) && k !== _recCacheKey())
+      .filter(k => /^rec\d?_/.test(k) && k !== _recCacheKey())
       .forEach(k => localStorage.removeItem(k));
     localStorage.setItem(_recCacheKey(), JSON.stringify(data));
   } catch (_) {}
@@ -1938,14 +1938,24 @@ async function loadRecommendations() {
       const tp1p = tpPcts[0] != null ? `+${tpPcts[0]}%` : '';
       const tp2p = tpPcts[1] != null ? `+${tpPcts[1]}%` : '';
 
+      const tfAlign = r.aligned_tfs
+        ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned</span>` : '';
+      const tfBreakdown = (r.h1_strength != null)
+        ? `<div class="rec-tf-breakdown">
+            <span>1H <strong>${r.h1_strength}</strong></span>
+            <span>2H <strong>${r.h2_strength}</strong></span>
+            <span>1D <strong>${r.d1_strength}</strong></span>
+           </div>` : '';
+
       return `<div class="rec-card rec-card-${dirCls}">
         <div class="rec-card-top">
           <span class="rec-rank">#${i+1}</span>
           <span class="rec-sym">${r.symbol}/USDT</span>
-          <span class="rec-tf">${r.timeframe}</span>
           <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
           <span class="rec-strength">${r.strength}/100</span>
         </div>
+        ${tfAlign}
+        ${tfBreakdown}
         ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
         ${strengthBar}
         <div class="rec-levels">
