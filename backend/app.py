@@ -249,6 +249,20 @@ def api_symbols():
     return jsonify(list(SYMBOLS.keys()))
 
 
+@app.get("/api/market-caps")
+def api_market_caps():
+    """Return all symbols with their market caps, sorted largest first.
+    Cached for 1 hour via the batch CoinGecko fetch in binance.py.
+    """
+    client.get_market_cap("BTCUSDT")  # trigger batch refresh if stale
+    result = []
+    for sym, bs in SYMBOLS.items():
+        mcap = client.get_market_cap(bs)
+        result.append({"symbol": sym, "market_cap": mcap or 0})
+    result.sort(key=lambda x: x["market_cap"], reverse=True)
+    return jsonify(result)
+
+
 @app.get("/api/diagnostics")
 def api_diagnostics():
     """Test each data source and return which ones are reachable."""

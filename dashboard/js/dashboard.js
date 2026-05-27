@@ -2105,7 +2105,26 @@ function renderHolidayBanner(holidays) {
 }
 
 /* ─── Bootstrap ───────────────────────────────────────────────────────────── */
-document.addEventListener('DOMContentLoaded', () => {
+async function renderAssetTabs() {
+  const container = document.getElementById('assetTabs');
+  let symbols = [];
+  try {
+    const res  = await fetch('/api/market-caps');
+    const data = await res.json();           // [{symbol, market_cap}, ...]
+    symbols = data.map(d => d.symbol);
+  } catch (_) {
+    // fallback: use ALL_TOKENS order if endpoint unreachable
+    symbols = ALL_TOKENS;
+  }
+  container.innerHTML = symbols.map((sym, i) =>
+    `<button class="asset-tab${i === 0 ? ' active' : ''}" data-sym="${sym}">${sym}</button>`
+  ).join('');
+  // set active symbol to first in sorted list
+  S.symbol = symbols[0] || S.symbol;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await renderAssetTabs();   // build tabs sorted by live market cap first
   wireSelectors();
   initCharts();
   renderMyTrades();
