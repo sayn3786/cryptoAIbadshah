@@ -421,7 +421,22 @@ def api_recommendations():
         })
 
     candidates.sort(key=lambda x: x["strength"], reverse=True)
-    top = candidates[:3]
+    # Pick top 3 with smart direction balance:
+    # - Picks 1 & 2: strongest overall (any direction)
+    # - Pick 3: if #1 and #2 are same direction → strongest in opposite direction
+    #           otherwise → next strongest overall
+    top = candidates[:2]
+    if len(top) == 2 and len(candidates) > 2:
+        if top[0]["direction"] == top[1]["direction"]:
+            opposite = top[0]["direction"] == "LONG" and "SHORT" or "LONG"
+            pick3 = next((c for c in candidates[2:] if c["direction"] == opposite), None)
+            if pick3 is None:
+                pick3 = candidates[2]  # no opposite found — take next strongest
+        else:
+            pick3 = candidates[2]
+        top.append(pick3)
+    elif len(top) < 2:
+        top = candidates[:3]
 
     session_start_sgt = session_start.astimezone(SGT)
     # Session ends at 07:59 SGT next day = 23:59 UTC same day
