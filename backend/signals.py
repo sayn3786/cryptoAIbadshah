@@ -292,25 +292,25 @@ def generate_signal(analysis: Dict) -> Dict:
         t_bear += 5;  t_bear_r.append("Price below EMA50 — medium-term bearish pressure")
 
     # ── Long / Short Ratio ────────────────────────────────────────────────────
-    # Contrarian indicator. When >65% of accounts are long, the crowd is max
-    # positioned — historically a bearish signal. Same principle as funding rate
-    # but measures account count instead of funding payment.
+    # Contrarian indicator — crowd positioning from a single exchange (OKX).
+    # Downweighted vs funding rate: funding measures actual money paid,
+    # L/S ratio only measures account count on one exchange — less reliable.
     ls = analysis.get("long_short") or {}
     ls_ratio   = ls.get("ratio")
     ls_long    = ls.get("long_pct", 50)
     ls_short   = ls.get("short_pct", 50)
     if ls_ratio is not None:
         if ls_ratio < 0.65:
-            score += 22
+            score += 14
             bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — crowd heavily short, contrarian long signal")
         elif ls_ratio < 0.85:
-            score += 12
+            score += 8
             bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — moderate short bias, favours longs")
         elif ls_ratio > 2.5:
-            score -= 22
+            score -= 14
             bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd extremely long, contrarian short signal")
         elif ls_ratio > 1.5:
-            score -= 12
+            score -= 8
             bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd long-heavy, late-cycle caution")
 
     # ── Fear & Greed Index ────────────────────────────────────────────────────
@@ -398,10 +398,8 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(div_desc or "Bearish RSI divergence — price higher high, RSI lower high")
 
     # ── Bollinger Bands ───────────────────────────────────────────────────────
-    # Squeeze (tight bands) = coiled spring, explosive move imminent.
-    # Breakout above upper band after a squeeze = high-probability momentum burst.
-    # Breakdown below lower band after a squeeze = high-probability dump.
-    # %B position also gives context on where price sits within the range.
+    # Squeeze = coiled spring. Breakout after squeeze = high-probability burst.
+    # Weights conservative until we have live performance data — can raise later.
     bb = analysis.get("bollinger") or {}
     bb_squeeze   = bb.get("squeeze", False)
     bb_breakout  = bb.get("breakout")
@@ -411,24 +409,23 @@ def generate_signal(analysis: Dict) -> Dict:
 
     fmt_p = lambda v: f"${v:,.4f}" if v else ""
     if bb_squeeze and bb_breakout == "bullish":
-        score += 22
+        score += 16
         bull_reasons.append(f"Bollinger squeeze breakout BULLISH — price closed above upper band {fmt_p(bb_upper)} after compression; explosive move signal")
     elif bb_squeeze and bb_breakout == "bearish":
-        score -= 22
+        score -= 16
         bear_reasons.append(f"Bollinger squeeze breakdown BEARISH — price closed below lower band {fmt_p(bb_lower)} after compression; explosive move signal")
     elif bb_squeeze:
-        # Squeeze without breakout yet — add mild bias based on %B position
         if bb_pct_b > 0.6:
-            score += 8
+            score += 5
             bull_reasons.append(f"Bollinger squeeze active — bands compressed, price upper half (%B {bb_pct_b:.2f}); breakout likely imminent")
         elif bb_pct_b < 0.4:
-            score -= 8
+            score -= 5
             bear_reasons.append(f"Bollinger squeeze active — bands compressed, price lower half (%B {bb_pct_b:.2f}); breakdown risk elevated")
     elif bb_breakout == "bullish":
-        score += 12
+        score += 10
         bull_reasons.append(f"Price above Bollinger upper band {fmt_p(bb_upper)} — strong bullish momentum")
     elif bb_breakout == "bearish":
-        score -= 12
+        score -= 10
         bear_reasons.append(f"Price below Bollinger lower band {fmt_p(bb_lower)} — strong bearish momentum")
 
     # SuperTrend — flip scores outside the trend cap (it's a momentum event,
@@ -485,43 +482,44 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(f"⚡ Trend cap applied — raw trend score {t_bear} capped at {TREND_CAP} (EMA/SuperTrend/Ichimoku all agree, preventing triple-counting)")
 
     # ── Final direction ───────────────────────────────────────────────────────
-    # Max theoretical bull score:
+    # Adjusted max theoretical bull score after calibration:
     #   Funding +30, CVD div confirmed +28, Engulfing +25, Spot CVD +18,
     #   RSI +22, OI +12, Flags +20, FVGs +20, Futures CVD +8, Elliott +8,
-    #   SuperTrend flip +20, Ichimoku price+cloud+TK = +35,
-    #   RSI divergence +18, BB squeeze breakout +22 → total ~286
-    # In practice signals are partially overlapping so 180 is a realistic ceiling.
-    MAX_SCORE = 300.0
+    #   SuperTrend flip +20, Trend cap (EMA+ST+Ichi) +35,
+    #   RSI divergence +18, BB squeeze breakout +16, L/S +14 → total ~274
+    # In practice signals overlap — realistic ceiling ~170.
+    MAX_SCORE = 280.0
 
-    # Single consistent strength formula across ALL directions.
-    # strength = what % of max possible confluence is present.
-    # A NEUTRAL token with score 24 = strength 9 — correctly low.
-    # Old NEUTRAL formula (score/30*50) inflated numbers and confused users.
     strength = min(int(abs(score) / MAX_SCORE * 100), 100)
 
-    if score >= 30:
+    # Directional threshold raised from 30 → 42.
+    # Old threshold (30) was only 10.7% of max — a single CVD signal + mild RSI
+    # was enough to trigger LONG. Raising to 42 requires at least 2-3 real
+    # signals in agreement before calling a direction.
+    DIRECTION_THRESHOLD = 42
+    if score >= DIRECTION_THRESHOLD:
         direction = "LONG"
-    elif score <= -30:
+    elif score <= -DIRECTION_THRESHOLD:
         direction = "SHORT"
     else:
         direction = "NEUTRAL"
 
-    # Strength tiers — calibrated against the consistent MAX_SCORE formula.
-    # Threshold to trigger LONG/SHORT = score 30 = strength 11.
-    # Weak     (11–30): score 30–78   — 2-3 mild signals, 25% size
-    # Moderate (31–50): score 81–130  — several aligned,  50% size
-    # Strong   (51–69): score 133–179 — good confluence,  full size
-    # Confirmed  (70+): score 182+    — maximum confluence, can scale
+    # Strength tiers (strength = score / MAX_SCORE * 100):
+    # NEUTRAL threshold = 42/280 = 15% strength
+    # Weak     (15–32): score 42–90   — few signals, cautious 25% size
+    # Moderate (33–50): score 92–140  — several aligned, 50% size
+    # Strong   (51–68): score 143–190 — good confluence, full size
+    # Confirmed  (69+): score 193+    — maximum confluence, can scale
     if direction == "NEUTRAL":
         tier = "Neutral"
         size_guide = "No trade"
-    elif strength < 31:
+    elif strength < 33:
         tier = "Weak"
         size_guide = "25% position — low confluence, minimal indicators aligned"
     elif strength < 51:
         tier = "Moderate"
         size_guide = "50% position — several signals aligned, manage risk carefully"
-    elif strength < 70:
+    elif strength < 69:
         tier = "Strong"
         size_guide = "Full position — good multi-indicator confluence"
     else:
