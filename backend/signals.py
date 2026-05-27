@@ -360,13 +360,75 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= 8
         bear_reasons.append(f"Elliott Wave: {wave_label} (bearish phase) — weak supporting signal")
 
+    # ── SuperTrend (22, 3) ────────────────────────────────────────────────────
+    # ATR-based trend follower — one of the most reliable trend indicators in
+    # crypto. Filters noise via volatility-adjusted bands. A fresh flip is a
+    # high-quality signal; sustained direction is a strong trend filter.
+    st = analysis.get("supertrend") or {}
+    st_dir     = st.get("direction")
+    st_flipped = st.get("flipped", False)
+    st_val     = st.get("value")
+    if st_dir == "bullish":
+        if st_flipped:
+            score += 20
+            bull_reasons.append(f"SuperTrend flipped BULLISH — fresh BUY signal, trend just reversed up (support ${st_val:,.4f})" if st_val else "SuperTrend flipped BULLISH — fresh BUY signal")
+        else:
+            score += 12
+            bull_reasons.append(f"SuperTrend bullish — price above dynamic support (${st_val:,.4f}), uptrend intact" if st_val else "SuperTrend bullish — uptrend intact")
+    elif st_dir == "bearish":
+        if st_flipped:
+            score -= 20
+            bear_reasons.append(f"SuperTrend flipped BEARISH — fresh SELL signal, trend just reversed down (resistance ${st_val:,.4f})" if st_val else "SuperTrend flipped BEARISH — fresh SELL signal")
+        else:
+            score -= 12
+            bear_reasons.append(f"SuperTrend bearish — price below dynamic resistance (${st_val:,.4f}), downtrend intact" if st_val else "SuperTrend bearish — downtrend intact")
+
+    # ── Ichimoku Cloud ────────────────────────────────────────────────────────
+    # A complete trend system — cloud gives support/resistance zones, TK cross
+    # gives momentum signals. Price above a green cloud is one of the strongest
+    # multi-confirmation setups in Japanese technical analysis.
+    # Score in three layers: cloud color, price position, TK cross.
+    ichi = analysis.get("ichimoku") or {}
+    cloud_color    = ichi.get("cloud_color")
+    price_vs_cloud = ichi.get("price_vs_cloud")
+    tk_cross       = ichi.get("tk_cross")
+    tenkan         = ichi.get("tenkan")
+    kijun          = ichi.get("kijun")
+
+    # Cloud color — trend bias
+    if cloud_color == "green":
+        score += 8
+        bull_reasons.append("Ichimoku cloud green (Span A > Span B) — bullish trend territory")
+    elif cloud_color == "red":
+        score -= 8
+        bear_reasons.append("Ichimoku cloud red (Span A < Span B) — bearish trend territory")
+
+    # Price vs cloud — strongest Ichimoku signal
+    if price_vs_cloud == "above":
+        score += 15
+        bull_reasons.append("Price above Ichimoku cloud — cloud acting as support, bullish structure")
+    elif price_vs_cloud == "below":
+        score -= 15
+        bear_reasons.append("Price below Ichimoku cloud — cloud acting as resistance, bearish structure")
+    # price_vs_cloud == "inside" → no score; indecision zone
+
+    # TK cross — momentum confirmation
+    if tk_cross == "bullish":
+        score += 12
+        tk_desc = f"Tenkan (${tenkan:,.4f}) crossed above Kijun (${kijun:,.4f})" if (tenkan and kijun) else "Tenkan crossed above Kijun"
+        bull_reasons.append(f"Ichimoku TK bullish cross — {tk_desc}, short-term momentum turning up")
+    elif tk_cross == "bearish":
+        score -= 12
+        tk_desc = f"Tenkan (${tenkan:,.4f}) crossed below Kijun (${kijun:,.4f})" if (tenkan and kijun) else "Tenkan crossed below Kijun"
+        bear_reasons.append(f"Ichimoku TK bearish cross — {tk_desc}, short-term momentum turning down")
+
     # ── Final direction ───────────────────────────────────────────────────────
     # Max theoretical bull score:
     #   Funding +30, CVD div confirmed +28, Engulfing +25, Spot CVD +18,
-    #   CVD div spot-led already counted above (mutually exclusive with confirmed),
-    #   RSI +22, OI +12, Flags +20, FVGs +20, Futures CVD +8, Elliott +8 = ~191
-    # In practice signals are partially overlapping so 140 is a realistic ceiling.
-    MAX_SCORE = 205.0
+    #   RSI +22, OI +12, Flags +20, FVGs +20, Futures CVD +8, Elliott +8,
+    #   SuperTrend flip +20, Ichimoku price+cloud+TK = +35 → total ~246
+    # In practice signals are partially overlapping so 160 is a realistic ceiling.
+    MAX_SCORE = 260.0
     if score >= 30:
         direction = "LONG"
         strength = min(int(score / MAX_SCORE * 100), 100)
