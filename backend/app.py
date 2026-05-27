@@ -423,19 +423,16 @@ def api_recommendations():
     candidates.sort(key=lambda x: x["strength"], reverse=True)
     # Pick top 3 with smart direction balance:
     # - Picks 1 & 2: strongest overall (any direction)
-    # - Pick 3: if #1 and #2 same direction → strongest opposite-direction from ALL candidates
-    #           otherwise → next strongest overall
+    # - Pick 3: always the strongest token from the direction opposite to #1
+    #           (fallback: next strongest overall if no opposite-direction candidate exists)
     top = candidates[:2]
     if len(top) == 2 and len(candidates) > 2:
         picked_syms = {c["symbol"] for c in top}
-        if top[0]["direction"] == top[1]["direction"]:
-            opposite     = "SHORT" if top[0]["direction"] == "LONG" else "LONG"
-            opp_list     = [c for c in candidates if c["direction"] == opposite
-                            and c["symbol"] not in picked_syms]
-            pick3 = opp_list[0] if opp_list else next(
-                (c for c in candidates if c["symbol"] not in picked_syms), None)
-        else:
-            pick3 = next((c for c in candidates if c["symbol"] not in picked_syms), None)
+        opposite    = "SHORT" if top[0]["direction"] == "LONG" else "LONG"
+        opp_list    = [c for c in candidates if c["direction"] == opposite
+                       and c["symbol"] not in picked_syms]
+        pick3 = opp_list[0] if opp_list else next(
+            (c for c in candidates if c["symbol"] not in picked_syms), None)
         if pick3:
             top.append(pick3)
     elif len(top) < 2:
