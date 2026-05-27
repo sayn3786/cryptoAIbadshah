@@ -393,15 +393,15 @@ def api_recommendations():
         if not (h1["direction"] == h2["direction"] == d1["direction"]):
             continue  # directions don't align
 
-        # Signal levels from 1H; strength = average of all 3 TFs
-        sig      = h1["sig"]
+        # Signal levels from 2H; strength = average of all 3 TFs
+        sig      = h2["sig"]
         strength = round((h1["strength"] + h2["strength"] + d1["strength"]) / 3, 1)
 
         candidates.append({
             "symbol":         sym,
-            "timeframe":      "1H",
-            "aligned_tfs":    f"1H·2H·1D",
-            "direction":      h1["direction"],
+            "timeframe":      "2H",
+            "aligned_tfs":    "1H·2H·1D",
+            "direction":      h2["direction"],
             "strength":       strength,
             "h1_strength":    round(h1["strength"], 1),
             "h2_strength":    round(h2["strength"], 1),
@@ -416,7 +416,7 @@ def api_recommendations():
             "tp_pcts":        sig.get("tp_pcts", []),
             "rr_ratio":       sig.get("rr_ratio"),
             "vol_tier_label": sig.get("vol_tier_label"),
-            "rsi":            h1["rsi"],
+            "rsi":            h2["rsi"],
             "reasons":        sig.get("reasons", [])[:3],
         })
 
