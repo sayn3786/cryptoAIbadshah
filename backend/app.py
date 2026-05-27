@@ -16,7 +16,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from cvd_sources import fetch_cvd_from_source
-from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence, calculate_macd, calculate_ema_trend, detect_whale_activity
+from indicators import calculate_rsi_series, calculate_cvd, detect_fvg, find_volume_spikes, detect_engulfing, detect_cvd_divergence, calculate_macd, calculate_ema_trend, detect_whale_activity, calculate_supertrend, calculate_ichimoku
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
@@ -207,6 +207,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         if v is not None and i < len(spot)
     ]
 
+    supertrend = calculate_supertrend(spot)
+    ichimoku   = calculate_ichimoku(spot)
+
     analysis = {
         "symbol":       symbol,
         "timeframe":    timeframe,
@@ -238,6 +241,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "long_short":    long_short,
         "fear_greed":    fear_greed,
         "news":          news,
+        "supertrend":    supertrend,
+        "ichimoku":      ichimoku,
     }
     analysis["signal"] = generate_signal(analysis)
     return analysis

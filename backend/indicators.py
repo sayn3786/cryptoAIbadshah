@@ -505,3 +505,149 @@ def detect_whale_activity(candles: List[Dict], lookback: int = 20,
         })
 
     return sorted(results, key=lambda x: x["candles_ago"])
+
+
+def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: float = 3.0) -> Dict:
+    """SuperTrend indicator.  Returns current direction, value and whether a
+    flip (new signal) occurred on the most recent closed candle."""
+    if len(candles) < period + 1:
+        return {"direction": None, "value": None, "signal": None, "flipped": False}
+
+    highs  = [c["high"]  for c in candles]
+    lows   = [c["low"]   for c in candles]
+    closes = [c["close"] for c in candles]
+
+    # True Range
+    trs = [highs[0] - lows[0]]
+    for i in range(1, len(candles)):
+        trs.append(max(highs[i] - lows[i],
+                       abs(highs[i] - closes[i - 1]),
+                       abs(lows[i]  - closes[i - 1])))
+
+    # Wilder ATR (RMA)
+    atr = [None] * len(candles)
+    atr[period - 1] = sum(trs[:period]) / period
+    for i in range(period, len(candles)):
+        atr[i] = (atr[i - 1] * (period - 1) + trs[i]) / period
+
+    up  = [None] * len(candles)
+    dn  = [None] * len(candles)
+    trend = [None] * len(candles)   # 1 = bullish, -1 = bearish
+
+    for i in range(period - 1, len(candles)):
+        if atr[i] is None:
+            continue
+        mid  = (highs[i] + lows[i]) / 2
+        b_up = mid + multiplier * atr[i]
+        b_dn = mid - multiplier * atr[i]
+
+        if i == period - 1:
+            up[i]    = b_up
+            dn[i]    = b_dn
+            trend[i] = 1 if closes[i] > b_dn else -1
+            continue
+
+        # Carry-forward logic — upper band only lowers, lower band only rises
+        up[i] = b_up if (b_up < up[i - 1] or closes[i - 1] > up[i - 1]) else up[i - 1]
+        dn[i] = b_dn if (b_dn > dn[i - 1] or closes[i - 1] < dn[i - 1]) else dn[i - 1]
+
+        if trend[i - 1] == -1 and closes[i] > up[i]:
+            trend[i] = 1
+        elif trend[i - 1] == 1 and closes[i] < dn[i]:
+            trend[i] = -1
+        else:
+            trend[i] = trend[i - 1]
+
+    last  = len(candles) - 1
+    prev  = last - 1
+    t_now = trend[last]
+    t_pre = trend[prev] if prev >= 0 else t_now
+
+    direction = "bullish" if t_now == 1 else "bearish"
+    value     = round(dn[last] if t_now == 1 else up[last], 8)
+    flipped   = t_now != t_pre
+    signal    = ("BUY" if t_now == 1 else "SELL") if flipped else None
+
+    return {"direction": direction, "value": value, "signal": signal, "flipped": flipped}
+
+
+def calculate_ichimoku(candles: List[Dict],
+                       tenkan_period: int = 9,
+                       kijun_period: int  = 26,
+                       senkou_b_period: int = 52,
+                       displacement: int  = 26) -> Dict:
+    """Ichimoku Cloud. Returns:
+    - tenkan, kijun (current values)
+    - span_a, span_b (current cloud boundaries — the displaced values at today's bar)
+    - cloud_color: 'green' (bullish) | 'red' (bearish)
+    - price_vs_cloud: 'above' | 'inside' | 'below'
+    - tk_cross: 'bullish' | 'bearish' | 'neutral'
+    """
+    if len(candles) < senkou_b_period + displacement:
+        return {
+            "tenkan": None, "kijun": None,
+            "span_a": None, "span_b": None,
+            "cloud_color": None, "price_vs_cloud": None, "tk_cross": None,
+        }
+
+    def _mid(cs, period, idx):
+        start = idx - period + 1
+        if start < 0:
+            return None
+        window = cs[start: idx + 1]
+        return (max(c["high"] for c in window) + min(c["low"] for c in window)) / 2
+
+    n = len(candles)
+    i = n - 1  # most recent bar index
+
+    tenkan = _mid(candles, tenkan_period, i)
+    kijun  = _mid(candles, kijun_period,  i)
+
+    # Span A and B are calculated `displacement` bars back (so they appear at current bar)
+    back = i - displacement
+    if back < 0:
+        span_a = span_b = None
+    else:
+        t_back = _mid(candles, tenkan_period, back)
+        k_back = _mid(candles, kijun_period,  back)
+        span_a = (t_back + k_back) / 2 if (t_back and k_back) else None
+        span_b = _mid(candles, senkou_b_period, back)
+
+    close = candles[i]["close"]
+
+    cloud_color    = None
+    price_vs_cloud = None
+    if span_a is not None and span_b is not None:
+        cloud_top = max(span_a, span_b)
+        cloud_bot = min(span_a, span_b)
+        cloud_color = "green" if span_a >= span_b else "red"
+        if close > cloud_top:
+            price_vs_cloud = "above"
+        elif close < cloud_bot:
+            price_vs_cloud = "below"
+        else:
+            price_vs_cloud = "inside"
+
+    tk_cross = "neutral"
+    if tenkan is not None and kijun is not None:
+        prev_i  = i - 1
+        p_tenkan = _mid(candles, tenkan_period, prev_i)
+        p_kijun  = _mid(candles, kijun_period,  prev_i)
+        if p_tenkan is not None and p_kijun is not None:
+            if p_tenkan <= p_kijun and tenkan > kijun:
+                tk_cross = "bullish"
+            elif p_tenkan >= p_kijun and tenkan < kijun:
+                tk_cross = "bearish"
+
+    def _r(v):
+        return round(v, 8) if v is not None else None
+
+    return {
+        "tenkan":        _r(tenkan),
+        "kijun":         _r(kijun),
+        "span_a":        _r(span_a),
+        "span_b":        _r(span_b),
+        "cloud_color":   cloud_color,
+        "price_vs_cloud": price_vs_cloud,
+        "tk_cross":      tk_cross,
+    }

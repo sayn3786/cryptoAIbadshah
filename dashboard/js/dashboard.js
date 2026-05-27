@@ -176,6 +176,8 @@ function renderAll(a) {
   renderMACDCard(a.macd);
   renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
+  renderSupertrendCard(a.supertrend);
+  renderIchimokuCard(a.ichimoku);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
   renderFNGCard(a.fear_greed);
@@ -520,6 +522,63 @@ function renderEMACard(ema) {
     const cls = up ? 'bull' : 'bear';
     return `<div class="ema-row"><span class="ema-label">EMA${r.p}</span><span class="${cls}">${up ? '▲' : '▼'} ${fmt(r.v)}</span></div>`;
   }).join('');
+}
+
+function renderSupertrendCard(st) {
+  const dirEl = document.getElementById('stDirection');
+  const sigEl = document.getElementById('stSignal');
+  const valEl = document.getElementById('stValueRow');
+  if (!dirEl) return;
+  if (!st || st.direction == null) {
+    dirEl.textContent = '—'; sigEl.textContent = '—'; valEl.innerHTML = '';
+    return;
+  }
+  const bull = st.direction === 'bullish';
+  dirEl.textContent = bull ? '▲ Bullish' : '▼ Bearish';
+  dirEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+
+  if (st.flipped && st.signal) {
+    sigEl.textContent = `🔔 New ${st.signal} signal`;
+    sigEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+  } else {
+    sigEl.textContent = 'No flip on last candle';
+    sigEl.style.color = 'var(--muted)';
+  }
+
+  const fmt = v => v != null ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
+  valEl.innerHTML = `<span class="st-label">${bull ? 'Support' : 'Resistance'}</span>
+    <span class="${bull ? 'bull' : 'bear'}">${fmt(st.value)}</span>`;
+}
+
+function renderIchimokuCard(ichi) {
+  const cloudEl = document.getElementById('ichiCloud');
+  const posEl   = document.getElementById('ichiPricePos');
+  const rowsEl  = document.getElementById('ichiRows');
+  if (!cloudEl) return;
+  if (!ichi || ichi.cloud_color == null) {
+    cloudEl.textContent = '—'; posEl.textContent = '—'; rowsEl.innerHTML = '';
+    return;
+  }
+
+  const green = ichi.cloud_color === 'green';
+  cloudEl.textContent = green ? '☁ Bullish Cloud' : '☁ Bearish Cloud';
+  cloudEl.style.color = green ? 'var(--bull)' : 'var(--bear)';
+
+  const posLabels = { above: '▲ Price above cloud', inside: '◆ Price inside cloud', below: '▼ Price below cloud' };
+  const posColors = { above: 'var(--bull)', inside: 'var(--neutral)', below: 'var(--bear)' };
+  posEl.textContent = posLabels[ichi.price_vs_cloud] || '—';
+  posEl.style.color = posColors[ichi.price_vs_cloud] || 'var(--muted)';
+
+  const fmt = v => v != null ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
+  const tkColor = ichi.tk_cross === 'bullish' ? 'var(--bull)' : ichi.tk_cross === 'bearish' ? 'var(--bear)' : 'var(--muted)';
+  const tkLabel = ichi.tk_cross === 'bullish' ? '🔼 TK Bullish Cross' : ichi.tk_cross === 'bearish' ? '🔽 TK Bearish Cross' : 'No TK cross';
+
+  rowsEl.innerHTML = `
+    <div class="ichi-row"><span class="ichi-label">Tenkan</span><span>${fmt(ichi.tenkan)}</span></div>
+    <div class="ichi-row"><span class="ichi-label">Kijun</span><span>${fmt(ichi.kijun)}</span></div>
+    <div class="ichi-row"><span class="ichi-label">Span A</span><span>${fmt(ichi.span_a)}</span></div>
+    <div class="ichi-row"><span class="ichi-label">Span B</span><span>${fmt(ichi.span_b)}</span></div>
+    <div class="ichi-row ichi-tk"><span class="ichi-label">TK Cross</span><span style="color:${tkColor}">${tkLabel}</span></div>`;
 }
 
 function renderWhaleActivity(events) {

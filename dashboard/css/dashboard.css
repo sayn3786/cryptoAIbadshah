@@ -683,6 +683,17 @@ a:hover { color: var(--gold2); }
 .ema-row   { display: flex; justify-content: space-between; font-size: .72rem; }
 .ema-label { color: var(--muted2); }
 
+/* SuperTrend card */
+.card-title-sub { font-size: .68rem; font-weight: 400; color: var(--muted2); margin-left: 4px; }
+.st-value-row   { display: flex; justify-content: space-between; font-size: .75rem; margin-top: 8px; }
+.st-label       { color: var(--muted2); }
+
+/* Ichimoku card */
+.ichi-rows  { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; width: 100%; }
+.ichi-row   { display: flex; justify-content: space-between; font-size: .72rem; }
+.ichi-label { color: var(--muted2); }
+.ichi-tk    { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
+
 .ls-bar-wrap { margin: 6px 0 3px; width: 100%; }
 .ls-bar-bg   { height: 6px; background: var(--bear); border-radius: 3px; overflow: hidden; }
 .ls-bar-fill { height: 100%; border-radius: 3px 0 0 3px; transition: width .5s ease; }
