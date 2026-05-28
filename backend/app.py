@@ -385,7 +385,7 @@ def api_recommendations():
     """
     now           = datetime.now(timezone.utc)
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    cache_key     = "v5_" + session_start.strftime("%Y%m%d")
+    cache_key     = "v6_" + session_start.strftime("%Y%m%d")
 
     with _rec_lock:
         mem = _rec_cache_load()
@@ -430,8 +430,9 @@ def api_recommendations():
         btc_consensus   = "NEUTRAL"
         btc_strength    = 0
 
-    # BTC conflict penalty applied to altcoins going against BTC consensus
-    BTC_CONFLICT_PENALTY = 25
+    # BTC alignment bonus / conflict penalty
+    BTC_ALIGN_BONUS      = 15   # same direction as BTC → boost
+    BTC_CONFLICT_PENALTY = 25   # opposite direction to BTC → penalise
 
     # Only keep tokens (excluding BTC itself) where 1H + 2H agree on direction
     candidates = []
@@ -451,10 +452,13 @@ def api_recommendations():
         strength = round((h1["strength"] + h2["strength"]) / 2, 1)
         direction = h2["direction"]
 
-        # Apply BTC conflict penalty when alt direction opposes BTC consensus
+        # Apply BTC alignment bonus or conflict penalty
         btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
+        btc_aligned  = (btc_consensus != "NEUTRAL" and direction == btc_consensus)
         if btc_conflict:
-            strength = max(0, round(strength - BTC_CONFLICT_PENALTY, 1))
+            strength = max(0,   round(strength - BTC_CONFLICT_PENALTY, 1))
+        elif btc_aligned:
+            strength = min(100, round(strength + BTC_ALIGN_BONUS,      1))
 
         candidates.append({
             "symbol":         sym,
@@ -465,6 +469,7 @@ def api_recommendations():
             "h1_strength":    round(h1["strength"], 1),
             "h2_strength":    round(h2["strength"], 1),
             "btc_conflict":   btc_conflict,
+            "btc_aligned":    btc_aligned,
             "btc_consensus":  btc_consensus,
             "score":          sig.get("score", 0),
             "tier":           sig.get("tier"),
