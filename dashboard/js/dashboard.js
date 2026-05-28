@@ -2074,7 +2074,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec13_${y}${m}${d}`;
+  return `rec14_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -2154,10 +2154,11 @@ async function loadRecommendations() {
 
       const tfAlign = r.aligned_tfs
         ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned</span>` : '';
+      const btcAdj = r.btc_adj != null ? Math.abs(r.btc_adj) : '';
       const btcWarn = r.btc_conflict
-        ? `<span class="rec-btc-conflict">⚠️ Conflicts with BTC ${r.btc_consensus} — penalised −25</span>`
+        ? `<span class="rec-btc-conflict">⚠️ Conflicts with BTC ${r.btc_consensus} — penalised −${btcAdj}</span>`
         : r.btc_aligned
-        ? `<span class="rec-btc-aligned">✅ Aligned with BTC ${r.btc_consensus} — boosted +15</span>`
+        ? `<span class="rec-btc-aligned">✅ Aligned with BTC ${r.btc_consensus} — boosted +${btcAdj}</span>`
         : '';
       const tfBreakdown = (r.h1_strength != null)
         ? `<div class="rec-tf-breakdown">

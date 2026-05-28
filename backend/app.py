@@ -385,7 +385,7 @@ def api_recommendations():
     """
     now           = datetime.now(timezone.utc)
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    cache_key     = "v6_" + session_start.strftime("%Y%m%d")
+    cache_key     = "v7_" + session_start.strftime("%Y%m%d")
 
     with _rec_lock:
         mem = _rec_cache_load()
@@ -430,9 +430,11 @@ def api_recommendations():
         btc_consensus   = "NEUTRAL"
         btc_strength    = 0
 
-    # BTC alignment bonus / conflict penalty
-    BTC_ALIGN_BONUS      = 15   # same direction as BTC → boost
-    BTC_CONFLICT_PENALTY = 25   # opposite direction to BTC → penalise
+    # BTC alignment bonus / conflict penalty — scaled by BTC's own strength
+    # At BTC strength 100: bonus = +15, penalty = -25
+    # At BTC strength 25:  bonus = +4,  penalty = -6
+    BTC_MAX_BONUS   = 15
+    BTC_MAX_PENALTY = 25
 
     # Only keep tokens (excluding BTC itself) where 1H + 2H agree on direction
     candidates = []
@@ -452,13 +454,16 @@ def api_recommendations():
         strength = round((h1["strength"] + h2["strength"]) / 2, 1)
         direction = h2["direction"]
 
-        # Apply BTC alignment bonus or conflict penalty
+        # Apply BTC alignment bonus or conflict penalty, scaled by BTC strength
         btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
         btc_aligned  = (btc_consensus != "NEUTRAL" and direction == btc_consensus)
+        btc_adj      = 0
         if btc_conflict:
-            strength = max(0,   round(strength - BTC_CONFLICT_PENALTY, 1))
+            btc_adj  = -round(BTC_MAX_PENALTY * (btc_strength / 100), 1)
+            strength = max(0,   round(strength + btc_adj, 1))
         elif btc_aligned:
-            strength = min(100, round(strength + BTC_ALIGN_BONUS,      1))
+            btc_adj  = round(BTC_MAX_BONUS * (btc_strength / 100), 1)
+            strength = min(100, round(strength + btc_adj, 1))
 
         candidates.append({
             "symbol":         sym,
@@ -471,6 +476,7 @@ def api_recommendations():
             "btc_conflict":   btc_conflict,
             "btc_aligned":    btc_aligned,
             "btc_consensus":  btc_consensus,
+            "btc_adj":        btc_adj,
             "score":          sig.get("score", 0),
             "tier":           sig.get("tier"),
             "entry":          sig.get("entry"),
