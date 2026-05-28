@@ -2074,7 +2074,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec10_${y}${m}${d}`;
+  return `rec11_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -2143,7 +2143,6 @@ async function loadRecommendations() {
         ? `<div class="rec-tf-breakdown">
             <span>1H <strong>${r.h1_strength}</strong></span>
             <span>2H <strong>${r.h2_strength}</strong></span>
-            <span>1D <strong>${r.d1_strength}</strong></span>
            </div>` : '';
 
       return `<div class="rec-card rec-card-${dirCls}">

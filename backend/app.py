@@ -377,13 +377,13 @@ def api_dashboard():
 @app.get("/api/recommendations")
 def api_recommendations():
     """
-    Top 3 trades where 1H, 2H and 1D all agree on direction.
-    Signal levels are taken from the 1H timeframe.
+    Top 3 trades where 1H and 2H agree on direction.
+    Signal levels are taken from the 2H timeframe.
     Refreshes daily at 08:00 SGT (= 00:00 UTC). Valid until 07:59 SGT next day.
     """
     now           = datetime.now(timezone.utc)
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    cache_key     = "v3_" + session_start.strftime("%Y%m%d")
+    cache_key     = "v4_" + session_start.strftime("%Y%m%d")
 
     with _rec_lock:
         mem = _rec_cache_load()
@@ -394,11 +394,11 @@ def api_recommendations():
     SGT             = timezone(timedelta(hours=8))
     detected_at_fmt = scan_time.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
-    # Scan each token at 1H, 2H, 1D in parallel
+    # Scan each token at 1H and 2H in parallel
     raw: dict = {}   # sym -> {tf -> {direction, strength, sig, data}}
     with ThreadPoolExecutor(max_workers=12) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
-                for sym in SYMBOLS for tf in ("1H", "2H", "1D")}
+                for sym in SYMBOLS for tf in ("1H", "2H")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
             try:
@@ -416,30 +416,28 @@ def api_recommendations():
             except Exception:
                 pass
 
-    # Only keep tokens where 1H + 2H + 1D all agree on direction
+    # Only keep tokens where 1H + 2H agree on direction
     candidates = []
     for sym, tfs in raw.items():
         h1 = tfs.get("1H")
         h2 = tfs.get("2H")
-        d1 = tfs.get("1D")
-        if not (h1 and h2 and d1):
+        if not (h1 and h2):
             continue  # missing one of the required timeframes
-        if not (h1["direction"] == h2["direction"] == d1["direction"]):
+        if h1["direction"] != h2["direction"]:
             continue  # directions don't align
 
-        # Signal levels from 2H; strength = average of all 3 TFs
+        # Signal levels from 2H; strength = average of 1H + 2H
         sig      = h2["sig"]
-        strength = round((h1["strength"] + h2["strength"] + d1["strength"]) / 3, 1)
+        strength = round((h1["strength"] + h2["strength"]) / 2, 1)
 
         candidates.append({
             "symbol":         sym,
             "timeframe":      "2H",
-            "aligned_tfs":    "1H·2H·1D",
+            "aligned_tfs":    "1H·2H",
             "direction":      h2["direction"],
             "strength":       strength,
             "h1_strength":    round(h1["strength"], 1),
             "h2_strength":    round(h2["strength"], 1),
-            "d1_strength":    round(d1["strength"], 1),
             "score":          sig.get("score", 0),
             "tier":           sig.get("tier"),
             "entry":          sig.get("entry"),
