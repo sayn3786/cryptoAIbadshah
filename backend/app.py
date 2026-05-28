@@ -378,12 +378,14 @@ def api_dashboard():
 def api_recommendations():
     """
     Top 3 trades where 1H and 2H agree on direction.
+    BTC direction acts as a market filter: altcoins that conflict with BTC
+    consensus get a strength penalty (-25 pts) and a btc_conflict flag.
     Signal levels are taken from the 2H timeframe.
     Refreshes daily at 08:00 SGT (= 00:00 UTC). Valid until 07:59 SGT next day.
     """
     now           = datetime.now(timezone.utc)
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    cache_key     = "v4_" + session_start.strftime("%Y%m%d")
+    cache_key     = "v5_" + session_start.strftime("%Y%m%d")
 
     with _rec_lock:
         mem = _rec_cache_load()
@@ -394,19 +396,18 @@ def api_recommendations():
     SGT             = timezone(timedelta(hours=8))
     detected_at_fmt = scan_time.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
-    # Scan each token at 1H and 2H in parallel
+    # Scan every token (including BTC) at 1H and 2H in parallel
+    all_syms = list(SYMBOLS)
     raw: dict = {}   # sym -> {tf -> {direction, strength, sig, data}}
     with ThreadPoolExecutor(max_workers=12) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
-                for sym in SYMBOLS for tf in ("1H", "2H")}
+                for sym in all_syms for tf in ("1H", "2H")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
             try:
                 data = future.result()
                 sig  = data.get("signal", {})
                 direction = sig.get("direction", "NEUTRAL")
-                if direction == "NEUTRAL":
-                    continue
                 raw.setdefault(sym, {})[tf] = {
                     "direction": direction,
                     "strength":  sig.get("strength", 0) or 0,
@@ -416,28 +417,55 @@ def api_recommendations():
             except Exception:
                 pass
 
-    # Only keep tokens where 1H + 2H agree on direction
+    # Determine BTC market consensus (1H + 2H must agree, else NEUTRAL)
+    btc_tfs  = raw.get("BTC", {})
+    btc_h1   = btc_tfs.get("1H", {}).get("direction", "NEUTRAL")
+    btc_h2   = btc_tfs.get("2H", {}).get("direction", "NEUTRAL")
+    btc_h1s  = btc_tfs.get("1H", {}).get("strength", 0) or 0
+    btc_h2s  = btc_tfs.get("2H", {}).get("strength", 0) or 0
+    if btc_h1 != "NEUTRAL" and btc_h1 == btc_h2:
+        btc_consensus   = btc_h1
+        btc_strength    = round((btc_h1s + btc_h2s) / 2, 1)
+    else:
+        btc_consensus   = "NEUTRAL"
+        btc_strength    = 0
+
+    # BTC conflict penalty applied to altcoins going against BTC consensus
+    BTC_CONFLICT_PENALTY = 25
+
+    # Only keep tokens (excluding BTC itself) where 1H + 2H agree on direction
     candidates = []
     for sym, tfs in raw.items():
+        if sym == "BTC":
+            continue
         h1 = tfs.get("1H")
         h2 = tfs.get("2H")
         if not (h1 and h2):
-            continue  # missing one of the required timeframes
+            continue
+        if h1["direction"] == "NEUTRAL" or h2["direction"] == "NEUTRAL":
+            continue
         if h1["direction"] != h2["direction"]:
-            continue  # directions don't align
+            continue  # 1H/2H don't agree
 
-        # Signal levels from 2H; strength = average of 1H + 2H
         sig      = h2["sig"]
         strength = round((h1["strength"] + h2["strength"]) / 2, 1)
+        direction = h2["direction"]
+
+        # Apply BTC conflict penalty when alt direction opposes BTC consensus
+        btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
+        if btc_conflict:
+            strength = max(0, round(strength - BTC_CONFLICT_PENALTY, 1))
 
         candidates.append({
             "symbol":         sym,
             "timeframe":      "2H",
             "aligned_tfs":    "1H·2H",
-            "direction":      h2["direction"],
+            "direction":      direction,
             "strength":       strength,
             "h1_strength":    round(h1["strength"], 1),
             "h2_strength":    round(h2["strength"], 1),
+            "btc_conflict":   btc_conflict,
+            "btc_consensus":  btc_consensus,
             "score":          sig.get("score", 0),
             "tier":           sig.get("tier"),
             "entry":          sig.get("entry"),
@@ -474,7 +502,6 @@ def api_recommendations():
         top = candidates[:3]
 
     session_start_sgt = session_start.astimezone(SGT)
-    # Session ends at 07:59 SGT next day = 23:59 UTC same day
     valid_until_utc   = session_start + timedelta(hours=23, minutes=59)
     valid_until_sgt   = valid_until_utc.astimezone(SGT)
 
@@ -483,6 +510,8 @@ def api_recommendations():
         "valid_until":     valid_until_sgt.isoformat(),
         "valid_until_fmt": valid_until_sgt.strftime("7:59 AM SGT, %b %d"),
         "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
+        "btc_consensus":   btc_consensus,
+        "btc_strength":    btc_strength,
         "recommendations": top[:3],
     }
     with _rec_lock:

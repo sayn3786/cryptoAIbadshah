@@ -2074,7 +2074,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec11_${y}${m}${d}`;
+  return `rec12_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -2116,6 +2116,21 @@ async function loadRecommendations() {
       valEl.textContent = `Valid until ${data.valid_until_fmt}`;
     }
 
+    // BTC consensus banner above the cards (replace if already rendered)
+    const btcBanner = (() => {
+      const bc = data.btc_consensus;
+      const bs = data.btc_strength;
+      if (!bc || bc === 'NEUTRAL') {
+        return `<div class="btc-banner btc-neutral">⚪ BTC: Neutral — no market bias applied</div>`;
+      }
+      const cls  = bc === 'LONG' ? 'bull' : 'bear';
+      const icon = bc === 'LONG' ? '▲' : '▼';
+      return `<div class="btc-banner btc-${cls}">${icon} BTC Signal: <strong>${bc}</strong> (${bs}/100) — altcoins opposing this direction penalised −25 pts</div>`;
+    })();
+    const existingBanner = cards.parentElement.querySelector('.btc-banner');
+    if (existingBanner) existingBanner.remove();
+    cards.insertAdjacentHTML('beforebegin', btcBanner);
+
     cards.innerHTML = data.recommendations.map((r, i) => {
       const isLong  = r.direction === 'LONG';
       const dirCls  = isLong ? 'bull' : 'bear';
@@ -2139,13 +2154,15 @@ async function loadRecommendations() {
 
       const tfAlign = r.aligned_tfs
         ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned</span>` : '';
+      const btcWarn = r.btc_conflict
+        ? `<span class="rec-btc-conflict">⚠️ Conflicts with BTC ${r.btc_consensus} — penalised</span>` : '';
       const tfBreakdown = (r.h1_strength != null)
         ? `<div class="rec-tf-breakdown">
             <span>1H <strong>${r.h1_strength}</strong></span>
             <span>2H <strong>${r.h2_strength}</strong></span>
            </div>` : '';
 
-      return `<div class="rec-card rec-card-${dirCls}">
+      return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}">
         <div class="rec-card-top">
           <span class="rec-rank">#${i+1}</span>
           <span class="rec-sym">${r.symbol}/USDT</span>
@@ -2153,6 +2170,7 @@ async function loadRecommendations() {
           <span class="rec-strength">${r.strength}/100</span>
         </div>
         ${tfAlign}
+        ${btcWarn}
         ${tfBreakdown}
         ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
         ${strengthBar}

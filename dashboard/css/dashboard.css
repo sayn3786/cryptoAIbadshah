@@ -1005,6 +1005,14 @@ a:hover { color: var(--gold2); }
 .rec-tf-align      { display: inline-block; font-size: .65rem; font-weight: 600; color: var(--bull); margin: 3px 0 2px; }
 .rec-tf-breakdown  { display: flex; gap: 12px; font-size: .65rem; color: var(--muted2); margin-bottom: 4px; }
 .rec-tf-breakdown strong { color: var(--text); }
+/* BTC consensus banner */
+.btc-banner        { padding: 7px 12px; border-radius: 6px; font-size: .72rem; font-weight: 600; margin-bottom: 10px; }
+.btc-banner.btc-bull { background: rgba(38,166,91,.15); color: var(--bull); border: 1px solid rgba(38,166,91,.3); }
+.btc-banner.btc-bear { background: rgba(239,68,68,.12); color: var(--bear); border: 1px solid rgba(239,68,68,.25); }
+.btc-banner.btc-neutral { background: var(--card2); color: var(--muted2); border: 1px solid var(--border); }
+/* BTC conflict badge on rec card */
+.rec-btc-conflict  { display: block; font-size: .62rem; font-weight: 600; color: #f59e0b; margin: 2px 0 4px; }
+.rec-card-conflict { opacity: .88; border-left-color: #f59e0b !important; }
 .rec-str-track { height: 4px; background: var(--card2); border-radius: 2px; overflow: hidden; }
 .rec-str-fill  { height: 100%; border-radius: 2px; transition: width .5s ease; }
 .rec-str-fill.bull { background: var(--bull); }
