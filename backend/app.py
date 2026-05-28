@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import time
+import math
 from typing import Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -385,7 +386,7 @@ def api_recommendations():
     """
     now           = datetime.now(timezone.utc)
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    cache_key     = "v7_" + session_start.strftime("%Y%m%d")
+    cache_key     = "v8_" + session_start.strftime("%Y%m%d")
 
     with _rec_lock:
         mem = _rec_cache_load()
@@ -430,11 +431,14 @@ def api_recommendations():
         btc_consensus   = "NEUTRAL"
         btc_strength    = 0
 
-    # BTC alignment bonus / conflict penalty — scaled by BTC's own strength
-    # At BTC strength 100: bonus = +15, penalty = -25
-    # At BTC strength 25:  bonus = +4,  penalty = -6
+    # BTC alignment bonus / conflict penalty — sqrt-scaled by BTC's own strength
+    # sqrt curve front-loads the effect: even weak BTC (25) still carries ~50% weight
+    # BTC strength 100 → full: bonus = +15, penalty = -25
+    # BTC strength 25  → half: bonus = +7.5, penalty = -12.5
+    # BTC strength 50  → 71%: bonus = +10.6, penalty = -17.7
     BTC_MAX_BONUS   = 15
     BTC_MAX_PENALTY = 25
+    btc_scale       = math.sqrt(btc_strength / 100.0) if btc_strength > 0 else 0.0
 
     # Only keep tokens (excluding BTC itself) where 1H + 2H agree on direction
     candidates = []
@@ -454,15 +458,15 @@ def api_recommendations():
         strength = round((h1["strength"] + h2["strength"]) / 2, 1)
         direction = h2["direction"]
 
-        # Apply BTC alignment bonus or conflict penalty, scaled by BTC strength
+        # Apply BTC alignment bonus or conflict penalty (sqrt-scaled by BTC strength)
         btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
         btc_aligned  = (btc_consensus != "NEUTRAL" and direction == btc_consensus)
         btc_adj      = 0
         if btc_conflict:
-            btc_adj  = -round(BTC_MAX_PENALTY * (btc_strength / 100), 1)
+            btc_adj  = -round(BTC_MAX_PENALTY * btc_scale, 1)
             strength = max(0,   round(strength + btc_adj, 1))
         elif btc_aligned:
-            btc_adj  = round(BTC_MAX_BONUS * (btc_strength / 100), 1)
+            btc_adj  = round(BTC_MAX_BONUS * btc_scale, 1)
             strength = min(100, round(strength + btc_adj, 1))
 
         candidates.append({

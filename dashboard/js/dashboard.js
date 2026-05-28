@@ -2074,7 +2074,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec14_${y}${m}${d}`;
+  return `rec15_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
