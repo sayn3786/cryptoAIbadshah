@@ -179,6 +179,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     news         = fetch_news_sentiment(bs)
     rsi_series = calculate_rsi_series(closes)
     current_rsi = next((v for v in reversed(rsi_series) if v is not None), None)
+    # RSI slope: change over last 5 valid values — positive = momentum building, negative = fading
+    _valid_rsi = [v for v in rsi_series if v is not None]
+    rsi_slope = round(_valid_rsi[-1] - _valid_rsi[-5], 2) if len(_valid_rsi) >= 5 else None
 
     spot_cvd = calculate_cvd(spot, "spot")
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
@@ -231,6 +234,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "timeframe":    timeframe,
         "candles":      spot[-60:],
         "rsi":          current_rsi,
+        "rsi_slope":    rsi_slope,
         "rsi_series":   rsi_with_ts[-30:],
         "spot_cvd":     spot_cvd,
         "futures_cvd":  fut_cvd,

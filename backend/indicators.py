@@ -934,6 +934,25 @@ def calculate_volume_signal(candles: List[Dict], lookback: int = 20) -> Dict:
             label = "Strong" if ratio >= 2.0 else "Elevated"
             best_desc = f"{label} volume ({ratio:.1f}× avg) on {direction} candle — confirms move"
 
+    # Sustained accumulation: 3 recent candles all above-average volume, directionally consistent
+    # Catches pre-pump buildup that a single-spike check misses entirely.
+    if not best_signal and len(closed) >= 4:
+        recent_3  = closed[-4:-1]
+        sus_ratio = sum(c["volume"] for c in recent_3) / (3 * avg_vol)
+        if sus_ratio >= 1.35:
+            bull_c = sum(1 for c in recent_3 if c["close"] > c["open"])
+            bear_c = sum(1 for c in recent_3 if c["close"] < c["open"])
+            if bull_c >= 2:
+                best_signal = "bullish"
+                best_ratio  = sus_ratio
+                best_desc = (f"Sustained volume accumulation ({sus_ratio:.1f}× avg over 3 candles) — "
+                             "buyers consistently active, not just a spike; pre-move buildup pattern")
+            elif bear_c >= 2:
+                best_signal = "bearish"
+                best_ratio  = sus_ratio
+                best_desc = (f"Sustained volume distribution ({sus_ratio:.1f}× avg over 3 candles) — "
+                             "sellers consistently active; pre-breakdown distribution pattern")
+
     if not best_signal:
         return {"signal": None, "ratio": None, "description": None}
     return {"signal": best_signal, "ratio": round(best_ratio, 2), "description": best_desc}

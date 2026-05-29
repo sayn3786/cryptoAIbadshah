@@ -63,10 +63,10 @@ def generate_signal(analysis: Dict) -> Dict:
     }
     tf_macro_w = _TF_MACRO_W.get(timeframe, 1.0)
 
-    # ── RSI ──────────────────────────────────────────────────────────────────
-    # RSI alone has ~55% accuracy in crypto (barely above random in trending
-    # markets). Only extreme readings carry real edge; mid-range RSI is noise.
-    # Source: Aronson "Evidence-Based Technical Analysis"; crypto quant backtests.
+    # ── RSI level (contrarian — extreme readings only) ───────────────────────
+    # Mid-range RSI (45–65) is genuinely ambiguous: the same reading occurs both
+    # in healthy trends and in weak rallies. Only extreme levels carry reliable
+    # mean-reversion edge; the 55–65 band is removed (was −4, net noise).
     if rsi is not None:
         if rsi < 25:
             score += 22; g['momentum'] += 22
@@ -76,16 +76,40 @@ def generate_signal(analysis: Dict) -> Dict:
             bull_reasons.append(f"RSI oversold ({rsi}) — selling pressure elevated, watch for reversal")
         elif rsi < 45:
             score += 4; g['momentum'] += 4
-            bull_reasons.append(f"RSI below midline ({rsi}) — mild bearish lean, low conviction alone")
+            bull_reasons.append(f"RSI below midline ({rsi}) — mild oversold lean, low conviction alone")
         elif rsi > 75:
             score -= 22; g['momentum'] -= 22
             bear_reasons.append(f"RSI extremely overbought ({rsi}) — historically rare, high mean-reversion probability")
         elif rsi > 65:
             score -= 12; g['momentum'] -= 12
             bear_reasons.append(f"RSI overbought ({rsi}) — buying pressure elevated, watch for reversal")
-        elif rsi > 55:
+        # 45–65: genuinely neutral — no score (same reading in uptrends and dead-cat bounces)
+
+    # ── RSI slope (momentum direction — catches building/fading pressure) ────
+    # RSI level is contrarian; RSI slope is momentum. They answer different
+    # questions. A coin with RSI=55 and slope=+14 is building bullish pressure.
+    # The same coin with RSI=55 and slope=−14 is momentum fading from overbought.
+    # Source: Elder "Trading for a Living" — RSI slope > RSI level for trend detection.
+    rsi_slope = analysis.get("rsi_slope")
+    if rsi_slope is not None:
+        if rsi_slope > 18:
+            score += 16; g['momentum'] += 16
+            bull_reasons.append(f"RSI momentum surging (+{rsi_slope:.1f} over 5 candles) — strong buying pressure building rapidly")
+        elif rsi_slope > 9:
+            score += 9; g['momentum'] += 9
+            bull_reasons.append(f"RSI rising (+{rsi_slope:.1f} over 5 candles) — momentum building, buyers gaining control")
+        elif rsi_slope > 4:
+            score += 4; g['momentum'] += 4
+            bull_reasons.append(f"RSI drifting higher (+{rsi_slope:.1f} over 5 candles) — mild upward pressure")
+        elif rsi_slope < -18:
+            score -= 16; g['momentum'] -= 16
+            bear_reasons.append(f"RSI momentum collapsing ({rsi_slope:.1f} over 5 candles) — strong selling pressure building rapidly")
+        elif rsi_slope < -9:
+            score -= 9; g['momentum'] -= 9
+            bear_reasons.append(f"RSI falling ({rsi_slope:.1f} over 5 candles) — momentum fading, sellers gaining control")
+        elif rsi_slope < -4:
             score -= 4; g['momentum'] -= 4
-            bear_reasons.append(f"RSI above midline ({rsi}) — mild bullish lean, low conviction alone")
+            bear_reasons.append(f"RSI drifting lower ({rsi_slope:.1f} over 5 candles) — mild downward pressure")
 
     # ── CVD: Unified Spot × Futures Analysis ─────────────────────────────────
     # Spot CVD, Futures CVD, and their divergence type are NOT independent —
