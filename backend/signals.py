@@ -614,58 +614,62 @@ def generate_signal(analysis: Dict) -> Dict:
     # Halving phase: mid (6-18 mo post-halving) = historically bullish window (+6)
     # Profitability: price vs estimated break-even cost
     # Difficulty   : rising network difficulty = miner confidence context (+4/-4)
+    # Group mapping: Hash Ribbon + Profitability + Difficulty → g['flow'] (on-chain network signals)
+    #                Halving phase → g['sentiment'] (macro cycle context)
     mining = analysis.get("btc_mining") or {}
     if mining:
         ribbon = mining.get("hash_ribbon", "neutral")
         if ribbon == "buy":           # fresh 30d/60d bullish cross
-            score += 12
+            score += 12;  g['flow'] += 12
             bull_reasons.append("▲ Hash Ribbon buy signal — miner capitulation over, 30d MA crossed above 60d MA")
         elif ribbon == "bull":        # 30d > 60d, no fresh cross
-            score += 7
+            score += 7;   g['flow'] += 7
             bull_reasons.append("▲ Hash Ribbon bullish — miners recovering, 30d MA above 60d MA")
         elif ribbon == "capitulation": # fresh bearish cross
-            score -= 10
+            score -= 10;  g['flow'] -= 10
             bear_reasons.append("▼ Hash Ribbon capitulation — miners under stress, 30d MA crossed below 60d MA")
         elif ribbon == "bear":         # 30d < 60d
-            score -= 6
+            score -= 6;   g['flow'] -= 6
             bear_reasons.append("▼ Hash Ribbon bearish — miner sell pressure, 30d MA below 60d MA")
 
         phase = mining.get("halving_phase")
         months = mining.get("halving_months_since", 0) or 0
         if phase == "mid":            # 6-18 months post-halving — historically strongest bull window
-            score += 6
+            score += 6;   g['sentiment'] += 6
             bull_reasons.append(f"▲ Halving cycle mid-phase ({months:.0f} mo post-halving) — historically strongest price appreciation window")
         elif phase == "early":        # 0-6 months — consolidation, slight bullish lean
-            score += 3
+            score += 3;   g['sentiment'] += 3
             bull_reasons.append(f"▲ Early post-halving phase ({months:.0f} mo) — supply shock still digesting, accumulation zone")
         elif phase == "late":         # 18-36 months — late cycle, distribution risk
-            score -= 4
+            score -= 4;   g['sentiment'] -= 4
             bear_reasons.append(f"▼ Late halving cycle ({months:.0f} mo post-halving) — historical distribution / top formation zone")
 
         prof = mining.get("profitability_ratio")
         if prof is not None:
             if prof >= 2.0:           # very profitable → miners holding, not selling
-                score += 8
+                score += 8;  g['flow'] += 8
                 bull_reasons.append(f"▲ Miners highly profitable ({prof:.1f}× break-even) — no forced selling pressure")
             elif prof >= 1.3:
-                score += 4
+                score += 4;  g['flow'] += 4
                 bull_reasons.append(f"▲ Miners profitable ({prof:.1f}× break-even) — healthy miner economics")
             elif prof < 1.05:         # at or near break-even → capitulation risk
-                score -= 8
+                score -= 8;  g['flow'] -= 8
                 bear_reasons.append(f"▼ Miners near break-even ({prof:.1f}×) — selling pressure risk, potential capitulation")
 
         diff_chg = mining.get("difficulty_change")
         if diff_chg is not None:
             if diff_chg >= 3.0:       # rising difficulty = more miners joining = bullish context
-                score += 4
+                score += 4;  g['flow'] += 4
                 bull_reasons.append(f"▲ Difficulty rising +{diff_chg:.1f}% — new miners joining, network confidence high")
             elif diff_chg <= -3.0:    # falling difficulty = miners leaving = bearish
-                score -= 4
+                score -= 4;  g['flow'] -= 4
                 bear_reasons.append(f"▼ Difficulty dropping {diff_chg:.1f}% — miners leaving, reduced network security")
 
     # ── Confluence Engine ─────────────────────────────────────────────────────────
     # Analyzes cross-group relationships to dynamically adjust the final score.
     # Groups: TREND | MOMENTUM | FLOW | SENTIMENT | PATTERN
+    # BTC additionally populates FLOW (Hash Ribbon, Profitability, Difficulty)
+    # and SENTIMENT (Halving phase) from mining/on-chain data.
     # Indicators do not score in isolation — they validate or contradict each other.
 
     def _gdir(v):
@@ -770,6 +774,37 @@ def generate_signal(analysis: Dict) -> Dict:
             bull_reasons.append("🔗 BB squeeze + Volume — compressed bands broke bullish with volume confirmation; explosive move setup")
         else:
             bear_reasons.append("🔗 BB squeeze + Volume — compressed bands broke bearish with volume confirmation; explosive breakdown setup")
+
+    # ── Combo 9: BTC Hash Ribbon + Trend aligned (on-chain confirms price trend) ─
+    # BTC-only. Hash Ribbon is a lagging but high-accuracy miner health signal.
+    # When it agrees with the price trend direction, it adds deep structural weight.
+    if mining:
+        ribbon_local = mining.get("hash_ribbon", "neutral")
+        ribbon_bull  = ribbon_local in ("buy", "bull")
+        ribbon_bear  = ribbon_local in ("capitulation", "bear")
+        if ribbon_bull and gdir['trend'] == 'bull' and score > 0:
+            pts = 14
+            combo_pts += pts
+            bull_reasons.append(f"🔗 Hash Ribbon+Trend (BTC) — miners healthy ({ribbon_local}) + bullish trend = structural BTC bull setup")
+        elif ribbon_bear and gdir['trend'] == 'bear' and score < 0:
+            pts = 14
+            combo_pts -= pts
+            bear_reasons.append(f"🔗 Hash Ribbon+Trend (BTC) — miner stress ({ribbon_local}) + bearish trend = structural BTC bear pressure")
+
+    # ── Combo 10: BTC Profitability extreme + Halving phase (macro cycle alignment) ─
+    # When miners are highly profitable AND we're in the historical bull phase window,
+    # both on-chain and macro cycle agree → high conviction BTC bullish structural context.
+    if mining:
+        prof_local  = mining.get("profitability_ratio")
+        phase_local = mining.get("halving_phase")
+        if prof_local is not None and prof_local >= 2.0 and phase_local in ("mid", "early") and score > 0:
+            pts = 10
+            combo_pts += pts
+            bull_reasons.append(f"🔗 Miner Profitability+Halving Phase (BTC) — highly profitable ({prof_local:.1f}×) in {phase_local} post-halving phase = structural accumulation conditions")
+        elif prof_local is not None and prof_local < 1.05 and phase_local == "late" and score < 0:
+            pts = 10
+            combo_pts -= pts
+            bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk")
 
     # Apply combo points
     score += combo_pts
