@@ -87,81 +87,88 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= 4; g['momentum'] -= 4
             bear_reasons.append(f"RSI above midline ({rsi}) — mild bullish lean, low conviction alone")
 
-    # ── Spot CVD ─────────────────────────────────────────────────────────────
-    # One of the highest-quality short-term signals — directly measures real
-    # buying vs selling pressure from actual spot transactions, not price-derived.
-    # Rated highly by Willy Woo, Glassnode, Laevitas for its leading quality.
-    cvd_trend = spot_cvd.get("trend", "neutral")
-    if cvd_trend == "bullish":
-        score += 18; g['flow'] += 18
-        bull_reasons.append("Spot CVD rising — real buying pressure confirmed in spot market")
-    elif cvd_trend == "bearish":
-        score -= 18; g['flow'] -= 18
-        bear_reasons.append("Spot CVD falling — real selling pressure confirmed in spot market")
+    # ── CVD: Unified Spot × Futures Analysis ─────────────────────────────────
+    # Spot CVD, Futures CVD, and their divergence type are NOT independent —
+    # they describe the same market event from different angles.
+    #
+    # The divergence type encodes both the direction AND the magnitude relationship
+    # between the two streams. Scoring all three separately triple-counts the same
+    # signal and creates incoherence (e.g. futures_dominated_down = squeeze risk,
+    # yet individual bearish CVD scores fight that conclusion).
+    #
+    # Rule: divergence type is the master signal when present.
+    # Individual spot/futures trends are fallback only when no divergence is detected.
+    # A magnitude intensifier adds a small dynamic push for extreme ratios.
+    cvd_div    = analysis.get("cvd_divergence") or {}
+    div_type   = cvd_div.get("type", "neutral")
+    spot_ratio = cvd_div.get("spot_ratio",    1) or 1
+    fut_ratio  = cvd_div.get("futures_ratio", 1) or 1
 
-    # ── Futures CVD ──────────────────────────────────────────────────────────
-    # Noisier than spot — perp market dominated by speculators and hedgers.
-    # Useful as context/confirmation but lower standalone reliability.
-    f_cvd_trend = futures_cvd.get("trend", "neutral")
-    if f_cvd_trend == "bullish":
-        score += 8; g['flow'] += 8
-        bull_reasons.append("Futures CVD bullish — speculative demand increasing")
-    elif f_cvd_trend == "bearish":
-        score -= 8; g['flow'] -= 8
-        bear_reasons.append("Futures CVD bearish — speculative selling increasing")
+    _CVD_BASE = {
+        "spot_dominated_up":     +35,   # spot >10×: pure organic buying
+        "spot_heavy_up":         +30,   # spot 2–10×: real buyers leading
+        "confirmed_up":          +26,   # balanced: both streams confirming
+        "spot_led_up":           +20,   # spot bullish, futures neutral/missing
+        "futures_led_up":        -16,   # futures pump, spot not confirming
+        "futures_dominated_up":  -14,   # futures >50×: leveraged long crowding
+        "futures_dominated_down":+10,   # futures >50×: speculative short pile-on
+        "futures_led_down":      +16,   # futures selling, spot rising — squeeze
+        "futures_heavy_down":    -14,   # futures 10–50×: speculative, lower conviction
+        "spot_led_down":         -20,   # spot selling, futures not following
+        "confirmed_down":        -26,   # balanced: both streams confirming
+        "spot_heavy_down":       -30,   # spot 2–10×: real sellers leading
+        "spot_dominated_down":   -35,   # spot >10×: pure holder distribution
+    }
+    _CVD_REASON = {
+        "spot_dominated_up":     ("bull", "Spot-dominated rally — spot CVD {sr:.0f}× futures; overwhelmingly organic buying with minimal leverage, highest-conviction bullish signal"),
+        "spot_heavy_up":         ("bull", "Spot-heavy confirmed rally — spot CVD {sr:.1f}× futures; real buyers leading with futures confirming organically"),
+        "confirmed_up":          ("bull", "Fully confirmed rally — spot and futures CVD rising in sync; balanced organic + speculative buying, strong confluence"),
+        "spot_led_up":           ("bull", "Spot-driven rally — spot CVD rising, futures not chasing; genuine demand without leverage build-up, more sustainable"),
+        "futures_led_up":        ("bear", "Futures-driven pump — spot CVD falling despite rally; no real spot demand behind the move; leveraged buyers only, likely to fade"),
+        "futures_dominated_up":  ("bear", "Futures-dominated rally — futures CVD {fr:.0f}× spot; speculative leverage crowding with no organic support; elevated long-squeeze risk"),
+        "futures_dominated_down":("bull", "Futures-dominated selloff — futures CVD {fr:.0f}× spot; speculative short pile-on, real holders not selling; high short-squeeze risk"),
+        "futures_led_down":      ("bull", "Futures-driven selloff — spot CVD rising while futures sell; no real distribution; short-squeeze risk elevated"),
+        "futures_heavy_down":    ("bear", "Futures-heavy selloff — futures CVD {fr:.0f}× spot; bearish but mostly speculative, conviction lower than genuine distribution"),
+        "spot_led_down":         ("bear", "Spot-driven selloff — spot CVD falling, futures not following; real holders distributing quietly without leverage"),
+        "confirmed_down":        ("bear", "Fully confirmed selloff — spot and futures CVD falling in sync; real selling meets speculative pressure, strong bearish confluence"),
+        "spot_heavy_down":       ("bear", "Spot-heavy confirmed selloff — spot CVD {sr:.1f}× futures; real sellers leading with futures confirming"),
+        "spot_dominated_down":   ("bear", "Spot-dominated selloff — spot CVD {sr:.0f}× futures; pure holder distribution with minimal leverage, highest-conviction bearish signal"),
+    }
 
-    # ── CVD Divergence ───────────────────────────────────────────────────────
-    # Spot vs futures CVD divergence is one of the most sophisticated setups
-    # used by prop desks — distinguishes organic moves from leveraged speculation.
-    # Spot-led = real conviction; futures-led = leveraged speculative money.
-    cvd_div = analysis.get("cvd_divergence") or {}
-    div_type = cvd_div.get("type", "neutral")
-    if div_type == "futures_led_up":
-        score -= 18; g['flow'] -= 18
-        bear_reasons.append("Futures-driven rally — spot CVD falling, no real demand; leveraged pump likely to fade")
-    elif div_type == "spot_led_up":
-        score += 22; g['flow'] += 22
-        bull_reasons.append("Spot-driven rally — genuine organic buying, futures not leading; more sustainable")
-    elif div_type == "confirmed_up":
-        score += 28; g['flow'] += 28
-        bull_reasons.append("Fully confirmed rally — both spot and futures CVD rising; strongest bullish confluence")
-    elif div_type == "futures_led_down":
-        score += 18; g['flow'] += 18
-        bull_reasons.append("Futures-driven selloff — spot CVD rising, no real selling; high short squeeze risk")
-    elif div_type == "spot_led_down":
-        score -= 22; g['flow'] -= 22
-        bear_reasons.append("Spot-driven selloff — genuine distribution by real holders; more sustainable decline")
-    elif div_type == "confirmed_down":
-        score -= 28; g['flow'] -= 28
-        bear_reasons.append("Fully confirmed selloff — both spot and futures CVD falling; strongest bearish confluence")
-    elif div_type == "futures_dominated_down":
-        # Futures >50× spot: overwhelmingly speculative shorts, not real distribution — squeeze risk elevated
-        score += 8; g['flow'] += 8
-        bull_reasons.append("Futures-dominated selloff — futures CVD dwarfs spot (>50×); likely speculative short pile-on, high squeeze risk")
-    elif div_type == "futures_heavy_down":
-        # Futures 10–50× spot: bearish but conviction reduced vs genuine confirmed selloff
-        score -= 14; g['flow'] -= 14
-        bear_reasons.append("Futures-heavy selloff — futures CVD 10–50× spot; bearish but mostly speculative, lower conviction than real distribution")
-    elif div_type == "futures_dominated_up":
-        # Futures >50× spot on upside: leveraged long pile-on, reversal risk elevated
-        score -= 14; g['flow'] -= 14
-        bear_reasons.append("Futures-dominated rally — futures CVD dwarfs spot (>50×); leveraged long crowding, elevated long squeeze / reversal risk")
-    elif div_type == "spot_dominated_up":
-        # Spot >10× futures: overwhelmingly organic buying — highest conviction bullish
-        score += 35; g['flow'] += 35
-        bull_reasons.append("Spot-dominated rally — spot CVD dwarfs futures (>10×); pure organic buying with minimal leverage, strongest conviction signal")
-    elif div_type == "spot_heavy_up":
-        # Spot 2–10× futures: real buyers leading, futures confirming
-        score += 30; g['flow'] += 30
-        bull_reasons.append("Spot-heavy confirmed rally — spot CVD 2–10× futures; real demand driving the move, futures confirming organically")
-    elif div_type == "spot_dominated_down":
-        # Spot >10× futures: overwhelmingly real distribution — highest conviction bearish
-        score -= 35; g['flow'] -= 35
-        bear_reasons.append("Spot-dominated selloff — spot CVD dwarfs futures (>10×); pure holder distribution with minimal leverage, strongest conviction bearish signal")
-    elif div_type == "spot_heavy_down":
-        # Spot 2–10× futures: real sellers leading, futures confirming
-        score -= 30; g['flow'] -= 30
-        bear_reasons.append("Spot-heavy confirmed selloff — spot CVD 2–10× futures; real selling pressure driving the move, not leveraged speculation")
+    if div_type in _CVD_BASE:
+        pts = _CVD_BASE[div_type]
+        # Magnitude intensifier: extreme ratios push slightly beyond the base (cap ±5)
+        # Makes scoring dynamic — a 200× ratio is meaningfully different from 55×
+        if "spot_dominated" in div_type:
+            extra = min(5, round((spot_ratio - 10) * 0.1))
+            pts = pts + extra if pts > 0 else pts - extra
+        elif "futures_dominated" in div_type:
+            extra = min(5, round((fut_ratio - 50) * 0.02))
+            pts = pts + extra if pts > 0 else pts - extra
+        score += pts; g['flow'] += pts
+        side, tmpl = _CVD_REASON[div_type]
+        reason = tmpl.format(sr=spot_ratio, fr=fut_ratio)
+        if side == "bull":
+            bull_reasons.append(reason)
+        else:
+            bear_reasons.append(reason)
+    else:
+        # No divergence detected — score individual CVD trends as independent signals
+        # (lower weight than unified signal since they carry no relational context)
+        cvd_trend = spot_cvd.get("trend", "neutral")
+        if cvd_trend == "bullish":
+            score += 14; g['flow'] += 14
+            bull_reasons.append("Spot CVD rising — real buying pressure confirmed; no futures divergence to contextualise")
+        elif cvd_trend == "bearish":
+            score -= 14; g['flow'] -= 14
+            bear_reasons.append("Spot CVD falling — real selling pressure confirmed; no futures divergence to contextualise")
+        f_cvd_trend = futures_cvd.get("trend", "neutral")
+        if f_cvd_trend == "bullish":
+            score += 7; g['flow'] += 7
+            bull_reasons.append("Futures CVD bullish — speculative demand rising; no divergence with spot")
+        elif f_cvd_trend == "bearish":
+            score -= 7; g['flow'] -= 7
+            bear_reasons.append("Futures CVD bearish — speculative selling rising; no divergence with spot")
 
     # ── Funding Rate ─────────────────────────────────────────────────────────
     # THE highest-reliability crypto-specific signal. Extreme negative funding
