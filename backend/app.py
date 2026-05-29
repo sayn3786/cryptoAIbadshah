@@ -381,31 +381,20 @@ def api_dashboard():
     return jsonify(results)
 
 
-@app.get("/api/recommendations")
-def api_recommendations():
+def _compute_recommendations() -> dict:
     """
-    Top 3 trades where 1H and 2H agree on direction.
-    BTC direction acts as a market filter: altcoins that conflict with BTC
-    consensus get a strength penalty (-25 pts) and a btc_conflict flag.
-    Signal levels are taken from the 2H timeframe.
-    Refreshes daily at 08:00 SGT (= 00:00 UTC). Valid until 07:59 SGT next day.
+    Scan all tokens at 1H + 2H, apply BTC consensus filter, pick top 3.
+    Called by the daily scheduler at 08:00 SGT and lazily by the API route
+    as a fallback if the scheduled run hasn't happened yet.
     """
     now           = datetime.now(timezone.utc)
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    cache_key     = "v8_" + session_start.strftime("%Y%m%d")
-
-    with _rec_lock:
-        mem = _rec_cache_load()
-        if mem.get("key") == cache_key and mem.get("data"):
-            return jsonify(mem["data"])
-
-    scan_time       = datetime.now(timezone.utc)
-    SGT             = timezone(timedelta(hours=8))
-    detected_at_fmt = scan_time.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
+    SGT           = timezone(timedelta(hours=8))
+    detected_at_fmt = now.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
     # Scan every token (including BTC) at 1H and 2H in parallel
     all_syms = list(SYMBOLS)
-    raw: dict = {}   # sym -> {tf -> {direction, strength, sig, data}}
+    raw: dict = {}
     with ThreadPoolExecutor(max_workers=12) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
                 for sym in all_syms for tf in ("1H", "2H")}
@@ -425,28 +414,24 @@ def api_recommendations():
                 pass
 
     # Determine BTC market consensus (1H + 2H must agree, else NEUTRAL)
-    btc_tfs  = raw.get("BTC", {})
-    btc_h1   = btc_tfs.get("1H", {}).get("direction", "NEUTRAL")
-    btc_h2   = btc_tfs.get("2H", {}).get("direction", "NEUTRAL")
-    btc_h1s  = btc_tfs.get("1H", {}).get("strength", 0) or 0
-    btc_h2s  = btc_tfs.get("2H", {}).get("strength", 0) or 0
+    btc_tfs = raw.get("BTC", {})
+    btc_h1  = btc_tfs.get("1H", {}).get("direction", "NEUTRAL")
+    btc_h2  = btc_tfs.get("2H", {}).get("direction", "NEUTRAL")
+    btc_h1s = btc_tfs.get("1H", {}).get("strength", 0) or 0
+    btc_h2s = btc_tfs.get("2H", {}).get("strength", 0) or 0
     if btc_h1 != "NEUTRAL" and btc_h1 == btc_h2:
-        btc_consensus   = btc_h1
-        btc_strength    = round((btc_h1s + btc_h2s) / 2, 1)
+        btc_consensus = btc_h1
+        btc_strength  = round((btc_h1s + btc_h2s) / 2, 1)
     else:
-        btc_consensus   = "NEUTRAL"
-        btc_strength    = 0
+        btc_consensus = "NEUTRAL"
+        btc_strength  = 0
 
     # BTC alignment bonus / conflict penalty — sqrt-scaled by BTC's own strength
-    # sqrt curve front-loads the effect: even weak BTC (25) still carries ~50% weight
-    # BTC strength 100 → full: bonus = +15, penalty = -25
-    # BTC strength 25  → half: bonus = +7.5, penalty = -12.5
-    # BTC strength 50  → 71%: bonus = +10.6, penalty = -17.7
     BTC_MAX_BONUS   = 15
     BTC_MAX_PENALTY = 25
     btc_scale       = math.sqrt(btc_strength / 100.0) if btc_strength > 0 else 0.0
 
-    # Only keep tokens (excluding BTC itself) where 1H + 2H agree on direction
+    # Only keep tokens (excl. BTC) where 1H + 2H agree on non-NEUTRAL direction
     candidates = []
     for sym, tfs in raw.items():
         if sym == "BTC":
@@ -458,13 +443,12 @@ def api_recommendations():
         if h1["direction"] == "NEUTRAL" or h2["direction"] == "NEUTRAL":
             continue
         if h1["direction"] != h2["direction"]:
-            continue  # 1H/2H don't agree
+            continue
 
-        sig      = h2["sig"]
-        strength = round((h1["strength"] + h2["strength"]) / 2, 1)
+        sig       = h2["sig"]
+        strength  = round((h1["strength"] + h2["strength"]) / 2, 1)
         direction = h2["direction"]
 
-        # Apply BTC alignment bonus or conflict penalty (sqrt-scaled by BTC strength)
         btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
         btc_aligned  = (btc_consensus != "NEUTRAL" and direction == btc_consensus)
         btc_adj      = 0
@@ -502,10 +486,6 @@ def api_recommendations():
         })
 
     candidates.sort(key=lambda x: x["strength"], reverse=True)
-    # Pick top 3 with smart direction balance:
-    # - Picks 1 & 2: strongest overall (any direction)
-    # - Pick 3: if #1 and #2 same direction → strongest opposite-direction from ALL candidates
-    #           if #1 and #2 different directions → just next strongest overall
     top = candidates[:2]
     if len(top) == 2 and len(candidates) > 2:
         picked_syms = {c["symbol"] for c in top}
@@ -523,10 +503,9 @@ def api_recommendations():
         top = candidates[:3]
 
     session_start_sgt = session_start.astimezone(SGT)
-    valid_until_utc   = session_start + timedelta(hours=23, minutes=59)
-    valid_until_sgt   = valid_until_utc.astimezone(SGT)
+    valid_until_sgt   = (session_start + timedelta(hours=23, minutes=59)).astimezone(SGT)
 
-    result = {
+    return {
         "generated_at":    session_start_sgt.isoformat(),
         "valid_until":     valid_until_sgt.isoformat(),
         "valid_until_fmt": valid_until_sgt.strftime("7:59 AM SGT, %b %d"),
@@ -535,8 +514,62 @@ def api_recommendations():
         "btc_strength":    btc_strength,
         "recommendations": top[:3],
     }
+
+
+def _rec_cache_key() -> str:
+    now = datetime.now(timezone.utc)
+    return "v8_" + now.strftime("%Y%m%d")
+
+
+def _daily_rec_scheduler():
+    """
+    Background thread: runs _compute_recommendations() once at 00:00 UTC
+    (= 08:00 SGT) every day and writes the result to the persistent cache.
+    This ensures all users worldwide see the same snapshot regardless of
+    when they first open the dashboard.
+    """
+    print("[scheduler] Daily recommendation scheduler started")
+    while True:
+        now      = datetime.now(timezone.utc)
+        tomorrow = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=5, microsecond=0)   # +5 s buffer past midnight
+        wait_s   = (tomorrow - now).total_seconds()
+        print(f"[scheduler] Next rec scan in {wait_s/3600:.2f} h (at 08:00 SGT)")
+        time.sleep(wait_s)
+
+        key = _rec_cache_key()
+        try:
+            print(f"[scheduler] Running daily recommendation scan (key={key})")
+            result = _compute_recommendations()
+            with _rec_lock:
+                _rec_cache_save(key, result)
+            print(f"[scheduler] Cached {len(result.get('recommendations', []))} recommendations")
+        except Exception as exc:
+            print(f"[scheduler] ERROR computing recommendations: {exc}")
+
+
+# Start the scheduler in a daemon thread so it dies with the server
+_threading.Thread(target=_daily_rec_scheduler, daemon=True, name="rec-scheduler").start()
+
+
+@app.get("/api/recommendations")
+def api_recommendations():
+    """
+    Returns today's top-3 recommendations.
+    Pre-computed at 08:00 SGT by the daily scheduler; served from cache to all users.
+    Falls back to on-demand compute if the scheduler hasn't run yet today.
+    """
+    key = _rec_cache_key()
+
     with _rec_lock:
-        _rec_cache_save(cache_key, result)
+        mem = _rec_cache_load()
+        if mem.get("key") == key and mem.get("data"):
+            return jsonify(mem["data"])
+
+    # Scheduler hasn't fired yet (first deploy of the day, or server just restarted)
+    result = _compute_recommendations()
+    with _rec_lock:
+        _rec_cache_save(key, result)
     return jsonify(result)
 
 
