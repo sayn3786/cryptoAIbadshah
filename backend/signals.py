@@ -146,6 +146,22 @@ def generate_signal(analysis: Dict) -> Dict:
         # Futures >50× spot on upside: leveraged long pile-on, reversal risk elevated
         score -= 14; g['flow'] -= 14
         bear_reasons.append("Futures-dominated rally — futures CVD dwarfs spot (>50×); leveraged long crowding, elevated long squeeze / reversal risk")
+    elif div_type == "spot_dominated_up":
+        # Spot >10× futures: overwhelmingly organic buying — highest conviction bullish
+        score += 35; g['flow'] += 35
+        bull_reasons.append("Spot-dominated rally — spot CVD dwarfs futures (>10×); pure organic buying with minimal leverage, strongest conviction signal")
+    elif div_type == "spot_heavy_up":
+        # Spot 2–10× futures: real buyers leading, futures confirming
+        score += 30; g['flow'] += 30
+        bull_reasons.append("Spot-heavy confirmed rally — spot CVD 2–10× futures; real demand driving the move, futures confirming organically")
+    elif div_type == "spot_dominated_down":
+        # Spot >10× futures: overwhelmingly real distribution — highest conviction bearish
+        score -= 35; g['flow'] -= 35
+        bear_reasons.append("Spot-dominated selloff — spot CVD dwarfs futures (>10×); pure holder distribution with minimal leverage, strongest conviction bearish signal")
+    elif div_type == "spot_heavy_down":
+        # Spot 2–10× futures: real sellers leading, futures confirming
+        score -= 30; g['flow'] -= 30
+        bear_reasons.append("Spot-heavy confirmed selloff — spot CVD 2–10× futures; real selling pressure driving the move, not leveraged speculation")
 
     # ── Funding Rate ─────────────────────────────────────────────────────────
     # THE highest-reliability crypto-specific signal. Extreme negative funding

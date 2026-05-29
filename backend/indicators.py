@@ -97,26 +97,31 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
 
     # Magnitude ratio: how much larger is futures CVD vs spot CVD (in absolute terms)?
     # Futures markets are naturally larger, but anything beyond ~10x signals speculative dominance.
-    # Thresholds: <10x = balanced, 10-50x = futures-heavy, >50x = futures-dominated
-    spot_abs = abs(spot_cvd.get("current", 0) or 0)
-    fut_abs  = abs(fut_cvd.get("current",  0) or 0)
-    futures_ratio = round(fut_abs / max(spot_abs, 1), 1)
+    # Spot dominance (spot >> futures) = organic conviction; futures dominance = speculative.
+    spot_abs    = abs(spot_cvd.get("current", 0) or 0)
+    fut_abs     = abs(fut_cvd.get("current",  0) or 0)
+    futures_ratio = round(fut_abs  / max(spot_abs, 1), 1)
+    spot_ratio    = round(spot_abs / max(fut_abs,  1), 1)
+
     if futures_ratio > 50:
         dominance = "futures"
         dom_label = f"futures-dominated ({futures_ratio:.0f}× larger than spot)"
     elif futures_ratio > 10:
         dominance = "futures"
         dom_label = f"futures-heavy ({futures_ratio:.0f}× vs spot)"
-    elif spot_abs > fut_abs * 2:
+    elif spot_ratio > 10:
         dominance = "spot"
-        dom_label = f"spot-dominant ({round(spot_abs/max(fut_abs,1),1):.0f}× vs futures)"
+        dom_label = f"spot-dominated ({spot_ratio:.0f}× larger than futures)"
+    elif spot_ratio > 2:
+        dominance = "spot"
+        dom_label = f"spot-heavy ({spot_ratio:.1f}× vs futures)"
     else:
         dominance = "balanced"
         dom_label = f"balanced ({futures_ratio:.1f}× futures/spot)"
 
     def _result(type_, label, detail, signal):
         return {"type": type_, "label": label, "detail": detail, "signal": signal,
-                "futures_ratio": futures_ratio, "dominance": dominance}
+                "futures_ratio": futures_ratio, "spot_ratio": spot_ratio, "dominance": dominance}
 
     if price_trend == "up":
         if spot_trend == "bearish" and fut_trend == "bullish":
@@ -137,6 +142,18 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                     "futures_dominated_up", "Futures-dominated rally",
                     f"Both CVDs rising but futures ({dom_label}) — move is overwhelmingly speculative leverage, not organic. Elevated reversal risk.",
                     "bearish",
+                )
+            if dominance == "spot" and spot_ratio > 10:
+                return _result(
+                    "spot_dominated_up", "Spot-dominated rally",
+                    f"Both CVDs rising but spot is {dom_label} — overwhelmingly organic buying with minimal leverage. Highest-conviction bullish signal.",
+                    "bullish",
+                )
+            if dominance == "spot" and spot_ratio > 2:
+                return _result(
+                    "spot_heavy_up", "Spot-driven confirmed rally",
+                    f"Both CVDs rising and spot is {dom_label} — real buyers leading, futures confirming. Strong organic conviction.",
+                    "bullish",
                 )
             return _result(
                 "confirmed_up", "Confirmed rally",
@@ -169,6 +186,18 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                     "futures_heavy_down", "Futures-heavy selloff",
                     f"Both CVDs falling but futures is {dom_label} — speculative selling heavier than organic. Some squeeze risk.",
                     "bearish",   # still bearish but lower conviction
+                )
+            if dominance == "spot" and spot_ratio > 10:
+                return _result(
+                    "spot_dominated_down", "Spot-dominated selloff",
+                    f"Both CVDs falling but spot is {dom_label} — overwhelmingly real holder distribution with minimal leverage. Highest-conviction bearish signal.",
+                    "bearish",
+                )
+            if dominance == "spot" and spot_ratio > 2:
+                return _result(
+                    "spot_heavy_down", "Spot-driven confirmed selloff",
+                    f"Both CVDs falling and spot is {dom_label} — real sellers leading, futures confirming. Strong organic distribution.",
+                    "bearish",
                 )
             return _result(
                 "confirmed_down", "Confirmed selloff",

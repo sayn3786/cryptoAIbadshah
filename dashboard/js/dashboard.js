@@ -471,18 +471,28 @@ function renderCVDDivergence(div) {
     futures_dominated_down:'⚠⚠',
     futures_heavy_down:    '⚠↓',
     futures_dominated_up:  '⚠⚠',
+    spot_dominated_up:     '✓✓✓',
+    spot_heavy_up:         '✓✓',
+    spot_dominated_down:   '↓↓↓',
+    spot_heavy_down:       '↓↓',
   };
   const sigCls = div.signal === 'bullish' ? 'bull' : div.signal === 'bearish' ? 'bear' : '';
-  // Build magnitude badge if ratio info is present
+  // Build magnitude badge — use spot_ratio when spot dominates, futures_ratio otherwise
   let ratioBadge = '';
-  if (div.futures_ratio != null && div.dominance) {
-    const ratioFmt = div.futures_ratio >= 10
-      ? `${Math.round(div.futures_ratio)}×`
-      : `${div.futures_ratio.toFixed(1)}×`;
-    const domLabel = div.dominance === 'futures' ? `Futures ${ratioFmt} spot` :
-                     div.dominance === 'spot'    ? `Spot ${ratioFmt} futures` :
-                     `Balanced (${ratioFmt})`;
-    ratioBadge = ` <span class="cvd-ratio-badge cvd-dom-${div.dominance}">${domLabel}</span>`;
+  if (div.dominance && div.dominance !== 'balanced') {
+    let ratioVal, domLabel;
+    if (div.dominance === 'spot' && div.spot_ratio != null) {
+      const r = div.spot_ratio;
+      ratioVal = r >= 10 ? `${Math.round(r)}×` : `${r.toFixed(1)}×`;
+      domLabel = `Spot ${ratioVal} futures`;
+    } else if (div.dominance === 'futures' && div.futures_ratio != null) {
+      const r = div.futures_ratio;
+      ratioVal = r >= 10 ? `${Math.round(r)}×` : `${r.toFixed(1)}×`;
+      domLabel = `Futures ${ratioVal} spot`;
+    }
+    if (domLabel) {
+      ratioBadge = ` <span class="cvd-ratio-badge cvd-dom-${div.dominance}">${domLabel}</span>`;
+    }
   }
   el.style.display = '';
   el.className = `cvd-div-banner cvd-div-${div.signal}`;
