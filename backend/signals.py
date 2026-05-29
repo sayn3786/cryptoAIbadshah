@@ -195,10 +195,36 @@ def generate_signal(analysis: Dict) -> Dict:
             f"{len(above)} bearish FVG(s) as resistance above (nearest: ${above[0]['midpoint']:,.4f})"
         )
 
+    # ── Pre-compute trend context for counter-trend discounts ─────────────────
+    # t_bull / t_bear are the raw trend bucket values (before capping).
+    # Computed here so Flag and MACD sections below can discount counter-trend signals.
+    # The authoritative scoring still happens in the full Trend section further down.
+    def _trend_raw(a: dict):
+        tb, tr = 0, 0
+        _ema = a.get("ema_trend") or {}
+        _ab  = _ema.get("above", []);  _bl = _ema.get("below", [])
+        if 50 in _ab and 200 in _ab: tb += 18
+        elif 50 in _ab: tb += max(5, 8)
+        if 50 in _bl and 200 in _bl: tr += 18
+        elif 50 in _bl: tr += max(5, 8)
+        _st = a.get("supertrend") or {}
+        if _st.get("direction") == "bullish":   tb += 12
+        elif _st.get("direction") == "bearish": tr += 12
+        _ic = a.get("ichimoku") or {}
+        if _ic.get("cloud_color")    == "green":  tb += 8
+        elif _ic.get("cloud_color")  == "red":    tr += 8
+        if _ic.get("price_vs_cloud") == "above":  tb += 15
+        elif _ic.get("price_vs_cloud") == "below": tr += 15
+        return tb, tr
+    t_bull, t_bear = _trend_raw(analysis)
+
     # ── Flag Patterns — one strongest per direction ───────────────────────────
     # Bulkowski's "Encyclopedia of Chart Patterns" gives confirmed bull flags
     # ~67% success rate — one of the stronger chart pattern signals.
     # Dominant (highest-TF) flag scores more; secondary TF flag scores less.
+    # Counter-trend discount: a bull flag in a strong bear trend (or vice versa)
+    # is likely a relief rally / dead-cat bounce, not a genuine breakout.
+    # When raw trend bucket ≥25 pts in one direction, opposing flag is cut 70%.
     scored_dirs: set = set()
     for f in flags:
         if not f.get("is_active"):
@@ -207,19 +233,39 @@ def generate_signal(analysis: Dict) -> Dict:
         if d in scored_dirs:
             continue
         scored_dirs.add(d)
-        bonus = 20 if f.get("dominant") else 10
+        base = 20 if f.get("dominant") else 10
         if d == "bullish":
-            score += bonus
-            bull_reasons.append(
-                f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag on {f['timeframe']} "
-                f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f})"
-            )
+            # Discount if strong bearish trend context
+            if t_bear >= 25:
+                pts = max(1, round(base * 0.30))
+                bull_reasons.append(
+                    f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag on {f['timeframe']} "
+                    f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f}) "
+                    f"[counter-trend discount: +{pts} vs base +{base}]"
+                )
+            else:
+                pts = base
+                bull_reasons.append(
+                    f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag on {f['timeframe']} "
+                    f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f})"
+                )
+            score += pts
         else:
-            score -= bonus
-            bear_reasons.append(
-                f"{'Dominant b' if f.get('dominant') else 'B'}earish flag on {f['timeframe']} "
-                f"({f['pole_pct']}% pole, target ${f['target']:,.4f})"
-            )
+            # Discount if strong bullish trend context
+            if t_bull >= 25:
+                pts = max(1, round(base * 0.30))
+                bear_reasons.append(
+                    f"{'Dominant b' if f.get('dominant') else 'B'}earish flag on {f['timeframe']} "
+                    f"({f['pole_pct']}% pole, target ${f['target']:,.4f}) "
+                    f"[counter-trend discount: -{pts} vs base -{base}]"
+                )
+            else:
+                pts = base
+                bear_reasons.append(
+                    f"{'Dominant b' if f.get('dominant') else 'B'}earish flag on {f['timeframe']} "
+                    f"({f['pole_pct']}% pole, target ${f['target']:,.4f})"
+                )
+            score -= pts
 
     # ── Engulfing Patterns ────────────────────────────────────────────────────
     # Bulkowski research + HTF studies show confirmed engulfing has 60-65%
@@ -256,20 +302,27 @@ def generate_signal(analysis: Dict) -> Dict:
         score += 20
         bull_reasons.append("MACD bullish cross — momentum flipping bullish, strong early signal")
     elif m_trend == "bullish" and m_hist is not None and m_hist > 0:
-        score += 10
-        bull_reasons.append(f"MACD histogram positive ({m_hist:+.4f}) — bullish momentum sustained")
+        # Counter-trend histogram: cap at +4 when strong bearish trend context
+        pts = 4 if t_bear >= 25 else 10
+        score += pts
+        note = " [counter-trend, capped]" if t_bear >= 25 else ""
+        bull_reasons.append(f"MACD histogram positive ({m_hist:+.4f}) — bullish momentum sustained{note}")
     if m_cross == "bearish" or m_zero == "bearish":
         score -= 20
         bear_reasons.append("MACD bearish cross — momentum flipping bearish, strong early signal")
     elif m_trend == "bearish" and m_hist is not None and m_hist < 0:
-        score -= 10
-        bear_reasons.append(f"MACD histogram negative ({m_hist:+.4f}) — bearish momentum sustained")
+        pts = 4 if t_bull >= 25 else 10
+        score -= pts
+        note = " [counter-trend, capped]" if t_bull >= 25 else ""
+        bear_reasons.append(f"MACD histogram negative ({m_hist:+.4f}) — bearish momentum sustained{note}")
 
     # ── Trend indicators — EMA + SuperTrend + Ichimoku (capped bucket) ────────
     # These three all measure the same thing: "is the market in an uptrend?"
     # Letting them each score independently can add 50+ pts from one idea.
     # Cap the combined trend contribution at ±35 so they confirm each other
     # without triple-counting. Individual reasons still shown in confluence list.
+    # NOTE: t_bull / t_bear were pre-computed above for counter-trend discounts.
+    # Reset here for the full authoritative calculation with reasons.
     TREND_CAP = 35
     t_bull = 0; t_bear = 0
     t_bull_r: List[str] = []; t_bear_r: List[str] = []
