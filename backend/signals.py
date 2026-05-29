@@ -35,6 +35,8 @@ def _mcap_tier(market_cap):
 
 def generate_signal(analysis: Dict) -> Dict:
     score = 0
+    # Group contribution tracker — signed (positive = bull, negative = bear)
+    g = {'trend': 0, 'momentum': 0, 'flow': 0, 'sentiment': 0, 'pattern': 0}
     bull_reasons: List[str] = []
     bear_reasons: List[str] = []
 
@@ -67,22 +69,22 @@ def generate_signal(analysis: Dict) -> Dict:
     # Source: Aronson "Evidence-Based Technical Analysis"; crypto quant backtests.
     if rsi is not None:
         if rsi < 25:
-            score += 22
+            score += 22; g['momentum'] += 22
             bull_reasons.append(f"RSI extremely oversold ({rsi}) — historically rare, high mean-reversion probability")
         elif rsi < 35:
-            score += 12
+            score += 12; g['momentum'] += 12
             bull_reasons.append(f"RSI oversold ({rsi}) — selling pressure elevated, watch for reversal")
         elif rsi < 45:
-            score += 4
+            score += 4; g['momentum'] += 4
             bull_reasons.append(f"RSI below midline ({rsi}) — mild bearish lean, low conviction alone")
         elif rsi > 75:
-            score -= 22
+            score -= 22; g['momentum'] -= 22
             bear_reasons.append(f"RSI extremely overbought ({rsi}) — historically rare, high mean-reversion probability")
         elif rsi > 65:
-            score -= 12
+            score -= 12; g['momentum'] -= 12
             bear_reasons.append(f"RSI overbought ({rsi}) — buying pressure elevated, watch for reversal")
         elif rsi > 55:
-            score -= 4
+            score -= 4; g['momentum'] -= 4
             bear_reasons.append(f"RSI above midline ({rsi}) — mild bullish lean, low conviction alone")
 
     # ── Spot CVD ─────────────────────────────────────────────────────────────
@@ -91,10 +93,10 @@ def generate_signal(analysis: Dict) -> Dict:
     # Rated highly by Willy Woo, Glassnode, Laevitas for its leading quality.
     cvd_trend = spot_cvd.get("trend", "neutral")
     if cvd_trend == "bullish":
-        score += 18
+        score += 18; g['flow'] += 18
         bull_reasons.append("Spot CVD rising — real buying pressure confirmed in spot market")
     elif cvd_trend == "bearish":
-        score -= 18
+        score -= 18; g['flow'] -= 18
         bear_reasons.append("Spot CVD falling — real selling pressure confirmed in spot market")
 
     # ── Futures CVD ──────────────────────────────────────────────────────────
@@ -102,10 +104,10 @@ def generate_signal(analysis: Dict) -> Dict:
     # Useful as context/confirmation but lower standalone reliability.
     f_cvd_trend = futures_cvd.get("trend", "neutral")
     if f_cvd_trend == "bullish":
-        score += 8
+        score += 8; g['flow'] += 8
         bull_reasons.append("Futures CVD bullish — speculative demand increasing")
     elif f_cvd_trend == "bearish":
-        score -= 8
+        score -= 8; g['flow'] -= 8
         bear_reasons.append("Futures CVD bearish — speculative selling increasing")
 
     # ── CVD Divergence ───────────────────────────────────────────────────────
@@ -115,22 +117,22 @@ def generate_signal(analysis: Dict) -> Dict:
     cvd_div = analysis.get("cvd_divergence") or {}
     div_type = cvd_div.get("type", "neutral")
     if div_type == "futures_led_up":
-        score -= 18
+        score -= 18; g['flow'] -= 18
         bear_reasons.append("Futures-driven rally — spot CVD falling, no real demand; leveraged pump likely to fade")
     elif div_type == "spot_led_up":
-        score += 22
+        score += 22; g['flow'] += 22
         bull_reasons.append("Spot-driven rally — genuine organic buying, futures not leading; more sustainable")
     elif div_type == "confirmed_up":
-        score += 28
+        score += 28; g['flow'] += 28
         bull_reasons.append("Fully confirmed rally — both spot and futures CVD rising; strongest bullish confluence")
     elif div_type == "futures_led_down":
-        score += 18
+        score += 18; g['flow'] += 18
         bull_reasons.append("Futures-driven selloff — spot CVD rising, no real selling; high short squeeze risk")
     elif div_type == "spot_led_down":
-        score -= 22
+        score -= 22; g['flow'] -= 22
         bear_reasons.append("Spot-driven selloff — genuine distribution by real holders; more sustainable decline")
     elif div_type == "confirmed_down":
-        score -= 28
+        score -= 28; g['flow'] -= 28
         bear_reasons.append("Fully confirmed selloff — both spot and futures CVD falling; strongest bearish confluence")
 
     # ── Funding Rate ─────────────────────────────────────────────────────────
@@ -141,16 +143,16 @@ def generate_signal(analysis: Dict) -> Dict:
     # Consistently the strongest mean-reversion signal in crypto markets.
     fr = funding.get("current", 0.0) or 0.0
     if fr < -0.02:
-        score += 30
+        score += 30; g['flow'] += 30
         bull_reasons.append(f"Funding extremely negative ({fr:.4f}%) — market max short, very high squeeze probability")
     elif fr < -0.005:
-        score += 15
+        score += 15; g['flow'] += 15
         bull_reasons.append(f"Funding negative ({fr:.4f}%) — shorts paying longs, structurally favours longs")
     elif fr > 0.04:
-        score -= 30
+        score -= 30; g['flow'] -= 30
         bear_reasons.append(f"Funding extremely high ({fr:.4f}%) — market max long, very high flush probability")
     elif fr > 0.015:
-        score -= 15
+        score -= 15; g['flow'] -= 15
         bear_reasons.append(f"Funding elevated ({fr:.4f}%) — longs overextended, late-cycle caution")
 
     # ── Open Interest ─────────────────────────────────────────────────────────
@@ -163,17 +165,17 @@ def generate_signal(analysis: Dict) -> Dict:
         price_up = current_price > prev_price
         if oi_change > 5:
             if price_up:
-                score += 12
+                score += 12; g['flow'] += 12
                 bull_reasons.append(f"OI +{oi_change:.1f}% with rising price — new longs opening, trend conviction")
             else:
-                score -= 12
+                score -= 12; g['flow'] -= 12
                 bear_reasons.append(f"OI +{oi_change:.1f}% with falling price — new shorts entering, bearish conviction")
         elif oi_change < -5:
             if price_up:
-                score += 8
+                score += 8; g['flow'] += 8
                 bull_reasons.append(f"OI declining ({oi_change:.1f}%) with rising price — shorts being squeezed out")
             else:
-                score -= 8
+                score -= 8; g['flow'] -= 8
                 bear_reasons.append(f"OI declining ({oi_change:.1f}%) with falling price — longs capitulating")
 
     # ── Fair Value Gaps ───────────────────────────────────────────────────────
@@ -185,12 +187,14 @@ def generate_signal(analysis: Dict) -> Dict:
     above = [f for f in unfilled if f["type"] == "bearish" and f["midpoint"] > current_price]
 
     if below:
-        score += min(len(below) * 8, 20)
+        _fvg_bull_pts = min(len(below) * 8, 20)
+        score += _fvg_bull_pts; g['pattern'] += _fvg_bull_pts
         bull_reasons.append(
             f"{len(below)} bullish FVG(s) acting as support below (nearest: ${below[0]['midpoint']:,.4f})"
         )
     if above:
-        score -= min(len(above) * 8, 20)
+        _fvg_bear_pts = min(len(above) * 8, 20)
+        score -= _fvg_bear_pts; g['pattern'] -= _fvg_bear_pts
         bear_reasons.append(
             f"{len(above)} bearish FVG(s) as resistance above (nearest: ${above[0]['midpoint']:,.4f})"
         )
@@ -249,7 +253,7 @@ def generate_signal(analysis: Dict) -> Dict:
                     f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag on {f['timeframe']} "
                     f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f})"
                 )
-            score += pts
+            score += pts; g['pattern'] += pts
         else:
             # Discount if strong bullish trend context
             if t_bull >= 25:
@@ -265,7 +269,7 @@ def generate_signal(analysis: Dict) -> Dict:
                     f"{'Dominant b' if f.get('dominant') else 'B'}earish flag on {f['timeframe']} "
                     f"({f['pole_pct']}% pole, target ${f['target']:,.4f})"
                 )
-            score -= pts
+            score -= pts; g['pattern'] -= pts
 
     # ── Engulfing Patterns ────────────────────────────────────────────────────
     # Bulkowski research + HTF studies show confirmed engulfing has 60-65%
@@ -283,10 +287,10 @@ def generate_signal(analysis: Dict) -> Dict:
         label = f"{'Bearish' if e['direction'] == 'bearish' else 'Bullish'} engulfing confirmed " \
                 f"({ago} candle ago, {ratio}x body) — HTF reversal signal"
         if e["direction"] == "bullish":
-            score += pts
+            score += pts; g['pattern'] += pts
             bull_reasons.append(label)
         else:
-            score -= pts
+            score -= pts; g['pattern'] -= pts
             bear_reasons.append(label)
 
     # ── MACD ─────────────────────────────────────────────────────────────────
@@ -299,20 +303,20 @@ def generate_signal(analysis: Dict) -> Dict:
     m_hist      = macd.get("histogram")
     m_trend     = macd.get("trend", "neutral")
     if m_cross == "bullish" or m_zero == "bullish":
-        score += 20
+        score += 20; g['momentum'] += 20
         bull_reasons.append("MACD bullish cross — momentum flipping bullish, strong early signal")
     elif m_trend == "bullish" and m_hist is not None and m_hist > 0:
         # Counter-trend histogram: cap at +4 when strong bearish trend context
         pts = 4 if t_bear >= 25 else 10
-        score += pts
+        score += pts; g['momentum'] += pts
         note = " [counter-trend, capped]" if t_bear >= 25 else ""
         bull_reasons.append(f"MACD histogram positive ({m_hist:+.4f}) — bullish momentum sustained{note}")
     if m_cross == "bearish" or m_zero == "bearish":
-        score -= 20
+        score -= 20; g['momentum'] -= 20
         bear_reasons.append("MACD bearish cross — momentum flipping bearish, strong early signal")
     elif m_trend == "bearish" and m_hist is not None and m_hist < 0:
         pts = 4 if t_bull >= 25 else 10
-        score -= pts
+        score -= pts; g['momentum'] -= pts
         note = " [counter-trend, capped]" if t_bull >= 25 else ""
         bear_reasons.append(f"MACD histogram negative ({m_hist:+.4f}) — bearish momentum sustained{note}")
 
@@ -354,16 +358,16 @@ def generate_signal(analysis: Dict) -> Dict:
     ls_short   = ls.get("short_pct", 50)
     if ls_ratio is not None:
         if ls_ratio < 0.65:
-            score += 14
+            score += 14; g['sentiment'] += 14
             bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — crowd heavily short, contrarian long signal")
         elif ls_ratio < 0.85:
-            score += 8
+            score += 8; g['sentiment'] += 8
             bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — moderate short bias, favours longs")
         elif ls_ratio > 2.5:
-            score -= 14
+            score -= 14; g['sentiment'] -= 14
             bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd extremely long, contrarian short signal")
         elif ls_ratio > 1.5:
-            score -= 8
+            score -= 8; g['sentiment'] -= 8
             bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd long-heavy, late-cycle caution")
 
     # ── Fear & Greed Index ────────────────────────────────────────────────────
@@ -377,19 +381,19 @@ def generate_signal(analysis: Dict) -> Dict:
         tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
         if fg_val <= 15:
             pts = round(25 * tf_macro_w)
-            score += pts
+            score += pts; g['sentiment'] += pts
             bull_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — extreme fear, best buying zones{tf_note}")
         elif fg_val <= 30:
             pts = round(12 * tf_macro_w)
-            score += pts
+            score += pts; g['sentiment'] += pts
             bull_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market fearful, contrarian bullish lean{tf_note}")
         elif fg_val >= 80:
             pts = round(25 * tf_macro_w)
-            score -= pts
+            score -= pts; g['sentiment'] -= pts
             bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — extreme greed, historically marks tops{tf_note}")
         elif fg_val >= 65:
             pts = round(12 * tf_macro_w)
-            score -= pts
+            score -= pts; g['sentiment'] -= pts
             bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market greedy, contrarian bearish lean{tf_note}")
 
     # ── News Sentiment ────────────────────────────────────────────────────────
@@ -403,7 +407,7 @@ def generate_signal(analysis: Dict) -> Dict:
     if news_signal == "bullish":
         raw = min(15, max(6, news_bull * 4))   # cap lowered 20→15, base 8→6
         pts = round(raw * tf_macro_w)
-        score += pts
+        score += pts; g['sentiment'] += pts
         tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
         bull_reasons.append(
             f"News sentiment bullish — {news_bull} bullish vs {news_bear} bearish "
@@ -412,7 +416,7 @@ def generate_signal(analysis: Dict) -> Dict:
     elif news_signal == "bearish":
         raw = min(15, max(6, news_bear * 4))
         pts = round(raw * tf_macro_w)
-        score -= pts
+        score -= pts; g['sentiment'] -= pts
         tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
         bear_reasons.append(
             f"News sentiment bearish — {news_bear} bearish vs {news_bull} bullish "
@@ -426,10 +430,10 @@ def generate_signal(analysis: Dict) -> Dict:
     wave_bias = elliott.get("bias", "neutral")
     wave_label = elliott.get("wave_count", "")
     if wave_bias == "bullish":
-        score += 8
+        score += 8; g['pattern'] += 8
         bull_reasons.append(f"Elliott Wave: {wave_label} (bullish phase) — weak supporting signal")
     elif wave_bias == "bearish":
-        score -= 8
+        score -= 8; g['pattern'] -= 8
         bear_reasons.append(f"Elliott Wave: {wave_label} (bearish phase) — weak supporting signal")
 
     # ── RSI Divergence ────────────────────────────────────────────────────────
@@ -443,11 +447,11 @@ def generate_signal(analysis: Dict) -> Dict:
     div_str  = rsi_div.get("strength", 0) or 0
     if div_type == "bullish":
         pts = 18 if div_str >= 5 else 12   # stronger divergence = more points
-        score += pts
+        score += pts; g['momentum'] += pts
         bull_reasons.append(div_desc or "Bullish RSI divergence — price lower low, RSI higher low")
     elif div_type == "bearish":
         pts = 18 if div_str >= 5 else 12
-        score -= pts
+        score -= pts; g['momentum'] -= pts
         bear_reasons.append(div_desc or "Bearish RSI divergence — price higher high, RSI lower high")
 
     # ── Bollinger Bands ───────────────────────────────────────────────────────
@@ -462,23 +466,23 @@ def generate_signal(analysis: Dict) -> Dict:
 
     fmt_p = lambda v: f"${v:,.4f}" if v else ""
     if bb_squeeze and bb_breakout == "bullish":
-        score += 16
+        score += 16; g['pattern'] += 16
         bull_reasons.append(f"Bollinger squeeze breakout BULLISH — price closed above upper band {fmt_p(bb_upper)} after compression; explosive move signal")
     elif bb_squeeze and bb_breakout == "bearish":
-        score -= 16
+        score -= 16; g['pattern'] -= 16
         bear_reasons.append(f"Bollinger squeeze breakdown BEARISH — price closed below lower band {fmt_p(bb_lower)} after compression; explosive move signal")
     elif bb_squeeze:
         if bb_pct_b > 0.6:
-            score += 5
+            score += 5; g['pattern'] += 5
             bull_reasons.append(f"Bollinger squeeze active — bands compressed, price upper half (%B {bb_pct_b:.2f}); breakout likely imminent")
         elif bb_pct_b < 0.4:
-            score -= 5
+            score -= 5; g['pattern'] -= 5
             bear_reasons.append(f"Bollinger squeeze active — bands compressed, price lower half (%B {bb_pct_b:.2f}); breakdown risk elevated")
     elif bb_breakout == "bullish":
-        score += 10
+        score += 10; g['pattern'] += 10
         bull_reasons.append(f"Price above Bollinger upper band {fmt_p(bb_upper)} — strong bullish momentum")
     elif bb_breakout == "bearish":
-        score -= 10
+        score -= 10; g['pattern'] -= 10
         bear_reasons.append(f"Price below Bollinger lower band {fmt_p(bb_lower)} — strong bearish momentum")
 
     # SuperTrend — flip scores outside the trend cap (it's a momentum event,
@@ -489,13 +493,13 @@ def generate_signal(analysis: Dict) -> Dict:
     st_val     = st.get("value")
     if st_dir == "bullish":
         if st_flipped:
-            score += 20   # fresh flip = momentum event → outside trend cap
+            score += 20; g['trend'] += 20   # fresh flip = momentum event → outside trend cap
             bull_reasons.append(f"SuperTrend flipped BULLISH — fresh BUY signal, trend just reversed up (support ${st_val:,.4f})" if st_val else "SuperTrend flipped BULLISH — fresh BUY signal")
         else:
             t_bull += 12; t_bull_r.append(f"SuperTrend bullish — price above dynamic support (${st_val:,.4f}), uptrend intact" if st_val else "SuperTrend bullish — uptrend intact")
     elif st_dir == "bearish":
         if st_flipped:
-            score -= 20   # fresh flip = momentum event → outside trend cap
+            score -= 20; g['trend'] -= 20   # fresh flip = momentum event → outside trend cap
             bear_reasons.append(f"SuperTrend flipped BEARISH — fresh SELL signal, trend just reversed down (resistance ${st_val:,.4f})" if st_val else "SuperTrend flipped BEARISH — fresh SELL signal")
         else:
             t_bear += 12; t_bear_r.append(f"SuperTrend bearish — price below dynamic resistance (${st_val:,.4f}), downtrend intact" if st_val else "SuperTrend bearish — downtrend intact")
@@ -527,6 +531,8 @@ def generate_signal(analysis: Dict) -> Dict:
     eff_t_bear = min(t_bear, TREND_CAP)
     score += eff_t_bull
     score -= eff_t_bear
+    g['trend'] += eff_t_bull
+    g['trend'] -= eff_t_bear
     bull_reasons += t_bull_r
     bear_reasons += t_bear_r
     if t_bull > TREND_CAP:
@@ -544,19 +550,19 @@ def generate_signal(analysis: Dict) -> Dict:
     vwap_val       = vwap_data.get("vwap")
     fmt_v = lambda v: f"${v:,.4f}" if v else ""
     if vwap_cross == "bullish":
-        score += 14
+        score += 14; g['trend'] += 14
         bull_reasons.append(f"VWAP bullish cross — price just crossed above VWAP {fmt_v(vwap_val)}, institutional momentum shift")
     elif vwap_cross == "bearish":
-        score -= 14
+        score -= 14; g['trend'] -= 14
         bear_reasons.append(f"VWAP bearish cross — price just crossed below VWAP {fmt_v(vwap_val)}, institutional selling pressure")
     elif vwap_pos == "above":
         pts = 10 if vwap_slope == "rising" else 6
-        score += pts
+        score += pts; g['trend'] += pts
         slope_note = " + VWAP rising" if vwap_slope == "rising" else ""
         bull_reasons.append(f"Price above VWAP{slope_note} {fmt_v(vwap_val)} — institutional buy-side structure intact")
     elif vwap_pos == "below":
         pts = 10 if vwap_slope == "falling" else 6
-        score -= pts
+        score -= pts; g['trend'] -= pts
         slope_note = " + VWAP falling" if vwap_slope == "falling" else ""
         bear_reasons.append(f"Price below VWAP{slope_note} {fmt_v(vwap_val)} — institutional sell-side pressure dominant")
 
@@ -568,22 +574,22 @@ def generate_signal(analysis: Dict) -> Dict:
     srsi_k         = srsi.get("k")
     srsi_d         = srsi.get("d")
     if srsi_signal == "bull_cross_oversold":
-        score += 20
+        score += 20; g['momentum'] += 20
         bull_reasons.append(f"Stoch RSI bullish cross from oversold (K:{srsi_k} D:{srsi_d}) — high-quality reversal signal")
     elif srsi_signal == "oversold":
-        score += 12
+        score += 12; g['momentum'] += 12
         bull_reasons.append(f"Stoch RSI oversold (K:{srsi_k} D:{srsi_d}) — momentum deeply oversold, bounce likely")
     elif srsi_signal == "near_oversold":
-        score += 6
+        score += 6; g['momentum'] += 6
         bull_reasons.append(f"Stoch RSI near oversold (K:{srsi_k}) — mild oversold lean")
     elif srsi_signal == "bear_cross_overbought":
-        score -= 20
+        score -= 20; g['momentum'] -= 20
         bear_reasons.append(f"Stoch RSI bearish cross from overbought (K:{srsi_k} D:{srsi_d}) — high-quality reversal signal")
     elif srsi_signal == "overbought":
-        score -= 12
+        score -= 12; g['momentum'] -= 12
         bear_reasons.append(f"Stoch RSI overbought (K:{srsi_k} D:{srsi_d}) — momentum deeply overbought, pullback likely")
     elif srsi_signal == "near_overbought":
-        score -= 6
+        score -= 6; g['momentum'] -= 6
         bear_reasons.append(f"Stoch RSI near overbought (K:{srsi_k}) — mild overbought lean")
 
     # ── Volume Confirmation ───────────────────────────────────────────────────
@@ -596,11 +602,11 @@ def generate_signal(analysis: Dict) -> Dict:
     vol_desc       = vol.get("description", "")
     if vol_sig == "bullish":
         pts = 12 if vol_ratio >= 2.0 else 8
-        score += pts
+        score += pts; g['flow'] += pts
         bull_reasons.append(vol_desc or f"Volume confirmation bullish ({vol_ratio:.1f}× avg)")
     elif vol_sig == "bearish":
         pts = 12 if vol_ratio >= 2.0 else 8
-        score -= pts
+        score -= pts; g['flow'] -= pts
         bear_reasons.append(vol_desc or f"Volume confirmation bearish ({vol_ratio:.1f}× avg)")
 
     # ── BTC mining / on-chain signals (BTC only) ──────────────────────────────
@@ -657,10 +663,147 @@ def generate_signal(analysis: Dict) -> Dict:
                 score -= 4
                 bear_reasons.append(f"▼ Difficulty dropping {diff_chg:.1f}% — miners leaving, reduced network security")
 
+    # ── Confluence Engine ─────────────────────────────────────────────────────────
+    # Analyzes cross-group relationships to dynamically adjust the final score.
+    # Groups: TREND | MOMENTUM | FLOW | SENTIMENT | PATTERN
+    # Indicators do not score in isolation — they validate or contradict each other.
+
+    def _gdir(v):
+        return 'bull' if v > 8 else ('bear' if v < -8 else 'neutral')
+
+    gdir = {k: _gdir(v) for k, v in g.items()}
+    overall_dir = 'bull' if score > 0 else 'bear'
+
+    # Groups agreeing / conflicting with the overall score direction
+    agreeing    = [k for k, d in gdir.items() if d == overall_dir]
+    conflicting = [k for k, d in gdir.items() if d != overall_dir and d != 'neutral']
+    n_agree     = len(agreeing)
+
+    combo_pts = 0   # additive bonuses/penalties from specific cross-group combos
+
+    # ── Combo 1: Flow confirms Trend (real money behind the move) ─────────────────
+    if gdir['flow'] == gdir['trend'] != 'neutral':
+        pts = 12
+        combo_pts += pts if score > 0 else -pts
+        label = "🔗 Flow+Trend confluence — CVD/OI confirms trend direction; real money behind the move"
+        (bull_reasons if score > 0 else bear_reasons).append(label)
+
+    # ── Combo 2: Momentum confirms Trend (healthy trend continuation) ─────────────
+    if gdir['momentum'] == gdir['trend'] != 'neutral':
+        pts = 8
+        combo_pts += pts if score > 0 else -pts
+        label = "🔗 Momentum+Trend confluence — MACD/RSI aligned with trend; healthy continuation signal"
+        (bull_reasons if score > 0 else bear_reasons).append(label)
+
+    # ── Combo 3: Flow contradicts Trend (CVD divergence warning) ─────────────────
+    if gdir['flow'] not in ('neutral', gdir['trend']) and gdir['trend'] != 'neutral':
+        penalty = min(abs(g['flow']), 20)
+        combo_pts += penalty if score < 0 else -penalty   # works against dominant direction
+        if score > 0:
+            bear_reasons.append(f"⚠️ Flow-Trend divergence — CVD/Volume contradicts uptrend (−{penalty} pts caution); watch for reversal")
+        else:
+            bull_reasons.append(f"⚠️ Flow-Trend divergence — CVD/Volume contradicts downtrend (−{penalty} pts caution); squeeze risk elevated")
+
+    # ── Combo 4: Momentum diverging from Trend (early exhaustion warning) ─────────
+    if gdir['momentum'] not in ('neutral', gdir['trend']) and gdir['trend'] != 'neutral':
+        penalty = min(abs(g['momentum']), 12)
+        combo_pts += penalty if score < 0 else -penalty
+        if score > 0:
+            bear_reasons.append(f"⚠️ Momentum diverging from trend (−{penalty} pts) — MACD/RSI losing alignment; trend exhaustion risk")
+        else:
+            bull_reasons.append(f"⚠️ Momentum diverging from downtrend (−{penalty} pts) — possible reversal building; monitor closely")
+
+    # ── Combo 5: Extreme Funding + Trend aligned (maximum squeeze/flush setup) ───
+    fr_val = funding.get("current", 0.0) or 0.0
+    if abs(fr_val) >= 0.02 and gdir['trend'] == overall_dir and gdir['trend'] != 'neutral':
+        pts = 15
+        combo_pts += pts if score > 0 else -pts
+        if score > 0:
+            bull_reasons.append(f"🔗 Extreme Funding+Trend aligned — max short positioning ({fr_val:.4f}%) + bullish trend = extreme squeeze setup")
+        else:
+            bear_reasons.append(f"🔗 Extreme Funding+Trend aligned — max long positioning ({fr_val:.4f}%) + bearish trend = extreme flush setup")
+
+    # ── Combo 6: SuperTrend flip + Volume confirmation (breakout with conviction) ─
+    vol_sig_local = (analysis.get("vol_signal") or {}).get("signal")
+    st_local      = analysis.get("supertrend") or {}
+    st_flipped_local = st_local.get("flipped", False)
+    st_dir_local     = st_local.get("direction")
+    vol_with_trend  = (vol_sig_local == 'bullish' and score > 0) or (vol_sig_local == 'bearish' and score < 0)
+    st_flip_with_trend = st_flipped_local and ((st_dir_local == 'bullish' and score > 0) or (st_dir_local == 'bearish' and score < 0))
+    if st_flip_with_trend and vol_with_trend:
+        pts = 10
+        combo_pts += pts if score > 0 else -pts
+        if score > 0:
+            bull_reasons.append("🔗 SuperTrend flip + Volume — trend reversal confirmed with elevated volume; high-conviction breakout")
+        else:
+            bear_reasons.append("🔗 SuperTrend flip + Volume — trend breakdown confirmed with elevated volume; high-conviction breakdown")
+
+    # ── Combo 7: RSI divergence + MACD cross (dual momentum reversal) ─────────────
+    rsi_div_local  = analysis.get("rsi_divergence") or {}
+    div_type_local = rsi_div_local.get("type")
+    macd_local     = analysis.get("macd") or {}
+    macd_cross_local = macd_local.get("cross")
+    macd_zero_local  = macd_local.get("zero_cross")
+    rsi_div_bull  = div_type_local == 'bullish'
+    rsi_div_bear  = div_type_local == 'bearish'
+    macd_bull_sig = macd_cross_local == 'bullish' or macd_zero_local == 'bullish'
+    macd_bear_sig = macd_cross_local == 'bearish' or macd_zero_local == 'bearish'
+    if (rsi_div_bull and macd_bull_sig) or (rsi_div_bear and macd_bear_sig):
+        pts = 12
+        is_bull_reversal = rsi_div_bull and macd_bull_sig
+        combo_pts += pts if is_bull_reversal else -pts
+        if is_bull_reversal:
+            bull_reasons.append("🔗 RSI divergence + MACD cross — dual momentum reversal confirmed; high-quality bottom signal")
+        else:
+            bear_reasons.append("🔗 RSI divergence + MACD cross — dual momentum reversal confirmed; high-quality top signal")
+
+    # ── Combo 8: Bollinger squeeze + Volume breakout (coiled spring released) ──────
+    bb_local      = analysis.get("bollinger") or {}
+    bb_squeeze_l  = bb_local.get("squeeze", False)
+    bb_breakout_l = bb_local.get("breakout")
+    bb_bull_break = bb_squeeze_l and bb_breakout_l == 'bullish'
+    bb_bear_break = bb_squeeze_l and bb_breakout_l == 'bearish'
+    if (bb_bull_break and vol_with_trend and score > 0) or (bb_bear_break and vol_with_trend and score < 0):
+        pts = 10
+        combo_pts += pts if score > 0 else -pts
+        if score > 0:
+            bull_reasons.append("🔗 BB squeeze + Volume — compressed bands broke bullish with volume confirmation; explosive move setup")
+        else:
+            bear_reasons.append("🔗 BB squeeze + Volume — compressed bands broke bearish with volume confirmation; explosive breakdown setup")
+
+    # Apply combo points
+    score += combo_pts
+
+    # ── Multi-group confluence multiplier ─────────────────────────────────────────
+    # Applied after combo adjustments — amplifies already-strong multi-group signals
+    MULT_LABELS = {5: "Penta", 4: "Quad", 3: "Triple", 2: "Double"}
+    if n_agree >= 4 and len(conflicting) == 0:
+        mult = 1.30
+        lbl = MULT_LABELS.get(n_agree, "Multi")
+        aligned_str = " + ".join(a.capitalize() for a in agreeing[:4])
+        msg = f"⚡ {lbl} confluence ({n_agree}/5 groups: {aligned_str}) — 30% strength amplifier"
+        (bull_reasons if score > 0 else bear_reasons).append(msg)
+    elif n_agree == 3 and len(conflicting) <= 1:
+        mult = 1.15
+        aligned_str = " + ".join(a.capitalize() for a in agreeing[:3])
+        msg = f"⚡ Triple confluence ({aligned_str}) — 15% strength amplifier"
+        (bull_reasons if score > 0 else bear_reasons).append(msg)
+    elif n_agree >= 2 and len(conflicting) == 0:
+        mult = 1.08
+    elif len(conflicting) >= 2:
+        mult = 0.82   # multiple groups in conflict — noisy, reduce confidence
+        conf_str = " + ".join(c.capitalize() for c in conflicting[:3])
+        msg = f"⚠️ Conflicting groups ({conf_str}) — −18% confidence penalty; signals mixed"
+        (bear_reasons if score > 0 else bull_reasons).append(msg)
+    else:
+        mult = 1.00
+
+    score = round(score * mult)
+
     # ── Final direction ───────────────────────────────────────────────────────
     #   VWAP cross +14, Stoch RSI bull cross +20, Volume +12 → total ~320
     # In practice signals overlap — realistic ceiling ~200.
-    MAX_SCORE = 360.0   # +30 for BTC mining signals (BTC only)
+    MAX_SCORE = 420.0   # +30 for BTC mining signals (BTC only); confluence engine adds up to ~60
 
     strength = min(int(abs(score) / MAX_SCORE * 100), 100)
 
