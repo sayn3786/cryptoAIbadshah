@@ -456,7 +456,7 @@ def calculate_macd(closes: List[float], fast: int = 12, slow: int = 26, signal_p
 
 
 def calculate_ema_trend(closes: List[float]) -> Dict:
-    """Compute EMA20, EMA50, EMA200 and classify where price sits relative to each."""
+    """Compute EMA7, EMA21, EMA50, EMA200 and classify where price sits relative to each."""
     def _ema_val(values: List[float], period: int) -> Optional[float]:
         if len(values) < period:
             return None
@@ -470,17 +470,31 @@ def calculate_ema_trend(closes: List[float]) -> Dict:
         return {}
 
     price  = closes[-1]
-    ema20  = _ema_val(closes, 20)
+    ema7   = _ema_val(closes, 7)
+    ema21  = _ema_val(closes, 21)
     ema50  = _ema_val(closes, 50)
     ema200 = _ema_val(closes, 200)
 
     above, below = [], []
-    for period, val in [(20, ema20), (50, ema50), (200, ema200)]:
+    for period, val in [(7, ema7), (21, ema21), (50, ema50), (200, ema200)]:
         if val is None:
             continue
         (above if price > val else below).append(period)
 
-    # Overall trend classification
+    # Short-term EMA crossover (EMA7 vs EMA21): fast-responding momentum signal
+    ema7_cross = None
+    short_trend = None
+    if ema7 is not None and ema21 is not None and len(closes) >= 22:
+        prev_ema7  = _ema_val(closes[:-1], 7)
+        prev_ema21 = _ema_val(closes[:-1], 21)
+        if prev_ema7 is not None and prev_ema21 is not None:
+            if prev_ema7 <= prev_ema21 and ema7 > ema21:
+                ema7_cross = "bullish"   # fresh EMA7 cross above EMA21
+            elif prev_ema7 >= prev_ema21 and ema7 < ema21:
+                ema7_cross = "bearish"   # fresh EMA7 cross below EMA21
+        short_trend = "bullish" if ema7 > ema21 else "bearish"
+
+    # Overall trend classification (driven by EMA50 vs 200 — structural)
     if 50 in above and (200 in above or 200 not in (above + below)):
         trend = "bullish"
     elif 50 in below and (200 in below or 200 not in (above + below)):
@@ -493,13 +507,17 @@ def calculate_ema_trend(closes: List[float]) -> Dict:
         trend = "neutral"
 
     return {
-        "price":  round(price, 8),
-        "ema20":  round(ema20,  8) if ema20  is not None else None,
-        "ema50":  round(ema50,  8) if ema50  is not None else None,
-        "ema200": round(ema200, 8) if ema200 is not None else None,
-        "above":  above,
-        "below":  below,
-        "trend":  trend,
+        "price":       round(price, 8),
+        "ema7":        round(ema7,   8) if ema7   is not None else None,
+        "ema21":       round(ema21,  8) if ema21  is not None else None,
+        "ema20":       round(_ema_val(closes, 20), 8) if _ema_val(closes, 20) is not None else None,
+        "ema50":       round(ema50,  8) if ema50  is not None else None,
+        "ema200":      round(ema200, 8) if ema200 is not None else None,
+        "above":       above,
+        "below":       below,
+        "trend":       trend,
+        "ema7_cross":  ema7_cross,
+        "short_trend": short_trend,
     }
 
 
@@ -892,10 +910,24 @@ def calculate_stoch_rsi(closes: List[float], rsi_period: int = 14,
     k, d           = round(k_line[-1], 2), round(d_line[-1], 2)
     prev_k, prev_d = (round(k_line[-2], 2), round(d_line[-2], 2)) if len(k_line) >= 2 and len(d_line) >= 2 else (k, d)
 
-    if k < 20 and d < 20:
-        signal = "bull_cross_oversold" if prev_k <= prev_d and k > d else "oversold"
-    elif k > 80 and d > 80:
-        signal = "bear_cross_overbought" if prev_k >= prev_d and k < d else "overbought"
+    if k >= 80:
+        if prev_k < 80:
+            # K just crossed INTO overbought — momentum surge, not a topping signal
+            signal = "bull_surge"
+        elif k < d and prev_k >= prev_d:
+            # K crossing down while overbought — genuine topping signal
+            signal = "bear_cross_overbought"
+        else:
+            signal = "overbought"
+    elif k <= 20:
+        if prev_k > 20:
+            # K just crossed INTO oversold — momentum collapse, not a reversal signal yet
+            signal = "bear_collapse"
+        elif k > d and prev_k <= prev_d:
+            # K crossing up while oversold — genuine reversal signal
+            signal = "bull_cross_oversold"
+        else:
+            signal = "oversold"
     elif k < 30:
         signal = "near_oversold"
     elif k > 70:

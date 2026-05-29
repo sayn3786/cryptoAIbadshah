@@ -111,6 +111,33 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= 4; g['momentum'] -= 4
             bear_reasons.append(f"RSI drifting lower ({rsi_slope:.1f} over 5 candles) — mild downward pressure")
 
+    # ── Price Rate-of-Change (ROC) ────────────────────────────────────────────
+    # The most direct momentum signal: "this coin is actively moving right now."
+    # A coin that's up 16% in 4 candles scores zero from RSI/trend indicators
+    # if it was previously in a downtrend. ROC fills that gap by reading the
+    # CURRENT price action without depending on historical context.
+    # Source: standard price momentum factor (Jegadeesh & Titman 1993 momentum anomaly).
+    price_roc = analysis.get("price_roc")
+    if price_roc is not None:
+        if price_roc > 12:
+            score += 20; g['momentum'] += 20
+            bull_reasons.append(f"Strong price momentum ({price_roc:+.1f}% over 4 candles) — active buying surge; coin is moving right now")
+        elif price_roc > 6:
+            score += 12; g['momentum'] += 12
+            bull_reasons.append(f"Price momentum building ({price_roc:+.1f}% over 4 candles) — sustained upward move in progress")
+        elif price_roc > 2.5:
+            score += 5; g['momentum'] += 5
+            bull_reasons.append(f"Mild positive price momentum ({price_roc:+.1f}% over 4 candles)")
+        elif price_roc < -12:
+            score -= 20; g['momentum'] -= 20
+            bear_reasons.append(f"Strong price selloff ({price_roc:+.1f}% over 4 candles) — active selling surge; coin is dropping right now")
+        elif price_roc < -6:
+            score -= 12; g['momentum'] -= 12
+            bear_reasons.append(f"Price momentum falling ({price_roc:+.1f}% over 4 candles) — sustained downward move in progress")
+        elif price_roc < -2.5:
+            score -= 5; g['momentum'] -= 5
+            bear_reasons.append(f"Mild negative price momentum ({price_roc:+.1f}% over 4 candles)")
+
     # ── CVD: Unified Spot × Futures Analysis ─────────────────────────────────
     # Spot CVD, Futures CVD, and their divergence type are NOT independent —
     # they describe the same market event from different angles.
@@ -407,6 +434,24 @@ def generate_signal(analysis: Dict) -> Dict:
     elif 50 in ema_below:
         t_bear += 5;  t_bear_r.append("Price below EMA50 — medium-term bearish pressure")
 
+    # EMA7/21 short-term cross — fast-responding momentum signal
+    # These flip bullish within the first 1-2 candles of a breakout, far faster than EMA50/200.
+    # Scored in the MOMENTUM group (not trend) to bypass TREND_CAP.
+    ema7_cross  = ema.get("ema7_cross")
+    short_trend = ema.get("short_trend")
+    if ema7_cross == "bullish":
+        score += 14; g['momentum'] += 14
+        bull_reasons.append("EMA7 crossed above EMA21 — short-term momentum just turned bullish; fast-moving trend flip")
+    elif ema7_cross == "bearish":
+        score -= 14; g['momentum'] -= 14
+        bear_reasons.append("EMA7 crossed below EMA21 — short-term momentum just turned bearish; fast-moving trend flip")
+    elif short_trend == "bullish":
+        score += 6; g['momentum'] += 6
+        bull_reasons.append("EMA7 above EMA21 — short-term trend bullish; near-term buyers in control")
+    elif short_trend == "bearish":
+        score -= 6; g['momentum'] -= 6
+        bear_reasons.append("EMA7 below EMA21 — short-term trend bearish; near-term sellers in control")
+
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,
@@ -632,24 +677,33 @@ def generate_signal(analysis: Dict) -> Dict:
     srsi_signal    = srsi.get("signal")
     srsi_k         = srsi.get("k")
     srsi_d         = srsi.get("d")
-    if srsi_signal == "bull_cross_oversold":
+    if srsi_signal == "bull_surge":
+        # K just entered overbought zone — momentum SURGE, not topping signal
+        score += 16; g['momentum'] += 16
+        bull_reasons.append(f"Stoch RSI momentum surge into overbought (K:{srsi_k}) — K just crossed 80, strong breakout momentum confirmation")
+    elif srsi_signal == "bull_cross_oversold":
         score += 20; g['momentum'] += 20
         bull_reasons.append(f"Stoch RSI bullish cross from oversold (K:{srsi_k} D:{srsi_d}) — high-quality reversal signal")
     elif srsi_signal == "oversold":
-        score += 12; g['momentum'] += 12
+        score += 10; g['momentum'] += 10
         bull_reasons.append(f"Stoch RSI oversold (K:{srsi_k} D:{srsi_d}) — momentum deeply oversold, bounce likely")
     elif srsi_signal == "near_oversold":
-        score += 6; g['momentum'] += 6
+        score += 5; g['momentum'] += 5
         bull_reasons.append(f"Stoch RSI near oversold (K:{srsi_k}) — mild oversold lean")
+    elif srsi_signal == "bear_collapse":
+        # K just entered oversold zone — momentum COLLAPSE, not reversal signal yet
+        score -= 16; g['momentum'] -= 16
+        bear_reasons.append(f"Stoch RSI momentum collapse into oversold (K:{srsi_k}) — K just crossed 20, strong breakdown momentum confirmation")
     elif srsi_signal == "bear_cross_overbought":
         score -= 20; g['momentum'] -= 20
-        bear_reasons.append(f"Stoch RSI bearish cross from overbought (K:{srsi_k} D:{srsi_d}) — high-quality reversal signal")
+        bear_reasons.append(f"Stoch RSI bearish cross from overbought (K:{srsi_k} D:{srsi_d}) — high-quality topping/reversal signal")
     elif srsi_signal == "overbought":
-        score -= 12; g['momentum'] -= 12
-        bear_reasons.append(f"Stoch RSI overbought (K:{srsi_k} D:{srsi_d}) — momentum deeply overbought, pullback likely")
+        # Stable overbought (K has been >80 for multiple candles) — reduce penalty vs fresh cross
+        score -= 8; g['momentum'] -= 8
+        bear_reasons.append(f"Stoch RSI overbought (K:{srsi_k} D:{srsi_d}) — momentum extended; not a topping signal on its own")
     elif srsi_signal == "near_overbought":
-        score -= 6; g['momentum'] -= 6
-        bear_reasons.append(f"Stoch RSI near overbought (K:{srsi_k}) — mild overbought lean")
+        score -= 4; g['momentum'] -= 4
+        bear_reasons.append(f"Stoch RSI near overbought (K:{srsi_k}) — mild extended lean")
 
     # ── Volume Confirmation ───────────────────────────────────────────────────
     # Elevated volume on a directional candle validates the move — price action
@@ -897,15 +951,15 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Final direction ───────────────────────────────────────────────────────
     #   VWAP cross +14, Stoch RSI bull cross +20, Volume +12 → total ~320
     # In practice signals overlap — realistic ceiling ~200.
-    MAX_SCORE = 420.0   # +30 for BTC mining signals (BTC only); confluence engine adds up to ~60
+    MAX_SCORE = 480.0   # updated: +60 from new momentum signals (ROC, EMA7/21, Stoch surge)
 
     strength = min(int(abs(score) / MAX_SCORE * 100), 100)
 
-    # Directional threshold raised from 30 → 42.
-    # Old threshold (30) was only 10.7% of max — a single CVD signal + mild RSI
-    # was enough to trigger LONG. Raising to 42 requires at least 2-3 real
-    # signals in agreement before calling a direction.
-    DIRECTION_THRESHOLD = 42
+    # Threshold at 35 (7.3% of MAX_SCORE) — requires at least 2-3 real signals agreeing.
+    # Lowered from 42 because new momentum signals (ROC, EMA7/21 cross, Stoch surge) give
+    # the scoring system enough range to catch trending/breakout moves without needing
+    # extreme squeeze or oversold conditions.
+    DIRECTION_THRESHOLD = 35
     if score >= DIRECTION_THRESHOLD:
         direction = "LONG"
     elif score <= -DIRECTION_THRESHOLD:

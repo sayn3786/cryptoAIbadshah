@@ -182,6 +182,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # RSI slope: change over last 5 valid values — positive = momentum building, negative = fading
     _valid_rsi = [v for v in rsi_series if v is not None]
     rsi_slope = round(_valid_rsi[-1] - _valid_rsi[-5], 2) if len(_valid_rsi) >= 5 else None
+    # Price ROC: 4-candle rate of change — captures "the coin is actively moving right now"
+    price_roc = round((closes[-1] - closes[-5]) / closes[-5] * 100, 2) if len(closes) >= 5 and closes[-5] != 0 else None
 
     spot_cvd = calculate_cvd(spot, "spot")
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
@@ -235,6 +237,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "candles":      spot[-60:],
         "rsi":          current_rsi,
         "rsi_slope":    rsi_slope,
+        "price_roc":    price_roc,
         "rsi_series":   rsi_with_ts[-30:],
         "spot_cvd":     spot_cvd,
         "futures_cvd":  fut_cvd,
