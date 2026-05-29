@@ -4,6 +4,8 @@ import sys
 import json
 import time
 import math
+sys.path.insert(0, os.path.dirname(__file__))
+from btc_onchain import get_btc_mining_signals
 from typing import Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -221,6 +223,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     stoch_rsi     = calculate_stoch_rsi([c["close"] for c in spot])
     vol_signal    = calculate_volume_signal(spot)
 
+    # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
+    btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
+
     analysis = {
         "symbol":       symbol,
         "timeframe":    timeframe,
@@ -259,6 +264,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "vwap":          vwap,
         "stoch_rsi":     stoch_rsi,
         "vol_signal":    vol_signal,
+        "btc_mining":    btc_mining,
     }
     analysis["signal"] = generate_signal(analysis)
     return analysis

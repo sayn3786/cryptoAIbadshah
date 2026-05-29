@@ -550,10 +550,64 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= pts
         bear_reasons.append(vol_desc or f"Volume confirmation bearish ({vol_ratio:.1f}× avg)")
 
+    # ── BTC mining / on-chain signals (BTC only) ──────────────────────────────
+    # Hash Ribbon  : miners recovered (+12 buy cross / +7 bull) or capitulating (-10/-6)
+    # Halving phase: mid (6-18 mo post-halving) = historically bullish window (+6)
+    # Profitability: price vs estimated break-even cost
+    # Difficulty   : rising network difficulty = miner confidence context (+4/-4)
+    mining = analysis.get("btc_mining") or {}
+    if mining:
+        ribbon = mining.get("hash_ribbon", "neutral")
+        if ribbon == "buy":           # fresh 30d/60d bullish cross
+            score += 12
+            bull_reasons.append("▲ Hash Ribbon buy signal — miner capitulation over, 30d MA crossed above 60d MA")
+        elif ribbon == "bull":        # 30d > 60d, no fresh cross
+            score += 7
+            bull_reasons.append("▲ Hash Ribbon bullish — miners recovering, 30d MA above 60d MA")
+        elif ribbon == "capitulation": # fresh bearish cross
+            score -= 10
+            bear_reasons.append("▼ Hash Ribbon capitulation — miners under stress, 30d MA crossed below 60d MA")
+        elif ribbon == "bear":         # 30d < 60d
+            score -= 6
+            bear_reasons.append("▼ Hash Ribbon bearish — miner sell pressure, 30d MA below 60d MA")
+
+        phase = mining.get("halving_phase")
+        months = mining.get("halving_months_since", 0) or 0
+        if phase == "mid":            # 6-18 months post-halving — historically strongest bull window
+            score += 6
+            bull_reasons.append(f"▲ Halving cycle mid-phase ({months:.0f} mo post-halving) — historically strongest price appreciation window")
+        elif phase == "early":        # 0-6 months — consolidation, slight bullish lean
+            score += 3
+            bull_reasons.append(f"▲ Early post-halving phase ({months:.0f} mo) — supply shock still digesting, accumulation zone")
+        elif phase == "late":         # 18-36 months — late cycle, distribution risk
+            score -= 4
+            bear_reasons.append(f"▼ Late halving cycle ({months:.0f} mo post-halving) — historical distribution / top formation zone")
+
+        prof = mining.get("profitability_ratio")
+        if prof is not None:
+            if prof >= 2.0:           # very profitable → miners holding, not selling
+                score += 8
+                bull_reasons.append(f"▲ Miners highly profitable ({prof:.1f}× break-even) — no forced selling pressure")
+            elif prof >= 1.3:
+                score += 4
+                bull_reasons.append(f"▲ Miners profitable ({prof:.1f}× break-even) — healthy miner economics")
+            elif prof < 1.05:         # at or near break-even → capitulation risk
+                score -= 8
+                bear_reasons.append(f"▼ Miners near break-even ({prof:.1f}×) — selling pressure risk, potential capitulation")
+
+        diff_chg = mining.get("difficulty_change")
+        if diff_chg is not None:
+            if diff_chg >= 3.0:       # rising difficulty = more miners joining = bullish context
+                score += 4
+                bull_reasons.append(f"▲ Difficulty rising +{diff_chg:.1f}% — new miners joining, network confidence high")
+            elif diff_chg <= -3.0:    # falling difficulty = miners leaving = bearish
+                score -= 4
+                bear_reasons.append(f"▼ Difficulty dropping {diff_chg:.1f}% — miners leaving, reduced network security")
+
     # ── Final direction ───────────────────────────────────────────────────────
     #   VWAP cross +14, Stoch RSI bull cross +20, Volume +12 → total ~320
     # In practice signals overlap — realistic ceiling ~200.
-    MAX_SCORE = 330.0
+    MAX_SCORE = 360.0   # +30 for BTC mining signals (BTC only)
 
     strength = min(int(abs(score) / MAX_SCORE * 100), 100)
 

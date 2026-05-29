@@ -183,6 +183,7 @@ function renderAll(a) {
   renderVwapCard(a.vwap);
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
+  renderBtcMiningCard(a.btc_mining, a.symbol);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
   renderFNGCard(a.fear_greed);
@@ -719,6 +720,69 @@ function renderVolSignalCard(vol) {
   dirEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
   descEl.textContent = vol.description || '';
   descEl.style.color = 'var(--muted2)';
+}
+
+function renderBtcMiningCard(mining, symbol) {
+  const card = document.getElementById('btcMiningCard');
+  const rows = document.getElementById('btcMiningRows');
+  if (!card || !rows) return;
+
+  if (symbol !== 'BTC' || !mining) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+
+  const ribbon = mining.hash_ribbon || 'neutral';
+  const ribbonMeta = {
+    buy:          { cls: 'bull', icon: '▲', label: 'Buy Signal',     desc: '30d MA crossed above 60d — miner recovery confirmed' },
+    bull:         { cls: 'bull', icon: '▲', label: 'Bullish',        desc: '30d MA above 60d — miners recovering' },
+    bear:         { cls: 'bear', icon: '▼', label: 'Bearish',        desc: '30d MA below 60d — miner sell pressure' },
+    capitulation: { cls: 'bear', icon: '▼', label: 'Capitulation',   desc: '30d MA crossed below 60d — miner stress peak' },
+    neutral:      { cls: '',     icon: '—', label: 'Neutral',        desc: 'Insufficient data' },
+  };
+  const rm = ribbonMeta[ribbon] || ribbonMeta.neutral;
+
+  const phaseMeta = {
+    early: { cls: 'bull', label: 'Early (0–6 mo)',   desc: 'Post-halving consolidation / accumulation' },
+    mid:   { cls: 'bull', label: 'Mid (6–18 mo)',    desc: 'Historical bull run window — strongest phase' },
+    late:  { cls: 'bear', label: 'Late (18–36 mo)',  desc: 'Late cycle — watch for distribution' },
+    pre:   { cls: '',     label: 'Pre-halving',      desc: 'Accumulation ahead of next halving' },
+  };
+  const phase  = mining.halving_phase || 'pre';
+  const pm     = phaseMeta[phase] || phaseMeta.pre;
+  const months = mining.halving_months_since != null ? `${mining.halving_months_since} mo` : '—';
+  const daysUntil = mining.halving_days_until != null ? `${mining.halving_days_until.toLocaleString()} days` : '—';
+
+  const prof = mining.profitability_ratio;
+  let profCls = '', profLabel = '—';
+  if (prof != null) {
+    if (prof >= 2.0)       { profCls = 'bull'; profLabel = `${prof}× (Very profitable)`; }
+    else if (prof >= 1.3)  { profCls = 'bull'; profLabel = `${prof}× (Profitable)`; }
+    else if (prof < 1.05)  { profCls = 'bear'; profLabel = `${prof}× (Near break-even!)`; }
+    else                   { profCls = '';      profLabel = `${prof}×`; }
+  }
+
+  const diff = mining.difficulty_change;
+  const diffStr = diff != null ? (diff >= 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`) : '—';
+  const diffCls = diff == null ? '' : diff >= 3 ? 'bull' : diff <= -3 ? 'bear' : '';
+
+  const be = mining.break_even_usd;
+  const beStr = be != null ? `$${be.toLocaleString()}` : '—';
+
+  const rev = mining.miner_revenue_usd;
+  const revStr = rev != null ? `$${(rev / 1e6).toFixed(1)}M / day` : '—';
+
+  rows.innerHTML = `
+    <div class="btcm-row"><span class="btcm-label">Hash Ribbon</span><span class="btcm-val ${rm.cls}">${rm.icon} ${rm.label}</span></div>
+    <div class="btcm-sub">${rm.desc}</div>
+    <div class="btcm-row"><span class="btcm-label">Halving Phase</span><span class="btcm-val ${pm.cls}">${pm.label}</span></div>
+    <div class="btcm-sub">${months} since halving · ${daysUntil} until next · ${pm.desc}</div>
+    <div class="btcm-row"><span class="btcm-label">Miner Profitability</span><span class="btcm-val ${profCls}">${profLabel}</span></div>
+    <div class="btcm-sub">Break-even est. ${beStr} · Revenue ${revStr}</div>
+    <div class="btcm-row"><span class="btcm-label">Difficulty Change</span><span class="btcm-val ${diffCls}">${diffStr}</span></div>
+    <div class="btcm-sub">Expected at next adjustment</div>
+  `;
 }
 
 function renderWhaleActivity(events) {
