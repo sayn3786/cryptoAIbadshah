@@ -281,6 +281,11 @@ a:hover { color: var(--gold2); }
 .cvd-div-icon  { font-size: .95rem; flex-shrink: 0; margin-top: 1px; }
 .cvd-div-label { font-weight: 700; white-space: nowrap; flex-shrink: 0; }
 .cvd-div-detail { color: var(--muted2); }
+.cvd-ratio-badge { display: inline-block; padding: 1px 7px; border-radius: 10px;
+  font-size: .72rem; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+.cvd-dom-futures { background: rgba(239,68,68,.15); color: #f87171; border: 1px solid rgba(239,68,68,.3); }
+.cvd-dom-spot    { background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.3); }
+.cvd-dom-balanced{ background: rgba(99,102,241,.12); color: #a5b4fc; border: 1px solid rgba(99,102,241,.25); }
 
 /* ─── Row 3: RSI sub-chart ──────────────────────────────────────────────────── */
 .rsi-chart-card { padding: 16px; }

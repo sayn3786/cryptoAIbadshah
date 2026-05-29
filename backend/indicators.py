@@ -73,7 +73,12 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
     Compare price direction vs spot/futures CVD trend to detect who is actually
     driving the move — spot buyers/sellers or futures speculators.
 
-    Returns a dict with: type, label, detail, signal ("bullish"|"bearish"|"neutral")
+    Also computes the magnitude ratio (futures / spot) so callers know whether a
+    "confirmed" move is genuinely organic or overwhelmingly futures-driven.
+
+    Returns a dict with:
+      type, label, detail, signal ("bullish"|"bearish"|"neutral"),
+      futures_ratio (float), dominance ("futures" | "spot" | "balanced")
     """
     if not spot_cvd or not fut_cvd or not candles or len(candles) < 5:
         return {}
@@ -85,58 +90,93 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
     elif price_chg < -0.005:
         price_trend = "down"
     else:
-        return {"type": "neutral", "label": "Price ranging", "detail": "No clear price trend to compare CVDs against.", "signal": "neutral"}
+        return {"type": "neutral", "label": "Price ranging", "detail": "No clear price trend to compare CVDs against.", "signal": "neutral", "futures_ratio": None, "dominance": "balanced"}
 
     spot_trend = spot_cvd.get("trend", "neutral")
     fut_trend  = fut_cvd.get("trend",  "neutral")
 
+    # Magnitude ratio: how much larger is futures CVD vs spot CVD (in absolute terms)?
+    # Futures markets are naturally larger, but anything beyond ~10x signals speculative dominance.
+    # Thresholds: <10x = balanced, 10-50x = futures-heavy, >50x = futures-dominated
+    spot_abs = abs(spot_cvd.get("current", 0) or 0)
+    fut_abs  = abs(fut_cvd.get("current",  0) or 0)
+    futures_ratio = round(fut_abs / max(spot_abs, 1), 1)
+    if futures_ratio > 50:
+        dominance = "futures"
+        dom_label = f"futures-dominated ({futures_ratio:.0f}× larger than spot)"
+    elif futures_ratio > 10:
+        dominance = "futures"
+        dom_label = f"futures-heavy ({futures_ratio:.0f}× vs spot)"
+    elif spot_abs > fut_abs * 2:
+        dominance = "spot"
+        dom_label = f"spot-dominant ({round(spot_abs/max(fut_abs,1),1):.0f}× vs futures)"
+    else:
+        dominance = "balanced"
+        dom_label = f"balanced ({futures_ratio:.1f}× futures/spot)"
+
+    def _result(type_, label, detail, signal):
+        return {"type": type_, "label": label, "detail": detail, "signal": signal,
+                "futures_ratio": futures_ratio, "dominance": dominance}
+
     if price_trend == "up":
         if spot_trend == "bearish" and fut_trend == "bullish":
-            return {
-                "type":   "futures_led_up",
-                "label":  "Futures-driven rally",
-                "detail": "Price rising but spot CVD falling — futures buyers are pushing price up with no real spot demand. Rally may be unsustainable.",
-                "signal": "bearish",
-            }
+            return _result(
+                "futures_led_up", "Futures-driven rally",
+                "Price rising but spot CVD falling — futures buyers are pushing price up with no real spot demand. Rally may be unsustainable.",
+                "bearish",
+            )
         if spot_trend == "bullish" and fut_trend == "bearish":
-            return {
-                "type":   "spot_led_up",
-                "label":  "Spot-driven rally",
-                "detail": "Price rising with spot CVD confirming — genuine buying pressure. Futures are not chasing, suggesting a healthier, more sustained move.",
-                "signal": "bullish",
-            }
+            return _result(
+                "spot_led_up", "Spot-driven rally",
+                "Price rising with spot CVD confirming — genuine buying pressure. Futures are not chasing, suggesting a healthier, more sustained move.",
+                "bullish",
+            )
         if spot_trend == "bullish" and fut_trend == "bullish":
-            return {
-                "type":   "confirmed_up",
-                "label":  "Confirmed rally",
-                "detail": "Both spot and futures CVD rising with price — strong confluence of real and speculative buying.",
-                "signal": "bullish",
-            }
+            if dominance == "futures" and futures_ratio > 50:
+                return _result(
+                    "futures_dominated_up", "Futures-dominated rally",
+                    f"Both CVDs rising but futures ({dom_label}) — move is overwhelmingly speculative leverage, not organic. Elevated reversal risk.",
+                    "bearish",
+                )
+            return _result(
+                "confirmed_up", "Confirmed rally",
+                f"Both spot and futures CVD rising with price — strong confluence of real and speculative buying. {dom_label.capitalize()}.",
+                "bullish",
+            )
 
     if price_trend == "down":
         if spot_trend == "bullish" and fut_trend == "bearish":
-            return {
-                "type":   "futures_led_down",
-                "label":  "Futures-driven selloff",
-                "detail": "Price falling but spot CVD rising — futures sellers are pushing price down with no real spot selling. Short squeeze risk.",
-                "signal": "bullish",
-            }
+            return _result(
+                "futures_led_down", "Futures-driven selloff",
+                "Price falling but spot CVD rising — futures sellers are pushing price down with no real spot selling. Short squeeze risk.",
+                "bullish",
+            )
         if spot_trend == "bearish" and fut_trend == "bullish":
-            return {
-                "type":   "spot_led_down",
-                "label":  "Spot-driven selloff",
-                "detail": "Price falling with spot CVD confirming — genuine distribution. Futures are not selling but spot sellers dominate.",
-                "signal": "bearish",
-            }
+            return _result(
+                "spot_led_down", "Spot-driven selloff",
+                "Price falling with spot CVD confirming — genuine distribution. Futures are not selling but spot sellers dominate.",
+                "bearish",
+            )
         if spot_trend == "bearish" and fut_trend == "bearish":
-            return {
-                "type":   "confirmed_down",
-                "label":  "Confirmed selloff",
-                "detail": "Both spot and futures CVD falling with price — strong confluence of real and speculative selling.",
-                "signal": "bearish",
-            }
+            if dominance == "futures" and futures_ratio > 50:
+                return _result(
+                    "futures_dominated_down", "Futures-dominated selloff",
+                    f"Both CVDs falling but futures is {dom_label} — selling is overwhelmingly speculative shorts, not real holder distribution. Short squeeze risk elevated.",
+                    "neutral",   # downgraded from bearish — unreliable organic signal
+                )
+            if dominance == "futures" and futures_ratio > 10:
+                return _result(
+                    "futures_heavy_down", "Futures-heavy selloff",
+                    f"Both CVDs falling but futures is {dom_label} — speculative selling heavier than organic. Some squeeze risk.",
+                    "bearish",   # still bearish but lower conviction
+                )
+            return _result(
+                "confirmed_down", "Confirmed selloff",
+                f"Both spot and futures CVD falling with price — strong confluence of real and speculative selling. {dom_label.capitalize()}.",
+                "bearish",
+            )
 
-    return {"type": "neutral", "label": "CVDs aligned with price", "detail": "No significant divergence between spot and futures CVD.", "signal": "neutral"}
+    return _result("neutral", "CVDs aligned with price", "No significant divergence between spot and futures CVD.", "neutral")
 
 
 

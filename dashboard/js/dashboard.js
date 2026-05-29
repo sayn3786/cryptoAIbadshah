@@ -462,19 +462,33 @@ function renderCVDDivergence(div) {
   if (!div || !div.type || div.type === 'neutral') { el.style.display = 'none'; return; }
 
   const icons = {
-    futures_led_up:   '⚠',
-    spot_led_up:      '✓',
-    confirmed_up:     '✓✓',
-    futures_led_down: '⚠',
-    spot_led_down:    '↓',
-    confirmed_down:   '↓↓',
+    futures_led_up:        '⚠',
+    spot_led_up:           '✓',
+    confirmed_up:          '✓✓',
+    futures_led_down:      '⚠',
+    spot_led_down:         '↓',
+    confirmed_down:        '↓↓',
+    futures_dominated_down:'⚠⚠',
+    futures_heavy_down:    '⚠↓',
+    futures_dominated_up:  '⚠⚠',
   };
   const sigCls = div.signal === 'bullish' ? 'bull' : div.signal === 'bearish' ? 'bear' : '';
+  // Build magnitude badge if ratio info is present
+  let ratioBadge = '';
+  if (div.futures_ratio != null && div.dominance) {
+    const ratioFmt = div.futures_ratio >= 10
+      ? `${Math.round(div.futures_ratio)}×`
+      : `${div.futures_ratio.toFixed(1)}×`;
+    const domLabel = div.dominance === 'futures' ? `Futures ${ratioFmt} spot` :
+                     div.dominance === 'spot'    ? `Spot ${ratioFmt} futures` :
+                     `Balanced (${ratioFmt})`;
+    ratioBadge = ` <span class="cvd-ratio-badge cvd-dom-${div.dominance}">${domLabel}</span>`;
+  }
   el.style.display = '';
   el.className = `cvd-div-banner cvd-div-${div.signal}`;
   el.innerHTML = `
     <span class="cvd-div-icon">${icons[div.type] || '·'}</span>
-    <span class="cvd-div-label ${sigCls}">${div.label}</span>
+    <span class="cvd-div-label ${sigCls}">${div.label}</span>${ratioBadge}
     <span class="cvd-div-detail">${div.detail}</span>`;
 }
 

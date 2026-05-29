@@ -134,6 +134,18 @@ def generate_signal(analysis: Dict) -> Dict:
     elif div_type == "confirmed_down":
         score -= 28; g['flow'] -= 28
         bear_reasons.append("Fully confirmed selloff — both spot and futures CVD falling; strongest bearish confluence")
+    elif div_type == "futures_dominated_down":
+        # Futures >50× spot: overwhelmingly speculative shorts, not real distribution — squeeze risk elevated
+        score += 8; g['flow'] += 8
+        bull_reasons.append("Futures-dominated selloff — futures CVD dwarfs spot (>50×); likely speculative short pile-on, high squeeze risk")
+    elif div_type == "futures_heavy_down":
+        # Futures 10–50× spot: bearish but conviction reduced vs genuine confirmed selloff
+        score -= 14; g['flow'] -= 14
+        bear_reasons.append("Futures-heavy selloff — futures CVD 10–50× spot; bearish but mostly speculative, lower conviction than real distribution")
+    elif div_type == "futures_dominated_up":
+        # Futures >50× spot on upside: leveraged long pile-on, reversal risk elevated
+        score -= 14; g['flow'] -= 14
+        bear_reasons.append("Futures-dominated rally — futures CVD dwarfs spot (>50×); leveraged long crowding, elevated long squeeze / reversal risk")
 
     # ── Funding Rate ─────────────────────────────────────────────────────────
     # THE highest-reliability crypto-specific signal. Extreme negative funding
