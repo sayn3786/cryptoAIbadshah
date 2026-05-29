@@ -64,6 +64,21 @@ SYMBOLS = {
     "INJ":    "INJUSDT",
     "FET":    "FETUSDT",
 }
+
+# BTC correlation tier — controls how much the BTC consensus penalty/bonus applies.
+# HIGH (1.0): standard alts that move in lockstep with BTC (ETH, SOL, AVAX, LINK…)
+# MED  (0.5): partial decouplers — own ecosystem/narrative but still BTC-correlated
+# LOW  (0.2): near-independent — privacy coins, regulatory narrative, exchange tokens
+_BTC_CORR = {
+    # Privacy coins: move on regulatory/privacy narratives, not BTC cycles
+    "ZEC": 0.2, "XMR": 0.2,
+    # Exchange / ecosystem tokens with independent demand drivers
+    "BNB": 0.4, "TRX": 0.4,
+    # XRP: SEC lawsuit / regulatory narrative decouples it significantly
+    "XRP": 0.4,
+    # Moderate decouplers — own L1 ecosystems but still react to BTC risk-off
+    "SOL": 0.7, "TON": 0.6, "HYPE": 0.6, "KAS": 0.5,
+}
 TF_INTERVAL = {
     "1H": "1h", "2H": "2h",
     "4H": "4h", "8H": "8h", "12H": "12h", "1D": "1d",
@@ -459,11 +474,12 @@ def _compute_recommendations() -> dict:
         btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
         btc_aligned  = (btc_consensus != "NEUTRAL" and direction == btc_consensus)
         btc_adj      = 0
+        corr_factor  = _BTC_CORR.get(sym, 1.0)   # default: full BTC correlation
         if btc_conflict:
-            btc_adj  = -round(BTC_MAX_PENALTY * btc_scale, 1)
+            btc_adj  = -round(BTC_MAX_PENALTY * btc_scale * corr_factor, 1)
             strength = max(0,   round(strength + btc_adj, 1))
         elif btc_aligned:
-            btc_adj  = round(BTC_MAX_BONUS * btc_scale, 1)
+            btc_adj  = round(BTC_MAX_BONUS * btc_scale * corr_factor, 1)
             strength = min(100, round(strength + btc_adj, 1))
 
         candidates.append({
@@ -478,6 +494,7 @@ def _compute_recommendations() -> dict:
             "btc_aligned":    btc_aligned,
             "btc_consensus":  btc_consensus,
             "btc_adj":        btc_adj,
+            "btc_corr":       corr_factor,
             "score":          sig.get("score", 0),
             "tier":           sig.get("tier"),
             "entry":          sig.get("entry"),

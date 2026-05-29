@@ -2243,10 +2243,14 @@ async function loadRecommendations() {
       const tfAlign = r.aligned_tfs
         ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned</span>` : '';
       const btcAdj = r.btc_adj != null ? Math.abs(r.btc_adj) : '';
+      const corrFactor = r.btc_corr != null ? r.btc_corr : 1.0;
+      const corrNote = corrFactor <= 0.3 ? ' (low BTC correlation — independent mover)'
+                     : corrFactor <= 0.6 ? ' (partial BTC correlation)'
+                     : '';
       const btcWarn = r.btc_conflict
-        ? `<span class="rec-btc-conflict">⚠️ Conflicts with BTC ${r.btc_consensus} — penalised −${btcAdj}</span>`
+        ? `<span class="rec-btc-conflict">⚠️ Conflicts with BTC ${r.btc_consensus} — penalised −${btcAdj}${corrNote}</span>`
         : r.btc_aligned
-        ? `<span class="rec-btc-aligned">✅ Aligned with BTC ${r.btc_consensus} — boosted +${btcAdj}</span>`
+        ? `<span class="rec-btc-aligned">✅ Aligned with BTC ${r.btc_consensus} — boosted +${btcAdj}${corrNote}</span>`
         : '';
       const tfBreakdown = (r.h1_strength != null)
         ? `<div class="rec-tf-breakdown">
