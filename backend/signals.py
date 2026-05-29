@@ -951,14 +951,20 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Final direction ───────────────────────────────────────────────────────
     #   VWAP cross +14, Stoch RSI bull cross +20, Volume +12 → total ~320
     # In practice signals overlap — realistic ceiling ~200.
-    MAX_SCORE = 480.0   # updated: +60 from new momentum signals (ROC, EMA7/21, Stoch surge)
+    # MAX_SCORE is the realistic ceiling — what a genuinely strong multi-signal setup
+    # actually scores. Theoretical max (every signal firing perfectly) is ~480, but
+    # signals overlap in practice. Using 480 compresses everything into 0–20% and
+    # makes a solid 150-pt signal display as "31/100 WEAK" — wrong calibration.
+    # Realistic ceiling (~200 pts) calibrates the display so:
+    #   Score 35  (threshold)  → 16/100  WEAK        (just signalling — 2-3 signals)
+    #   Score 80               → 36/100  MODERATE     (several aligned)
+    #   Score 120              → 55/100  STRONG        (good multi-indicator confluence)
+    #   Score 160+             → 73+/100 CONFIRMED     (max conviction)
+    MAX_SCORE = 220.0
 
     strength = min(int(abs(score) / MAX_SCORE * 100), 100)
 
-    # Threshold at 35 (7.3% of MAX_SCORE) — requires at least 2-3 real signals agreeing.
-    # Lowered from 42 because new momentum signals (ROC, EMA7/21 cross, Stoch surge) give
-    # the scoring system enough range to catch trending/breakout moves without needing
-    # extreme squeeze or oversold conditions.
+    # Threshold at 35 pts — requires at least 2-3 real signals agreeing.
     DIRECTION_THRESHOLD = 35
     if score >= DIRECTION_THRESHOLD:
         direction = "LONG"
@@ -967,12 +973,11 @@ def generate_signal(analysis: Dict) -> Dict:
     else:
         direction = "NEUTRAL"
 
-    # Strength tiers (strength = score / MAX_SCORE * 100):
-    # NEUTRAL threshold = 42/280 = 15% strength
-    # Weak     (15–32): score 42–90   — few signals, cautious 25% size
-    # Moderate (33–50): score 92–140  — several aligned, 50% size
-    # Strong   (51–68): score 143–190 — good confluence, full size
-    # Confirmed  (69+): score 193+    — maximum confluence, can scale
+    # Strength tiers (strength = score / 220 * 100):
+    # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size
+    # Moderate (33–50): score  73–110 — several aligned, 50% size
+    # Strong   (51–68): score 112–150 — good confluence, full size
+    # Confirmed  (69+): score  152+   — maximum confluence, can scale
     if direction == "NEUTRAL":
         tier = "Neutral"
         size_guide = "No trade"
