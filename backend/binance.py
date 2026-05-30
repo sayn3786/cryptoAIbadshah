@@ -19,6 +19,38 @@ BYBIT_BASE   = "https://api.bybit.com"
 TIMEOUT      = 15
 BINANCE_RETRIES = int(os.getenv("BINANCE_RETRIES", "1"))
 
+# Approximate market caps (USD) used as fallback when CoinGecko is unavailable.
+# Values are intentionally rounded — only need to be accurate enough for tier bucketing.
+# Update periodically; wrong by 2× still gives correct tier in most cases.
+MCAP_FALLBACK = {
+    "BTCUSDT":    1_400_000_000_000,
+    "ETHUSDT":      220_000_000_000,
+    "BNBUSDT":       80_000_000_000,
+    "XRPUSDT":      120_000_000_000,
+    "SOLUSDT":       70_000_000_000,
+    "ADAUSDT":       28_000_000_000,
+    "TRXUSDT":       20_000_000_000,
+    "AVAXUSDT":      15_000_000_000,
+    "XLMUSDT":       12_000_000_000,
+    "SUIUSDT":       12_000_000_000,
+    "TONUSDT":       22_000_000_000,
+    "LINKUSDT":      10_000_000_000,
+    "HBARUSDT":       8_000_000_000,
+    "KASUSDT":        4_000_000_000,
+    "RENDERUSDT":     4_000_000_000,
+    "HYPEUSDT":       5_000_000_000,
+    "TAOUSDT":        3_000_000_000,
+    "ONDOUSDT":       3_000_000_000,
+    "AAVEUSDT":       3_000_000_000,
+    "XMRUSDT":        3_000_000_000,
+    "INJUSDT":        2_500_000_000,
+    "QNTUSDT":        2_000_000_000,
+    "ALGOUSDT":       1_800_000_000,
+    "FETUSDT":        1_200_000_000,
+    "ZECUSDT":          300_000_000,
+    "BLURUSDT":         200_000_000,
+}
+
 # CoinGecko IDs
 CG_IDS = {
     "BTCUSDT":  "bitcoin",
@@ -740,12 +772,13 @@ class BinanceClient:
         return self._get_market_cap(symbol)
 
     def _get_market_cap(self, symbol: str) -> Optional[float]:
-        # Refresh the whole batch if stale (one call covers all 26 tokens)
+        # Refresh the whole batch if stale (one call covers all tokens)
         self._refresh_mcap_batch()
         cached = self._mcap_cache.get(symbol)
         if cached:
             return cached[0]
-        return None
+        # CoinGecko unavailable — use hardcoded approximate fallback for tier classification
+        return MCAP_FALLBACK.get(symbol)
 
     def get_order_book_walls(self, symbol: str, market_cap: Optional[float] = None) -> Dict:
         """

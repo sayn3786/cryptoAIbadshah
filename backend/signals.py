@@ -1182,15 +1182,19 @@ def generate_signal(analysis: Dict) -> Dict:
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
 
             # ── Leverage suggestion ───────────────────────────────────────────
-            # Base leverage from signal strength (already reflects indicator quality)
+            # Base leverage from signal strength
             if strength >= 80:     _base_lev = 5
             elif strength >= 65:   _base_lev = 4
             elif strength >= 50:   _base_lev = 3
             else:                  _base_lev = 2
 
-            # Risk cap: 2% account at risk per trade → leverage = 2% / sl_pct
-            # E.g. SL=1% → max 20×, SL=2% → max 10×, SL=5% → max 4×
-            _lev_risk = max(1.0, 2.0 / sl_pct)
+            # Risk cap: 5% account at risk per trade (practical for volatile crypto)
+            # leverage = 5% / sl_pct → e.g. SL=1% → 5×, SL=2.5% → 2×, SL=5% → 1×
+            _lev_risk = max(1.0, 5.0 / sl_pct)
+
+            # Strong signals (≥65) get at least 2× regardless of SL width
+            if strength >= 65 and _lev_risk < 2.0:
+                _lev_risk = 2.0
 
             # Max leverage by market cap — smaller = more volatile = lower ceiling
             _MAX_LEV = {"mega": 20, "large": 15, "mid": 10, "small": 7, "micro": 5}
