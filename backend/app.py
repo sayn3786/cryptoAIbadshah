@@ -493,7 +493,8 @@ def _compute_recommendations() -> dict:
     independently. BTC consensus is anchored at 2H+4H (more stable bias).
     """
     now           = datetime.now(timezone.utc)
-    session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    slot_hour     = (now.hour // 2) * 2
+    session_start = now.replace(hour=slot_hour, minute=0, second=0, microsecond=0)
     SGT           = timezone(timedelta(hours=8))
     detected_at_fmt = now.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
@@ -608,7 +609,8 @@ def _compute_recommendations() -> dict:
                 "view_tf":        primary_tf,   # chart to open on "View Analysis"
                 "aligned_tfs":    f"{tf_short}·{tf_long}",
                 "direction":      direction,
-                "strength":       strength,
+                "strength":       strength,          # composite (used for ranking only)
+                "display_strength": round(h_long["strength"], 1),  # raw 2H score shown on card
                 "h1_strength":    round(h_short["strength"], 1),
                 "h2_strength":    round(h_long["strength"], 1),
                 "btc_conflict":   btc_conflict,
@@ -658,12 +660,12 @@ def _compute_recommendations() -> dict:
     intraday_recs = _build_set("1H", "2H", "2H")   # 2H levels for 4-24h holds; view 1H chart
 
     session_start_sgt = session_start.astimezone(SGT)
-    valid_until_sgt   = (session_start + timedelta(hours=23, minutes=59)).astimezone(SGT)
+    valid_until_sgt   = (session_start + timedelta(hours=1, minutes=59)).astimezone(SGT)
 
     return {
         "generated_at":    session_start_sgt.isoformat(),
         "valid_until":     valid_until_sgt.isoformat(),
-        "valid_until_fmt": valid_until_sgt.strftime("7:59 AM SGT, %b %d"),
+        "valid_until_fmt": valid_until_sgt.strftime("%-I:%M %p SGT, %b %d"),
         "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
         "btc_consensus":   btc_consensus,
         "btc_strength":    btc_strength,
@@ -672,29 +674,31 @@ def _compute_recommendations() -> dict:
 
 
 def _rec_cache_key() -> str:
-    now = datetime.now(timezone.utc)
-    return "v14_mtf_" + now.strftime("%Y%m%d")
+    now  = datetime.now(timezone.utc)
+    slot = (now.hour // 2) * 2          # 2-hour windows: 00, 02, 04 … 22
+    return f"v15_mtf_{now.strftime('%Y%m%d')}{slot:02d}"
 
 
 def _daily_rec_scheduler():
     """
-    Background thread: runs _compute_recommendations() once at 00:00 UTC
-    (= 08:00 SGT) every day and writes the result to the persistent cache.
-    This ensures all users worldwide see the same snapshot regardless of
-    when they first open the dashboard.
+    Background thread: refreshes recommendations every 2 hours so the
+    displayed strength stays close to the live 2H analysis score.
+    Runs at the start of each even UTC hour (00:05, 02:05, 04:05 …).
     """
-    print("[scheduler] Daily recommendation scheduler started")
+    print("[scheduler] 2-hour recommendation scheduler started")
     while True:
-        now      = datetime.now(timezone.utc)
-        tomorrow = (now + timedelta(days=1)).replace(
-            hour=0, minute=0, second=5, microsecond=0)   # +5 s buffer past midnight
-        wait_s   = (tomorrow - now).total_seconds()
-        print(f"[scheduler] Next rec scan in {wait_s/3600:.2f} h (at 08:00 SGT)")
+        now  = datetime.now(timezone.utc)
+        slot = (now.hour // 2) * 2
+        nxt  = now.replace(hour=slot, minute=0, second=5, microsecond=0)
+        if nxt <= now:
+            nxt += timedelta(hours=2)
+        wait_s = (nxt - now).total_seconds()
+        print(f"[scheduler] Next rec scan in {wait_s/3600:.2f} h")
         time.sleep(wait_s)
 
         key = _rec_cache_key()
         try:
-            print(f"[scheduler] Running daily recommendation scan (key={key})")
+            print(f"[scheduler] Running recommendation scan (key={key})")
             result = _compute_recommendations()
             with _rec_lock:
                 _rec_cache_save(key, result)

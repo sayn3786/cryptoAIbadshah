@@ -2201,13 +2201,14 @@ async function loadWhaleAlerts() {
 /* ─── Recommended Trades ─────────────────────────────────────────────────── */
 
 // Session starts at 8AM SGT = 00:00 UTC exactly.
-// Use UTC date as key — matches server's cache_key and invalidates at the right time.
+// 2-hour cache key — invalidates every even UTC hour to match backend refresh cadence.
 function _recCacheKey() {
-  const now = new Date();
-  const y   = now.getUTCFullYear();
-  const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
-  const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec22_mtf_${y}${m}${d}`;
+  const now  = new Date();
+  const y    = now.getUTCFullYear();
+  const m    = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d    = String(now.getUTCDate()).padStart(2, '0');
+  const slot = String(Math.floor(now.getUTCHours() / 2) * 2).padStart(2, '0');
+  return `rec23_mtf_${y}${m}${d}${slot}`;
 }
 
 function _recCacheGet() {
@@ -2235,7 +2236,7 @@ function _buildRecCard(r, i) {
   const tpPcts  = r.tp_pcts   || [];
 
   const strengthBar = `<div class="rec-str-track">
-    <div class="rec-str-fill ${dirCls}" style="width:${Math.min(r.strength,100)}%"></div>
+    <div class="rec-str-fill ${dirCls}" style="width:${Math.min(r.display_strength ?? r.h2_strength ?? r.strength, 100)}%"></div>
   </div>`;
 
   const reasons = (r.reasons || []).slice(0, 2).map(rx => {
@@ -2303,7 +2304,7 @@ function _buildRecCard(r, i) {
       <span class="rec-rank">#${i+1}</span>
       <span class="rec-sym">${r.symbol}/USDT</span>
       <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
-      <span class="rec-strength">${r.strength}/100</span>
+      <span class="rec-strength">${r.display_strength ?? r.h2_strength}/100</span>
     </div>
     ${tfAlign}
     ${btcWarn}
