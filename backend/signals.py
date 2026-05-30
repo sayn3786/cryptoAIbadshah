@@ -1034,7 +1034,34 @@ def generate_signal(analysis: Dict) -> Dict:
 
     if candles and len(candles) >= 14 and current_price > 0:
         atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
-        entry = round(current_price, 8)
+
+        # Smart limit-entry: prefer EMA21 as a natural pullback/bounce level rather than
+        # the raw current price (which is stale by the time the user sees the recommendation).
+        # Rules (applied per direction):
+        #   LONG:  if EMA21 is below current price by ≤3% → limit at EMA21
+        #          if EMA21 is >3% below (very extended) → entry = current_price × 0.99
+        #          if price already ≤ EMA21 → enter at current price (already at support)
+        #   SHORT: mirror logic above EMA21
+        _PULLBACK_CAP = 0.03   # max gap to EMA21 we're willing to wait for (3%)
+        _SLIGHT_DISC  = 0.01   # fallback nudge when EMA21 is too far (1%)
+        ema21_val = (analysis.get("ema_trend") or {}).get("ema21")
+
+        if direction == "LONG":
+            if ema21_val and ema21_val < current_price:
+                gap = (current_price - ema21_val) / current_price
+                base = ema21_val if gap <= _PULLBACK_CAP else current_price * (1 - _SLIGHT_DISC)
+            else:
+                base = current_price   # price at/below EMA21 — enter now
+        elif direction == "SHORT":
+            if ema21_val and ema21_val > current_price:
+                gap = (ema21_val - current_price) / current_price
+                base = ema21_val if gap <= _PULLBACK_CAP else current_price * (1 + _SLIGHT_DISC)
+            else:
+                base = current_price   # price at/above EMA21 — enter now
+        else:
+            base = current_price
+
+        entry = round(base, 8)
 
         eff_atr  = min(atr, max_atr_abs)
         sl_dist  = eff_atr * sl_m
@@ -1044,20 +1071,20 @@ def generate_signal(analysis: Dict) -> Dict:
 
         def _tp_short(dist):
             """Return TP price for a SHORT, or None if it would require >95% drop."""
-            target = current_price - dist
-            if target <= current_price * 0.05:   # >95% drop — not achievable
+            target = entry - dist
+            if target <= entry * 0.05:   # >95% drop — not achievable
                 return None
             return round(target, 8)
 
         if direction == "LONG":
-            sl = round(max(current_price * 0.001, current_price - sl_dist), 8)
+            sl = round(max(entry * 0.001, entry - sl_dist), 8)
             tp_targets = [
-                round(current_price + tp1_dist, 8),
-                round(current_price + tp2_dist, 8),
-                round(current_price + tp3_dist, 8),
+                round(entry + tp1_dist, 8),
+                round(entry + tp2_dist, 8),
+                round(entry + tp3_dist, 8),
             ]
         elif direction == "SHORT":
-            sl = round(current_price + sl_dist, 8)
+            sl = round(entry + sl_dist, 8)
             tp_targets = [
                 _tp_short(tp1_dist),
                 _tp_short(tp2_dist),
