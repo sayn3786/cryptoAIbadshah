@@ -2260,7 +2260,7 @@ function _recCacheKey() {
   const d    = String(now.getUTCDate()).padStart(2, '0');
   const h    = String(now.getUTCHours()).padStart(2, '0');
   const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec24_mtf_${y}${m}${d}${h}${half}`;
+  return `rec25_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
@@ -2381,7 +2381,7 @@ function _buildRecCard(r, i) {
   </div>`;
 }
 
-async function loadRecommendations() {
+async function loadRecommendations(force = false) {
   const section = document.getElementById('recSection');
   const cards   = document.getElementById('recCards');
   const dateEl  = document.getElementById('recDateLabel');
@@ -2389,10 +2389,10 @@ async function loadRecommendations() {
   if (!section || !cards) return;
 
   try {
-    // Use localStorage cache for token list / entry-SL-TP — always refresh scores live
-    let data = _recCacheGet();
+    let data = force ? null : _recCacheGet();
     if (!data) {
-      const res = await fetch(`${API}/recommendations`);
+      const url = `${API}/recommendations` + (force ? '?force=1' : '');
+      const res = await fetch(url);
       data = await res.json();
       if (data.recommendations?.length) _recCacheSet(data);
     }
@@ -2476,8 +2476,11 @@ function jumpTo(sym, tf) {
 }
 
 async function refresh() {
+  // Clear rec localStorage cache so fresh data (with latest leverage) is fetched
+  Object.keys(localStorage).filter(k => /^rec\d*_/.test(k)).forEach(k => localStorage.removeItem(k));
   await loadAnalysis();
   await loadTicker();
+  await loadRecommendations(true);
 }
 
 /* ─── Order Book Walls ────────────────────────────────────────────────────── */

@@ -858,14 +858,15 @@ def api_recommendations():
     Pre-computed at 08:00 SGT by the daily scheduler; served from cache to all users.
     Falls back to on-demand compute if the scheduler hasn't run yet today.
     """
-    key = _rec_cache_key()
+    force = request.args.get("force") == "1"
+    key   = _rec_cache_key()
 
-    with _rec_lock:
-        mem = _rec_cache_load()
-        if mem.get("key") == key and mem.get("data"):
-            return jsonify(mem["data"])
+    if not force:
+        with _rec_lock:
+            mem = _rec_cache_load()
+            if mem.get("key") == key and mem.get("data"):
+                return jsonify(mem["data"])
 
-    # Scheduler hasn't fired yet (first deploy of the day, or server just restarted)
     result = _compute_recommendations()
     with _rec_lock:
         _rec_cache_save(key, result)
