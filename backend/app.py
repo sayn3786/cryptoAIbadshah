@@ -794,14 +794,12 @@ def _rec_cache_key() -> str:
 
 
 _SGT = timezone(timedelta(hours=8))
-_tg_sent_today: set = set()   # tracks "YYYY-MM-DD" dates already sent to Telegram
-
-
 def _daily_rec_scheduler():
     """
     Background thread: refreshes recommendations every 30 minutes.
-    Fires at HH:05 and HH:35 UTC (5 s after each half-hour boundary).
-    Also sends a Telegram notification at the first run at or after 08:00 SGT each day.
+    Notifications (Telegram/Twitter) are handled exclusively by GitHub Actions
+    cron + /api/cron/daily — NOT triggered here to avoid duplicate sends on
+    every new Vercel serverless instance.
     """
     print("[scheduler] 30-min recommendation scheduler started")
     while True:
@@ -821,28 +819,6 @@ def _daily_rec_scheduler():
             with _rec_lock:
                 _rec_cache_save(key, result)
             print(f"[scheduler] Cached {len(result.get('recommendations', []))} recommendations")
-
-            # ── Daily notifications: Telegram + Twitter at/after 08:00 SGT ──
-            now_sgt    = datetime.now(_SGT)
-            today_str  = now_sgt.strftime("%Y-%m-%d")
-            if now_sgt.hour >= 8 and today_str not in _tg_sent_today:
-                _tg_sent_today.add(today_str)
-                # Telegram — trade recommendations
-                _threading.Thread(
-                    target=_send_telegram_recs, args=(result,), daemon=True,
-                    name="tg-notify"
-                ).start()
-                print(f"[scheduler] Telegram notification dispatched for {today_str}")
-                # Twitter — BTC + ETH 1D signal thread
-                def _tw_task():
-                    try:
-                        btc = build_analysis("BTC", "1D")
-                        eth = build_analysis("ETH", "1D")
-                        _post_twitter_signals(btc, eth)
-                    except Exception as ex:
-                        print(f"[twitter] scheduler error: {ex}")
-                _threading.Thread(target=_tw_task, daemon=True, name="tw-notify").start()
-                print(f"[scheduler] Twitter post dispatched for {today_str}")
         except Exception as exc:
             print(f"[scheduler] ERROR computing recommendations: {exc}")
 
