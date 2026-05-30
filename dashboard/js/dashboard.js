@@ -1749,8 +1749,13 @@ function renderBtcContext(a) {
 /* ─── Confluence lists ────────────────────────────────────────────────────── */
 function renderConfluence(s) {
   if (!s) return;
-  const bullEl = document.getElementById('bullList');
-  const bearEl = document.getElementById('bearList');
+  const bullEl  = document.getElementById('bullList');
+  const bearEl  = document.getElementById('bearList');
+  const labelEl = document.getElementById('confluenceTfLabel');
+
+  // Show which TF this confluence is computed from
+  if (labelEl) labelEl.textContent = `· ${S.symbol} ${S.timeframe}`;
+
   const li = (txt) => `<li>${txt}</li>`;
   bullEl.innerHTML = (s.bullish_reasons?.length ? s.bullish_reasons : ['No bullish confluence']).map(li).join('');
   bearEl.innerHTML = (s.bearish_reasons?.length ? s.bearish_reasons : ['No bearish confluence']).map(li).join('');
