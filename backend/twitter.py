@@ -142,6 +142,8 @@ def _confluence_line(analysis: Dict) -> str:
 
 def _signal_block(sym: str, analysis: Dict) -> List[str]:
     """Format one symbol into a list of display lines."""
+    if not analysis:
+        return [f"⚪ ${sym}  —  data unavailable", ""]
     sig  = analysis.get("signal") or {}
     d    = sig.get("direction", "NEUTRAL")
     s    = sig.get("strength", 0)

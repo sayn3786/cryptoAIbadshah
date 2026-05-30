@@ -901,14 +901,23 @@ def api_telegram_send():
 def api_twitter_posts():
     """Return pre-formatted X posts for manual copying (BTC+ETH and ALTs)."""
     from twitter import build_btc_eth_post, build_alts_post
-    _ALT_SYMS = ["TAO", "LINK", "HYPE", "ZEC", "ONDO"]
+    _SYMS = ["BTC", "ETH", "TAO", "LINK", "HYPE", "ZEC", "ONDO"]
     try:
-        btc  = build_analysis("BTC", "1D")
-        eth  = build_analysis("ETH", "1D")
-        alts = {sym: build_analysis(sym, "1D") for sym in _ALT_SYMS}
+        results: dict = {}
+        with ThreadPoolExecutor(max_workers=len(_SYMS)) as ex:
+            fmap = {ex.submit(build_analysis, sym, "1D"): sym for sym in _SYMS}
+            for future in as_completed(fmap):
+                sym = fmap[future]
+                try:
+                    results[sym] = future.result()
+                except Exception as e:
+                    print(f"[twitter/posts] {sym} failed: {e}")
+                    results[sym] = {}   # empty → shows N/A gracefully
+
+        alts = {sym: results[sym] for sym in ["TAO", "LINK", "HYPE", "ZEC", "ONDO"]}
         return jsonify({
             "ok":    True,
-            "post1": build_btc_eth_post(btc, eth),
+            "post1": build_btc_eth_post(results.get("BTC", {}), results.get("ETH", {})),
             "post2": build_alts_post(alts),
         })
     except Exception as e:
