@@ -125,8 +125,24 @@ _TF_CANDLE_N: Dict[str, int] = {
 }
 
 
+def _ema_val(values: List[float], period: int):
+    """Simple EMA over a list of floats. Returns None if not enough data."""
+    if len(values) < period:
+        return None
+    k = 2.0 / (period + 1)
+    e = sum(values[:period]) / period
+    for v in values[period:]:
+        e = v * k + e * (1 - k)
+    return e
+
+
 def _quick_tf_dir(symbol: str, tf: str) -> str:
-    """Lightweight direction check for a single TF using recent closed candles only."""
+    """
+    Lightweight direction for HTF confluence check.
+    Uses EMA20 slope (price above/below + slope direction) as the primary
+    signal — same logic used by generate_signal() — with candle majority
+    as fallback when EMA is flat/insufficient.
+    """
     try:
         bs       = SYMBOLS.get(symbol)
         if not bs:
@@ -134,14 +150,30 @@ def _quick_tf_dir(symbol: str, tf: str) -> str:
         n        = _TF_CANDLE_N.get(tf, 3)
         interval = TF_INTERVAL.get(tf, "1d")
         agg      = TF_AGG.get(tf, 1)
-        limit    = (n + 3) * agg          # extra buffer for aggregation
+        ema_p    = 20
+        # Fetch enough candles for EMA20 after aggregation
+        limit    = (ema_p + 8) * agg
         candles  = client.get_spot_klines(bs, interval, limit)
         if agg > 1:
             candles = client.aggregate_candles(candles, agg)
         if not candles or len(candles) < 2:
             return "NEUTRAL"
-        closed  = candles[:-1]            # drop live candle
-        recent  = closed[-n:] if len(closed) >= n else closed
+        closed  = candles[:-1]              # drop live candle
+        closes  = [c["close"] for c in closed]
+
+        # Primary: EMA20 slope — price above rising EMA = LONG, below falling = SHORT
+        if len(closes) >= ema_p + 2:
+            ema_now  = _ema_val(closes,      ema_p)
+            ema_prev = _ema_val(closes[:-1], ema_p)
+            last     = closes[-1]
+            if ema_now and ema_prev:
+                if last > ema_now and ema_now >= ema_prev:
+                    return "LONG"
+                if last < ema_now and ema_now <= ema_prev:
+                    return "SHORT"
+
+        # Fallback: candle majority over last N closed candles
+        recent    = closed[-n:] if len(closed) >= n else closed
         if not recent:
             return "NEUTRAL"
         bull      = sum(1 for c in recent if c["close"] > c["open"])
