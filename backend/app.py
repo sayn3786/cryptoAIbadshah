@@ -423,6 +423,35 @@ def api_symbols():
     return jsonify(list(SYMBOLS.keys()))
 
 
+@app.get("/api/scores")
+def api_scores():
+    """
+    Live signal strength/direction for a comma-separated list of symbols at
+    a given timeframe.  Used by rec cards to refresh the displayed score
+    after initial render without blocking the page load.
+    e.g. /api/scores?symbols=HYPE,ETH,SUI&tf=2H
+    """
+    raw_syms = request.args.get("symbols", "")
+    tf       = request.args.get("tf", "2H").upper()
+    valid    = [s.strip().upper() for s in raw_syms.split(",")
+                if s.strip().upper() in SYMBOLS]
+    if not valid:
+        return jsonify({})
+    results: Dict = {}
+    with ThreadPoolExecutor(max_workers=len(valid)) as ex:
+        futs = {sym: ex.submit(build_analysis, sym, tf) for sym in valid}
+        for sym, fut in futs.items():
+            try:
+                sig = fut.result().get("signal", {})
+                results[sym] = {
+                    "strength":  sig.get("strength", 0),
+                    "direction": sig.get("direction", "NEUTRAL"),
+                }
+            except Exception:
+                pass
+    return jsonify(results)
+
+
 @app.get("/api/market-caps")
 def api_market_caps():
     """Return all symbols with their market caps, sorted largest first.

@@ -2322,7 +2322,7 @@ function _buildRecCard(r, i) {
   const detectedShort = r.detected_at
     ? r.detected_at.replace(/\d{4} · /, '').replace(' SGT', '') : '';
 
-  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}">
+  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}" data-rec-sym="${r.symbol}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
       <span class="rec-sym">${r.symbol}/USDT</span>
@@ -2359,7 +2359,7 @@ async function loadRecommendations() {
   if (!section || !cards) return;
 
   try {
-    // Use localStorage cache if available for today (SGT) — never re-fetches mid-day
+    // Use localStorage cache for token list / entry-SL-TP — always refresh scores live
     let data = _recCacheGet();
     if (!data) {
       const res = await fetch(`${API}/recommendations`);
@@ -2394,8 +2394,28 @@ async function loadRecommendations() {
       : '<p class="rec-empty">No signals aligned today.</p>';
 
     section.classList.remove('hidden');
-    // Fetch live prices and inject into cards (fire-and-forget, non-blocking)
+    // Fire-and-forget: refresh prices and live signal scores (non-blocking)
     _refreshRecPrices();
+    _refreshRecScores(recs);
+  } catch (_) {}
+}
+
+async function _refreshRecScores(recs) {
+  if (!recs?.length) return;
+  const syms = recs.map(r => r.symbol).join(',');
+  const tf   = recs[0]?.timeframe || '2H';
+  try {
+    const scores = await fetch(`${API}/scores?symbols=${syms}&tf=${tf}`).then(r => r.json());
+    recs.forEach(r => {
+      const live = scores[r.symbol];
+      if (!live) return;
+      const card = document.querySelector(`.rec-card[data-rec-sym="${r.symbol}"]`);
+      if (!card) return;
+      const strEl  = card.querySelector('.rec-strength');
+      const fillEl = card.querySelector('.rec-str-fill');
+      if (strEl)  strEl.textContent = `${live.strength}/100`;
+      if (fillEl) fillEl.style.width = `${Math.min(live.strength, 100)}%`;
+    });
   } catch (_) {}
 }
 
