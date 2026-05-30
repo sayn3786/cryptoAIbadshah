@@ -405,23 +405,23 @@ def api_dashboard():
 
 def _compute_recommendations() -> dict:
     """
-    Scan all tokens at 1H + 2H, apply BTC consensus filter, pick top 3.
-    Called by the daily scheduler at 08:00 SGT and lazily by the API route
-    as a fallback if the scheduled run hasn't happened yet.
+    Dual recommendation engine:
+    - Intraday (1H+2H aligned): 4–24h holds — user's daily 8AM trades
+    - Swing    (2H+4H aligned): 1–5 day holds — longer position sizing
+
+    Fetches all three timeframes in one parallel pass, then builds each set
+    independently. BTC consensus is anchored at 2H+4H (more stable bias).
     """
     now           = datetime.now(timezone.utc)
     session_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     SGT           = timezone(timedelta(hours=8))
     detected_at_fmt = now.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
-    # Scan every token (including BTC) at 2H and 4H in parallel.
-    # 2H+4H alignment is the right frame for 24-hour swing trades (8AM→8AM).
-    # 1H+2H predicted 2-6h moves; 2H+4H predicts 12-24h moves.
     all_syms = list(SYMBOLS)
     raw: dict = {}
-    with ThreadPoolExecutor(max_workers=12) as ex:
+    with ThreadPoolExecutor(max_workers=18) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
-                for sym in all_syms for tf in ("2H", "4H")}
+                for sym in all_syms for tf in ("1H", "2H", "4H")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
             try:
@@ -437,116 +437,132 @@ def _compute_recommendations() -> dict:
             except Exception:
                 pass
 
-    # BTC consensus: 2H + 4H must agree (longer frame = more reliable 24h bias)
+    # BTC consensus: 2H + 4H must agree (longer frames = more reliable market bias)
     btc_tfs = raw.get("BTC", {})
-    btc_h1  = btc_tfs.get("2H", {}).get("direction", "NEUTRAL")
-    btc_h2  = btc_tfs.get("4H", {}).get("direction", "NEUTRAL")
-    btc_h1s = btc_tfs.get("2H", {}).get("strength", 0) or 0
-    btc_h2s = btc_tfs.get("4H", {}).get("strength", 0) or 0
-    if btc_h1 != "NEUTRAL" and btc_h1 == btc_h2:
-        btc_consensus = btc_h1
-        btc_strength  = round((btc_h1s + btc_h2s) / 2, 1)
+    btc_2h  = btc_tfs.get("2H", {})
+    btc_4h  = btc_tfs.get("4H", {})
+    btc_2h_dir = btc_2h.get("direction", "NEUTRAL")
+    btc_4h_dir = btc_4h.get("direction", "NEUTRAL")
+    btc_2h_str = btc_2h.get("strength", 0) or 0
+    btc_4h_str = btc_4h.get("strength", 0) or 0
+    if btc_2h_dir != "NEUTRAL" and btc_2h_dir == btc_4h_dir:
+        btc_consensus = btc_2h_dir
+        btc_strength  = round((btc_2h_str + btc_4h_str) / 2, 1)
     else:
         btc_consensus = "NEUTRAL"
         btc_strength  = 0
 
-    # BTC alignment bonus / conflict penalty — sqrt-scaled by BTC's own strength
     BTC_MAX_BONUS   = 15
     BTC_MAX_PENALTY = 25
     btc_scale       = math.sqrt(btc_strength / 100.0) if btc_strength > 0 else 0.0
 
-    # Only keep tokens (excl. BTC) where 2H + 4H agree on non-NEUTRAL direction
-    candidates = []
-    for sym, tfs in raw.items():
-        if sym == "BTC":
-            continue
-        h1 = tfs.get("2H")
-        h2 = tfs.get("4H")
-        if not (h1 and h2):
-            continue
-        if h1["direction"] == "NEUTRAL" or h2["direction"] == "NEUTRAL":
-            continue
-        if h1["direction"] != h2["direction"]:
-            continue
-
-        # 4H is the primary signal (longer = more predictive for 24h holds)
-        # 2H is the confirmation (shorter = entry timing)
-        sig       = h2["sig"]
-        strength  = round((h1["strength"] * 0.4 + h2["strength"] * 0.6), 1)
-        direction = h2["direction"]
-
+    def _apply_btc(sym, direction, strength):
         btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
         btc_aligned  = (btc_consensus != "NEUTRAL" and direction == btc_consensus)
         btc_adj      = 0
-        corr_factor  = _BTC_CORR.get(sym, 1.0)   # default: full BTC correlation
+        corr_factor  = _BTC_CORR.get(sym, 1.0)
         if btc_conflict:
             btc_adj  = -round(BTC_MAX_PENALTY * btc_scale * corr_factor, 1)
-            strength = max(0,   round(strength + btc_adj, 1))
+            strength = max(0, round(strength + btc_adj, 1))
         elif btc_aligned:
             btc_adj  = round(BTC_MAX_BONUS * btc_scale * corr_factor, 1)
             strength = min(100, round(strength + btc_adj, 1))
+        return btc_conflict, btc_aligned, btc_adj, corr_factor, strength
 
-        candidates.append({
-            "symbol":         sym,
-            "timeframe":      "4H",
-            "aligned_tfs":    "2H·4H",
-            "direction":      direction,
-            "strength":       strength,
-            "h1_strength":    round(h1["strength"], 1),
-            "h2_strength":    round(h2["strength"], 1),
-            "btc_conflict":   btc_conflict,
-            "btc_aligned":    btc_aligned,
-            "btc_consensus":  btc_consensus,
-            "btc_adj":        btc_adj,
-            "btc_corr":       corr_factor,
-            "score":          sig.get("score", 0),
-            "tier":           sig.get("tier"),
-            "entry":          sig.get("entry"),
-            "detected_at":    detected_at_fmt,
-            "sl":             sig.get("sl"),
-            "sl_pct":         sig.get("sl_pct"),
-            "tp_targets":     sig.get("tp_targets", []),
-            "tp_pcts":        sig.get("tp_pcts", []),
-            "rr_ratio":       sig.get("rr_ratio"),
-            "vol_tier_label": sig.get("vol_tier_label"),
-            "rsi":            h2["rsi"],   # 4H RSI
-            "reasons":        sig.get("reasons", [])[:3],
-        })
+    def _build_set(tf_short, tf_long, primary_tf):
+        """
+        Build top-3 candidates where tf_short + tf_long directions agree.
+        primary_tf determines which signal is used for entry/SL/TP levels
+        and which chart the "View Analysis" button links to.
+        Longer TF carries 60% weight, shorter 40%.
+        """
+        candidates = []
+        for sym, tfs in raw.items():
+            if sym == "BTC":
+                continue
+            h_short = tfs.get(tf_short)
+            h_long  = tfs.get(tf_long)
+            if not (h_short and h_long):
+                continue
+            if h_short["direction"] == "NEUTRAL" or h_long["direction"] == "NEUTRAL":
+                continue
+            if h_short["direction"] != h_long["direction"]:
+                continue
 
-    candidates.sort(key=lambda x: x["strength"], reverse=True)
-    top = candidates[:2]
-    if len(top) == 2 and len(candidates) > 2:
-        picked_syms = {c["symbol"] for c in top}
-        if top[0]["direction"] == top[1]["direction"]:
-            opposite = "SHORT" if top[0]["direction"] == "LONG" else "LONG"
-            opp_list = [c for c in candidates if c["direction"] == opposite
-                        and c["symbol"] not in picked_syms]
-            pick3 = opp_list[0] if opp_list else next(
-                (c for c in candidates if c["symbol"] not in picked_syms), None)
-        else:
-            pick3 = next((c for c in candidates if c["symbol"] not in picked_syms), None)
-        if pick3:
-            top.append(pick3)
-    elif len(top) < 2:
-        top = candidates[:3]
+            direction = h_long["direction"]
+            strength  = round(h_short["strength"] * 0.4 + h_long["strength"] * 0.6, 1)
+            sig       = tfs[primary_tf]["sig"]
+
+            btc_conflict, btc_aligned, btc_adj, corr_factor, strength = _apply_btc(
+                sym, direction, strength)
+
+            candidates.append({
+                "symbol":         sym,
+                "timeframe":      primary_tf,
+                "aligned_tfs":    f"{tf_short}·{tf_long}",
+                "direction":      direction,
+                "strength":       strength,
+                "h1_strength":    round(h_short["strength"], 1),
+                "h2_strength":    round(h_long["strength"], 1),
+                "btc_conflict":   btc_conflict,
+                "btc_aligned":    btc_aligned,
+                "btc_consensus":  btc_consensus,
+                "btc_adj":        btc_adj,
+                "btc_corr":       corr_factor,
+                "score":          sig.get("score", 0),
+                "tier":           sig.get("tier"),
+                "entry":          sig.get("entry"),
+                "detected_at":    detected_at_fmt,
+                "sl":             sig.get("sl"),
+                "sl_pct":         sig.get("sl_pct"),
+                "tp_targets":     sig.get("tp_targets", []),
+                "tp_pcts":        sig.get("tp_pcts", []),
+                "rr_ratio":       sig.get("rr_ratio"),
+                "vol_tier_label": sig.get("vol_tier_label"),
+                "rsi":            tfs[primary_tf]["rsi"],
+                "reasons":        sig.get("reasons", [])[:3],
+            })
+
+        candidates.sort(key=lambda x: x["strength"], reverse=True)
+        top = candidates[:2]
+        if len(top) == 2 and len(candidates) > 2:
+            picked_syms = {c["symbol"] for c in top}
+            if top[0]["direction"] == top[1]["direction"]:
+                opposite = "SHORT" if top[0]["direction"] == "LONG" else "LONG"
+                opp_list = [c for c in candidates if c["direction"] == opposite
+                            and c["symbol"] not in picked_syms]
+                pick3 = opp_list[0] if opp_list else next(
+                    (c for c in candidates if c["symbol"] not in picked_syms), None)
+            else:
+                pick3 = next((c for c in candidates if c["symbol"] not in picked_syms), None)
+            if pick3:
+                top.append(pick3)
+        elif len(top) < 2:
+            top = candidates[:3]
+
+        return top[:3]
+
+    intraday_recs = _build_set("1H", "2H", "1H")   # 4–24h hold → view 1H chart
+    swing_recs    = _build_set("2H", "4H", "4H")   # 1–5 day hold → view 4H chart
 
     session_start_sgt = session_start.astimezone(SGT)
     valid_until_sgt   = (session_start + timedelta(hours=23, minutes=59)).astimezone(SGT)
 
     return {
-        "generated_at":    session_start_sgt.isoformat(),
-        "valid_until":     valid_until_sgt.isoformat(),
-        "valid_until_fmt": valid_until_sgt.strftime("7:59 AM SGT, %b %d"),
-        "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
-        "btc_consensus":   btc_consensus,
-        "btc_strength":    btc_strength,
-        "recommendations": top[:3],
+        "generated_at":          session_start_sgt.isoformat(),
+        "valid_until":           valid_until_sgt.isoformat(),
+        "valid_until_fmt":       valid_until_sgt.strftime("7:59 AM SGT, %b %d"),
+        "date_label":            session_start_sgt.strftime("%b %d, %Y (SGT)"),
+        "btc_consensus":         btc_consensus,
+        "btc_strength":          btc_strength,
+        "recommendations":       intraday_recs,   # 1H+2H, 4-24h holds
+        "swing_recommendations": swing_recs,      # 2H+4H, 1-5 day holds
     }
 
 
 def _rec_cache_key() -> str:
     now = datetime.now(timezone.utc)
-    return "v9_2H4H_" + now.strftime("%Y%m%d")
+    return "v10_dual_" + now.strftime("%Y%m%d")
 
 
 def _daily_rec_scheduler():

@@ -2162,7 +2162,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec16_2H4H_${y}${m}${d}`;
+  return `rec17_dual_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -2182,6 +2182,73 @@ function _recCacheSet(data) {
   } catch (_) {}
 }
 
+function _buildRecCard(r, i) {
+  const isLong  = r.direction === 'LONG';
+  const dirCls  = isLong ? 'bull' : 'bear';
+  const dirIcon = isLong ? '▲' : '▼';
+  const tps     = r.tp_targets || [];
+  const tpPcts  = r.tp_pcts   || [];
+
+  const strengthBar = `<div class="rec-str-track">
+    <div class="rec-str-fill ${dirCls}" style="width:${Math.min(r.strength,100)}%"></div>
+  </div>`;
+
+  const reasons = (r.reasons || []).slice(0, 2).map(rx => {
+    const isBull = rx.startsWith('▲');
+    return `<li class="${isBull ? 'bull' : 'bear'}">${rx}</li>`;
+  }).join('');
+
+  const tp1  = tps[0]     != null ? fmtPrice(tps[0]) : 'N/A';
+  const tp2  = tps[1]     != null ? fmtPrice(tps[1]) : 'N/A';
+  const tp1p = tpPcts[0]  != null ? `+${tpPcts[0]}%` : '';
+  const tp2p = tpPcts[1]  != null ? `+${tpPcts[1]}%` : '';
+
+  const tfAlign = r.aligned_tfs
+    ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned</span>` : '';
+  const btcAdj = r.btc_adj != null ? Math.abs(r.btc_adj) : '';
+  const corrFactor = r.btc_corr != null ? r.btc_corr : 1.0;
+  const corrNote = corrFactor <= 0.3 ? ' (low BTC correlation — independent mover)'
+                 : corrFactor <= 0.6 ? ' (partial BTC correlation)'
+                 : '';
+  const btcWarn = r.btc_conflict
+    ? `<span class="rec-btc-conflict">⚠️ Conflicts with BTC ${r.btc_consensus} — penalised −${btcAdj}${corrNote}</span>`
+    : r.btc_aligned
+    ? `<span class="rec-btc-aligned">✅ Aligned with BTC ${r.btc_consensus} — boosted +${btcAdj}${corrNote}</span>`
+    : '';
+
+  // Parse tf labels from aligned_tfs (e.g. "1H·2H" or "2H·4H")
+  const [tfLabel1, tfLabel2] = (r.aligned_tfs || '').split('·');
+  const tfBreakdown = (r.h1_strength != null && tfLabel1 && tfLabel2)
+    ? `<div class="rec-tf-breakdown">
+        <span>${tfLabel1} <strong>${r.h1_strength}</strong></span>
+        <span>${tfLabel2} <strong>${r.h2_strength}</strong></span>
+       </div>` : '';
+
+  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}">
+    <div class="rec-card-top">
+      <span class="rec-rank">#${i+1}</span>
+      <span class="rec-sym">${r.symbol}/USDT</span>
+      <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
+      <span class="rec-strength">${r.strength}/100</span>
+    </div>
+    ${tfAlign}
+    ${btcWarn}
+    ${tfBreakdown}
+    ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
+    ${strengthBar}
+    <div class="rec-levels">
+      <div class="rec-lvl"><span class="rec-lbl">Entry</span><span class="rec-val">${fmtPrice(r.entry)}</span></div>
+      <div class="rec-lvl"><span class="rec-lbl">Stop Loss</span><span class="rec-val bear">${fmtPrice(r.sl)} ${r.sl_pct ? `<small>-${r.sl_pct}%</small>` : ''}</span></div>
+      <div class="rec-lvl"><span class="rec-lbl">TP 1</span><span class="rec-val bull">${tp1} ${tp1p ? `<small>${tp1p}</small>` : ''}</span></div>
+      <div class="rec-lvl"><span class="rec-lbl">TP 2</span><span class="rec-val bull">${tp2} ${tp2p ? `<small>${tp2p}</small>` : ''}</span></div>
+      ${r.rr_ratio ? `<div class="rec-lvl"><span class="rec-lbl">R/R</span><span class="rec-val">${r.rr_ratio} : 1</span></div>` : ''}
+    </div>
+    ${reasons ? `<ul class="rec-reasons">${reasons}</ul>` : ''}
+    ${r.vol_tier_label ? `<span class="vol-tier-badge" style="margin-top:4px">${r.vol_tier_label}</span>` : ''}
+    <button class="rec-go-btn" onclick="jumpTo('${r.symbol}','${r.timeframe}')">View Analysis →</button>
+  </div>`;
+}
+
 async function loadRecommendations() {
   const section = document.getElementById('recSection');
   const cards   = document.getElementById('recCards');
@@ -2195,16 +2262,16 @@ async function loadRecommendations() {
     if (!data) {
       const res = await fetch(`${API}/recommendations`);
       data = await res.json();
-      if (data.recommendations?.length) _recCacheSet(data);
+      if (data.recommendations?.length || data.swing_recommendations?.length) _recCacheSet(data);
     }
-    if (!data.recommendations?.length) return;
+    if (!data.recommendations?.length && !data.swing_recommendations?.length) return;
 
     if (dateEl) dateEl.textContent = data.date_label || '';
     if (valEl && data.valid_until_fmt) {
       valEl.textContent = `Valid until ${data.valid_until_fmt}`;
     }
 
-    // BTC consensus banner above the cards (replace if already rendered)
+    // BTC consensus banner (replace if already rendered)
     const btcBanner = (() => {
       const bc = data.btc_consensus;
       const bs = data.btc_strength;
@@ -2219,69 +2286,33 @@ async function loadRecommendations() {
     if (existingBanner) existingBanner.remove();
     cards.insertAdjacentHTML('beforebegin', btcBanner);
 
-    cards.innerHTML = data.recommendations.map((r, i) => {
-      const isLong  = r.direction === 'LONG';
-      const dirCls  = isLong ? 'bull' : 'bear';
-      const dirIcon = isLong ? '▲' : '▼';
-      const tps     = r.tp_targets || [];
-      const tpPcts  = r.tp_pcts   || [];
-
-      const strengthBar = `<div class="rec-str-track">
-        <div class="rec-str-fill ${dirCls}" style="width:${Math.min(r.strength,100)}%"></div>
-      </div>`;
-
-      const reasons = (r.reasons || []).slice(0, 2).map(rx => {
-        const isBull = rx.startsWith('▲');
-        return `<li class="${isBull ? 'bull' : 'bear'}">${rx}</li>`;
-      }).join('');
-
-      const tp1 = tps[0] != null ? fmtPrice(tps[0]) : 'N/A';
-      const tp2 = tps[1] != null ? fmtPrice(tps[1]) : 'N/A';
-      const tp1p = tpPcts[0] != null ? `+${tpPcts[0]}%` : '';
-      const tp2p = tpPcts[1] != null ? `+${tpPcts[1]}%` : '';
-
-      const tfAlign = r.aligned_tfs
-        ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned</span>` : '';
-      const btcAdj = r.btc_adj != null ? Math.abs(r.btc_adj) : '';
-      const corrFactor = r.btc_corr != null ? r.btc_corr : 1.0;
-      const corrNote = corrFactor <= 0.3 ? ' (low BTC correlation — independent mover)'
-                     : corrFactor <= 0.6 ? ' (partial BTC correlation)'
-                     : '';
-      const btcWarn = r.btc_conflict
-        ? `<span class="rec-btc-conflict">⚠️ Conflicts with BTC ${r.btc_consensus} — penalised −${btcAdj}${corrNote}</span>`
-        : r.btc_aligned
-        ? `<span class="rec-btc-aligned">✅ Aligned with BTC ${r.btc_consensus} — boosted +${btcAdj}${corrNote}</span>`
-        : '';
-      const tfBreakdown = (r.h1_strength != null)
-        ? `<div class="rec-tf-breakdown">
-            <span>1H <strong>${r.h1_strength}</strong></span>
-            <span>2H <strong>${r.h2_strength}</strong></span>
-           </div>` : '';
-
-      return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}">
-        <div class="rec-card-top">
-          <span class="rec-rank">#${i+1}</span>
-          <span class="rec-sym">${r.symbol}/USDT</span>
-          <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
-          <span class="rec-strength">${r.strength}/100</span>
+    // ── Intraday section (1H+2H, 4-24h holds) ─────────────────────────────
+    const intraday = data.recommendations || [];
+    if (intraday.length) {
+      cards.innerHTML = `
+        <div class="rec-section-sub">
+          <span class="rec-section-label">⚡ Intraday</span>
+          <span class="rec-section-desc">1H·2H aligned · Hold 4–24 hours</span>
         </div>
-        ${tfAlign}
-        ${btcWarn}
-        ${tfBreakdown}
-        ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
-        ${strengthBar}
-        <div class="rec-levels">
-          <div class="rec-lvl"><span class="rec-lbl">Entry</span><span class="rec-val">${fmtPrice(r.entry)}</span></div>
-          <div class="rec-lvl"><span class="rec-lbl">Stop Loss</span><span class="rec-val bear">${fmtPrice(r.sl)} ${r.sl_pct ? `<small>-${r.sl_pct}%</small>` : ''}</span></div>
-          <div class="rec-lvl"><span class="rec-lbl">TP 1</span><span class="rec-val bull">${tp1} ${tp1p ? `<small>${tp1p}</small>` : ''}</span></div>
-          <div class="rec-lvl"><span class="rec-lbl">TP 2</span><span class="rec-val bull">${tp2} ${tp2p ? `<small>${tp2p}</small>` : ''}</span></div>
-          ${r.rr_ratio ? `<div class="rec-lvl"><span class="rec-lbl">R/R</span><span class="rec-val">${r.rr_ratio} : 1</span></div>` : ''}
+        <div class="rec-cards-inner">${intraday.map(_buildRecCard).join('')}</div>`;
+    } else {
+      cards.innerHTML = '<p class="rec-empty">No intraday signals aligned today.</p>';
+    }
+
+    // ── Swing section (2H+4H, 1-5 day holds) ──────────────────────────────
+    const swing = data.swing_recommendations || [];
+    const existingSwing = cards.parentElement.querySelector('.rec-swing-block');
+    if (existingSwing) existingSwing.remove();
+    if (swing.length) {
+      const swingHtml = `<div class="rec-swing-block">
+        <div class="rec-section-sub">
+          <span class="rec-section-label">📈 Swing</span>
+          <span class="rec-section-desc">2H·4H aligned · Hold 1–5 days</span>
         </div>
-        ${reasons ? `<ul class="rec-reasons">${reasons}</ul>` : ''}
-        ${r.vol_tier_label ? `<span class="vol-tier-badge" style="margin-top:4px">${r.vol_tier_label}</span>` : ''}
-        <button class="rec-go-btn" onclick="jumpTo('${r.symbol}','${r.timeframe}')">View Analysis →</button>
+        <div class="rec-cards-inner">${swing.map(_buildRecCard).join('')}</div>
       </div>`;
-    }).join('');
+      cards.insertAdjacentHTML('afterend', swingHtml);
+    }
 
     section.classList.remove('hidden');
   } catch (_) {}

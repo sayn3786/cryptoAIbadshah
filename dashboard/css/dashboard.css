@@ -1043,6 +1043,28 @@ a:hover { color: var(--gold2); }
 .rec-reasons li.bull { color: var(--bull); }
 .rec-reasons li.bear { color: var(--bear); }
 
+/* Dual section sub-headers */
+.rec-section-sub {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 8px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.rec-section-label {
+  font-size: .82rem; font-weight: 700; color: var(--text);
+}
+.rec-section-desc {
+  font-size: .7rem; color: var(--muted2);
+}
+.rec-cards-inner {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+@media (max-width: 900px) { .rec-cards-inner { grid-template-columns: 1fr; } }
+@media (min-width: 601px) and (max-width: 900px) { .rec-cards-inner { grid-template-columns: repeat(2, 1fr); } }
+.rec-swing-block { margin-top: 20px; }
+.rec-empty { font-size: .75rem; color: var(--muted); padding: 8px 0; }
+
 .rec-go-btn {
   margin-top: auto; padding: 7px 0; border-radius: 6px; border: none; cursor: pointer;
   font-size: .75rem; font-weight: 600; background: var(--card2);
