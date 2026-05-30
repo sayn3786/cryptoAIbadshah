@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=6" />
+  <link rel="stylesheet" href="css/dashboard.css?v=7" />
 </head>
 <body>
 
@@ -179,6 +179,9 @@
       <div class="metric-label" id="mcapRank">—</div>
     </div>
   </section>
+
+  <!-- BTC market context banner (hidden for BTC itself and when NEUTRAL) -->
+  <div id="btcContextBanner" class="btc-ctx-banner" style="display:none"></div>
 
   <!-- HTF Confluence row (shown when a TF has higher TFs to check against) -->
   <section id="htfSection" style="display:none">
@@ -536,7 +539,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=6"></script>
+<script src="js/dashboard.js?v=7"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.

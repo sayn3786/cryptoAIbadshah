@@ -349,6 +349,38 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     }
     analysis["signal"] = generate_signal(analysis)
 
+    # BTC market context for altcoins — same TF direction check so the analysis
+    # view shows the same BTC bias that the recommendation engine uses for scoring.
+    if symbol != "BTC" and "BTC" in SYMBOLS:
+        try:
+            btc_raw = client.get_spot_klines(SYMBOLS["BTC"], interval, _n_dir + 3)
+            if timeframe in TF_AGG:
+                btc_raw = client.aggregate_candles(btc_raw, TF_AGG[timeframe])
+            btc_closed = btc_raw[:-1] if btc_raw else []
+            btc_recent = btc_closed[-_n_dir:] if len(btc_closed) >= _n_dir else btc_closed
+            if btc_recent:
+                _bull = sum(1 for c in btc_recent if c["close"] > c["open"])
+                _bear = len(btc_recent) - _bull
+                _thr  = max(1, round(len(btc_recent) * 0.6))
+                btc_dir = "LONG" if _bull >= _thr else ("SHORT" if _bear >= _thr else "NEUTRAL")
+            else:
+                btc_dir = "NEUTRAL"
+            sig_dir  = analysis["signal"].get("direction", "NEUTRAL")
+            corr     = _BTC_CORR.get(symbol, 1.0)
+            aligned  = btc_dir != "NEUTRAL" and btc_dir == sig_dir
+            conflict = btc_dir != "NEUTRAL" and btc_dir != sig_dir
+            analysis["btc_context"] = {
+                "direction":   btc_dir,
+                "aligned":     aligned,
+                "conflict":    conflict,
+                "corr_factor": corr,
+                "candles_used": len(btc_recent),
+            }
+        except Exception:
+            analysis["btc_context"] = None
+    else:
+        analysis["btc_context"] = None
+
     # HTF confluence: fetch direction for each higher TF in parallel
     htf_list = _HTF_DEPS.get(timeframe, [])
     if htf_list:
@@ -493,8 +525,8 @@ def _compute_recommendations() -> dict:
     independently. BTC consensus is anchored at 2H+4H (more stable bias).
     """
     now           = datetime.now(timezone.utc)
-    slot_hour     = (now.hour // 2) * 2
-    session_start = now.replace(hour=slot_hour, minute=0, second=0, microsecond=0)
+    slot_min      = (now.minute // 30) * 30
+    session_start = now.replace(minute=slot_min, second=0, microsecond=0)
     SGT           = timezone(timedelta(hours=8))
     detected_at_fmt = now.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
@@ -660,7 +692,7 @@ def _compute_recommendations() -> dict:
     intraday_recs = _build_set("1H", "2H", "2H")   # 2H levels for 4-24h holds; view 1H chart
 
     session_start_sgt = session_start.astimezone(SGT)
-    valid_until_sgt   = (session_start + timedelta(hours=1, minutes=59)).astimezone(SGT)
+    valid_until_sgt   = (session_start + timedelta(minutes=29)).astimezone(SGT)
 
     return {
         "generated_at":    session_start_sgt.isoformat(),
@@ -675,25 +707,26 @@ def _compute_recommendations() -> dict:
 
 def _rec_cache_key() -> str:
     now  = datetime.now(timezone.utc)
-    slot = (now.hour // 2) * 2          # 2-hour windows: 00, 02, 04 … 22
-    return f"v15_mtf_{now.strftime('%Y%m%d')}{slot:02d}"
+    # 30-minute windows: :00 and :30 of each hour
+    half = (now.minute // 30) * 30
+    return f"v16_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 
 def _daily_rec_scheduler():
     """
-    Background thread: refreshes recommendations every 2 hours so the
-    displayed strength stays close to the live 2H analysis score.
-    Runs at the start of each even UTC hour (00:05, 02:05, 04:05 …).
+    Background thread: refreshes recommendations every 30 minutes so the
+    displayed strength closely tracks the live 2H analysis score.
+    Fires at HH:05 and HH:35 UTC (5 s after each half-hour boundary).
     """
-    print("[scheduler] 2-hour recommendation scheduler started")
+    print("[scheduler] 30-min recommendation scheduler started")
     while True:
         now  = datetime.now(timezone.utc)
-        slot = (now.hour // 2) * 2
-        nxt  = now.replace(hour=slot, minute=0, second=5, microsecond=0)
+        half = (now.minute // 30) * 30
+        nxt  = now.replace(minute=half, second=5, microsecond=0)
         if nxt <= now:
-            nxt += timedelta(hours=2)
+            nxt += timedelta(minutes=30)
         wait_s = (nxt - now).total_seconds()
-        print(f"[scheduler] Next rec scan in {wait_s/3600:.2f} h")
+        print(f"[scheduler] Next rec scan in {wait_s/60:.1f} min")
         time.sleep(wait_s)
 
         key = _rec_cache_key()

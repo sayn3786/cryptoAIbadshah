@@ -203,6 +203,7 @@ function renderAll(a) {
   renderElliottWave(a.elliott_wave);
   renderConfluence(a.signal);
   renderHtfConfluence(a);
+  renderBtcContext(a);
   renderOrderBook(a.order_book);
   renderHolidayBanner(a.upcoming_holidays);
   document.getElementById('chartTitle').textContent = `${a.symbol}/USDT · ${a.timeframe}`;
@@ -1724,6 +1725,27 @@ function renderHtfConfluence(a) {
     <div class="htf-footer">${badge}</div>`;
 }
 
+/* ─── BTC Market Context banner ──────────────────────────────────────────── */
+function renderBtcContext(a) {
+  const el = document.getElementById('btcContextBanner');
+  if (!el) return;
+  const ctx = a.btc_context;
+  if (!ctx || ctx.direction === 'NEUTRAL' || a.symbol === 'BTC') {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = '';
+  const icon   = ctx.direction === 'LONG' ? '▲' : '▼';
+  const corPct = Math.round((ctx.corr_factor || 1) * 100);
+  if (ctx.aligned) {
+    el.className = 'btc-ctx-banner btc-ctx-aligned';
+    el.innerHTML = `<strong>✓ BTC ${icon} ${ctx.direction}</strong> — aligns with this signal · ${corPct}% correlated · ${ctx.candles_used} candles checked`;
+  } else {
+    el.className = 'btc-ctx-banner btc-ctx-conflict';
+    el.innerHTML = `<strong>⚠ BTC ${icon} ${ctx.direction}</strong> — opposes this signal · ${corPct}% correlated · watch for reversal / fakeout`;
+  }
+}
+
 /* ─── Confluence lists ────────────────────────────────────────────────────── */
 function renderConfluence(s) {
   if (!s) return;
@@ -2201,14 +2223,15 @@ async function loadWhaleAlerts() {
 /* ─── Recommended Trades ─────────────────────────────────────────────────── */
 
 // Session starts at 8AM SGT = 00:00 UTC exactly.
-// 2-hour cache key — invalidates every even UTC hour to match backend refresh cadence.
+// 30-min cache key — invalidates at :00 and :30 of each UTC hour.
 function _recCacheKey() {
   const now  = new Date();
   const y    = now.getUTCFullYear();
   const m    = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d    = String(now.getUTCDate()).padStart(2, '0');
-  const slot = String(Math.floor(now.getUTCHours() / 2) * 2).padStart(2, '0');
-  return `rec23_mtf_${y}${m}${d}${slot}`;
+  const h    = String(now.getUTCHours()).padStart(2, '0');
+  const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
+  return `rec24_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
