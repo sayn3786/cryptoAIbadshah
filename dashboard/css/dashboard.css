@@ -1065,6 +1065,16 @@ a:hover { color: var(--gold2); }
 .rec-swing-block { margin-top: 20px; }
 .rec-empty { font-size: .75rem; color: var(--muted); padding: 8px 0; }
 
+/* Live price row on rec cards */
+.rec-live-row {
+  display: flex; align-items: center; gap: 8px; font-size: .72rem;
+  background: var(--card2); border-radius: 4px; padding: 3px 8px; margin: 2px 0;
+}
+.rec-live-price {
+  font-family: var(--mono); font-weight: 700; color: var(--text);
+  margin-left: auto;
+}
+
 /* Entry distance from scan-time price */
 .rec-entry-dist {
   display: inline-block; font-size: .6rem; font-weight: 600;

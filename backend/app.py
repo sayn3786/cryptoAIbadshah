@@ -521,7 +521,8 @@ def _compute_recommendations() -> dict:
 
             candidates.append({
                 "symbol":         sym,
-                "timeframe":      primary_tf,
+                "timeframe":      primary_tf,   # signal source (entry/SL/TP levels)
+                "view_tf":        tf_short,     # chart to open on "View Analysis"
                 "aligned_tfs":    f"{tf_short}·{tf_long}",
                 "direction":      direction,
                 "strength":       strength,
@@ -570,7 +571,7 @@ def _compute_recommendations() -> dict:
 
         return top[:3]
 
-    intraday_recs = _build_set("1H", "2H", "1H")   # 4–24h hold → view 1H chart
+    intraday_recs = _build_set("1H", "2H", "2H")   # 2H levels for 4-24h holds; view 1H chart
 
     session_start_sgt = session_start.astimezone(SGT)
     valid_until_sgt   = (session_start + timedelta(hours=23, minutes=59)).astimezone(SGT)
@@ -588,7 +589,7 @@ def _compute_recommendations() -> dict:
 
 def _rec_cache_key() -> str:
     now = datetime.now(timezone.utc)
-    return "v12_intraday_" + now.strftime("%Y%m%d")
+    return "v13_2Hlevels_" + now.strftime("%Y%m%d")
 
 
 def _daily_rec_scheduler():
@@ -640,6 +641,29 @@ def api_recommendations():
     result = _compute_recommendations()
     with _rec_lock:
         _rec_cache_save(key, result)
+    return jsonify(result)
+
+
+@app.get("/api/prices")
+def api_prices():
+    """
+    Lightweight live-price endpoint. Returns the latest close for each requested symbol.
+    Used by rec cards to show the live price without fetching full analysis.
+    e.g. GET /api/prices?symbols=ETH,BLUR,HYPE
+    """
+    syms_param = request.args.get("symbols", "")
+    requested  = [s.strip().upper() for s in syms_param.split(",") if s.strip()]
+    result: Dict = {}
+    for sym in requested:
+        bs = SYMBOLS.get(sym)
+        if not bs:
+            continue
+        try:
+            candles = client.get_spot_klines(bs, "1m", 2)
+            if candles:
+                result[sym] = round(candles[-1]["close"], 8)
+        except Exception:
+            pass
     return jsonify(result)
 
 

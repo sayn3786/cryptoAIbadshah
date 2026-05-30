@@ -2162,7 +2162,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec19_intraday_${y}${m}${d}`;
+  return `rec20_2Hlvl_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -2203,10 +2203,9 @@ function _buildRecCard(r, i) {
   const tp1p = tpPcts[0]  != null ? `+${tpPcts[0]}%` : '';
   const tp2p = tpPcts[1]  != null ? `+${tpPcts[1]}%` : '';
 
-  // Show primary timeframe as the "trade type", 2H is just confirmation
-  const [tfConfirm] = (r.aligned_tfs || '').split('·').slice(1);
-  const tfAlign = r.timeframe
-    ? `<span class="rec-tf-align">✅ ${r.timeframe} Signal${tfConfirm ? ` · ${tfConfirm} confirms` : ''}</span>` : '';
+  // 1H+2H must agree — levels come from 2H (wider targets suit 4-24h holds)
+  const tfAlign = r.aligned_tfs
+    ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned · ${r.timeframe} levels</span>` : '';
   const btcAdj = r.btc_adj != null ? Math.abs(r.btc_adj) : '';
   const corrFactor = r.btc_corr != null ? r.btc_corr : 1.0;
   const corrNote = corrFactor <= 0.3 ? ' (low BTC correlation — independent mover)'
@@ -2259,6 +2258,10 @@ function _buildRecCard(r, i) {
     ${dailyBadge}
     ${tfBreakdown}
     ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
+    <div class="rec-live-row">
+      <span class="rec-lbl">Live Price</span>
+      <span class="rec-live-price" data-sym="${r.symbol}">—</span>
+    </div>
     ${strengthBar}
     <div class="rec-levels">
       <div class="rec-lvl"><span class="rec-lbl">Entry</span><span class="rec-val">${fmtPrice(r.entry)} ${entryDist}</span></div>
@@ -2269,7 +2272,7 @@ function _buildRecCard(r, i) {
     </div>
     ${reasons ? `<ul class="rec-reasons">${reasons}</ul>` : ''}
     ${r.vol_tier_label ? `<span class="vol-tier-badge" style="margin-top:4px">${r.vol_tier_label}</span>` : ''}
-    <button class="rec-go-btn" onclick="jumpTo('${r.symbol}','${r.timeframe}')">View Analysis →</button>
+    <button class="rec-go-btn" onclick="jumpTo('${r.symbol}','${r.view_tf || r.timeframe}')">View Analysis →</button>
   </div>`;
 }
 
@@ -2316,6 +2319,21 @@ async function loadRecommendations() {
       : '<p class="rec-empty">No signals aligned today.</p>';
 
     section.classList.remove('hidden');
+    // Fetch live prices and inject into cards (fire-and-forget, non-blocking)
+    _refreshRecPrices();
+  } catch (_) {}
+}
+
+async function _refreshRecPrices() {
+  const els  = [...document.querySelectorAll('.rec-live-price[data-sym]')];
+  if (!els.length) return;
+  const syms = [...new Set(els.map(el => el.dataset.sym))].join(',');
+  try {
+    const prices = await fetch(`${API}/prices?symbols=${syms}`).then(r => r.json());
+    els.forEach(el => {
+      const p = prices[el.dataset.sym];
+      if (p != null) el.textContent = fmtPrice(p);
+    });
   } catch (_) {}
 }
 
