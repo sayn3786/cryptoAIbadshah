@@ -529,7 +529,7 @@ def _compute_recommendations() -> dict:
             candidates.append({
                 "symbol":         sym,
                 "timeframe":      primary_tf,   # signal source (entry/SL/TP levels)
-                "view_tf":        tf_short,     # chart to open on "View Analysis"
+                "view_tf":        primary_tf,   # chart to open on "View Analysis"
                 "aligned_tfs":    f"{tf_short}·{tf_long}",
                 "direction":      direction,
                 "strength":       strength,
