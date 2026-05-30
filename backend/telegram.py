@@ -106,7 +106,7 @@ def build_rec_message(recs_data: Dict) -> str:
     lines += [
         "",
         "⚠️ _Not financial advice. Always manage risk — max 1-2% per trade._",
-        "🌟 @CryptoSTARS",
+        "🌟 @CryptoSTARS1560",
     ]
     return "\n".join(lines)
 
