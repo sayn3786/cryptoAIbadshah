@@ -1769,8 +1769,8 @@ function renderConfluence(s) {
   bearEl.innerHTML = (s.bearish_reasons?.length ? s.bearish_reasons : ['No bearish confluence']).map(li).join('');
 }
 
-/* ─── X (Twitter) Thread Generator ───────────────────────────────────────── */
-async function generateJournal() {
+/* ─── X Posts — Signal Confluence ────────────────────────────────────────── */
+async function generateXPosts() {
   const btn     = document.getElementById('generateBtn');
   const loading = document.getElementById('journalLoading');
   const output  = document.getElementById('journalOutput');
@@ -1780,59 +1780,28 @@ async function generateJournal() {
   output.classList.add('hidden');
 
   try {
-    const res = await fetch(`${API}/journal/${S.symbol}?timeframe=${S.timeframe}`, { method: 'POST' });
+    const res = await fetch(`${API}/twitter/posts`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    S.journalData = data.journal;
-    renderJournal(data.journal);
+    if (!data.ok) throw new Error(data.error || 'Failed');
+    document.getElementById('xPost1').textContent = data.post1;
+    document.getElementById('xPost2').textContent = data.post2;
     output.classList.remove('hidden');
   } catch (e) {
-    alert('Thread generation failed: ' + e.message);
+    alert('Failed to generate X posts: ' + e.message);
   } finally {
     btn.disabled = false;
     loading.classList.add('hidden');
   }
 }
 
-function renderJournal(j) {
-  if (!j) return;
-  document.getElementById('journalMeta').textContent =
-    `Generated: ${new Date(j.generated_at).toLocaleString()} · Model: ${j.model}`;
-
-  // Render thread tweets with visual tweet separators
-  const fmtThread = (txt) => {
-    if (!txt) return '—';
-    return txt.split(/\n(?=\d+\/)/).map(tweet => {
-      const escaped = tweet.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      return `<div class="x-tweet">${escaped.replace(/\n/g,'<br>')}</div>`;
-    }).join('');
-  };
-  const fmtPlain = (txt) => txt?.replace(/\n/g, '<br>') || '—';
-
-  // Full thread = hook + thread + closing
-  const full = [j.hook, j.thread, j.closing].filter(Boolean).join('\n\n');
-  document.getElementById('journalScript').innerHTML = fmtThread(full);
-  document.getElementById('journalTitle').innerHTML  = fmtPlain(j.hook);
-  document.getElementById('journalDesc').innerHTML   = fmtPlain(j.hashtags);
-}
-
-function showJTab(btn, tab) {
-  document.querySelectorAll('.jtab').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  ['journalScript', 'journalTitle', 'journalDesc'].forEach(id => {
-    document.getElementById(id).classList.add('hidden');
-  });
-  const map = { script: 'journalScript', title: 'journalTitle', desc: 'journalDesc' };
-  document.getElementById(map[tab]).classList.remove('hidden');
-}
-
-function copyJournal() {
-  const active = document.querySelector('.journal-content:not(.hidden)');
-  if (!active) return;
-  navigator.clipboard.writeText(active.innerText).then(() => {
-    const btn = document.querySelector('.copy-btn');
+function copyXPost(n) {
+  const el  = document.getElementById(`xPost${n}`);
+  const btn = el?.closest('.x-post-block')?.querySelector('.copy-btn');
+  if (!el || !btn) return;
+  navigator.clipboard.writeText(el.textContent).then(() => {
     btn.textContent = '✅ Copied!';
-    setTimeout(() => { btn.textContent = '📋 Copy to Clipboard'; }, 2000);
+    setTimeout(() => { btn.textContent = `📋 Copy Post ${n}`; }, 2000);
   });
 }
 
@@ -2246,32 +2215,6 @@ async function loadWhaleAlerts() {
 
 /* ─── Recommended Trades ─────────────────────────────────────────────────── */
 
-async function sendToTwitter() {
-  const btn   = document.getElementById('twSendBtn');
-  const icon  = document.getElementById('twBtnIcon');
-  const label = document.getElementById('twBtnLabel');
-  if (!btn || btn.disabled) return;
-
-  btn.disabled = true;
-  icon.textContent  = '⏳';
-  label.textContent = 'Posting…';
-
-  try {
-    const res  = await fetch(`${API}/twitter/send`, { method: 'POST' });
-    const data = await res.json();
-    if (data.ok) {
-      icon.textContent  = '✅';
-      label.textContent = 'Posted!';
-      setTimeout(() => { icon.textContent = '𝕏'; label.textContent = 'Post to X'; btn.disabled = false; }, 3000);
-    } else {
-      throw new Error(data.error || 'Failed');
-    }
-  } catch (e) {
-    icon.textContent  = '❌';
-    label.textContent = e.message.includes('configured') ? 'Not configured' : 'Failed';
-    setTimeout(() => { icon.textContent = '𝕏'; label.textContent = 'Post to X'; btn.disabled = false; }, 4000);
-  }
-}
 
 async function sendToTelegram() {
   const btn   = document.getElementById('tgSendBtn');

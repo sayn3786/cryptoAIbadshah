@@ -897,6 +897,24 @@ def api_telegram_send():
     return jsonify({"ok": False, "error": "Telegram send failed — check server logs"}), 500
 
 
+@app.get("/api/twitter/posts")
+def api_twitter_posts():
+    """Return pre-formatted X posts for manual copying (BTC+ETH and ALTs)."""
+    from twitter import build_btc_eth_post, build_alts_post
+    _ALT_SYMS = ["TAO", "LINK", "HYPE", "ZEC", "ONDO"]
+    try:
+        btc  = build_analysis("BTC", "1D")
+        eth  = build_analysis("ETH", "1D")
+        alts = {sym: build_analysis(sym, "1D") for sym in _ALT_SYMS}
+        return jsonify({
+            "ok":    True,
+            "post1": build_btc_eth_post(btc, eth),
+            "post2": build_alts_post(alts),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.post("/api/twitter/send")
 def api_twitter_send():
     """Manually post BTC + ETH 1D signal thread to X (Twitter)."""
