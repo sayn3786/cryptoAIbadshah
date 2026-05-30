@@ -2321,7 +2321,7 @@ async function loadRecommendations() {
 
     const recs = data.recommendations || [];
     cards.innerHTML = recs.length
-      ? `<div class="rec-cards-inner">${recs.map(_buildRecCard).join('')}</div>`
+      ? recs.map(_buildRecCard).join('')
       : '<p class="rec-empty">No signals aligned today.</p>';
 
     section.classList.remove('hidden');

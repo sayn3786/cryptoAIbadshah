@@ -986,8 +986,9 @@ a:hover { color: var(--gold2); }
 
 .rec-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+  align-items: start;
 }
 @media (max-width: 900px) { .rec-cards { grid-template-columns: 1fr; } }
 @media (min-width: 601px) and (max-width: 900px) { .rec-cards { grid-template-columns: repeat(2, 1fr); } }
