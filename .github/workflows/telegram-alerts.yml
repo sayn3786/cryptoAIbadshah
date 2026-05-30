@@ -14,8 +14,16 @@ jobs:
     steps:
       - name: Trigger Telegram notification
         run: |
-          curl -s -X POST "${{ secrets.APP_URL }}/api/cron/daily" \
+          echo "Calling: ${{ secrets.APP_URL }}/api/cron/daily"
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST "${{ secrets.APP_URL }}/api/cron/daily" \
             -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
-            --max-time 60 \
-            --retry 3 \
-            --retry-delay 5
+            --max-time 90)
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
+          echo "Status: $HTTP_STATUS"
+          echo "Response: $BODY"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: API returned HTTP $HTTP_STATUS"
+            exit 1
+          fi
