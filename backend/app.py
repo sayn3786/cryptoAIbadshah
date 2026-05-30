@@ -121,7 +121,7 @@ _HTF_DEPS: Dict[str, List[str]] = {
 # Lower TFs are noisier so we require more candles for confidence.
 _TF_CANDLE_N: Dict[str, int] = {
     "1H": 4, "2H": 4, "4H": 4, "8H": 4, "12H": 4,
-    "1D": 3, "1W": 2, "2W": 2, "3W": 2, "1M": 2,
+    "1D": 3, "1W": 2, "2W": 2, "3W": 2, "1M": 4,
 }
 
 
