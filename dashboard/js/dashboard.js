@@ -223,6 +223,8 @@ function renderPrice(a) {
   const chgEl = document.getElementById('priceChange');
   chgEl.textContent = `${up ? '▲' : '▼'} ${pct(chg)}`;
   chgEl.className = `price-change ${up ? 'up' : 'dn'}`;
+  const periodEl = document.getElementById('priceChangePeriod');
+  if (periodEl) periodEl.textContent = `${a.timeframe} change`;
   document.getElementById('priceHigh').textContent = `H: ${fmtPrice(last.high)}`;
   document.getElementById('priceLow').textContent  = `L: ${fmtPrice(last.low)}`;
   document.getElementById('priceVol').textContent  = `Vol: ${fmtK(last.volume)}`;

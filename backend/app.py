@@ -567,7 +567,7 @@ def api_analysis(symbol):
 def api_dashboard():
     results = {}
     with ThreadPoolExecutor(max_workers=6) as ex:
-        futures = {ex.submit(build_analysis, sym, "1W"): sym for sym in SYMBOLS}
+        futures = {ex.submit(build_analysis, sym, "1D"): sym for sym in SYMBOLS}
         for future in as_completed(futures):
             sym = futures[future]
             try:
