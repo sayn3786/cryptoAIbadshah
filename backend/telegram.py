@@ -40,9 +40,8 @@ def build_rec_message(recs_data: Dict) -> str:
     recs       = recs_data.get("recommendations", [])
     date_label = recs_data.get("date_label", "")
     valid_fmt  = recs_data.get("valid_until_fmt", "")
-    btc_signal = recs_data.get("btc_signal") or {}
-    btc_dir    = btc_signal.get("direction", "NEUTRAL")
-    btc_str    = btc_signal.get("strength", 0)
+    btc_dir = recs_data.get("btc_consensus", "NEUTRAL")
+    btc_str = recs_data.get("btc_strength", 0)
 
     lines = [
         f"🌟 *CryptoSTARS Daily Trades* — {date_label}",
