@@ -174,8 +174,8 @@ def _signal_block(sym: str, analysis: Dict) -> List[str]:
 
     # Top reason — human readable narrative
     reasons = (sig.get("bullish_reasons") if d == "LONG" else sig.get("bearish_reasons")) or []
-    top_reason = reasons[0][:90] if reasons else ""
-    second_reason = reasons[1][:80] if len(reasons) > 1 else ""
+    top_reason = reasons[0] if reasons else ""
+    second_reason = reasons[1] if len(reasons) > 1 else ""
 
     # Indicator narrative
     rsi_ctx  = _rsi_context(analysis.get("rsi"), d)
