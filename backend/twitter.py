@@ -84,6 +84,10 @@ def _fmt_price(v) -> str:
     return f"${v:,.4f}"
 
 
+def _fmt_pct(v) -> str:
+    return f"{float(v):.1f}%" if v is not None else ""
+
+
 def _rsi_context(rsi, direction: str) -> str:
     if rsi is None:
         return ""
@@ -137,11 +141,11 @@ def _indicator_narrative(analysis: Dict, direction: str) -> str:
         bits.append("price below key EMAs")
 
     bb = analysis.get("bollinger") or {}
-    bb_pos = bb.get("position", "")
-    if bb_pos == "above_upper":
-        bits.append("BB upper band breakout")
-    elif bb_pos == "below_lower":
-        bits.append("BB lower band breakdown")
+    bb_break = bb.get("breakout", "")
+    if bb_break == "bullish":
+        bits.append("BB upper breakout")
+    elif bb_break == "bearish":
+        bits.append("BB lower breakdown")
 
     return " · ".join(bits[:4])
 
