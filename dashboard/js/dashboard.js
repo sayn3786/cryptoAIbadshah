@@ -202,6 +202,7 @@ function renderAll(a) {
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
   renderConfluence(a.signal);
+  renderHtfConfluence(a);
   renderOrderBook(a.order_book);
   renderHolidayBanner(a.upcoming_holidays);
   document.getElementById('chartTitle').textContent = `${a.symbol}/USDT · ${a.timeframe}`;
@@ -1677,6 +1678,50 @@ function renderElliottWave(e) {
   // Deduplicate by time (LightweightCharts requires unique timestamps per series)
   const unique = [...new Map(markers.map(m => [m.time, m])).values()];
   S.candleSeries.setMarkers(unique);
+}
+
+/* ─── HTF Confluence card ─────────────────────────────────────────────────── */
+function renderHtfConfluence(a) {
+  const section = document.getElementById('htfSection');
+  const card    = document.getElementById('htfConfluence');
+  if (!section || !card) return;
+
+  const htf = a.htf_confluence;
+  if (!htf || !htf.deps || Object.keys(htf.deps).length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  const icon = d => d === 'LONG' ? '▲' : d === 'SHORT' ? '▼' : '—';
+  const mainDir = htf.main_dir;
+
+  const items = Object.entries(htf.deps).map(([tf, dir]) => {
+    const cls = dir === mainDir ? 'htf-aligned'
+              : dir === 'NEUTRAL' ? 'htf-neutral'
+              : 'htf-against';
+    return `<span class="htf-item ${cls}">${tf} ${icon(dir)}</span>`;
+  }).join('');
+
+  const alignedCount = htf.aligned.length;
+  const totalDeps    = Object.keys(htf.deps).length;
+
+  let badge = '';
+  if (htf.confirmed) {
+    badge = `<span class="htf-badge htf-badge-confirm">✓ HTF Confirmed (${alignedCount}/${totalDeps} aligned)</span>`;
+  } else if (htf.warning) {
+    badge = `<span class="htf-badge htf-badge-warn">⚠ Counter-trend on ${htf.against.join(', ')} — possible reversal or fakeout</span>`;
+  } else {
+    badge = `<span class="htf-badge htf-badge-neutral">${alignedCount}/${totalDeps} HTFs aligned</span>`;
+  }
+
+  card.innerHTML = `
+    <div class="htf-header">
+      <span class="card-title" style="margin:0">Higher Timeframe Confluence</span>
+      <span class="htf-main-dir htf-${mainDir.toLowerCase()}">${icon(mainDir)} ${mainDir} on ${a.timeframe}</span>
+    </div>
+    <div class="htf-items">${items}</div>
+    <div class="htf-footer">${badge}</div>`;
 }
 
 /* ─── Confluence lists ────────────────────────────────────────────────────── */

@@ -6,7 +6,7 @@ import time
 import math
 sys.path.insert(0, os.path.dirname(__file__))
 from btc_onchain import get_btc_mining_signals
-from typing import Dict
+from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -101,6 +101,59 @@ TF_MIN_POLE_PCT = {
     "4H": 3.0, "8H": 4.0, "12H": 5.0, "1D":  6.0,
     "1W": 8.0, "2W": 8.0, "3W":  8.0, "1M": 10.0,
 }
+
+# Higher timeframes that each TF must align with for confluence validation.
+# Shorter TFs depend on a larger stack of HTFs; longer TFs have fewer above them.
+_HTF_DEPS: Dict[str, List[str]] = {
+    "1H":  ["2H", "4H", "12H", "1D", "1W", "1M"],
+    "2H":  ["4H", "12H", "1D", "1W", "1M"],
+    "4H":  ["8H", "1D", "1W", "1M"],
+    "8H":  ["12H", "1D", "1W", "1M"],
+    "12H": ["1D", "1W", "1M"],
+    "1D":  ["1W", "2W", "1M"],
+    "1W":  ["2W", "1M"],
+    "2W":  ["1M"],
+    "3W":  ["1M"],
+    "1M":  [],
+}
+
+# How many closed candles to use for direction checks per TF.
+# Lower TFs are noisier so we require more candles for confidence.
+_TF_CANDLE_N: Dict[str, int] = {
+    "1H": 4, "2H": 4, "4H": 4, "8H": 4, "12H": 4,
+    "1D": 3, "1W": 2, "2W": 2, "3W": 2, "1M": 2,
+}
+
+
+def _quick_tf_dir(symbol: str, tf: str) -> str:
+    """Lightweight direction check for a single TF using recent closed candles only."""
+    try:
+        bs       = SYMBOLS.get(symbol)
+        if not bs:
+            return "NEUTRAL"
+        n        = _TF_CANDLE_N.get(tf, 3)
+        interval = TF_INTERVAL.get(tf, "1d")
+        agg      = TF_AGG.get(tf, 1)
+        limit    = (n + 3) * agg          # extra buffer for aggregation
+        candles  = client.get_spot_klines(bs, interval, limit)
+        if agg > 1:
+            candles = client.aggregate_candles(candles, agg)
+        if not candles or len(candles) < 2:
+            return "NEUTRAL"
+        closed  = candles[:-1]            # drop live candle
+        recent  = closed[-n:] if len(closed) >= n else closed
+        if not recent:
+            return "NEUTRAL"
+        bull      = sum(1 for c in recent if c["close"] > c["open"])
+        bear      = len(recent) - bull
+        threshold = max(1, round(len(recent) * 0.6))
+        if bull >= threshold:
+            return "LONG"
+        if bear >= threshold:
+            return "SHORT"
+        return "NEUTRAL"
+    except Exception:
+        return "NEUTRAL"
 
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
@@ -199,9 +252,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     rsi_slope = round(_valid_rsi[-1] - _valid_rsi[-5], 2) if len(_valid_rsi) >= 5 else None
     # Price ROC: 4-candle rate of change — captures "the coin is actively moving right now"
     price_roc = round((closes[-1] - closes[-5]) / closes[-5] * 100, 2) if len(closes) >= 5 and closes[-5] != 0 else None
-    # Candle direction: +1 bullish (close > open), -1 bearish for last 4 CLOSED candles.
+    # Candle direction: +1 bullish / -1 bearish for last N CLOSED candles.
+    # Count varies by TF — lower TFs are noisier so we require more candles.
     # Skip spot[-1] — the live candle hasn't closed yet, its direction can flip.
-    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-5:-1]] if len(spot) >= 5 else []
+    _n_dir = _TF_CANDLE_N.get(timeframe, 4)
+    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-(1 + _n_dir):-1]] if len(spot) >= 1 + _n_dir else []
 
     spot_cvd = calculate_cvd(spot, "spot")
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
@@ -293,6 +348,27 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "btc_mining":    btc_mining,
     }
     analysis["signal"] = generate_signal(analysis)
+
+    # HTF confluence: fetch direction for each higher TF in parallel
+    htf_list = _HTF_DEPS.get(timeframe, [])
+    if htf_list:
+        with ThreadPoolExecutor(max_workers=min(len(htf_list), 6)) as ex:
+            futs     = {tf: ex.submit(_quick_tf_dir, symbol, tf) for tf in htf_list}
+            htf_dirs = {tf: fut.result() for tf, fut in futs.items()}
+        main_dir = analysis["signal"].get("direction", "NEUTRAL")
+        aligned  = [tf for tf, d in htf_dirs.items() if d == main_dir]
+        against  = [tf for tf, d in htf_dirs.items() if d != main_dir and d != "NEUTRAL"]
+        analysis["htf_confluence"] = {
+            "deps":      htf_dirs,
+            "main_dir":  main_dir,
+            "aligned":   aligned,
+            "against":   against,
+            "confirmed": len(aligned) >= max(1, len(htf_list) // 2 + 1),
+            "warning":   len(against) >= 2,
+        }
+    else:
+        analysis["htf_confluence"] = None
+
     return analysis
 
 
