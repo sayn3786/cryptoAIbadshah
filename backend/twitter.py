@@ -84,66 +84,73 @@ def _fmt_price(v) -> str:
     return f"${v:,.4f}"
 
 
-def _reasons_short(reasons: List[str], n: int = 3) -> List[str]:
-    """Trim reason strings to ≤60 chars each for tweet space."""
-    out = []
-    for r in (reasons or [])[:n]:
-        out.append(r[:60] + "…" if len(r) > 60 else r)
-    return out
+def _rsi_context(rsi, direction: str) -> str:
+    if rsi is None:
+        return ""
+    v = float(rsi)
+    if v >= 75:
+        return f"RSI {v:.0f} — overbought, watch for reversal"
+    if v <= 25:
+        return f"RSI {v:.0f} — oversold, watch for bounce"
+    if direction == "SHORT" and v < 50:
+        return f"RSI {v:.0f} — bearish momentum building"
+    if direction == "LONG" and v > 50:
+        return f"RSI {v:.0f} — bullish momentum building"
+    return f"RSI {v:.0f}"
 
 
-def _fmt_pct(v) -> str:
-    return f"{float(v):.1f}%" if v is not None else ""
-
-
-def _confluence_line(analysis: Dict) -> str:
-    """Build a short indicator confluence line from analysis data."""
-    parts = []
-
-    rsi = analysis.get("rsi")
-    if rsi is not None:
-        level = " OB" if float(rsi) >= 70 else " OS" if float(rsi) <= 30 else ""
-        parts.append(f"RSI {float(rsi):.0f}{level}")
+def _indicator_narrative(analysis: Dict, direction: str) -> str:
+    """Build a human-readable indicator confluence sentence."""
+    bits = []
 
     macd = analysis.get("macd") or {}
     cross = macd.get("cross")
     trend = macd.get("trend", "neutral")
     if cross == "bullish":
-        parts.append("MACD Cross ↑")
+        bits.append("MACD bullish crossover ↑")
     elif cross == "bearish":
-        parts.append("MACD Cross ↓")
+        bits.append("MACD bearish crossover ↓")
     elif trend == "bullish":
-        parts.append("MACD ↑")
+        bits.append("MACD bullish")
     elif trend == "bearish":
-        parts.append("MACD ↓")
+        bits.append("MACD bearish")
 
     st = analysis.get("supertrend") or {}
     st_dir = st.get("direction")
     flipped = st.get("flipped", False)
     if st_dir == "bull":
-        parts.append("ST Bull" + (" ⚡" if flipped else ""))
+        bits.append("SuperTrend bullish" + (" 🔄 just flipped" if flipped else ""))
     elif st_dir == "bear":
-        parts.append("ST Bear" + (" ⚡" if flipped else ""))
+        bits.append("SuperTrend bearish" + (" 🔄 just flipped" if flipped else ""))
 
     ema = analysis.get("ema_trend") or {}
-    short_trend = ema.get("short_trend", "")
-    ema7_cross  = ema.get("ema7_cross", "")
-    if ema7_cross == "golden":
-        parts.append("EMA Golden Cross")
-    elif ema7_cross == "death":
-        parts.append("EMA Death Cross")
-    elif short_trend == "bullish":
-        parts.append("EMA Bull")
-    elif short_trend == "bearish":
-        parts.append("EMA Bear")
+    cross7 = ema.get("ema7_cross", "")
+    short_t = ema.get("short_trend", "")
+    trend_e = ema.get("trend", "")
+    if cross7 == "golden":
+        bits.append("EMA Golden Cross ✨")
+    elif cross7 == "death":
+        bits.append("EMA Death Cross 💀")
+    elif short_t == "bullish":
+        bits.append("price above key EMAs")
+    elif short_t == "bearish":
+        bits.append("price below key EMAs")
 
-    return " · ".join(parts[:5])
+    bb = analysis.get("bollinger") or {}
+    bb_pos = bb.get("position", "")
+    if bb_pos == "above_upper":
+        bits.append("BB upper band breakout")
+    elif bb_pos == "below_lower":
+        bits.append("BB lower band breakdown")
+
+    return " · ".join(bits[:4])
 
 
 def _signal_block(sym: str, analysis: Dict) -> List[str]:
-    """Format one symbol into a list of display lines."""
+    """Format one symbol into human-written post lines."""
     if not analysis:
-        return [f"⚪ ${sym}  —  data unavailable", ""]
+        return [f"⚪ ${sym} — data unavailable", ""]
+
     sig  = analysis.get("signal") or {}
     d    = sig.get("direction", "NEUTRAL")
     s    = sig.get("strength", 0)
@@ -155,54 +162,108 @@ def _signal_block(sym: str, analysis: Dict) -> List[str]:
     tps     = sig.get("tp_targets") or []
     tp_pcts = sig.get("tp_pcts") or []
     tp1     = _fmt_price(tps[0]) if tps else "N/A"
-    tp1_p   = tp_pcts[0] if tp_pcts else None
     tp2     = _fmt_price(tps[1]) if len(tps) > 1 else None
+    tp1_p   = tp_pcts[0] if tp_pcts else None
     tp2_p   = tp_pcts[1] if len(tp_pcts) > 1 else None
     rr      = sig.get("rr_ratio")
     lev     = sig.get("leverage")
-    conf    = _confluence_line(analysis)
 
-    sl_str  = f"SL: {sl}" + (f" (-{_fmt_pct(sl_p)})" if sl_p else "")
-    tp1_str = f"TP1: {tp1}" + (f" (+{_fmt_pct(tp1_p)})" if tp1_p else "")
-    tp2_str = (f"TP2: {tp2}" + (f" (+{_fmt_pct(tp2_p)})" if tp2_p else "")) if tp2 else None
+    # Top reason — human readable narrative
+    reasons = (sig.get("bullish_reasons") if d == "LONG" else sig.get("bearish_reasons")) or []
+    top_reason = reasons[0][:90] if reasons else ""
+    second_reason = reasons[1][:80] if len(reasons) > 1 else ""
 
-    lines = [
-        f"{icon} ${sym} {d}  {s}/100",
-        f"  Entry: {entry}  |  {sl_str}",
-        f"  {tp1_str}" + (f"  |  {tp2_str}" if tp2_str else ""),
-    ]
-    if conf:
-        lines.append(f"  📊 {conf}")
-    if rr:
-        lev_str = f"  |  Lev {lev}×" if lev else ""
-        lines.append(f"  R/R {rr}:1{lev_str}")
+    # Indicator narrative
+    rsi_ctx  = _rsi_context(analysis.get("rsi"), d)
+    ind_narr = _indicator_narrative(analysis, d)
+
+    tp_str = f"TP1: {tp1}" + (f" (+{_fmt_pct(tp1_p)})" if tp1_p else "")
+    if tp2:
+        tp_str += f"  →  TP2: {tp2}" + (f" (+{_fmt_pct(tp2_p)})" if tp2_p else "")
+
+    lines = [f"{icon} ${sym} — {d}  ({s}/100)"]
+    if top_reason:
+        lines.append(f"↳ {top_reason}")
+    if second_reason:
+        lines.append(f"↳ {second_reason}")
+    if rsi_ctx:
+        lines.append(f"📊 {rsi_ctx}")
+    if ind_narr:
+        lines.append(f"   {ind_narr}")
+    lines.append(f"Entry: {entry}  |  SL: {sl}" + (f" (-{_fmt_pct(sl_p)})" if sl_p else ""))
+    lines.append(tp_str)
+    rr_str = f"R/R {rr}:1" if rr else ""
+    lev_str = f"Lev {lev}×" if lev else ""
+    if rr_str or lev_str:
+        lines.append("  |  ".join(x for x in [rr_str, lev_str] if x))
     return lines
 
 
 def build_btc_eth_post(btc_analysis: Dict, eth_analysis: Dict) -> str:
-    """Format BTC + ETH 1D signal confluence into a copyable X post."""
-    date  = datetime.now().strftime("%b %d, %Y")
-    lines = [f"🌟 Daily 1D Signals — {date}", ""]
+    """Format BTC + ETH 1D signal confluence into a human-written X post."""
+    date = datetime.now().strftime("%b %d, %Y")
+
+    btc_sig = (btc_analysis.get("signal") or {})
+    eth_sig = (eth_analysis.get("signal") or {})
+    btc_d   = btc_sig.get("direction", "NEUTRAL")
+    eth_d   = eth_sig.get("direction", "NEUTRAL")
+
+    # Intro context line
+    if btc_d == eth_d and btc_d != "NEUTRAL":
+        mood = "both majors aligned" + (" bullish 🟢" if btc_d == "LONG" else " bearish 🔴")
+    elif btc_d == "NEUTRAL" and eth_d == "NEUTRAL":
+        mood = "mixed signals across majors — patience required"
+    else:
+        mood = "majors diverging — trade selectively"
+
+    lines = [
+        f"🌟 Daily 1D Signal Breakdown — {date}",
+        f"Market context: {mood}",
+        "",
+    ]
     lines += _signal_block("BTC", btc_analysis)
-    lines.append("")
+    lines += [""]
     lines += _signal_block("ETH", eth_analysis)
     lines += [
         "",
-        "⚠️ Not financial advice — manage your risk!",
-        "#CryptoSTARS #BTC #ETH #Bitcoin #Ethereum #CryptoSignals",
+        "⚠️ Not financial advice. Always manage risk — max 1-2% per trade.",
+        "#CryptoSTARS #Bitcoin #Ethereum #BTC #ETH #CryptoSignals #TradingSignals",
     ]
     return "\n".join(lines)
 
 
 def build_alts_post(analyses: Dict[str, Dict]) -> str:
-    """Format ALT signals (TAO, LINK, HYPE, ZEC, ONDO) into a copyable X post."""
-    date  = datetime.now().strftime("%b %d, %Y")
-    lines = [f"🌟 ALT 1D Signals — {date}", ""]
+    """Format ALT signals (TAO, LINK, HYPE, ZEC, ONDO) into a human-written X post."""
+    date = datetime.now().strftime("%b %d, %Y")
+
+    # Count directions for intro
+    dirs = [(sym, (a.get("signal") or {}).get("direction", "NEUTRAL"))
+            for sym, a in analyses.items()]
+    longs  = [s for s, d in dirs if d == "LONG"]
+    shorts = [s for s, d in dirs if d == "SHORT"]
+
+    if longs and not shorts:
+        mood = f"all setups bullish today ({', '.join('$'+s for s in longs)})"
+    elif shorts and not longs:
+        mood = f"all setups bearish today ({', '.join('$'+s for s in shorts)})"
+    elif longs and shorts:
+        mood = (f"{len(longs)} long{'s' if len(longs)>1 else ''} "
+                f"({', '.join('$'+s for s in longs)}) · "
+                f"{len(shorts)} short{'s' if len(shorts)>1 else ''} "
+                f"({', '.join('$'+s for s in shorts)})")
+    else:
+        mood = "no high-conviction setups — stand aside"
+
+    lines = [
+        f"🌟 Altcoin 1D Signals — {date}",
+        f"Setups today: {mood}",
+        "",
+    ]
     for sym, analysis in analyses.items():
         lines += _signal_block(sym, analysis)
         lines.append("")
     lines += [
-        "⚠️ Not financial advice — manage your risk!",
+        "⚠️ Not financial advice. Always manage risk — max 1-2% per trade.",
         "#CryptoSTARS #TAO #LINK #HYPE #ZEC #ONDO #Altcoins #CryptoSignals",
     ]
     return "\n".join(lines)
