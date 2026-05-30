@@ -1038,6 +1038,15 @@ a:hover { color: var(--gold2); }
 .rec-title  { font-size: .95rem; font-weight: 700; color: var(--gold); }
 .rec-date   { font-size: .75rem; color: var(--muted2); }
 .rec-validity { font-size: .7rem; color: var(--muted); margin-left: auto; }
+.btn-tg {
+  display: flex; align-items: center; gap: 5px;
+  background: #229ED9; color: #fff; border: none; border-radius: 7px;
+  padding: 5px 12px; font-size: .75rem; font-weight: 600;
+  cursor: pointer; transition: opacity .2s, transform .1s;
+  white-space: nowrap;
+}
+.btn-tg:hover:not(:disabled) { opacity: .85; transform: translateY(-1px); }
+.btn-tg:disabled { opacity: .55; cursor: not-allowed; }
 
 .rec-cards {
   display: grid;

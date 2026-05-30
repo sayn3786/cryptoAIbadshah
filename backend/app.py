@@ -856,6 +856,31 @@ def api_recommendations():
     return jsonify(result)
 
 
+@app.post("/api/telegram/send")
+def api_telegram_send():
+    """Manually trigger a Telegram notification with the current recommendations."""
+    import os as _os
+    token   = _os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = _os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return jsonify({"ok": False, "error": "Bot not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env"}), 400
+
+    key = _rec_cache_key()
+    with _rec_lock:
+        mem = _rec_cache_load()
+    if mem.get("key") == key and mem.get("data"):
+        result = mem["data"]
+    else:
+        result = _compute_recommendations()
+        with _rec_lock:
+            _rec_cache_save(key, result)
+
+    ok = _send_telegram_recs(result)
+    if ok:
+        return jsonify({"ok": True, "count": len(result.get("recommendations", []))})
+    return jsonify({"ok": False, "error": "Telegram send failed — check server logs"}), 500
+
+
 @app.get("/api/prices")
 def api_prices():
     """

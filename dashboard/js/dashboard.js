@@ -2246,6 +2246,41 @@ async function loadWhaleAlerts() {
 
 /* ─── Recommended Trades ─────────────────────────────────────────────────── */
 
+async function sendToTelegram() {
+  const btn   = document.getElementById('tgSendBtn');
+  const icon  = document.getElementById('tgBtnIcon');
+  const label = document.getElementById('tgBtnLabel');
+  if (!btn || btn.disabled) return;
+
+  btn.disabled = true;
+  icon.textContent  = '⏳';
+  label.textContent = 'Sending…';
+
+  try {
+    const res  = await fetch(`${API}/telegram/send`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      icon.textContent  = '✅';
+      label.textContent = 'Sent!';
+      setTimeout(() => {
+        icon.textContent  = '✈️';
+        label.textContent = 'Send to Telegram';
+        btn.disabled = false;
+      }, 3000);
+    } else {
+      throw new Error(data.error || 'Failed');
+    }
+  } catch (e) {
+    icon.textContent  = '❌';
+    label.textContent = e.message.includes('not configured') ? 'Bot not configured' : 'Failed — check server logs';
+    setTimeout(() => {
+      icon.textContent  = '✈️';
+      label.textContent = 'Send to Telegram';
+      btn.disabled = false;
+    }, 4000);
+  }
+}
+
 // Session starts at 8AM SGT = 00:00 UTC exactly.
 // 30-min cache key — invalidates at :00 and :30 of each UTC hour.
 function _recCacheKey() {
