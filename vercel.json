@@ -23,14 +23,6 @@
     {
       "path": "/api/cron/daily",
       "schedule": "5 0 * * *"
-    },
-    {
-      "path": "/api/cron/daily",
-      "schedule": "5 8 * * *"
-    },
-    {
-      "path": "/api/cron/daily",
-      "schedule": "5 16 * * *"
     }
   ]
 }

@@ -951,11 +951,13 @@ def api_cron_daily():
     Vercel calls this with a GET; also accepts POST for manual testing.
     """
     import os as _os
-    # Vercel signs cron requests — verify in production to prevent abuse
-    auth = request.headers.get("authorization", "")
+    # Accept Bearer token (Vercel) or x-cron-secret header (GitHub Actions)
     cron_secret = _os.getenv("CRON_SECRET", "")
-    if cron_secret and auth != f"Bearer {cron_secret}":
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    if cron_secret:
+        auth   = request.headers.get("authorization", "")
+        secret = request.headers.get("x-cron-secret", "")
+        if auth != f"Bearer {cron_secret}" and secret != cron_secret:
+            return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     results = {}
     try:

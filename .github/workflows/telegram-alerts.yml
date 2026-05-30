@@ -1,0 +1,21 @@
+name: Telegram Daily Alerts
+
+on:
+  schedule:
+    # All times UTC — SGT is UTC+8
+    - cron: '5 0 * * *'   # 08:05 AM SGT
+    - cron: '5 8 * * *'   # 04:05 PM SGT
+    - cron: '5 16 * * *'  # 12:05 AM SGT (next day)
+  workflow_dispatch:       # allow manual trigger from GitHub UI
+
+jobs:
+  send-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Telegram notification
+        run: |
+          curl -s -X POST "${{ secrets.APP_URL }}/api/cron/daily" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            --max-time 60 \
+            --retry 3 \
+            --retry-delay 5
