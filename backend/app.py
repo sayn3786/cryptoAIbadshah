@@ -778,6 +778,10 @@ def _compute_recommendations() -> dict:
         "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
         "btc_consensus":   btc_consensus,
         "btc_strength":    btc_strength,
+        "btc_4h_dir":      btc_4h_dir,
+        "btc_4h_str":      btc_4h_str,
+        "btc_1d_dir":      btc_tfs.get("1D", {}).get("direction", "NEUTRAL"),
+        "btc_1d_str":      btc_tfs.get("1D", {}).get("strength", 0) or 0,
         "recommendations": intraday_recs,
     }
 
@@ -786,7 +790,7 @@ def _rec_cache_key() -> str:
     now  = datetime.now(timezone.utc)
     # 30-minute windows: :00 and :30 of each hour
     half = (now.minute // 30) * 30
-    return f"v16_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
+    return f"v17_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 
 _SGT = timezone(timedelta(hours=8))
@@ -891,6 +895,33 @@ def api_telegram_send():
     if ok:
         return jsonify({"ok": True, "count": len(result.get("recommendations", []))})
     return jsonify({"ok": False, "error": "Telegram send failed — check server logs"}), 500
+
+
+@app.get("/api/twitter/posts")
+def api_twitter_posts():
+    """Return pre-formatted X posts for manual copying (BTC+ETH and ALTs)."""
+    from twitter import build_btc_eth_post, build_alts_post
+    _SYMS = ["BTC", "ETH", "TAO", "LINK", "HYPE", "ZEC", "ONDO"]
+    try:
+        results: dict = {}
+        with ThreadPoolExecutor(max_workers=len(_SYMS)) as ex:
+            fmap = {ex.submit(build_analysis, sym, "1D"): sym for sym in _SYMS}
+            for future in as_completed(fmap):
+                sym = fmap[future]
+                try:
+                    results[sym] = future.result()
+                except Exception as e:
+                    print(f"[twitter/posts] {sym} failed: {e}")
+                    results[sym] = {}   # empty → shows N/A gracefully
+
+        alts = {sym: results[sym] for sym in ["TAO", "LINK", "HYPE", "ZEC", "ONDO"]}
+        return jsonify({
+            "ok":    True,
+            "post1": build_btc_eth_post(results.get("BTC", {}), results.get("ETH", {})),
+            "post2": build_alts_post(alts),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.post("/api/twitter/send")

@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=12" />
+  <link rel="stylesheet" href="css/dashboard.css?v=14" />
 </head>
 <body>
 
@@ -88,9 +88,6 @@
     <span id="recValidity" class="rec-validity"></span>
     <button class="btn-tg" id="tgSendBtn" onclick="sendToTelegram()" title="Send to Telegram channel">
       <span id="tgBtnIcon">✈️</span> <span id="tgBtnLabel">Send to Telegram</span>
-    </button>
-    <button class="btn-tw" id="twSendBtn" onclick="sendToTwitter()" title="Post BTC+ETH 1D signals to X">
-      <span id="twBtnIcon">𝕏</span> <span id="twBtnLabel">Post to X</span>
     </button>
   </div>
   <div id="recCards" class="rec-cards"></div>
@@ -492,26 +489,28 @@
   <section class="row-journal">
     <div class="card journal-card">
       <div class="journal-header">
-        <h3 class="card-title">𝕏 X (Twitter) Thread Generator</h3>
-        <button class="btn-primary" id="generateBtn" onclick="generateJournal()">
-          Generate AI Thread
+        <h3 class="card-title">𝕏 X Posts — Signal Confluence</h3>
+        <button class="btn-primary" id="generateBtn" onclick="generateXPosts()">
+          Generate X Posts
         </button>
       </div>
       <div id="journalLoading" class="journal-loading hidden">
         <div class="spinner small"></div>
-        <span>Generating your X thread with Claude AI…</span>
+        <span>Fetching 1D signal data…</span>
       </div>
       <div id="journalOutput" class="journal-output hidden">
-        <div class="journal-meta" id="journalMeta"></div>
-        <div class="journal-tabs">
-          <button class="jtab active" data-tab="script" onclick="showJTab(this,'script')">Full Thread</button>
-          <button class="jtab" data-tab="title" onclick="showJTab(this,'title')">Hook Tweet</button>
-          <button class="jtab" data-tab="desc" onclick="showJTab(this,'desc')">Hashtags</button>
+        <div class="x-posts-grid">
+          <div class="x-post-block">
+            <div class="x-post-label">Post 1 — BTC &amp; ETH</div>
+            <pre class="x-post-text" id="xPost1"></pre>
+            <button class="btn-outline copy-btn" onclick="copyXPost(1)">📋 Copy Post 1</button>
+          </div>
+          <div class="x-post-block">
+            <div class="x-post-label">Post 2 — TAO · LINK · HYPE · ZEC · ONDO</div>
+            <pre class="x-post-text" id="xPost2"></pre>
+            <button class="btn-outline copy-btn" onclick="copyXPost(2)">📋 Copy Post 2</button>
+          </div>
         </div>
-        <div class="journal-content" id="journalScript"></div>
-        <div class="journal-content hidden" id="journalTitle"></div>
-        <div class="journal-content hidden" id="journalDesc"></div>
-        <button class="btn-outline copy-btn" onclick="copyJournal()">📋 Copy to Clipboard</button>
       </div>
     </div>
   </section>
@@ -529,7 +528,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=12"></script>
+<script src="js/dashboard.js?v=14"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
