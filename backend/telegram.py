@@ -5,8 +5,6 @@ from typing import Dict, List
 
 
 TELEGRAM_API = "https://api.telegram.org"
-_BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
-_CHAT_ID     = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
 def _fmt_price(v, d: int = 4) -> str:
@@ -101,8 +99,8 @@ def build_rec_message(recs_data: Dict) -> str:
 
 def send_daily_recs(recs_data: Dict) -> bool:
     """Send the daily recommendation message to the configured Telegram channel."""
-    token   = _BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = _CHAT_ID   or os.getenv("TELEGRAM_CHAT_ID", "")
+    token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
 
     if not token or not chat_id:
         print("[telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — skipping")
