@@ -138,6 +138,22 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= 5; g['momentum'] -= 5
             bear_reasons.append(f"Mild negative price momentum ({price_roc:+.1f}% over 4 candles)")
 
+    # ── Last-4-candle direction consistency ───────────────────────────────────
+    # Raw candle direction (close > open = bullish) over the 4 most recently
+    # CLOSED candles (live candle excluded — it hasn't closed yet).
+    # Rewards 3-4 candles aligned in one direction (+6/+12), penalises whipsawing.
+    # Net contribution: ±12 pts max into momentum bucket.
+    candle_dirs = analysis.get("candle_dirs") or []
+    if len(candle_dirs) >= 4:
+        bull_count = sum(1 for d in candle_dirs[-4:] if d > 0)
+        bear_count = 4 - bull_count
+        candle_pts = {4: 12, 3: 6, 2: 0, 1: -6, 0: -12}[bull_count]
+        score += candle_pts; g['momentum'] += candle_pts
+        if candle_pts > 0:
+            bull_reasons.append(f"Candle consistency: {bull_count}/4 recent closed candles bullish — sustained buying pressure")
+        elif candle_pts < 0:
+            bear_reasons.append(f"Candle consistency: {bear_count}/4 recent closed candles bearish — sustained selling pressure")
+
     # ── CVD: Unified Spot × Futures Analysis ─────────────────────────────────
     # Spot CVD, Futures CVD, and their divergence type are NOT independent —
     # they describe the same market event from different angles.
@@ -1115,4 +1131,5 @@ def generate_signal(analysis: Dict) -> Dict:
         "tp_targets": tp_targets,
         "tp_pcts": [tp1_pct, tp2_pct, tp3_pct],
         "rr_ratio": rr_ratio,
+        "current_price": round(current_price, 8) if current_price else None,
     }

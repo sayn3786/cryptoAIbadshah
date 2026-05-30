@@ -1065,6 +1065,14 @@ a:hover { color: var(--gold2); }
 .rec-swing-block { margin-top: 20px; }
 .rec-empty { font-size: .75rem; color: var(--muted); padding: 8px 0; }
 
+/* Entry distance from scan-time price */
+.rec-entry-dist {
+  display: inline-block; font-size: .6rem; font-weight: 600;
+  margin-left: 4px; opacity: .85;
+}
+.rec-entry-dist.bull { color: var(--bull); }
+.rec-entry-dist.bear { color: var(--bear); }
+
 /* Daily candle direction badge */
 .rec-daily-badge {
   display: inline-block; font-size: .62rem; font-weight: 600;

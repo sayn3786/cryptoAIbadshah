@@ -2203,8 +2203,10 @@ function _buildRecCard(r, i) {
   const tp1p = tpPcts[0]  != null ? `+${tpPcts[0]}%` : '';
   const tp2p = tpPcts[1]  != null ? `+${tpPcts[1]}%` : '';
 
-  const tfAlign = r.aligned_tfs
-    ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned</span>` : '';
+  // Show primary timeframe as the "trade type", 2H is just confirmation
+  const [tfConfirm] = (r.aligned_tfs || '').split('·').slice(1);
+  const tfAlign = r.timeframe
+    ? `<span class="rec-tf-align">✅ ${r.timeframe} Signal${tfConfirm ? ` · ${tfConfirm} confirms` : ''}</span>` : '';
   const btcAdj = r.btc_adj != null ? Math.abs(r.btc_adj) : '';
   const corrFactor = r.btc_corr != null ? r.btc_corr : 1.0;
   const corrNote = corrFactor <= 0.3 ? ' (low BTC correlation — independent mover)'
@@ -2235,6 +2237,16 @@ function _buildRecCard(r, i) {
     return `<span class="rec-daily-badge ${dCls}">${dIcon} 1D ${dd} — ${note}</span>`;
   })();
 
+  // Entry distance from the live price at scan time
+  const entryDist = (() => {
+    if (!r.current_price || !r.entry || r.current_price === r.entry) return '';
+    const pct = ((r.entry - r.current_price) / r.current_price * 100);
+    const label = pct > 0
+      ? `+${pct.toFixed(2)}% above current`
+      : `${pct.toFixed(2)}% below current`;
+    return `<span class="rec-entry-dist ${pct > 0 ? 'bear' : 'bull'}">${label}</span>`;
+  })();
+
   return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
@@ -2249,7 +2261,7 @@ function _buildRecCard(r, i) {
     ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
     ${strengthBar}
     <div class="rec-levels">
-      <div class="rec-lvl"><span class="rec-lbl">Entry</span><span class="rec-val">${fmtPrice(r.entry)}</span></div>
+      <div class="rec-lvl"><span class="rec-lbl">Entry</span><span class="rec-val">${fmtPrice(r.entry)} ${entryDist}</span></div>
       <div class="rec-lvl"><span class="rec-lbl">Stop Loss</span><span class="rec-val bear">${fmtPrice(r.sl)} ${r.sl_pct ? `<small>-${r.sl_pct}%</small>` : ''}</span></div>
       <div class="rec-lvl"><span class="rec-lbl">TP 1</span><span class="rec-val bull">${tp1} ${tp1p ? `<small>${tp1p}</small>` : ''}</span></div>
       <div class="rec-lvl"><span class="rec-lbl">TP 2</span><span class="rec-val bull">${tp2} ${tp2p ? `<small>${tp2p}</small>` : ''}</span></div>

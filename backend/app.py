@@ -199,6 +199,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     rsi_slope = round(_valid_rsi[-1] - _valid_rsi[-5], 2) if len(_valid_rsi) >= 5 else None
     # Price ROC: 4-candle rate of change — captures "the coin is actively moving right now"
     price_roc = round((closes[-1] - closes[-5]) / closes[-5] * 100, 2) if len(closes) >= 5 and closes[-5] != 0 else None
+    # Candle direction: +1 bullish (close > open), -1 bearish for last 4 CLOSED candles.
+    # Skip spot[-1] — the live candle hasn't closed yet, its direction can flip.
+    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-5:-1]] if len(spot) >= 5 else []
 
     spot_cvd = calculate_cvd(spot, "spot")
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
@@ -253,6 +256,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "rsi":          current_rsi,
         "rsi_slope":    rsi_slope,
         "price_roc":    price_roc,
+        "candle_dirs":  candle_dirs,
         "rsi_series":   rsi_with_ts[-30:],
         "spot_cvd":     spot_cvd,
         "futures_cvd":  fut_cvd,
@@ -429,10 +433,11 @@ def _compute_recommendations() -> dict:
                 sig  = data.get("signal", {})
                 direction = sig.get("direction", "NEUTRAL")
                 raw.setdefault(sym, {})[tf] = {
-                    "direction": direction,
-                    "strength":  sig.get("strength", 0) or 0,
-                    "sig":       sig,
-                    "rsi":       data.get("rsi"),
+                    "direction":     direction,
+                    "strength":      sig.get("strength", 0) or 0,
+                    "sig":           sig,
+                    "rsi":           data.get("rsi"),
+                    "current_price": sig.get("current_price"),
                 }
             except Exception:
                 pass
@@ -542,6 +547,7 @@ def _compute_recommendations() -> dict:
                 "rr_ratio":       sig.get("rr_ratio"),
                 "vol_tier_label": sig.get("vol_tier_label"),
                 "rsi":            tfs[primary_tf]["rsi"],
+                "current_price":  tfs[primary_tf].get("current_price"),
                 "reasons":        sig.get("reasons", [])[:3],
             })
 
