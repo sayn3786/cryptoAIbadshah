@@ -2208,13 +2208,10 @@ function _buildRecCard(r, i) {
     ? `<span class="rec-tf-align">✅ ${r.aligned_tfs} aligned · ${r.timeframe} levels</span>` : '';
   const btcAdj = r.btc_adj != null ? Math.abs(r.btc_adj) : '';
   const corrFactor = r.btc_corr != null ? r.btc_corr : 1.0;
-  const corrNote = corrFactor <= 0.3 ? ' (low BTC correlation — independent mover)'
-                 : corrFactor <= 0.6 ? ' (partial BTC correlation)'
-                 : '';
   const btcWarn = r.btc_conflict
-    ? `<span class="rec-btc-conflict">⚠️ Conflicts with BTC ${r.btc_consensus} — penalised −${btcAdj}${corrNote}</span>`
+    ? `<span class="rec-btc-conflict">⚠ vs BTC ${r.btc_consensus} −${btcAdj}${corrFactor <= 0.6 ? ' (partial corr)' : ''}</span>`
     : r.btc_aligned
-    ? `<span class="rec-btc-aligned">✅ Aligned with BTC ${r.btc_consensus} — boosted +${btcAdj}${corrNote}</span>`
+    ? `<span class="rec-btc-aligned">✅ with BTC ${r.btc_consensus} +${btcAdj}</span>`
     : '';
 
   // Parse tf labels from aligned_tfs (e.g. "1H·2H" or "2H·4H")
@@ -2237,27 +2234,24 @@ function _buildRecCard(r, i) {
     const ct  = r.mtf_aligned ?? 0;
     const adj = r.mtf_adj != null ? (r.mtf_adj >= 0 ? `+${r.mtf_adj}` : `${r.mtf_adj}`) : '';
     const scoreCls = ct >= 2 ? 'bull' : ct === 0 ? 'bear' : 'warn';
-    const warn = r.mtf_counter
-      ? `<div class="mtf-counter-warn">⚠ Counter-trend — reversal / fake-out risk</div>`
-      : r.mtf_confirm
-      ? `<div class="mtf-full-confirm">✓ All HTFs confirm — strong trend continuation</div>`
-      : '';
+    const warn = r.mtf_counter ? `<span class="mtf-counter-warn">⚠ Counter-trend</span>`
+               : r.mtf_confirm ? `<span class="mtf-full-confirm">✓ Confirmed</span>` : '';
     return `<div class="rec-mtf-row">
       <div class="mtf-tfs">${items}</div>
-      <span class="mtf-score ${scoreCls}">${ct}/3 aligned ${adj}</span>
+      <span class="mtf-score ${scoreCls}">${ct}/3 ${adj}</span>
       ${warn}
     </div>`;
   })();
 
-  // Entry distance from the live price at scan time
+  // Entry distance from scan-time price — compact format
   const entryDist = (() => {
     if (!r.current_price || !r.entry || r.current_price === r.entry) return '';
     const pct = ((r.entry - r.current_price) / r.current_price * 100);
-    const label = pct > 0
-      ? `+${pct.toFixed(2)}% above current`
-      : `${pct.toFixed(2)}% below current`;
-    return `<span class="rec-entry-dist ${pct > 0 ? 'bear' : 'bull'}">${label}</span>`;
+    return `<span class="rec-entry-dist ${pct > 0 ? 'bear' : 'bull'}">${pct > 0 ? '+' : ''}${pct.toFixed(2)}%</span>`;
   })();
+  // Detected timestamp — short format
+  const detectedShort = r.detected_at
+    ? r.detected_at.replace(/\d{4} · /, '').replace(' SGT', '') : '';
 
   return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}">
     <div class="rec-card-top">
@@ -2270,9 +2264,8 @@ function _buildRecCard(r, i) {
     ${btcWarn}
     ${mtfBadge}
     ${tfBreakdown}
-    ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
-    <div class="rec-live-row">
-      <span class="rec-lbl">Live Price</span>
+    <div class="rec-meta-row">
+      ${detectedShort ? `<span class="rec-detected">🕐 ${detectedShort}</span>` : ''}
       <span class="rec-live-price" data-sym="${r.symbol}">—</span>
     </div>
     ${strengthBar}
