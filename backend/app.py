@@ -175,6 +175,29 @@ from datetime import datetime, timezone, timedelta
 _fng_cache: Dict = {"value": None, "label": None, "ts": 0}
 _fng_lock = _threading.Lock()
 
+# BTC signal cache — keyed by TF, refreshed every 5 minutes.
+# Avoids recomputing full BTC analysis on every altcoin page load while
+# keeping BTC direction consistent with what the analysis view shows.
+_btc_sig_cache: Dict = {}
+_btc_sig_lock  = _threading.Lock()
+
+
+def _get_btc_direction(tf: str) -> str:
+    """Return BTC's indicator-based signal direction for a TF. Cached 5 min."""
+    with _btc_sig_lock:
+        cached = _btc_sig_cache.get(tf)
+        if cached and time.time() - cached["ts"] < 300:
+            return cached["direction"]
+    try:
+        data      = build_analysis("BTC", tf)
+        direction = data["signal"].get("direction", "NEUTRAL")
+    except Exception:
+        direction = "NEUTRAL"
+    with _btc_sig_lock:
+        _btc_sig_cache[tf] = {"direction": direction, "ts": time.time()}
+    return direction
+
+
 _rec_lock = _threading.Lock()
 _REC_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".rec_cache.json")
 
@@ -353,18 +376,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # view shows the same BTC bias that the recommendation engine uses for scoring.
     if symbol != "BTC" and "BTC" in SYMBOLS:
         try:
-            btc_raw = client.get_spot_klines(SYMBOLS["BTC"], interval, _n_dir + 3)
-            if timeframe in TF_AGG:
-                btc_raw = client.aggregate_candles(btc_raw, TF_AGG[timeframe])
-            btc_closed = btc_raw[:-1] if btc_raw else []
-            btc_recent = btc_closed[-_n_dir:] if len(btc_closed) >= _n_dir else btc_closed
-            if btc_recent:
-                _bull = sum(1 for c in btc_recent if c["close"] > c["open"])
-                _bear = len(btc_recent) - _bull
-                _thr  = max(1, round(len(btc_recent) * 0.6))
-                btc_dir = "LONG" if _bull >= _thr else ("SHORT" if _bear >= _thr else "NEUTRAL")
-            else:
-                btc_dir = "NEUTRAL"
+            # Use BTC's full indicator-based signal (same as viewing BTC analysis),
+            # cached 5 min so we don't double the API load on every altcoin request.
+            btc_dir  = _get_btc_direction(timeframe)
             sig_dir  = analysis["signal"].get("direction", "NEUTRAL")
             corr     = _BTC_CORR.get(symbol, 1.0)
             aligned  = btc_dir != "NEUTRAL" and btc_dir == sig_dir
@@ -374,7 +388,6 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
                 "aligned":     aligned,
                 "conflict":    conflict,
                 "corr_factor": corr,
-                "candles_used": len(btc_recent),
             }
         except Exception:
             analysis["btc_context"] = None

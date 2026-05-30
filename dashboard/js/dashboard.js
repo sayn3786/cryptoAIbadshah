@@ -1739,10 +1739,10 @@ function renderBtcContext(a) {
   const corPct = Math.round((ctx.corr_factor || 1) * 100);
   if (ctx.aligned) {
     el.className = 'btc-ctx-banner btc-ctx-aligned';
-    el.innerHTML = `<strong>✓ BTC ${icon} ${ctx.direction}</strong> — aligns with this signal · ${corPct}% correlated · ${ctx.candles_used} candles checked`;
+    el.innerHTML = `<strong>✓ BTC ${icon} ${ctx.direction}</strong> — aligns with this signal · ${corPct}% BTC-correlated`;
   } else {
     el.className = 'btc-ctx-banner btc-ctx-conflict';
-    el.innerHTML = `<strong>⚠ BTC ${icon} ${ctx.direction}</strong> — opposes this signal · ${corPct}% correlated · watch for reversal / fakeout`;
+    el.innerHTML = `<strong>⚠ BTC ${icon} ${ctx.direction}</strong> — opposes this signal · ${corPct}% BTC-correlated · watch for reversal / fakeout`;
   }
 }
 
