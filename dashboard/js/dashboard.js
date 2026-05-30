@@ -2162,7 +2162,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec20_2Hlvl_${y}${m}${d}`;
+  return `rec21_mtf_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -2225,15 +2225,28 @@ function _buildRecCard(r, i) {
         <span>${tfLabel2} <strong>${r.h2_strength}</strong></span>
        </div>` : '';
 
-  // Daily candle direction soft filter badge
-  const dailyBadge = (() => {
-    const dd = r.daily_dir;
-    if (!dd || dd === 'NEUTRAL') return `<span class="rec-daily-badge neutral">1D — Neutral</span>`;
-    const dIcon = dd === 'LONG' ? '▲' : '▼';
-    const dCls  = dd === 'LONG' ? 'bull' : 'bear';
-    const adj   = r.daily_adj > 0 ? `+${r.daily_adj}` : `${r.daily_adj}`;
-    const note  = r.daily_aligned ? `confirms (${adj})` : `headwind (${adj})`;
-    return `<span class="rec-daily-badge ${dCls}">${dIcon} 1D ${dd} — ${note}</span>`;
+  // Higher-timeframe confluence badge: 1D + 1W + 1M
+  const mtfBadge = (() => {
+    const dirs  = r.mtf_dirs || {};
+    const icons = { LONG: '▲', SHORT: '▼', NEUTRAL: '—' };
+    const clses = { LONG: 'bull', SHORT: 'bear', NEUTRAL: 'neutral' };
+    const items = ['1D', '1W', '1M'].map(tf => {
+      const d = dirs[tf] || 'NEUTRAL';
+      return `<span class="mtf-tf ${clses[d]}">${tf}&nbsp;${icons[d]}</span>`;
+    }).join('');
+    const ct  = r.mtf_aligned ?? 0;
+    const adj = r.mtf_adj != null ? (r.mtf_adj >= 0 ? `+${r.mtf_adj}` : `${r.mtf_adj}`) : '';
+    const scoreCls = ct >= 2 ? 'bull' : ct === 0 ? 'bear' : 'warn';
+    const warn = r.mtf_counter
+      ? `<div class="mtf-counter-warn">⚠ Counter-trend — reversal / fake-out risk</div>`
+      : r.mtf_confirm
+      ? `<div class="mtf-full-confirm">✓ All HTFs confirm — strong trend continuation</div>`
+      : '';
+    return `<div class="rec-mtf-row">
+      <div class="mtf-tfs">${items}</div>
+      <span class="mtf-score ${scoreCls}">${ct}/3 aligned ${adj}</span>
+      ${warn}
+    </div>`;
   })();
 
   // Entry distance from the live price at scan time
@@ -2255,7 +2268,7 @@ function _buildRecCard(r, i) {
     </div>
     ${tfAlign}
     ${btcWarn}
-    ${dailyBadge}
+    ${mtfBadge}
     ${tfBreakdown}
     ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
     <div class="rec-live-row">
