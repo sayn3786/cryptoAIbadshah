@@ -18,5 +18,11 @@
       "source": "/dashboard/",
       "destination": "/dashboard/index.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/daily",
+      "schedule": "5 0 * * *"
+    }
   ]
 }

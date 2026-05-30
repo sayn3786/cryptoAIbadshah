@@ -910,6 +910,51 @@ def api_twitter_send():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.get("/api/cron/daily")
+@app.post("/api/cron/daily")
+def api_cron_daily():
+    """
+    Vercel Cron Job endpoint — called automatically at 00:05 UTC (08:05 SGT) daily.
+    Computes fresh recommendations, sends to Telegram, posts BTC+ETH 1D to Twitter.
+    Vercel calls this with a GET; also accepts POST for manual testing.
+    """
+    import os as _os
+    # Vercel signs cron requests — verify in production to prevent abuse
+    auth = request.headers.get("authorization", "")
+    cron_secret = _os.getenv("CRON_SECRET", "")
+    if cron_secret and auth != f"Bearer {cron_secret}":
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    results = {}
+    try:
+        result = _compute_recommendations()
+        key = _rec_cache_key()
+        with _rec_lock:
+            _rec_cache_save(key, result)
+        results["recs"] = len(result.get("recommendations", []))
+    except Exception as e:
+        results["recs_error"] = str(e)
+
+    # Telegram
+    try:
+        tg_ok = _send_telegram_recs(result)
+        results["telegram"] = "sent" if tg_ok else "failed"
+    except Exception as e:
+        results["telegram"] = f"error: {e}"
+
+    # Twitter — BTC + ETH 1D
+    try:
+        btc = build_analysis("BTC", "1D")
+        eth = build_analysis("ETH", "1D")
+        tw_ok = _post_twitter_signals(btc, eth)
+        results["twitter"] = "sent" if tw_ok else "failed/not configured"
+    except Exception as e:
+        results["twitter"] = f"error: {e}"
+
+    print(f"[cron/daily] {results}")
+    return jsonify({"ok": True, "results": results})
+
+
 @app.get("/api/prices")
 def api_prices():
     """
