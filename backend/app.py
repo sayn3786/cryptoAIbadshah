@@ -414,12 +414,14 @@ def _compute_recommendations() -> dict:
     SGT           = timezone(timedelta(hours=8))
     detected_at_fmt = now.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
-    # Scan every token (including BTC) at 1H and 2H in parallel
+    # Scan every token (including BTC) at 2H and 4H in parallel.
+    # 2H+4H alignment is the right frame for 24-hour swing trades (8AM→8AM).
+    # 1H+2H predicted 2-6h moves; 2H+4H predicts 12-24h moves.
     all_syms = list(SYMBOLS)
     raw: dict = {}
     with ThreadPoolExecutor(max_workers=12) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
-                for sym in all_syms for tf in ("1H", "2H")}
+                for sym in all_syms for tf in ("2H", "4H")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
             try:
@@ -435,12 +437,12 @@ def _compute_recommendations() -> dict:
             except Exception:
                 pass
 
-    # Determine BTC market consensus (1H + 2H must agree, else NEUTRAL)
+    # BTC consensus: 2H + 4H must agree (longer frame = more reliable 24h bias)
     btc_tfs = raw.get("BTC", {})
-    btc_h1  = btc_tfs.get("1H", {}).get("direction", "NEUTRAL")
-    btc_h2  = btc_tfs.get("2H", {}).get("direction", "NEUTRAL")
-    btc_h1s = btc_tfs.get("1H", {}).get("strength", 0) or 0
-    btc_h2s = btc_tfs.get("2H", {}).get("strength", 0) or 0
+    btc_h1  = btc_tfs.get("2H", {}).get("direction", "NEUTRAL")
+    btc_h2  = btc_tfs.get("4H", {}).get("direction", "NEUTRAL")
+    btc_h1s = btc_tfs.get("2H", {}).get("strength", 0) or 0
+    btc_h2s = btc_tfs.get("4H", {}).get("strength", 0) or 0
     if btc_h1 != "NEUTRAL" and btc_h1 == btc_h2:
         btc_consensus = btc_h1
         btc_strength  = round((btc_h1s + btc_h2s) / 2, 1)
@@ -453,13 +455,13 @@ def _compute_recommendations() -> dict:
     BTC_MAX_PENALTY = 25
     btc_scale       = math.sqrt(btc_strength / 100.0) if btc_strength > 0 else 0.0
 
-    # Only keep tokens (excl. BTC) where 1H + 2H agree on non-NEUTRAL direction
+    # Only keep tokens (excl. BTC) where 2H + 4H agree on non-NEUTRAL direction
     candidates = []
     for sym, tfs in raw.items():
         if sym == "BTC":
             continue
-        h1 = tfs.get("1H")
-        h2 = tfs.get("2H")
+        h1 = tfs.get("2H")
+        h2 = tfs.get("4H")
         if not (h1 and h2):
             continue
         if h1["direction"] == "NEUTRAL" or h2["direction"] == "NEUTRAL":
@@ -467,8 +469,10 @@ def _compute_recommendations() -> dict:
         if h1["direction"] != h2["direction"]:
             continue
 
+        # 4H is the primary signal (longer = more predictive for 24h holds)
+        # 2H is the confirmation (shorter = entry timing)
         sig       = h2["sig"]
-        strength  = round((h1["strength"] + h2["strength"]) / 2, 1)
+        strength  = round((h1["strength"] * 0.4 + h2["strength"] * 0.6), 1)
         direction = h2["direction"]
 
         btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
@@ -484,8 +488,8 @@ def _compute_recommendations() -> dict:
 
         candidates.append({
             "symbol":         sym,
-            "timeframe":      "2H",
-            "aligned_tfs":    "1H·2H",
+            "timeframe":      "4H",
+            "aligned_tfs":    "2H·4H",
             "direction":      direction,
             "strength":       strength,
             "h1_strength":    round(h1["strength"], 1),
@@ -505,7 +509,7 @@ def _compute_recommendations() -> dict:
             "tp_pcts":        sig.get("tp_pcts", []),
             "rr_ratio":       sig.get("rr_ratio"),
             "vol_tier_label": sig.get("vol_tier_label"),
-            "rsi":            h2["rsi"],
+            "rsi":            h2["rsi"],   # 4H RSI
             "reasons":        sig.get("reasons", [])[:3],
         })
 
@@ -542,7 +546,7 @@ def _compute_recommendations() -> dict:
 
 def _rec_cache_key() -> str:
     now = datetime.now(timezone.utc)
-    return "v8_" + now.strftime("%Y%m%d")
+    return "v9_2H4H_" + now.strftime("%Y%m%d")
 
 
 def _daily_rec_scheduler():
