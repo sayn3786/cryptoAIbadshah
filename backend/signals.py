@@ -1051,29 +1051,56 @@ def generate_signal(analysis: Dict) -> Dict:
     if candles and len(candles) >= 14 and current_price > 0:
         atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
 
-        # Smart limit-entry: prefer EMA21 as a natural pullback/bounce level rather than
-        # the raw current price (which is stale by the time the user sees the recommendation).
-        # Rules (applied per direction):
-        #   LONG:  if EMA21 is below current price by ≤3% → limit at EMA21
-        #          if EMA21 is >3% below (very extended) → entry = current_price × 0.99
-        #          if price already ≤ EMA21 → enter at current price (already at support)
-        #   SHORT: mirror logic above EMA21
-        _PULLBACK_CAP = 0.03   # max gap to EMA21 we're willing to wait for (3%)
-        _SLIGHT_DISC  = 0.01   # fallback nudge when EMA21 is too far (1%)
-        ema21_val = (analysis.get("ema_trend") or {}).get("ema21")
+        # Dynamic limit-entry: scan real technical levels in priority order.
+        # For LONG: find the nearest support BELOW current price to place a limit buy.
+        # For SHORT: find the nearest resistance ABOVE current price to place a limit sell.
+        # Priority: EMA21 → BB upper/lower → recent 5-candle swing high/low → current price.
+        # Each level is only used when it is within LEVEL_CAP of current price (avoids
+        # suggesting entries that would never fill on a 4-24h timeframe).
+        LEVEL_CAP  = 0.04    # max 4% away — if all levels are further, enter at market
+        SWING_CAP  = 0.025   # swing highs/lows are noisy; tighter cap (2.5%)
+
+        ema21_val  = (analysis.get("ema_trend") or {}).get("ema21")
+        _bb        = analysis.get("bollinger") or {}
+        bb_upper   = _bb.get("upper")
+        bb_lower   = _bb.get("lower")
+        # Last 5 closed candles (skip live candle at index -1)
+        _closed    = candles[-6:-1] if len(candles) >= 6 else candles[:-1]
+        swing_high = max((c["high"] for c in _closed), default=None) if _closed else None
+        swing_low  = min((c["low"]  for c in _closed), default=None) if _closed else None
+
+        def _within(level, above: bool) -> bool:
+            """True if level is on the right side and within cap distance."""
+            if level is None or current_price <= 0:
+                return False
+            if above:
+                gap = (level - current_price) / current_price
+            else:
+                gap = (current_price - level) / current_price
+            return 0 < gap <= LEVEL_CAP
+
+        def _within_swing(level, above: bool) -> bool:
+            if level is None or current_price <= 0:
+                return False
+            gap = ((level - current_price) if above else (current_price - level)) / current_price
+            return 0 < gap <= SWING_CAP
 
         if direction == "LONG":
-            if ema21_val and ema21_val < current_price:
-                gap = (current_price - ema21_val) / current_price
-                base = ema21_val if gap <= _PULLBACK_CAP else current_price * (1 - _SLIGHT_DISC)
-            else:
-                base = current_price   # price at/below EMA21 — enter now
+            # Collect support levels below current price; pick the highest (closest)
+            supports = []
+            if _within(ema21_val, above=False):      supports.append(ema21_val)
+            if _within(bb_lower,  above=False):      supports.append(bb_lower)
+            if _within_swing(swing_low, above=False): supports.append(swing_low)
+            base = max(supports) if supports else current_price
+
         elif direction == "SHORT":
-            if ema21_val and ema21_val > current_price:
-                gap = (ema21_val - current_price) / current_price
-                base = ema21_val if gap <= _PULLBACK_CAP else current_price * (1 + _SLIGHT_DISC)
-            else:
-                base = current_price   # price at/above EMA21 — enter now
+            # Collect resistance levels above current price; pick the lowest (closest)
+            resistances = []
+            if _within(ema21_val, above=True):        resistances.append(ema21_val)
+            if _within(bb_upper,  above=True):        resistances.append(bb_upper)
+            if _within_swing(swing_high, above=True): resistances.append(swing_high)
+            base = min(resistances) if resistances else current_price
+
         else:
             base = current_price
 
