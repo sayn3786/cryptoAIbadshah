@@ -1,23 +1,28 @@
-"""AI journal generation — direct HTTP to Claude API, no Rust SDK needed."""
+"""AI journal generation — X (Twitter) thread format via Claude API."""
 import os
-import json
 import requests
 from datetime import datetime
 from typing import Dict
 
-CLAUDE_URL  = "https://api.anthropic.com/v1/messages"
+CLAUDE_URL   = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL = "claude-opus-4-7"
 
-SYSTEM_PROMPT = """You are CryptoBadshah — a sharp, data-driven crypto analyst and YouTube content creator.
-Your analysis is professional, educational, and engagingly written for a trading audience.
-You explain the WHY behind every signal, reference specific price levels, and always emphasise risk management.
-Never give financial advice; always encourage viewers to DYOR."""
+SYSTEM_PROMPT = """You are CryptoSTARS — a sharp, data-driven crypto analyst posting on X (Twitter).
+Your analysis is concise, punchy, and educational for a trading audience.
+Each tweet in the thread must be ≤ 280 characters. Use emojis strategically.
+Explain the WHY behind every signal, reference specific price levels, and always emphasise risk management.
+Never give financial advice; always remind followers to DYOR."""
 
 
 def _fmt(v, d=4, prefix="$"):
     if v is None:
         return "N/A"
-    return f"{prefix}{float(v):,.{d}f}"
+    v = float(v)
+    if v >= 10_000:
+        return f"{prefix}{v:,.2f}"
+    if v >= 1:
+        return f"{prefix}{v:,.{d}f}"
+    return f"{prefix}{v:,.6f}"
 
 
 def generate_journal(symbol: str, timeframe: str, analysis: Dict) -> Dict:
@@ -36,7 +41,7 @@ def generate_journal(symbol: str, timeframe: str, analysis: Dict) -> Dict:
             },
             json={
                 "model": CLAUDE_MODEL,
-                "max_tokens": 4096,
+                "max_tokens": 2048,
                 "system": SYSTEM_PROMPT,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -45,9 +50,10 @@ def generate_journal(symbol: str, timeframe: str, analysis: Dict) -> Dict:
         response.raise_for_status()
         content = response.json()["content"][0]["text"]
         return {
-            "title":        _extract(content, "VIDEO TITLE"),
-            "thumbnail":    _extract(content, "THUMBNAIL IDEA"),
-            "description":  _extract(content, "VIDEO DESCRIPTION"),
+            "hook":         _extract(content, "HOOK TWEET"),
+            "thread":       _extract(content, "THREAD"),
+            "closing":      _extract(content, "CLOSING TWEET"),
+            "hashtags":     _extract(content, "HASHTAGS"),
             "script":       content,
             "generated_at": datetime.now().isoformat(),
             "model":        CLAUDE_MODEL,
@@ -62,63 +68,65 @@ def _build_prompt(symbol: str, timeframe: str, analysis: Dict) -> str:
     price    = candles[-1]["close"] if candles else 0
     funding  = analysis.get("funding_rate") or {}
     oi       = analysis.get("open_interest") or {}
-    spot_cvd = analysis.get("spot_cvd") or {}
-    fut_cvd  = analysis.get("futures_cvd") or {}
-    fvgs     = analysis.get("fvgs") or []
-    harmonics = analysis.get("harmonics") or []
-    elliott  = analysis.get("elliott_wave") or {}
-    liq      = analysis.get("liquidations") or {}
+    htf      = analysis.get("htf_confluence") or {}
+    btc_ctx  = analysis.get("btc_context") or {}
 
-    unfilled = [f for f in fvgs if not f["filled"]]
-    harm_str = ", ".join(f"{h['pattern']} ({h['direction']})" for h in harmonics) or "None"
+    direction = signal.get("direction", "NEUTRAL")
+    strength  = signal.get("strength", 0)
+    lev       = signal.get("leverage")
+    rr        = signal.get("rr_ratio")
+
+    htf_summary = ""
+    if htf.get("deps"):
+        icon = lambda d: "▲" if d == "LONG" else "▼" if d == "SHORT" else "—"
+        htf_summary = " ".join(f"{tf}{icon(d)}" for tf, d in htf["deps"].items())
 
     data = f"""
-=== {symbol}/USDT — {timeframe} Close Analysis ===
-Date: {datetime.now().strftime("%B %d, %Y")}  |  Price: ${price:,.4f}
-
-MOMENTUM
-• RSI({timeframe}): {analysis.get('rsi')}
-• Spot CVD: {spot_cvd.get('current', 0):,.2f} ({spot_cvd.get('trend', '?')})
-• Futures CVD: {fut_cvd.get('current', 0):,.2f} ({fut_cvd.get('trend', '?')})
-
-DERIVATIVES
-• Funding Rate: {funding.get('current', 0):+.4f}%  (avg {funding.get('average', 0):+.4f}%)
-• Open Interest: ${oi.get('value', 0):,.2f}  ({oi.get('change_pct', 0):+.2f}%)
-• Liquidations: Longs ${liq.get('longs_liquidated', 0):,.2f} / Shorts ${liq.get('shorts_liquidated', 0):,.2f}
-
-STRUCTURE
-• Unfilled FVGs: {len(unfilled)} (Bull: {len([f for f in unfilled if f['type']=='bullish'])}, Bear: {len([f for f in unfilled if f['type']=='bearish'])})
-• Harmonics: {harm_str}
-• Elliott Wave: {elliott.get('wave_count','N/A')} — {elliott.get('description','')}
+=== {symbol}/USDT — {timeframe} Analysis ===
+Date: {datetime.now().strftime("%B %d, %Y")}  |  Price: {_fmt(price)}
 
 SIGNAL
-• Direction: {signal.get('direction','NEUTRAL')} (Strength: {signal.get('strength',0)}/100)
-• Entry: {_fmt(signal.get('entry'))}  SL: {_fmt(signal.get('sl'))}
-• TPs: {' / '.join(_fmt(t) for t in (signal.get('tp_targets') or []))}
-• R/R: {signal.get('rr_ratio','N/A')}
-• Bullish: {'; '.join(signal.get('bullish_reasons') or ['None'])}
-• Bearish: {'; '.join(signal.get('bearish_reasons') or ['None'])}
+• Direction: {direction}  ({strength}/100)
+• Entry: {_fmt(signal.get('entry'))}
+• Stop Loss: {_fmt(signal.get('sl'))}  (-{signal.get('sl_pct','?')}%)
+• TP1: {_fmt((signal.get('tp_targets') or [None])[0])}  (+{(signal.get('tp_pcts') or [None])[0] or '?'}%)
+• TP2: {_fmt((signal.get('tp_targets') or [None, None])[1])}
+• TP3: {_fmt((signal.get('tp_targets') or [None, None, None])[2])}
+• R/R: {rr}  |  Leverage: {lev}×
+
+MARKET CONTEXT
+• Funding Rate: {funding.get('current', 0):+.4f}%
+• Open Interest: ${oi.get('value', 0):,.2f} ({oi.get('change_pct', 0):+.2f}%)
+• BTC: {btc_ctx.get('direction','?')} ({'aligned' if btc_ctx.get('aligned') else 'conflict' if btc_ctx.get('conflict') else 'neutral'})
+• HTF confluence: {htf_summary or 'N/A'}
+
+BULLISH FACTORS
+{chr(10).join('• ' + r for r in (signal.get('bullish_reasons') or ['None']))}
+
+BEARISH FACTORS
+{chr(10).join('• ' + r for r in (signal.get('bearish_reasons') or ['None']))}
 """
 
     return f"""{data}
 
-Generate a complete YouTube video script using this structure:
+Generate a complete X (Twitter) thread with this structure.
+Each section must be clearly labeled with the headers below.
+Keep every individual tweet ≤ 280 characters.
 
-## 🎬 VIDEO TITLE
-## 🖼️ THUMBNAIL IDEA
-## 📝 VIDEO DESCRIPTION
-## 🎙️ FULL SCRIPT
-### HOOK [0:00–0:30]
-### MARKET CONTEXT [0:30–2:00]
-### DEEP DIVE: INDICATORS [2:00–7:00]
-### STRUCTURE & PATTERNS [7:00–9:30]
-### TRADE SETUP [9:30–11:30]
-### RISK MANAGEMENT [11:30–12:30]
-### CONCLUSION & CTA [12:30–13:00]
-## 🏷️ TAGS
-## ⏱️ TIMESTAMPS
+## HOOK TWEET
+(1 punchy tweet to grab attention — include symbol, direction, price)
 
-Be specific with price levels. Make it compelling and educational."""
+## THREAD
+(6-8 numbered tweets: 1/ market context, 2/ signal strength, 3/ key levels — entry/SL/TP,
+ 4/ leverage and risk guide, 5/ HTF confluence, 6/ main bullish/bearish reasons, 7/ trade plan)
+
+## CLOSING TWEET
+(final tweet — call to action, follow @CryptoSTARS, not financial advice disclaimer)
+
+## HASHTAGS
+(8-12 relevant hashtags on one line)
+
+Be specific with price levels. Keep it punchy and data-driven."""
 
 
 def _extract(text: str, header: str) -> str:
@@ -130,7 +138,7 @@ def _extract(text: str, header: str) -> str:
             continue
         if collecting and line.startswith("##"):
             break
-        if collecting and line.strip():
+        if collecting:
             out.append(line)
     return "\n".join(out).strip()
 
@@ -141,48 +149,47 @@ def _fallback(symbol: str, timeframe: str, analysis: Dict, error: str = "") -> D
     price     = candles[-1]["close"] if candles else 0
     direction = signal.get("direction", "NEUTRAL")
     strength  = signal.get("strength", 0)
+    lev       = signal.get("leverage")
+    rr        = signal.get("rr_ratio")
+    tps       = signal.get("tp_targets") or []
+    tp_pcts   = signal.get("tp_pcts") or []
 
-    bull = "\n".join(f"  • {r}" for r in (signal.get("bullish_reasons") or ["None"]))
-    bear = "\n".join(f"  • {r}" for r in (signal.get("bearish_reasons") or ["None"]))
-    tps  = " / ".join(_fmt(t) for t in (signal.get("tp_targets") or []))
-    note = f"\n⚠️  AI unavailable: {error}" if error else \
-           "\n⚠️  Add ANTHROPIC_API_KEY to .env for full AI YouTube scripts."
+    dir_icon = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "⚪"
+    note = f"\n\n⚠️ AI unavailable: {error}" if error else \
+           "\n\n⚠️ Add ANTHROPIC_API_KEY to .env for full AI-generated threads."
 
-    script = f"""## 🎬 VIDEO TITLE
-{symbol} {timeframe} Analysis: {direction} Signal ({strength}/100) | CryptoBadshah
+    tp1 = f"{_fmt(tps[0])} (+{tp_pcts[0]}%)" if tps else "N/A"
+    tp2 = f"{_fmt(tps[1])}" if len(tps) > 1 else "N/A"
 
-## 🎙️ FULL SCRIPT
+    hook = f"{dir_icon} {symbol} {timeframe} — {direction} signal at {_fmt(price)} | Strength: {strength}/100 🔥 Thread below 👇 #CryptoSTARS"
 
-### HOOK [0:00–0:30]
-"What's up Crypto Badshah family! Today we break down {symbol} on the {timeframe} close.
-We have a clear {direction.lower()} setup at ${price:,.4f} — let me show you exactly why."
+    thread = f"""1/ 📊 Market setup: {symbol}/USDT trading at {_fmt(price)} on the {timeframe} close. Signal: {direction} ({strength}/100).
 
-### TRADE SETUP
-Signal: {direction}  (Strength: {strength}/100)
-Entry:  {_fmt(signal.get('entry'))}
-SL:     {_fmt(signal.get('sl'))}
-TPs:    {tps}
-R/R:    {signal.get('rr_ratio', 'N/A')}
+2/ 🎯 Key levels:
+Entry: {_fmt(signal.get('entry'))}
+Stop Loss: {_fmt(signal.get('sl'))} (-{signal.get('sl_pct','?')}%)
+TP1: {tp1}
+TP2: {tp2}
 
-### BULLISH CONFLUENCE
-{bull}
+3/ ⚖️ Risk guide:
+{"Suggested leverage: " + str(lev) + "×  |  " if lev else ""}R/R: {rr}:1
+Risk max 1-2% of account per trade. Size = (Account × Risk%) ÷ |Entry − SL|
 
-### BEARISH CONFLUENCE
-{bear}
+4/ 🔍 Bullish confluence:
+{chr(10).join('• ' + r for r in (signal.get('bullish_reasons') or ['None'])[:3])}
 
-### RISK MANAGEMENT
-Never risk more than 1-2% per trade.
-Position size = (Account × Risk%) ÷ |Entry − SL|
+5/ ⚠️ Bearish factors:
+{chr(10).join('• ' + r for r in (signal.get('bearish_reasons') or ['None'])[:3])}"""
 
-### CTA
-"Smash LIKE, subscribe, and join Telegram @cryptobadshah123 for live alerts!"{note}
-"""
+    closing = "Follow @CryptoSTARS for daily setups 🌟 Not financial advice — always DYOR and manage your risk. #Crypto #Trading"
+    hashtags = f"#{symbol} #Crypto #CryptoTrading #CryptoSTARS #{direction} #TechnicalAnalysis #DeFi #Altcoins"
 
     return {
-        "title":        f"{symbol} {timeframe}: {direction} Signal | CryptoBadshah",
-        "thumbnail":    f"{direction} setup on {symbol} at ${price:,.2f}",
-        "description":  f"CryptoBadshah {symbol} {timeframe} analysis — {direction} ({strength}/100).",
-        "script":       script,
+        "hook":         hook,
+        "thread":       thread,
+        "closing":      closing,
+        "hashtags":     hashtags,
+        "script":       hook + "\n\n" + thread + "\n\n" + closing + "\n\n" + hashtags + note,
         "generated_at": datetime.now().isoformat(),
         "model":        "fallback",
     }

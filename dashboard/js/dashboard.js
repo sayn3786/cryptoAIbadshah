@@ -1769,11 +1769,11 @@ function renderConfluence(s) {
   bearEl.innerHTML = (s.bearish_reasons?.length ? s.bearish_reasons : ['No bearish confluence']).map(li).join('');
 }
 
-/* ─── Journal generation ──────────────────────────────────────────────────── */
+/* ─── X (Twitter) Thread Generator ───────────────────────────────────────── */
 async function generateJournal() {
-  const btn = document.getElementById('generateBtn');
+  const btn     = document.getElementById('generateBtn');
   const loading = document.getElementById('journalLoading');
-  const output = document.getElementById('journalOutput');
+  const output  = document.getElementById('journalOutput');
 
   btn.disabled = true;
   loading.classList.remove('hidden');
@@ -1787,7 +1787,7 @@ async function generateJournal() {
     renderJournal(data.journal);
     output.classList.remove('hidden');
   } catch (e) {
-    alert('Journal generation failed: ' + e.message);
+    alert('Thread generation failed: ' + e.message);
   } finally {
     btn.disabled = false;
     loading.classList.add('hidden');
@@ -1799,10 +1799,21 @@ function renderJournal(j) {
   document.getElementById('journalMeta').textContent =
     `Generated: ${new Date(j.generated_at).toLocaleString()} · Model: ${j.model}`;
 
-  const fmt = (txt) => txt?.replace(/##\s(.+)/g, '<h2>$1</h2>').replace(/###\s(.+)/g, '<h3>$1</h3>') || '—';
-  document.getElementById('journalScript').innerHTML = fmt(j.script);
-  document.getElementById('journalTitle').innerHTML  = fmt(j.title);
-  document.getElementById('journalDesc').innerHTML   = fmt(j.description);
+  // Render thread tweets with visual tweet separators
+  const fmtThread = (txt) => {
+    if (!txt) return '—';
+    return txt.split(/\n(?=\d+\/)/).map(tweet => {
+      const escaped = tweet.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return `<div class="x-tweet">${escaped.replace(/\n/g,'<br>')}</div>`;
+    }).join('');
+  };
+  const fmtPlain = (txt) => txt?.replace(/\n/g, '<br>') || '—';
+
+  // Full thread = hook + thread + closing
+  const full = [j.hook, j.thread, j.closing].filter(Boolean).join('\n\n');
+  document.getElementById('journalScript').innerHTML = fmtThread(full);
+  document.getElementById('journalTitle').innerHTML  = fmtPlain(j.hook);
+  document.getElementById('journalDesc').innerHTML   = fmtPlain(j.hashtags);
 }
 
 function showJTab(btn, tab) {

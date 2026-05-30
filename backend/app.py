@@ -1,4 +1,4 @@
-"""CryptoBadshah — Flask backend, pure Python, works on Python 3.15+"""
+"""CryptoSTARS — Flask backend, pure Python, works on Python 3.15+"""
 import os
 import sys
 import json
@@ -30,6 +30,7 @@ from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
 from signals import generate_signal
 from journal import generate_journal
+from telegram import send_daily_recs as _send_telegram_recs
 from video import create_talk, get_talk
 
 app = Flask(__name__)
@@ -787,11 +788,15 @@ def _rec_cache_key() -> str:
     return f"v16_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 
+_SGT = timezone(timedelta(hours=8))
+_tg_sent_today: set = set()   # tracks "YYYY-MM-DD" dates already sent to Telegram
+
+
 def _daily_rec_scheduler():
     """
-    Background thread: refreshes recommendations every 30 minutes so the
-    displayed strength closely tracks the live 2H analysis score.
+    Background thread: refreshes recommendations every 30 minutes.
     Fires at HH:05 and HH:35 UTC (5 s after each half-hour boundary).
+    Also sends a Telegram notification at the first run at or after 08:00 SGT each day.
     """
     print("[scheduler] 30-min recommendation scheduler started")
     while True:
@@ -811,6 +816,17 @@ def _daily_rec_scheduler():
             with _rec_lock:
                 _rec_cache_save(key, result)
             print(f"[scheduler] Cached {len(result.get('recommendations', []))} recommendations")
+
+            # ── Telegram: send once per day at/after 08:00 SGT ───────────────
+            now_sgt    = datetime.now(_SGT)
+            today_str  = now_sgt.strftime("%Y-%m-%d")
+            if now_sgt.hour >= 8 and today_str not in _tg_sent_today:
+                _tg_sent_today.add(today_str)
+                _threading.Thread(
+                    target=_send_telegram_recs, args=(result,), daemon=True,
+                    name="tg-notify"
+                ).start()
+                print(f"[scheduler] Telegram notification dispatched for {today_str}")
         except Exception as exc:
             print(f"[scheduler] ERROR computing recommendations: {exc}")
 
@@ -1036,7 +1052,7 @@ def serve_home():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     print(f"\n{'='*48}")
-    print(f"  CryptoBadshah AI — http://localhost:{port}")
+    print(f"  CryptoSTARS AI — http://localhost:{port}")
     print(f"  Dashboard → http://localhost:{port}/dashboard/")
     print(f"{'='*48}\n")
 

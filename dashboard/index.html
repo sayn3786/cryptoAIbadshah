@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>CryptoBadshah — AI Analysis Dashboard</title>
+  <title>CryptoSTARS — AI Analysis Dashboard</title>
 
   <!-- PWA -->
   <link rel="manifest" href="/dashboard/manifest.json" />
@@ -11,12 +11,12 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="CryptoBadshah" />
+  <meta name="apple-mobile-web-app-title" content="CryptoSTARS" />
   <link rel="apple-touch-icon" href="/dashboard/icons/icon-192.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=9" />
+  <link rel="stylesheet" href="css/dashboard.css?v=10" />
 </head>
 <body>
 
@@ -25,7 +25,7 @@
   <div class="hdr-left">
     <span class="logo">₿</span>
     <div>
-      <h1 class="brand">CryptoBadshah</h1>
+      <h1 class="brand">CryptoSTARS</h1>
       <p class="brand-sub">AI Market Intelligence</p>
     </div>
   </div>
@@ -486,44 +486,26 @@
   <section class="row-journal">
     <div class="card journal-card">
       <div class="journal-header">
-        <h3 class="card-title">📹 YouTube Trade Journal</h3>
+        <h3 class="card-title">𝕏 X (Twitter) Thread Generator</h3>
         <button class="btn-primary" id="generateBtn" onclick="generateJournal()">
-          Generate AI Journal
+          Generate AI Thread
         </button>
       </div>
       <div id="journalLoading" class="journal-loading hidden">
         <div class="spinner small"></div>
-        <span>Generating your YouTube script with Claude AI…</span>
+        <span>Generating your X thread with Claude AI…</span>
       </div>
       <div id="journalOutput" class="journal-output hidden">
         <div class="journal-meta" id="journalMeta"></div>
         <div class="journal-tabs">
-          <button class="jtab active" data-tab="script" onclick="showJTab(this,'script')">Full Script</button>
-          <button class="jtab" data-tab="title" onclick="showJTab(this,'title')">Title & Tags</button>
-          <button class="jtab" data-tab="desc" onclick="showJTab(this,'desc')">Description</button>
+          <button class="jtab active" data-tab="script" onclick="showJTab(this,'script')">Full Thread</button>
+          <button class="jtab" data-tab="title" onclick="showJTab(this,'title')">Hook Tweet</button>
+          <button class="jtab" data-tab="desc" onclick="showJTab(this,'desc')">Hashtags</button>
         </div>
         <div class="journal-content" id="journalScript"></div>
         <div class="journal-content hidden" id="journalTitle"></div>
         <div class="journal-content hidden" id="journalDesc"></div>
         <button class="btn-outline copy-btn" onclick="copyJournal()">📋 Copy to Clipboard</button>
-
-        <!-- D-ID Video Generation -->
-        <div class="video-gen-section">
-          <div class="video-gen-header">
-            <span class="video-gen-title">🎬 Generate AI Avatar Video</span>
-            <span class="video-gen-sub">D-ID · ElevenLabs voice · your avatar</span>
-          </div>
-          <div class="video-gen-controls">
-            <button class="btn-video" id="genVideoBtn" onclick="generateVideo()">
-              🎬 Generate Video
-            </button>
-            <span class="video-status" id="videoStatus"></span>
-          </div>
-          <div class="video-truncate-warn hidden" id="videoTruncateWarn">
-            ⚠️ Script was trimmed to 4 500 characters for D-ID. The video covers the opening section.
-          </div>
-          <div class="video-output hidden" id="videoOutput"></div>
-        </div>
       </div>
     </div>
   </section>
@@ -532,15 +514,16 @@
 
 <!-- ── FOOTER ─────────────────────────────────────────────────────────────── -->
 <footer class="dash-footer">
-  <span>CryptoBadshah © 2025 — AI-powered crypto analysis for high-timeframe traders <span style="opacity:.4;font-size:.7em">v20260516</span></span>
+  <span>CryptoSTARS © 2025 — AI-powered crypto analysis for high-timeframe traders <span style="opacity:.4;font-size:.7em">v20260516</span></span>
   <span>
-    <a href="https://t.me/cryptobadshah123" target="_blank">Telegram</a> ·
-    <a href="https://www.instagram.com/crypto_badsha" target="_blank">Instagram</a>
+    <a href="https://t.me/CryptoSTARS" target="_blank">Telegram</a> ·
+    <a href="https://x.com/CryptoSTARS" target="_blank">𝕏 Twitter</a> ·
+    <a href="https://www.instagram.com/CryptoSTARS" target="_blank">Instagram</a>
   </span>
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=9"></script>
+<script src="js/dashboard.js?v=10"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
