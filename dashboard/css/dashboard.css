@@ -145,7 +145,7 @@ a:hover { color: var(--gold2); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ─── Dashboard Grid ─────────────────────────────────────────────────────────── */
-.dashboard { padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+.dashboard { padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; max-width: 1800px; margin: 0 auto; }
 
 /* ─── Cards ──────────────────────────────────────────────────────────────────── */
 .card {
@@ -295,7 +295,9 @@ a:hover { color: var(--gold2); }
 .rsi-lvl.os { color: var(--bull); }
 
 /* ─── Row 4: Analysis ─────────────────────────────────────────────────────────── */
-.row-analysis { display: grid; grid-template-columns: 1.6fr 1fr; gap: 12px; }
+.row-analysis { display: grid; grid-template-columns: 1.6fr 1fr; gap: 12px; align-items: start; }
+/* Single card (e.g. Whale Activity) should span the full row */
+.row-analysis > :only-child { grid-column: 1 / -1; }
 
 /* FVG Table */
 .data-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
@@ -753,6 +755,12 @@ a:hover { color: var(--gold2); }
   .chart-sidebar { flex-direction: row; }
   .cvd-card { flex: 1; }
 }
+
+/* Tablet landscape: indicator grid 3-col, analysis row stays 2-col */
+@media (max-width: 1024px) {
+  .row-indicators { grid-template-columns: repeat(3, 1fr); }
+  .row-analysis   { grid-template-columns: 1fr 1fr; }
+}
 @media (max-width: 768px) {
   html { font-size: 13px; }
   .hdr {
@@ -974,7 +982,7 @@ a:hover { color: var(--gold2); }
 
 /* ── Recommended Trades Section ─────────────────────────────────────────── */
 .rec-section {
-  max-width: 1400px; margin: 0 auto 16px; padding: 0 12px;
+  margin-bottom: 16px;
 }
 .rec-header {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
