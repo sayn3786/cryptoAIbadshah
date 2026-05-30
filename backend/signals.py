@@ -1181,26 +1181,25 @@ def generate_signal(analysis: Dict) -> Dict:
             tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
 
+
             # ── Leverage suggestion ───────────────────────────────────────────
-            # Base leverage from signal strength (+2 on top of base)
-            if strength >= 80:     _base_lev = 7
-            elif strength >= 65:   _base_lev = 6
-            elif strength >= 50:   _base_lev = 5
-            else:                  _base_lev = 4
+            # Slab base by market cap tier
+            _SLAB_BASE  = {"mega": 8, "large": 6, "mid": 5, "small": 3, "micro": 3}
+            _SLAB_FLOOR = {"mega": 5, "large": 4, "mid": 3, "small": 2, "micro": 2}
+            _SLAB_CEIL  = {"mega": 12, "large": 10, "mid": 8, "small": 5, "micro": 5}
+            _slab_base  = _SLAB_BASE.get(vol_tier_id, 5)
+            _slab_floor = _SLAB_FLOOR.get(vol_tier_id, 2)
+            _slab_ceil  = _SLAB_CEIL.get(vol_tier_id, 8)
 
-            # Risk cap: 5% account at risk per trade
-            # leverage = 5% / sl_pct → e.g. SL=1% → 5×, SL=2% → 2.5×
-            _lev_risk = max(1.0, 5.0 / sl_pct)
+            # Strength adjustment within slab: -1 to +3
+            if strength >= 80:     _str_adj = 3
+            elif strength >= 65:   _str_adj = 2
+            elif strength >= 50:   _str_adj = 1
+            elif strength >= 35:   _str_adj = 0
+            else:                  _str_adj = -1
 
-            # Strong signals (≥65) get at least 2× regardless of SL width
-            if strength >= 65 and _lev_risk < 2.0:
-                _lev_risk = 2.0
+            suggested_lev = int(min(_slab_ceil, max(_slab_floor, _slab_base + _str_adj)))
 
-            # Max leverage by market cap — smaller = more volatile = lower ceiling
-            _MAX_LEV = {"mega": 20, "large": 15, "mid": 10, "small": 7, "micro": 5}
-            _max_lev = _MAX_LEV.get(vol_tier_id, 10)
-
-            suggested_lev = int(min(max(1, round(min(float(_base_lev), _lev_risk))), _max_lev))
 
     return {
         "direction": direction,
