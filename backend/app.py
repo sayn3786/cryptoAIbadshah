@@ -31,6 +31,7 @@ from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, fi
 from signals import generate_signal
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs
+from twitter import post_daily_signals as _post_twitter_signals
 from video import create_talk, get_talk
 
 app = Flask(__name__)
@@ -817,16 +818,27 @@ def _daily_rec_scheduler():
                 _rec_cache_save(key, result)
             print(f"[scheduler] Cached {len(result.get('recommendations', []))} recommendations")
 
-            # ── Telegram: send once per day at/after 08:00 SGT ───────────────
+            # ── Daily notifications: Telegram + Twitter at/after 08:00 SGT ──
             now_sgt    = datetime.now(_SGT)
             today_str  = now_sgt.strftime("%Y-%m-%d")
             if now_sgt.hour >= 8 and today_str not in _tg_sent_today:
                 _tg_sent_today.add(today_str)
+                # Telegram — trade recommendations
                 _threading.Thread(
                     target=_send_telegram_recs, args=(result,), daemon=True,
                     name="tg-notify"
                 ).start()
                 print(f"[scheduler] Telegram notification dispatched for {today_str}")
+                # Twitter — BTC + ETH 1D signal thread
+                def _tw_task():
+                    try:
+                        btc = build_analysis("BTC", "1D")
+                        eth = build_analysis("ETH", "1D")
+                        _post_twitter_signals(btc, eth)
+                    except Exception as ex:
+                        print(f"[twitter] scheduler error: {ex}")
+                _threading.Thread(target=_tw_task, daemon=True, name="tw-notify").start()
+                print(f"[scheduler] Twitter post dispatched for {today_str}")
         except Exception as exc:
             print(f"[scheduler] ERROR computing recommendations: {exc}")
 
@@ -879,6 +891,23 @@ def api_telegram_send():
     if ok:
         return jsonify({"ok": True, "count": len(result.get("recommendations", []))})
     return jsonify({"ok": False, "error": "Telegram send failed — check server logs"}), 500
+
+
+@app.post("/api/twitter/send")
+def api_twitter_send():
+    """Manually post BTC + ETH 1D signal thread to X (Twitter)."""
+    import os as _os
+    if not all([_os.getenv("TWITTER_API_KEY"), _os.getenv("TWITTER_ACCESS_TOKEN")]):
+        return jsonify({"ok": False, "error": "Not configured — set TWITTER_API_KEY/SECRET/ACCESS_TOKEN/SECRET in .env"}), 400
+    try:
+        btc = build_analysis("BTC", "1D")
+        eth = build_analysis("ETH", "1D")
+        ok  = _post_twitter_signals(btc, eth)
+        if ok:
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Twitter post failed — check server logs"}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.get("/api/prices")

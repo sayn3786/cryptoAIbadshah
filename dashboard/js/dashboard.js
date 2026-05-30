@@ -2246,6 +2246,33 @@ async function loadWhaleAlerts() {
 
 /* ─── Recommended Trades ─────────────────────────────────────────────────── */
 
+async function sendToTwitter() {
+  const btn   = document.getElementById('twSendBtn');
+  const icon  = document.getElementById('twBtnIcon');
+  const label = document.getElementById('twBtnLabel');
+  if (!btn || btn.disabled) return;
+
+  btn.disabled = true;
+  icon.textContent  = '⏳';
+  label.textContent = 'Posting…';
+
+  try {
+    const res  = await fetch(`${API}/twitter/send`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      icon.textContent  = '✅';
+      label.textContent = 'Posted!';
+      setTimeout(() => { icon.textContent = '𝕏'; label.textContent = 'Post to X'; btn.disabled = false; }, 3000);
+    } else {
+      throw new Error(data.error || 'Failed');
+    }
+  } catch (e) {
+    icon.textContent  = '❌';
+    label.textContent = e.message.includes('configured') ? 'Not configured' : 'Failed';
+    setTimeout(() => { icon.textContent = '𝕏'; label.textContent = 'Post to X'; btn.disabled = false; }, 4000);
+  }
+}
+
 async function sendToTelegram() {
   const btn   = document.getElementById('tgSendBtn');
   const icon  = document.getElementById('tgBtnIcon');
