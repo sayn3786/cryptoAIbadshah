@@ -2162,7 +2162,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec17_dual_${y}${m}${d}`;
+  return `rec18_dual1D_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -2224,6 +2224,17 @@ function _buildRecCard(r, i) {
         <span>${tfLabel2} <strong>${r.h2_strength}</strong></span>
        </div>` : '';
 
+  // Daily candle direction soft filter badge
+  const dailyBadge = (() => {
+    const dd = r.daily_dir;
+    if (!dd || dd === 'NEUTRAL') return `<span class="rec-daily-badge neutral">1D — Neutral</span>`;
+    const dIcon = dd === 'LONG' ? '▲' : '▼';
+    const dCls  = dd === 'LONG' ? 'bull' : 'bear';
+    const adj   = r.daily_adj > 0 ? `+${r.daily_adj}` : `${r.daily_adj}`;
+    const note  = r.daily_aligned ? `confirms (${adj})` : `headwind (${adj})`;
+    return `<span class="rec-daily-badge ${dCls}">${dIcon} 1D ${dd} — ${note}</span>`;
+  })();
+
   return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
@@ -2233,6 +2244,7 @@ function _buildRecCard(r, i) {
     </div>
     ${tfAlign}
     ${btcWarn}
+    ${dailyBadge}
     ${tfBreakdown}
     ${r.detected_at ? `<div class="rec-detected">🕐 Detected: ${r.detected_at}</div>` : ''}
     ${strengthBar}

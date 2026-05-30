@@ -419,9 +419,9 @@ def _compute_recommendations() -> dict:
 
     all_syms = list(SYMBOLS)
     raw: dict = {}
-    with ThreadPoolExecutor(max_workers=18) as ex:
+    with ThreadPoolExecutor(max_workers=24) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
-                for sym in all_syms for tf in ("1H", "2H", "4H")}
+                for sym in all_syms for tf in ("1H", "2H", "4H", "1D")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
             try:
@@ -469,12 +469,17 @@ def _compute_recommendations() -> dict:
             strength = min(100, round(strength + btc_adj, 1))
         return btc_conflict, btc_aligned, btc_adj, corr_factor, strength
 
+    DAILY_BOOST   = 8
+    DAILY_PENALTY = 10
+
     def _build_set(tf_short, tf_long, primary_tf):
         """
         Build top-3 candidates where tf_short + tf_long directions agree.
         primary_tf determines which signal is used for entry/SL/TP levels
         and which chart the "View Analysis" button links to.
         Longer TF carries 60% weight, shorter 40%.
+        Daily (1D) candle direction is applied as a soft filter: +8 if it
+        confirms the trade direction, -10 if it opposes.
         """
         candidates = []
         for sym, tfs in raw.items():
@@ -496,6 +501,19 @@ def _compute_recommendations() -> dict:
             btc_conflict, btc_aligned, btc_adj, corr_factor, strength = _apply_btc(
                 sym, direction, strength)
 
+            # Daily candle direction soft filter
+            daily_data    = tfs.get("1D")
+            daily_dir     = daily_data["direction"] if daily_data else "NEUTRAL"
+            daily_aligned = (daily_dir != "NEUTRAL" and daily_dir == direction)
+            daily_opposed = (daily_dir != "NEUTRAL" and daily_dir != direction)
+            daily_adj     = 0
+            if daily_aligned:
+                daily_adj = DAILY_BOOST
+                strength  = min(100, round(strength + daily_adj, 1))
+            elif daily_opposed:
+                daily_adj = -DAILY_PENALTY
+                strength  = max(0, round(strength + daily_adj, 1))
+
             candidates.append({
                 "symbol":         sym,
                 "timeframe":      primary_tf,
@@ -509,6 +527,10 @@ def _compute_recommendations() -> dict:
                 "btc_consensus":  btc_consensus,
                 "btc_adj":        btc_adj,
                 "btc_corr":       corr_factor,
+                "daily_dir":      daily_dir,
+                "daily_aligned":  daily_aligned,
+                "daily_opposed":  daily_opposed,
+                "daily_adj":      daily_adj,
                 "score":          sig.get("score", 0),
                 "tier":           sig.get("tier"),
                 "entry":          sig.get("entry"),
@@ -562,7 +584,7 @@ def _compute_recommendations() -> dict:
 
 def _rec_cache_key() -> str:
     now = datetime.now(timezone.utc)
-    return "v10_dual_" + now.strftime("%Y%m%d")
+    return "v11_dual1D_" + now.strftime("%Y%m%d")
 
 
 def _daily_rec_scheduler():
