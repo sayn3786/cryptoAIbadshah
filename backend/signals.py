@@ -1182,19 +1182,19 @@ def generate_signal(analysis: Dict) -> Dict:
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
 
             # ── Leverage suggestion ───────────────────────────────────────────
-            # Base leverage from signal strength (3× aggressive scaling)
-            if strength >= 80:     _base_lev = 15
-            elif strength >= 65:   _base_lev = 12
-            elif strength >= 50:   _base_lev = 9
-            else:                  _base_lev = 6
+            # Base leverage from signal strength (+2 on top of base)
+            if strength >= 80:     _base_lev = 7
+            elif strength >= 65:   _base_lev = 6
+            elif strength >= 50:   _base_lev = 5
+            else:                  _base_lev = 4
 
-            # Risk cap: 15% account tolerance → leverage = 15 / sl_pct
-            # e.g. SL=1% → 15×, SL=2% → 7.5×, SL=5% → 3×
-            _lev_risk = max(3.0, 15.0 / sl_pct)
+            # Risk cap: 5% account at risk per trade
+            # leverage = 5% / sl_pct → e.g. SL=1% → 5×, SL=2% → 2.5×
+            _lev_risk = max(1.0, 5.0 / sl_pct)
 
-            # Strong signals (≥65) get at least 6× regardless of SL width
-            if strength >= 65 and _lev_risk < 6.0:
-                _lev_risk = 6.0
+            # Strong signals (≥65) get at least 2× regardless of SL width
+            if strength >= 65 and _lev_risk < 2.0:
+                _lev_risk = 2.0
 
             # Max leverage by market cap — smaller = more volatile = lower ceiling
             _MAX_LEV = {"mega": 20, "large": 15, "mid": 10, "small": 7, "micro": 5}
