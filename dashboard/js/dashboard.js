@@ -1198,6 +1198,7 @@ function renderTradeManagement(a) {
   const slPct    = sig.sl_pct;
   const tpPcts   = sig.tp_pcts || [];
   const volTier  = sig.vol_tier_label || '';
+  const lev      = sig.leverage;
 
   // Best active flag for this direction
   const matchFlag = (a.flags || []).find(f =>
@@ -1261,6 +1262,11 @@ function renderTradeManagement(a) {
       <div class="tm-row">
         <span class="tm-label">R / R Ratio</span>
         <span class="tm-val ${rr >= 2 ? 'bull' : rr >= 1.5 ? '' : 'bear'}">${rr} : 1</span>
+      </div>` : ''}
+      ${lev ? `
+      <div class="tm-row">
+        <span class="tm-label">Suggested Leverage <span style="color:var(--muted);font-size:.68rem">2% risk</span></span>
+        <span class="tm-val ${lev >= 5 ? 'bull' : lev >= 3 ? '' : 'bear'}">${lev}×</span>
       </div>` : ''}
     </div>`;
 
@@ -2351,6 +2357,7 @@ function _buildRecCard(r, i) {
       <div class="rec-lvl"><span class="rec-lbl">TP 1</span><span class="rec-val bull">${tp1} ${tp1p ? `<small>${tp1p}</small>` : ''}</span></div>
       <div class="rec-lvl"><span class="rec-lbl">TP 2</span><span class="rec-val bull">${tp2} ${tp2p ? `<small>${tp2p}</small>` : ''}</span></div>
       ${r.rr_ratio ? `<div class="rec-lvl"><span class="rec-lbl">R/R</span><span class="rec-val">${r.rr_ratio} : 1</span></div>` : ''}
+      ${r.leverage  ? `<div class="rec-lvl"><span class="rec-lbl">Leverage</span><span class="rec-val ${r.leverage >= 5 ? 'bull' : ''}">${r.leverage}×</span></div>` : ''}
     </div>
     ${reasons ? `<ul class="rec-reasons">${reasons}</ul>` : ''}
     ${r.vol_tier_label ? `<span class="vol-tier-badge" style="margin-top:4px">${r.vol_tier_label}</span>` : ''}

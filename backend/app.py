@@ -738,6 +738,7 @@ def _compute_recommendations() -> dict:
                 "tp_targets":     sig.get("tp_targets", []),
                 "tp_pcts":        sig.get("tp_pcts", []),
                 "rr_ratio":       sig.get("rr_ratio"),
+                "leverage":       sig.get("leverage"),
                 "vol_tier_label": sig.get("vol_tier_label"),
                 "rsi":            tfs[primary_tf]["rsi"],
                 "current_price":  tfs[primary_tf].get("current_price"),

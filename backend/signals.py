@@ -1019,6 +1019,7 @@ def generate_signal(analysis: Dict) -> Dict:
     tp_targets: List[float] = []
     rr_ratio = None
     sl_pct = tp1_pct = tp2_pct = tp3_pct = None
+    suggested_lev = None
 
     # SL distance multiplier — same across market caps; wider ATR cap does the work
     TF_SL_MULT = {
@@ -1030,9 +1031,6 @@ def generate_signal(analysis: Dict) -> Dict:
     sl_m = TF_SL_MULT.get(timeframe, 1.5)
 
     TP1_RR, TP2_RR, TP3_RR = 1.5, 2.5, 4.0
-    tp1_m = sl_m * TP1_RR
-    tp2_m = sl_m * TP2_RR
-    tp3_m = sl_m * TP3_RR
 
     # Base ATR cap per timeframe — calibrated for mega-cap (BTC/ETH level).
     # Scaled up by atr_mult so smaller caps get room matching their true volatility:
@@ -1055,12 +1053,11 @@ def generate_signal(analysis: Dict) -> Dict:
         # For LONG: find the nearest support BELOW current price to place a limit buy.
         # For SHORT: find the nearest resistance ABOVE current price to place a limit sell.
         # Priority: EMA21 → BB upper/lower → recent 5-candle swing high/low → current price.
-        # Each level is only used when it is within LEVEL_CAP of current price (avoids
-        # suggesting entries that would never fill on a 4-24h timeframe).
         LEVEL_CAP  = 0.04    # max 4% away — if all levels are further, enter at market
         SWING_CAP  = 0.025   # swing highs/lows are noisy; tighter cap (2.5%)
 
-        ema21_val  = (analysis.get("ema_trend") or {}).get("ema21")
+        _ema_t     = analysis.get("ema_trend") or {}
+        ema21_val  = _ema_t.get("ema21")
         _bb        = analysis.get("bollinger") or {}
         bb_upper   = _bb.get("upper")
         bb_lower   = _bb.get("lower")
@@ -1070,13 +1067,9 @@ def generate_signal(analysis: Dict) -> Dict:
         swing_low  = min((c["low"]  for c in _closed), default=None) if _closed else None
 
         def _within(level, above: bool) -> bool:
-            """True if level is on the right side and within cap distance."""
             if level is None or current_price <= 0:
                 return False
-            if above:
-                gap = (level - current_price) / current_price
-            else:
-                gap = (current_price - level) / current_price
+            gap = (level - current_price) / current_price if above else (current_price - level) / current_price
             return 0 < gap <= LEVEL_CAP
 
         def _within_swing(level, above: bool) -> bool:
@@ -1086,34 +1079,81 @@ def generate_signal(analysis: Dict) -> Dict:
             return 0 < gap <= SWING_CAP
 
         if direction == "LONG":
-            # Collect support levels below current price; pick the highest (closest)
             supports = []
-            if _within(ema21_val, above=False):      supports.append(ema21_val)
-            if _within(bb_lower,  above=False):      supports.append(bb_lower)
+            if _within(ema21_val, above=False):       supports.append(ema21_val)
+            if _within(bb_lower,  above=False):       supports.append(bb_lower)
             if _within_swing(swing_low, above=False): supports.append(swing_low)
             base = max(supports) if supports else current_price
-
         elif direction == "SHORT":
-            # Collect resistance levels above current price; pick the lowest (closest)
             resistances = []
-            if _within(ema21_val, above=True):        resistances.append(ema21_val)
-            if _within(bb_upper,  above=True):        resistances.append(bb_upper)
-            if _within_swing(swing_high, above=True): resistances.append(swing_high)
+            if _within(ema21_val, above=True):         resistances.append(ema21_val)
+            if _within(bb_upper,  above=True):         resistances.append(bb_upper)
+            if _within_swing(swing_high, above=True):  resistances.append(swing_high)
             base = min(resistances) if resistances else current_price
-
         else:
             base = current_price
 
         entry = round(base, 8)
 
-        eff_atr  = min(atr, max_atr_abs)
-        sl_dist  = eff_atr * sl_m
-        tp1_dist = eff_atr * tp1_m
-        tp2_dist = eff_atr * tp2_m
-        tp3_dist = eff_atr * tp3_m
+        eff_atr      = min(atr, max_atr_abs)
+        sl_dist_base = eff_atr * sl_m
+
+        # ── SL: anchor to Supertrend when it's nearby ─────────────────────────
+        # Supertrend is a natural invalidation level — if it's within 1.5× ATR range
+        # and on the correct side, use it instead of pure ATR to get a tighter stop.
+        _st      = analysis.get("supertrend") or {}
+        st_price = _st.get("value")
+        st_dir   = _st.get("direction")
+
+        sl_dist = sl_dist_base
+        if direction == "LONG" and st_dir == "bull" and st_price and st_price < entry:
+            st_gap = entry - st_price
+            if 0 < st_gap <= sl_dist_base * 1.5:
+                sl_dist = min(sl_dist_base, st_gap * 1.003)   # just below supertrend
+        elif direction == "SHORT" and st_dir == "bear" and st_price and st_price > entry:
+            st_gap = st_price - entry
+            if 0 < st_gap <= sl_dist_base * 1.5:
+                sl_dist = min(sl_dist_base, st_gap * 1.003)   # just above supertrend
+
+        # ── TP multiplier: RSI headroom + EMA/MACD trend + BB squeeze ─────────
+        # RSI headroom: how far can price run before RSI becomes extreme?
+        rsi_val = analysis.get("rsi") or 50
+        if direction == "LONG":
+            rsi_room = max(0.4, min(1.3, (75.0 - float(rsi_val)) / 30.0))
+        elif direction == "SHORT":
+            rsi_room = max(0.4, min(1.3, (float(rsi_val) - 25.0) / 30.0))
+        else:
+            rsi_room = 0.7
+
+        # Trend alignment: EMA stack + MACD direction
+        tp_bonus    = 0.0
+        short_trend = _ema_t.get("short_trend")       # "bullish" / "bearish"
+        ema_trend   = _ema_t.get("trend", "neutral")  # EMA50/200 structural trend
+        macd_hist   = float((analysis.get("macd") or {}).get("histogram") or 0)
+
+        if direction == "LONG":
+            if short_trend == "bullish":                          tp_bonus += 0.15
+            if ema_trend in ("bullish", "mixed_bullish"):         tp_bonus += 0.10
+            if macd_hist > 0:                                     tp_bonus += 0.10
+        elif direction == "SHORT":
+            if short_trend == "bearish":                          tp_bonus += 0.15
+            if ema_trend in ("bearish", "mixed_bearish"):         tp_bonus += 0.10
+            if macd_hist < 0:                                     tp_bonus += 0.10
+
+        # BB squeeze = compressed volatility about to expand → wider TP targets
+        bb_bw = _bb.get("bandwidth")
+        if bb_bw is not None:
+            if bb_bw < 0.03:   tp_bonus += 0.15   # tight squeeze — big move imminent
+            elif bb_bw > 0.08: tp_bonus += 0.10   # already expanding
+
+        tp_factor = rsi_room + tp_bonus   # typically 0.4 – 1.6
+
+        # Apply factor but enforce minimum R:R floors (TP1 ≥ 1.2×, TP2 ≥ 2.0×, TP3 ≥ 3.0×)
+        tp1_dist = sl_dist * max(1.2, TP1_RR * tp_factor)
+        tp2_dist = sl_dist * max(2.0, TP2_RR * tp_factor)
+        tp3_dist = sl_dist * max(3.0, TP3_RR * tp_factor)
 
         def _tp_short(dist):
-            """Return TP price for a SHORT, or None if it would require >95% drop."""
             target = entry - dist
             if target <= entry * 0.05:   # >95% drop — not achievable
                 return None
@@ -1136,11 +1176,27 @@ def generate_signal(analysis: Dict) -> Dict:
 
         if sl and sl != entry and tp_targets and tp_targets[0] is not None:
             rr_ratio = round(abs((tp_targets[1] or tp_targets[0]) - entry) / abs(sl - entry), 2)
-            # Percentage distances from entry (always positive)
             sl_pct  = round(abs(sl - entry) / entry * 100, 2)
             tp1_pct = round(abs(tp_targets[0] - entry) / entry * 100, 2) if tp_targets[0] else None
             tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
+
+            # ── Leverage suggestion ───────────────────────────────────────────
+            # Base leverage from signal strength (already reflects indicator quality)
+            if strength >= 80:     _base_lev = 5
+            elif strength >= 65:   _base_lev = 4
+            elif strength >= 50:   _base_lev = 3
+            else:                  _base_lev = 2
+
+            # Risk cap: 2% account at risk per trade → leverage = 2% / sl_pct
+            # E.g. SL=1% → max 20×, SL=2% → max 10×, SL=5% → max 4×
+            _lev_risk = max(1.0, 2.0 / sl_pct)
+
+            # Max leverage by market cap — smaller = more volatile = lower ceiling
+            _MAX_LEV = {"mega": 20, "large": 15, "mid": 10, "small": 7, "micro": 5}
+            _max_lev = _MAX_LEV.get(vol_tier_id, 10)
+
+            suggested_lev = int(min(max(1, round(min(float(_base_lev), _lev_risk))), _max_lev))
 
     return {
         "direction": direction,
@@ -1158,5 +1214,6 @@ def generate_signal(analysis: Dict) -> Dict:
         "tp_targets": tp_targets,
         "tp_pcts": [tp1_pct, tp2_pct, tp3_pct],
         "rr_ratio": rr_ratio,
+        "leverage": suggested_lev,
         "current_price": round(current_price, 8) if current_price else None,
     }
