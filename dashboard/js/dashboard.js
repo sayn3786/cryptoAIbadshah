@@ -2162,7 +2162,7 @@ function _recCacheKey() {
   const y   = now.getUTCFullYear();
   const m   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d   = String(now.getUTCDate()).padStart(2, '0');
-  return `rec18_dual1D_${y}${m}${d}`;
+  return `rec19_intraday_${y}${m}${d}`;
 }
 
 function _recCacheGet() {
@@ -2274,9 +2274,9 @@ async function loadRecommendations() {
     if (!data) {
       const res = await fetch(`${API}/recommendations`);
       data = await res.json();
-      if (data.recommendations?.length || data.swing_recommendations?.length) _recCacheSet(data);
+      if (data.recommendations?.length) _recCacheSet(data);
     }
-    if (!data.recommendations?.length && !data.swing_recommendations?.length) return;
+    if (!data.recommendations?.length) return;
 
     if (dateEl) dateEl.textContent = data.date_label || '';
     if (valEl && data.valid_until_fmt) {
@@ -2298,33 +2298,10 @@ async function loadRecommendations() {
     if (existingBanner) existingBanner.remove();
     cards.insertAdjacentHTML('beforebegin', btcBanner);
 
-    // ── Intraday section (1H+2H, 4-24h holds) ─────────────────────────────
-    const intraday = data.recommendations || [];
-    if (intraday.length) {
-      cards.innerHTML = `
-        <div class="rec-section-sub">
-          <span class="rec-section-label">⚡ Intraday</span>
-          <span class="rec-section-desc">1H·2H aligned · Hold 4–24 hours</span>
-        </div>
-        <div class="rec-cards-inner">${intraday.map(_buildRecCard).join('')}</div>`;
-    } else {
-      cards.innerHTML = '<p class="rec-empty">No intraday signals aligned today.</p>';
-    }
-
-    // ── Swing section (2H+4H, 1-5 day holds) ──────────────────────────────
-    const swing = data.swing_recommendations || [];
-    const existingSwing = cards.parentElement.querySelector('.rec-swing-block');
-    if (existingSwing) existingSwing.remove();
-    if (swing.length) {
-      const swingHtml = `<div class="rec-swing-block">
-        <div class="rec-section-sub">
-          <span class="rec-section-label">📈 Swing</span>
-          <span class="rec-section-desc">2H·4H aligned · Hold 1–5 days</span>
-        </div>
-        <div class="rec-cards-inner">${swing.map(_buildRecCard).join('')}</div>
-      </div>`;
-      cards.insertAdjacentHTML('afterend', swingHtml);
-    }
+    const recs = data.recommendations || [];
+    cards.innerHTML = recs.length
+      ? `<div class="rec-cards-inner">${recs.map(_buildRecCard).join('')}</div>`
+      : '<p class="rec-empty">No signals aligned today.</p>';
 
     section.classList.remove('hidden');
   } catch (_) {}

@@ -565,26 +565,24 @@ def _compute_recommendations() -> dict:
         return top[:3]
 
     intraday_recs = _build_set("1H", "2H", "1H")   # 4–24h hold → view 1H chart
-    swing_recs    = _build_set("2H", "4H", "4H")   # 1–5 day hold → view 4H chart
 
     session_start_sgt = session_start.astimezone(SGT)
     valid_until_sgt   = (session_start + timedelta(hours=23, minutes=59)).astimezone(SGT)
 
     return {
-        "generated_at":          session_start_sgt.isoformat(),
-        "valid_until":           valid_until_sgt.isoformat(),
-        "valid_until_fmt":       valid_until_sgt.strftime("7:59 AM SGT, %b %d"),
-        "date_label":            session_start_sgt.strftime("%b %d, %Y (SGT)"),
-        "btc_consensus":         btc_consensus,
-        "btc_strength":          btc_strength,
-        "recommendations":       intraday_recs,   # 1H+2H, 4-24h holds
-        "swing_recommendations": swing_recs,      # 2H+4H, 1-5 day holds
+        "generated_at":    session_start_sgt.isoformat(),
+        "valid_until":     valid_until_sgt.isoformat(),
+        "valid_until_fmt": valid_until_sgt.strftime("7:59 AM SGT, %b %d"),
+        "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
+        "btc_consensus":   btc_consensus,
+        "btc_strength":    btc_strength,
+        "recommendations": intraday_recs,
     }
 
 
 def _rec_cache_key() -> str:
     now = datetime.now(timezone.utc)
-    return "v11_dual1D_" + now.strftime("%Y%m%d")
+    return "v12_intraday_" + now.strftime("%Y%m%d")
 
 
 def _daily_rec_scheduler():
