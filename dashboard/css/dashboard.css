@@ -613,7 +613,7 @@ a:hover { color: var(--gold2); }
 }
 /* X posts grid */
 .x-posts-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 4px;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 4px;
 }
 @media (max-width: 700px) { .x-posts-grid { grid-template-columns: 1fr; } }
 
