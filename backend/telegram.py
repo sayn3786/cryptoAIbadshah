@@ -40,14 +40,29 @@ def build_rec_message(recs_data: Dict) -> str:
     recs       = recs_data.get("recommendations", [])
     date_label = recs_data.get("date_label", "")
     valid_fmt  = recs_data.get("valid_until_fmt", "")
-    btc_dir = recs_data.get("btc_consensus", "NEUTRAL")
-    btc_str = recs_data.get("btc_strength", 0)
+    btc_dir  = recs_data.get("btc_consensus", "NEUTRAL")
+    btc_str  = recs_data.get("btc_strength", 0)
+    btc_note = ""
+    # If 2H+4H disagree, fall back to 4H alone, then 1D
+    if btc_dir == "NEUTRAL":
+        fb_dir = recs_data.get("btc_4h_dir", "NEUTRAL")
+        fb_str = recs_data.get("btc_4h_str", 0)
+        if fb_dir == "NEUTRAL":
+            fb_dir = recs_data.get("btc_1d_dir", "NEUTRAL")
+            fb_str = recs_data.get("btc_1d_str", 0)
+            if fb_dir != "NEUTRAL":
+                btc_note = " _(1D only)_"
+        elif fb_dir != "NEUTRAL":
+            btc_note = " _(4H only)_"
+        if fb_dir != "NEUTRAL":
+            btc_dir = fb_dir
+            btc_str = fb_str
 
     lines = [
         f"🌟 *CryptoSTARS Daily Trades* — {date_label}",
         f"⏰ Valid until {valid_fmt}",
         "",
-        f"{'🟢' if btc_dir == 'LONG' else '🔴' if btc_dir == 'SHORT' else '⚪'} *BTC Signal: {btc_dir} ({btc_str}/100)*",
+        f"{'🟢' if btc_dir == 'LONG' else '🔴' if btc_dir == 'SHORT' else '⚪'} *BTC Signal: {btc_dir} ({btc_str}/100)*{btc_note}",
     ]
 
     if not recs:

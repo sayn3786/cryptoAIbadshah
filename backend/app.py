@@ -778,6 +778,10 @@ def _compute_recommendations() -> dict:
         "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
         "btc_consensus":   btc_consensus,
         "btc_strength":    btc_strength,
+        "btc_4h_dir":      btc_4h_dir,
+        "btc_4h_str":      btc_4h_str,
+        "btc_1d_dir":      btc_tfs.get("1D", {}).get("direction", "NEUTRAL"),
+        "btc_1d_str":      btc_tfs.get("1D", {}).get("strength", 0) or 0,
         "recommendations": intraday_recs,
     }
 
