@@ -3,9 +3,9 @@ name: Telegram Daily Alerts
 on:
   schedule:
     # All times UTC — SGT is UTC+8
-    - cron: '5 0 * * *'   # 08:05 AM SGT
-    - cron: '5 8 * * *'   # 04:05 PM SGT
-    - cron: '5 16 * * *'  # 12:05 AM SGT (next day)
+    - cron: '50 23 * * *'  # ~08:00 AM SGT (fires early to absorb GitHub delay)
+    - cron: '50 7 * * *'   # ~04:00 PM SGT
+    - cron: '50 15 * * *'  # ~12:00 AM SGT (next day)
   workflow_dispatch:       # allow manual trigger from GitHub UI
 
 jobs:
