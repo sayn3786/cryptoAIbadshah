@@ -769,12 +769,16 @@ def _compute_recommendations() -> dict:
     intraday_recs = _build_set("1H", "2H", "2H")   # 2H levels for 4-24h holds; view 1H chart
 
     session_start_sgt = session_start.astimezone(SGT)
-    valid_until_sgt   = (session_start + timedelta(minutes=29)).astimezone(SGT)
+    # Next signal slot: midnight, 8 AM, or 4 PM SGT (whichever comes next)
+    _now_sgt     = session_start_sgt
+    _today       = [_now_sgt.replace(hour=h, minute=0, second=0, microsecond=0) for h in (0, 8, 16)]
+    _tomorrow    = [s + timedelta(days=1) for s in _today]
+    valid_until_sgt = next(s for s in sorted(_today + _tomorrow) if s > _now_sgt)
 
     return {
         "generated_at":    session_start_sgt.isoformat(),
         "valid_until":     valid_until_sgt.isoformat(),
-        "valid_until_fmt": valid_until_sgt.strftime("%-I:%M %p SGT, %b %d"),
+        "valid_until_fmt": valid_until_sgt.strftime("%-I:%M %p SGT, %b %d") + " (next signal)",
         "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
         "btc_consensus":   btc_consensus,
         "btc_strength":    btc_strength,
