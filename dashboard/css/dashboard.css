@@ -200,6 +200,19 @@ a:hover { color: var(--gold2); }
 .tier-confirmed { background: rgba(16,185,129,.25);  color: #10b981; border: 1px solid rgba(16,185,129,.5); font-weight: 900; }
 .signal-size-guide { font-size: .7rem; color: var(--muted2); }
 
+/* Exhaustion alert inside individual token signal card */
+.signal-exhaustion-alert {
+  margin: 8px 0 4px; padding: 8px 10px; border-radius: 8px;
+  font-size: .72rem; line-height: 1.5; border-left: 3px solid;
+}
+.signal-exhaustion-alert.exh-tf-1   { background: rgba(251,191,36,.10); border-color: #f59e0b; color: #fcd34d; }
+.signal-exhaustion-alert.exh-tf-mid { background: rgba(249,115,22,.13); border-color: #f97316; color: #fdba74; }
+.signal-exhaustion-alert.exh-tf-high{ background: rgba(239,68,68,.15);  border-color: #ef4444; color: #fca5a5; }
+.signal-exhaustion-alert.exh-flipped { border-width: 2px; }
+.exh-header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: 600; }
+.exh-badge  { background: rgba(255,255,255,.1); padding: 1px 6px; border-radius: 8px; font-size: .67rem; font-weight: 700; }
+.exh-roc    { font-size: .67rem; opacity: .8; }
+
 .trade-levels { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .level { display: flex; justify-content: space-between; font-size: .75rem; padding: 4px 8px; border-radius: 6px; background: var(--bg2); }
 .level span:first-child { color: var(--muted); }

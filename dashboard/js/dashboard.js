@@ -267,6 +267,43 @@ function renderSignal(s) {
   document.getElementById('lvlTP2').textContent = price(tps[1]);
   document.getElementById('lvlTP3').textContent = price(tps[2]);
   document.getElementById('lvlRR').textContent  = s.rr_ratio ? `${s.rr_ratio}x` : '—';
+
+  // Exhaustion alert inside signal card
+  const exhEl = document.getElementById('signalExhaustion');
+  const exh   = s.exhaustion_alert;
+  if (exh && exhEl) {
+    const isPump    = exh.type === 'pump';
+    const isActive  = exh.active !== false;
+    const isFlipped = exh.flipped === true;
+    const rocAbs    = Math.abs(exh.price_roc ?? 0).toFixed(1);
+    const dirArrow  = isPump ? '▲' : '▼';
+    const cls       = isPump ? 'exh-pump' : 'exh-dump';
+    const n         = exh.signals;
+
+    let lvlCls;
+    if (!isActive)    lvlCls = 'exh-tf-1';     // 0–1 signals: watching
+    else if (n <= 3)  lvlCls = 'exh-tf-mid';   // 2–3: warning
+    else              lvlCls = 'exh-tf-high';   // 4+: strong
+
+    const title = isFlipped
+      ? (isPump ? '🔄 Reversal → SHORT (pump exhausted)' : '🔄 Reversal → LONG (dump exhausted)')
+      : isActive
+        ? (isPump ? '🚨 Pump Exhaustion' : '🚨 Dump Exhaustion')
+        : (isPump ? '👀 Pump Watch' : '👀 Dump Watch');
+
+    exhEl.className   = `signal-exhaustion-alert ${lvlCls}${isFlipped ? ' exh-flipped' : ''}`;
+    exhEl.style.display = '';
+    exhEl.innerHTML = `
+      <div class="exh-header"><strong>${title}</strong>
+        <span class="exh-badge">${n}/7 signals</span>
+        <span class="exh-roc">${dirArrow}${rocAbs}% (4-candle)</span>
+      </div>
+      ${exh.detail ? `<div class="exh-detail">${exh.detail}</div>` : ''}
+    `;
+  } else if (exhEl) {
+    exhEl.style.display = 'none';
+    exhEl.innerHTML = '';
+  }
 }
 
 /* ─── RSI gauge (canvas arc) ──────────────────────────────────────────────── */
