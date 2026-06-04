@@ -1164,6 +1164,11 @@ a:hover { color: var(--gold2); }
 .exh-tf-1   { background: rgba(251,191,36,.12);  color: #fcd34d; border-color: rgba(251,191,36,.3); }
 .exh-tf-mid { background: rgba(249,115,22,.15);  color: #fdba74; border-color: rgba(249,115,22,.4); }
 .exh-tf-high{ background: rgba(239,68,68,.18);   color: #fca5a5; border-color: rgba(239,68,68,.5); font-weight: 700; }
+/* Analysis view exhaustion card */
+.analysis-exh-card { padding: 10px 14px; margin-bottom: 0; }
+.exh-grid-title { font-size: .78rem; font-weight: 700; margin-bottom: 6px; }
+.exh-grid-sub   { font-size: .68rem; font-weight: 400; color: var(--muted2); }
+.analysis-exh-tf-grid { background: none; border: none; padding: 0; margin: 0; }
 .rec-str-track { height: 4px; background: var(--card2); border-radius: 2px; overflow: hidden; }
 .rec-str-fill  { height: 100%; border-radius: 2px; transition: width .5s ease; }
 .rec-str-fill.bull { background: var(--bull); }

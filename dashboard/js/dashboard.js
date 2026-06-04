@@ -1,4 +1,9 @@
 /* ─── State ───────────────────────────────────────────────────────────────── */
+// Per-symbol exhaustion lookup — populated when recommendations are loaded so
+// the analysis view can show the multi-TF exhaustion grid regardless of which
+// timeframe is currently being viewed.
+const _symExhaustion = {};
+
 const S = {
   symbol: 'BTC',
   timeframe: '1W',
@@ -149,6 +154,59 @@ async function loadAnalysis() {
   }
 }
 
+/* ─── Multi-TF exhaustion grid for analysis view ─────────────────────────── */
+function renderAnalysisExhaustion(symbol, currentTfSignal) {
+  const el = document.getElementById('analysisExhGrid');
+  if (!el) return;
+
+  // Combine: per-TF data from rec cache + current TF's live signal
+  const fromRec = _symExhaustion[symbol] || [];
+  // Merge: rec data as base, override/add current TF from live signal
+  const byTf = {};
+  fromRec.forEach(t => { byTf[t.tf] = t; });
+  const curExh = currentTfSignal?.exhaustion_alert;
+  // Always add current TF data even if not in rec cache
+  if (curExh) {
+    const curTf = currentTfSignal?.timeframe;
+    if (curTf) byTf[curTf] = {
+      tf: curTf, signals: curExh.signals, type: curExh.type,
+      active: curExh.active !== false, price_roc: curExh.price_roc ?? 0,
+      detail: curExh.detail || '',
+    };
+  }
+
+  const tfData = ['1H','2H','4H','8H','12H','1D'].map(tf => byTf[tf]).filter(Boolean);
+  if (tfData.length === 0) { el.style.display = 'none'; el.innerHTML = ''; return; }
+
+  const isPump = tfData[0].type === 'pump';
+  const hasActive = tfData.some(t => t.active);
+
+  const cells = tfData.map(t => {
+    const n      = t.signals;
+    const roc    = Math.abs(t.price_roc ?? 0).toFixed(1);
+    const dir    = t.type === 'pump' ? '▲' : '▼';
+    const flip   = t.active && n >= 4 ? ' ↩' : '';
+    let lvl;
+    if (n === 0)      lvl = 'exh-tf-0';
+    else if (n === 1) lvl = 'exh-tf-1';
+    else if (n <= 3)  lvl = 'exh-tf-mid';
+    else              lvl = 'exh-tf-high';
+    const tip = t.detail ? ` title="${t.detail}"` : '';
+    return `<span class="exh-tf-cell ${lvl}"${tip}>${t.tf} <strong>${n}/7</strong> <small>${dir}${roc}%</small>${flip}</span>`;
+  }).join('');
+
+  const icon  = isPump ? '🔴' : '🟢';
+  const label = hasActive
+    ? (isPump ? 'Pump Exhaustion' : 'Dump Exhaustion')
+    : (isPump ? 'Pump Watch' : 'Dump Watch');
+
+  el.style.display = '';
+  el.innerHTML = `<div class="card analysis-exh-card">
+    <div class="exh-grid-title">${icon} ${label} <span class="exh-grid-sub">— reversal signals across timeframes</span></div>
+    <div class="exh-tf-grid analysis-exh-tf-grid">${cells}</div>
+  </div>`;
+}
+
 function renderAll(a) {
   // Show data source banner
   const banner = document.getElementById('demoBanner');
@@ -173,6 +231,7 @@ function renderAll(a) {
 
   renderPrice(a);
   renderSignal(a.signal);
+  renderAnalysisExhaustion(a.symbol, a.signal);
   renderMACDCard(a.macd);
   renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
@@ -2500,6 +2559,12 @@ async function loadRecommendations(force = false) {
     cards.insertAdjacentHTML('beforebegin', btcBanner);
 
     const recs = data.recommendations || [];
+    // Store per-symbol exhaustion so the analysis view can show it
+    recs.forEach(r => {
+      if (r.symbol && r.exhaustion_by_tf) {
+        _symExhaustion[r.symbol] = r.exhaustion_by_tf;
+      }
+    });
     cards.innerHTML = recs.length
       ? recs.map(_buildRecCard).join('')
       : '<p class="rec-empty">No signals aligned today.</p>';
