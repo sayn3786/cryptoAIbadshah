@@ -1093,6 +1093,31 @@ def generate_signal(analysis: Dict) -> Dict:
 
     strength = min(int(abs(score) / MAX_SCORE * 100), 100)
 
+    # ── Exhaustion post-multiplier correction ─────────────────────────────────
+    # Combo 11 adds pts BEFORE the confluence multiplier, so a 1.30x multiplier
+    # inflates the score back up and the exhaustion penalty gets wiped out.
+    # Fix: cut strength directly on the final 0–100 value, bypassing the mult.
+    # If the cut pushes strength below the flip threshold AND signals >= 4,
+    # also flip direction to the reversal side.
+    #
+    # Strength cut per signal count:
+    #   2/7 = −12   3/7 = −22   4/7 = −35
+    #   5/7 = −50   6/7 = −65   7/7 = −80
+    _EXH_CUT = {2: 12, 3: 22, 4: 35, 5: 50, 6: 65, 7: 80}
+    if exhaustion_alert:
+        _n   = exhaustion_alert["signals"]
+        _cut = _EXH_CUT.get(_n, 80)
+        strength = max(0, strength - _cut)
+        # If exhaustion is strong (4+) and has knocked strength down far enough,
+        # flip direction to the reversal side
+        _FLIP_THRESHOLD = 35   # same as direction threshold
+        if _n >= 4 and strength <= _FLIP_THRESHOLD:
+            _rev = "SHORT" if exhaustion_alert["type"] == "pump" else "LONG"
+            score = -abs(score) if _rev == "SHORT" else abs(score)
+            _FLIP_STR = {4: 48, 5: 60, 6: 74, 7: 88}
+            strength = _FLIP_STR.get(_n, 88)
+            exhaustion_alert["flipped"] = True
+
     # Threshold at 35 pts — requires at least 2-3 real signals agreeing.
     DIRECTION_THRESHOLD = 35
     if score >= DIRECTION_THRESHOLD:
