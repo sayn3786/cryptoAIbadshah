@@ -2260,7 +2260,7 @@ function _recCacheKey() {
   const d    = String(now.getUTCDate()).padStart(2, '0');
   const h    = String(now.getUTCHours()).padStart(2, '0');
   const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec26_mtf_${y}${m}${d}${h}${half}`;
+  return `rec27_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {

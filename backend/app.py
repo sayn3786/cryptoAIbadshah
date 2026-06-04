@@ -718,12 +718,21 @@ def _compute_recommendations() -> dict:
                 _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
                 if _ea and (_exh is None or _ea["signals"] > _exh["signals"]):
                     _exh = {**_ea, "tf": _etf}
-            # If exhaustion opposes the trade direction, penalise strength
+            # If exhaustion opposes the trade direction, penalise both
+            # ranking strength and displayed score proportionally to signal count
+            _exh_display_penalty = 0
             if _exh:
                 _opp = (_exh["type"] == "pump" and direction == "LONG") or \
                        (_exh["type"] == "dump" and direction == "SHORT")
                 if _opp:
-                    strength = max(0, round(strength - min(_exh["pts"] / 4, 15), 1))
+                    # Penalty mirrors the exhaustion pts scale: 2=15, 3=25, 4=40, 5=60…
+                    _EXH_PEN = {2: 15, 3: 25, 4: 40, 5: 55, 6: 70, 7: 85}
+                    _pen = _EXH_PEN.get(_exh["signals"], 85)
+                    strength             = max(0, round(strength - _pen, 1))
+                    _exh_display_penalty = _pen   # also reduce displayed badge
+
+            _raw_display = round(h_long["strength"], 1)
+            _display_str = max(0, round(_raw_display - _exh_display_penalty, 1))
 
             candidates.append({
                 "symbol":         sym,
@@ -732,7 +741,7 @@ def _compute_recommendations() -> dict:
                 "aligned_tfs":    f"{tf_short}·{tf_long}",
                 "direction":      direction,
                 "strength":       strength,
-                "display_strength": round(h_long["strength"], 1),
+                "display_strength": _display_str,
                 "h1_strength":    round(h_short["strength"], 1),
                 "h2_strength":    round(h_long["strength"], 1),
                 "btc_conflict":   btc_conflict,
@@ -809,7 +818,7 @@ def _rec_cache_key() -> str:
     now  = datetime.now(timezone.utc)
     # 30-minute windows: :00 and :30 of each hour
     half = (now.minute // 30) * 30
-    return f"v18_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
+    return f"v19_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 
 _SGT = timezone(timedelta(hours=8))
