@@ -935,6 +935,95 @@ def generate_signal(analysis: Dict) -> Dict:
             combo_pts -= pts
             bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk")
 
+    # ── Combo 11: Extreme pump/dump reversal confluence ──────────────────────────
+    # When price has moved 12%+ in 4 candles (extreme pump or dump), the market is
+    # extended. If 3+ reversal indicators simultaneously fire AGAINST that move,
+    # it's a high-conviction exhaustion signal. Each extra indicator adds weight.
+    # Gate: price_roc must be extreme (>12% pump OR <-12% dump).
+    # Reversal signals checked (counter to the move):
+    #   1. RSI overbought (>70) on a pump, or oversold (<30) on a dump
+    #   2. RSI divergence (bearish div on pump, bullish div on dump)
+    #   3. CVD weakening against the move (futures-led or spot CVD falling on pump)
+    #   4. Funding rate extreme in direction of move (>0.02% on pump, <-0.02% on dump)
+    #   5. MACD cross against the move (bearish on pump, bullish on dump)
+    #   6. SuperTrend just flipped against the move
+    #   7. Bollinger upper band breach on pump / lower breach on dump
+    if price_roc is not None and abs(price_roc) >= 12:
+        is_pump = price_roc > 0  # True = pump, False = dump
+        rev_signals = 0
+        rev_details = []
+
+        # 1. RSI extreme
+        _rsi = analysis.get("rsi")
+        if _rsi is not None:
+            if is_pump and _rsi > 70:
+                rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} overbought")
+            elif not is_pump and _rsi < 30:
+                rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} oversold")
+
+        # 2. RSI divergence against the move
+        _rdiv = (analysis.get("rsi_divergence") or {}).get("type")
+        if is_pump and _rdiv == "bearish":
+            rev_signals += 1; rev_details.append("RSI bearish divergence")
+        elif not is_pump and _rdiv == "bullish":
+            rev_signals += 1; rev_details.append("RSI bullish divergence")
+
+        # 3. CVD weakening against the move
+        _cvd_type = (analysis.get("cvd_divergence") or {}).get("type", "neutral")
+        if is_pump and _cvd_type in ("futures_led_up",):
+            rev_signals += 1; rev_details.append("CVD not confirming pump")
+        elif not is_pump and _cvd_type in ("futures_led_down",):
+            rev_signals += 1; rev_details.append("CVD not confirming dump")
+
+        # 4. Funding rate extreme in direction of move (crowded trade)
+        _fr = funding.get("current", 0.0) or 0.0
+        if is_pump and _fr >= 0.02:
+            rev_signals += 1; rev_details.append(f"funding {_fr:.3f}% — longs overcrowded")
+        elif not is_pump and _fr <= -0.02:
+            rev_signals += 1; rev_details.append(f"funding {_fr:.3f}% — shorts overcrowded")
+
+        # 5. MACD cross against the move
+        _macd = analysis.get("macd") or {}
+        if is_pump and (_macd.get("cross") == "bearish" or _macd.get("zero_cross") == "bearish"):
+            rev_signals += 1; rev_details.append("MACD bearish cross")
+        elif not is_pump and (_macd.get("cross") == "bullish" or _macd.get("zero_cross") == "bullish"):
+            rev_signals += 1; rev_details.append("MACD bullish cross")
+
+        # 6. SuperTrend just flipped against the move
+        _st = analysis.get("supertrend") or {}
+        if _st.get("flipped", False):
+            if is_pump and _st.get("direction") == "bear":
+                rev_signals += 1; rev_details.append("SuperTrend just flipped bearish")
+            elif not is_pump and _st.get("direction") == "bull":
+                rev_signals += 1; rev_details.append("SuperTrend just flipped bullish")
+
+        # 7. Bollinger band breach in direction of move (overextension)
+        _bb = analysis.get("bollinger") or {}
+        if is_pump and _bb.get("breakout") == "bullish":
+            rev_signals += 1; rev_details.append("BB upper band breached")
+        elif not is_pump and _bb.get("breakout") == "bearish":
+            rev_signals += 1; rev_details.append("BB lower band breached")
+
+        # Require at least 3 reversal signals to fire the combo
+        if rev_signals >= 3:
+            # Scale: 3 signals = +12, 4 = +16, 5+ = +20
+            rev_pts = min(12 + (rev_signals - 3) * 4, 20)
+            detail_str = " · ".join(rev_details[:4])
+            if is_pump:
+                # Pump + multiple reversal signals → push SHORT
+                combo_pts -= rev_pts
+                bear_reasons.insert(0,
+                    f"🚨 Pump exhaustion confluence ({rev_signals}/7 reversal signals: {detail_str}) "
+                    f"— price up {price_roc:.1f}% but {rev_signals} indicators signalling reversal; "
+                    f"−{rev_pts} pts SHORT bias")
+            else:
+                # Dump + multiple reversal signals → push LONG
+                combo_pts += rev_pts
+                bull_reasons.insert(0,
+                    f"🚨 Dump exhaustion confluence ({rev_signals}/7 reversal signals: {detail_str}) "
+                    f"— price down {abs(price_roc):.1f}% but {rev_signals} indicators signalling reversal; "
+                    f"+{rev_pts} pts LONG bias")
+
     # Apply combo points
     score += combo_pts
 
