@@ -936,19 +936,26 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk")
 
     # ── Combo 11: Extreme pump/dump reversal confluence ──────────────────────────
-    # When price has moved 12%+ in 4 candles (extreme pump or dump), the market is
-    # extended. If 3+ reversal indicators simultaneously fire AGAINST that move,
-    # it's a high-conviction exhaustion signal. Each extra indicator adds weight.
-    # Gate: price_roc must be extreme (>12% pump OR <-12% dump).
+    # Threshold adapts per timeframe — shorter candles need less % to be "extreme":
+    #   1H/2H: 5-7% in 4 candles   |   4H/8H: 8-10%   |   1D: 12%   |   1W+: 15-20%
+    # If 3+ reversal indicators simultaneously fire AGAINST that move, it's a
+    # high-conviction exhaustion signal. Each extra indicator adds more weight.
     # Reversal signals checked (counter to the move):
     #   1. RSI overbought (>70) on a pump, or oversold (<30) on a dump
     #   2. RSI divergence (bearish div on pump, bullish div on dump)
-    #   3. CVD weakening against the move (futures-led or spot CVD falling on pump)
+    #   3. CVD weakening against the move (futures-led pump with no spot follow)
     #   4. Funding rate extreme in direction of move (>0.02% on pump, <-0.02% on dump)
     #   5. MACD cross against the move (bearish on pump, bullish on dump)
     #   6. SuperTrend just flipped against the move
     #   7. Bollinger upper band breach on pump / lower breach on dump
-    if price_roc is not None and abs(price_roc) >= 12:
+    _TF_ROC_EXTREME = {
+        "1H": 5.0, "2H": 7.0,
+        "4H": 8.0, "8H": 10.0, "12H": 11.0, "1D": 12.0,
+        "1W": 15.0, "2W": 18.0, "3W": 20.0, "1M": 20.0,
+    }
+    _tf         = analysis.get("timeframe", "1D")
+    _roc_thresh = _TF_ROC_EXTREME.get(_tf, 12.0)
+    if price_roc is not None and abs(price_roc) >= _roc_thresh:
         is_pump = price_roc > 0  # True = pump, False = dump
         rev_signals = 0
         rev_details = []
