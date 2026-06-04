@@ -89,9 +89,12 @@ def build_rec_message(recs_data: Dict) -> str:
                 if tp is not None:
                     tp_lines.append(f"  🎯 TP{j}: {_fmt_price(tp)}" + (f" (+{_pct(pct)})" if pct else ""))
 
+            is_reversal = r.get("reversal_trade", False)
+            rev_tag     = " ↩ REVERSAL" if is_reversal else ""
+
             block = [
                 "",
-                f"*#{i} {sym}/USDT* {_dir_icon(d)} *{d}*  `{score}/100`",
+                f"*#{i} {sym}/USDT* {_dir_icon(d)} *{d}{rev_tag}*  `{score}/100`",
                 f"  💰 Entry: {entry}",
                 f"  🛑 Stop:  {sl}" + (f"  (-{sl_pct})" if sl_pct else ""),
             ] + tp_lines + [
@@ -103,16 +106,23 @@ def build_rec_message(recs_data: Dict) -> str:
             if tier:
                 block.append(f"  🏷 {tier}")
             if exh:
-                _exh_tf  = exh.get("tf", "")
-                _n       = exh.get("signals", 0)
-                _detail  = exh.get("detail", "")
-                _etype   = exh.get("type", "")
-                _roc     = exh.get("price_roc", 0)
-                _icon    = "🔴" if _etype == "pump" else "🟢"
-                block.append(
-                    f"  🚨 *{'Pump' if _etype == 'pump' else 'Dump'} Exhaustion* ({_n}/7 signals, {_exh_tf}) "
-                    f"— {_icon} price {'up' if _etype == 'pump' else 'down'} {abs(_roc):.1f}%: _{_detail}_"
-                )
+                _exh_tf   = exh.get("tf", "")
+                _n        = exh.get("signals", 0)
+                _detail   = exh.get("detail", "")
+                _etype    = exh.get("type", "")
+                _roc      = exh.get("price_roc", 0)
+                _icon     = "🔴" if _etype == "pump" else "🟢"
+                _is_flip  = exh.get("reversal_trade", False)
+                if _is_flip:
+                    block.append(
+                        f"  🔄 *Trade flipped* — {'pump' if _etype == 'pump' else 'dump'} exhausted "
+                        f"({_n}/7 signals, {_exh_tf}): _{_detail}_"
+                    )
+                else:
+                    block.append(
+                        f"  🚨 *{'Pump' if _etype == 'pump' else 'Dump'} Exhaustion* ({_n}/7 signals, {_exh_tf}) "
+                        f"— {_icon} price {'up' if _etype == 'pump' else 'down'} {abs(_roc):.1f}%: _{_detail}_"
+                    )
             lines += [l for l in block if l is not None]
 
     lines += [

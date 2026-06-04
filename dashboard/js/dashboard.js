@@ -2260,7 +2260,7 @@ function _recCacheKey() {
   const d    = String(now.getUTCDate()).padStart(2, '0');
   const h    = String(now.getUTCHours()).padStart(2, '0');
   const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec27_mtf_${y}${m}${d}${h}${half}`;
+  return `rec28_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
@@ -2355,22 +2355,25 @@ function _buildRecCard(r, i) {
   const exhBanner = (() => {
     const exh = r.exhaustion_alert;
     if (!exh) return '';
-    const isPump  = exh.type === 'pump';
-    const icon    = isPump ? '🔴' : '🟢';
-    const label   = isPump ? 'Pump Exhaustion' : 'Dump Exhaustion';
-    const rocAbs  = Math.abs(exh.price_roc ?? 0).toFixed(1);
-    const cls     = isPump ? 'exh-pump' : 'exh-dump';
-    return `<div class="rec-exhaustion-alert ${cls}">
-      🚨 <strong>${label}</strong> ${exh.signals}/7 signals (${exh.tf}) — ${icon} price ${isPump ? 'up' : 'down'} ${rocAbs}%
+    const isPump    = exh.type === 'pump';
+    const isFlipped = exh.reversal_trade === true || r.reversal_trade === true;
+    const icon      = isPump ? '🔴' : '🟢';
+    const rocAbs    = Math.abs(exh.price_roc ?? 0).toFixed(1);
+    const cls       = isPump ? 'exh-pump' : 'exh-dump';
+    const label     = isFlipped
+      ? (isPump ? '🔄 Reversal → SHORT (pump exhausted)' : '🔄 Reversal → LONG (dump exhausted)')
+      : (isPump ? 'Pump Exhaustion — caution' : 'Dump Exhaustion — caution');
+    return `<div class="rec-exhaustion-alert ${cls}${isFlipped ? ' exh-flipped' : ''}">
+      🚨 <strong>${label}</strong> — ${exh.signals}/7 signals (${exh.tf}), price ${isPump ? 'up' : 'down'} ${rocAbs}%
       <div class="exh-detail">${exh.detail}</div>
     </div>`;
   })();
 
-  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}" data-rec-sym="${r.symbol}">
+  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}${r.reversal_trade ? ' rec-card-reversal' : ''}" data-rec-sym="${r.symbol}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
       <span class="rec-sym">${r.symbol}/USDT</span>
-      <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
+      <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}${r.reversal_trade ? ' ↩' : ''}</span>
       <span class="rec-strength">${r.display_strength ?? r.h2_strength}/100</span>
     </div>
     ${exhBanner}

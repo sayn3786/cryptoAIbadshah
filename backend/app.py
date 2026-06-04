@@ -712,63 +712,97 @@ def _compute_recommendations() -> dict:
             mtf_counter  = len(mtf_against_list) >= 2   # against at least 2 HTFs
             mtf_confirm  = mtf_aligned_ct == 3          # all 3 HTFs agree
 
-            # Collect exhaustion alerts across all available timeframes
+            # ── Exhaustion override ───────────────────────────────────────────
+            # Collect best exhaustion alert across timeframes (most signals wins)
             _exh = None
             for _etf in (tf_short, tf_long, "4H", "1D"):
                 _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
                 if _ea and (_exh is None or _ea["signals"] > _exh["signals"]):
                     _exh = {**_ea, "tf": _etf}
-            # If exhaustion opposes the trade direction, penalise both
-            # ranking strength and displayed score proportionally to signal count
-            _exh_display_penalty = 0
+
+            _reversal_trade = False
+            _raw_display    = round(h_long["strength"], 1)
+            _display_str    = _raw_display
+
             if _exh:
                 _opp = (_exh["type"] == "pump" and direction == "LONG") or \
                        (_exh["type"] == "dump" and direction == "SHORT")
                 if _opp:
-                    # Penalty mirrors the exhaustion pts scale: 2=15, 3=25, 4=40, 5=60…
-                    _EXH_PEN = {2: 15, 3: 25, 4: 40, 5: 55, 6: 70, 7: 85}
-                    _pen = _EXH_PEN.get(_exh["signals"], 85)
-                    strength             = max(0, round(strength - _pen, 1))
-                    _exh_display_penalty = _pen   # also reduce displayed badge
-
-            _raw_display = round(h_long["strength"], 1)
-            _display_str = max(0, round(_raw_display - _exh_display_penalty, 1))
+                    n = _exh["signals"]
+                    if n >= 3:
+                        # ── FLIP: exhaustion strong enough to reverse the trade ──
+                        # 3 signals = moderate conviction, 7 = maximum conviction.
+                        # Reversal strength scales with signal count.
+                        _REV_STR = {3: 52, 4: 64, 5: 76, 6: 88, 7: 100}
+                        rev_str      = _REV_STR.get(n, 100)
+                        rev_dir      = "SHORT" if direction == "LONG" else "LONG"
+                        # Invert SL/TP: use sl_pct to build levels from the other side
+                        _entry   = sig.get("entry") or sig.get("current_price")
+                        _sl_pct  = sig.get("sl_pct") or 3.0
+                        _tp_pcts = sig.get("tp_pcts") or [4.75, 7.92]
+                        if _entry:
+                            _m = 1 if rev_dir == "LONG" else -1
+                            _sl_rev  = round(_entry * (1 - _m * _sl_pct / 100), 8)
+                            _tp1_rev = round(_entry * (1 + _m * (_tp_pcts[0] if _tp_pcts else 4.75) / 100), 8)
+                            _tp2_rev = round(_entry * (1 + _m * (_tp_pcts[1] if len(_tp_pcts) > 1 else 7.92) / 100), 8)
+                        else:
+                            _sl_rev = _tp1_rev = _tp2_rev = None
+                        direction      = rev_dir
+                        strength       = rev_str
+                        _display_str   = rev_str
+                        _reversal_trade = True
+                        _exh["reversal_trade"]    = True
+                        _exh["reversal_strength"] = rev_str
+                        # Override signal levels with reversal levels
+                        sig = dict(sig)
+                        sig["direction"]  = rev_dir
+                        sig["sl"]         = _sl_rev
+                        sig["sl_pct"]     = _sl_pct
+                        sig["tp_targets"] = [_tp1_rev, _tp2_rev]
+                        sig["tp_pcts"]    = _tp_pcts[:2] if _tp_pcts else [4.75, 7.92]
+                    else:
+                        # 2 signals = caution only, penalise but don't flip
+                        _EXH_PEN = {2: 20}
+                        _pen       = _EXH_PEN.get(n, 20)
+                        strength   = max(0, round(strength - _pen, 1))
+                        _display_str = max(0, round(_raw_display - _pen, 1))
 
             candidates.append({
-                "symbol":         sym,
-                "timeframe":      primary_tf,
-                "view_tf":        primary_tf,
-                "aligned_tfs":    f"{tf_short}·{tf_long}",
-                "direction":      direction,
-                "strength":       strength,
+                "symbol":           sym,
+                "timeframe":        primary_tf,
+                "view_tf":          primary_tf,
+                "aligned_tfs":      f"{tf_short}·{tf_long}",
+                "direction":        direction,
+                "strength":         strength,
                 "display_strength": _display_str,
-                "h1_strength":    round(h_short["strength"], 1),
-                "h2_strength":    round(h_long["strength"], 1),
-                "btc_conflict":   btc_conflict,
-                "btc_aligned":    btc_aligned,
-                "btc_consensus":  btc_consensus,
-                "btc_adj":        btc_adj,
-                "btc_corr":       corr_factor,
-                "mtf_dirs":       mtf_dirs,
-                "mtf_aligned":    mtf_aligned_ct,
-                "mtf_adj":        mtf_adj,
-                "mtf_counter":    mtf_counter,
-                "mtf_confirm":    mtf_confirm,
-                "score":          sig.get("score", 0),
-                "tier":           sig.get("tier"),
-                "entry":          sig.get("entry"),
-                "detected_at":    detected_at_fmt,
-                "sl":             sig.get("sl"),
-                "sl_pct":         sig.get("sl_pct"),
-                "tp_targets":     sig.get("tp_targets", []),
-                "tp_pcts":        sig.get("tp_pcts", []),
-                "rr_ratio":       sig.get("rr_ratio"),
-                "leverage":       sig.get("leverage"),
-                "vol_tier_label":  sig.get("vol_tier_label"),
-                "rsi":             tfs[primary_tf]["rsi"],
-                "current_price":   tfs[primary_tf].get("current_price"),
-                "reasons":         sig.get("reasons", [])[:3],
+                "h1_strength":      round(h_short["strength"], 1),
+                "h2_strength":      round(h_long["strength"], 1),
+                "btc_conflict":     btc_conflict,
+                "btc_aligned":      btc_aligned,
+                "btc_consensus":    btc_consensus,
+                "btc_adj":          btc_adj,
+                "btc_corr":         corr_factor,
+                "mtf_dirs":         mtf_dirs,
+                "mtf_aligned":      mtf_aligned_ct,
+                "mtf_adj":          mtf_adj,
+                "mtf_counter":      mtf_counter,
+                "mtf_confirm":      mtf_confirm,
+                "score":            sig.get("score", 0),
+                "tier":             sig.get("tier"),
+                "entry":            sig.get("entry"),
+                "detected_at":      detected_at_fmt,
+                "sl":               sig.get("sl"),
+                "sl_pct":           sig.get("sl_pct"),
+                "tp_targets":       sig.get("tp_targets", []),
+                "tp_pcts":          sig.get("tp_pcts", []),
+                "rr_ratio":         sig.get("rr_ratio"),
+                "leverage":         sig.get("leverage"),
+                "vol_tier_label":   sig.get("vol_tier_label"),
+                "rsi":              tfs[primary_tf]["rsi"],
+                "current_price":    tfs[primary_tf].get("current_price"),
+                "reasons":          sig.get("reasons", [])[:3],
                 "exhaustion_alert": _exh,
+                "reversal_trade":   _reversal_trade,
             })
 
         candidates.sort(key=lambda x: x["strength"], reverse=True)
@@ -818,7 +852,7 @@ def _rec_cache_key() -> str:
     now  = datetime.now(timezone.utc)
     # 30-minute windows: :00 and :30 of each hour
     half = (now.minute // 30) * 30
-    return f"v19_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
+    return f"v20_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 
 _SGT = timezone(timedelta(hours=8))

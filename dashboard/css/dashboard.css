@@ -1132,6 +1132,9 @@ a:hover { color: var(--gold2); }
   color: #6ee7b7;
 }
 .exh-detail { font-weight: 400; opacity: .85; margin-top: 2px; font-size: .68rem; }
+.exh-flipped { border-width: 2px; font-size: .74rem; }
+.rec-card-reversal { border-color: #a78bfa !important; }
+.rec-card-reversal .rec-card-top { background: rgba(167,139,250,.08); }
 .rec-str-track { height: 4px; background: var(--card2); border-radius: 2px; overflow: hidden; }
 .rec-str-fill  { height: 100%; border-radius: 2px; transition: width .5s ease; }
 .rec-str-fill.bull { background: var(--bull); }
