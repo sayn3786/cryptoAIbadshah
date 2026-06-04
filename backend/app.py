@@ -713,12 +713,26 @@ def _compute_recommendations() -> dict:
             mtf_confirm  = mtf_aligned_ct == 3          # all 3 HTFs agree
 
             # ── Exhaustion override ───────────────────────────────────────────
-            # Collect best exhaustion alert across timeframes (most signals wins)
+            # Best active exhaustion (≥2 signals) across timeframes
             _exh = None
             for _etf in (tf_short, tf_long, "4H", "1D"):
                 _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
-                if _ea and (_exh is None or _ea["signals"] > _exh["signals"]):
+                if _ea and _ea.get("active", True) and (_exh is None or _ea["signals"] > _exh["signals"]):
                     _exh = {**_ea, "tf": _etf}
+
+            # Per-TF exhaustion summary (all TFs, including 0–1 signal watch states)
+            _exh_by_tf = []
+            for _etf in ("1H", "2H", "4H", "8H", "12H", "1D"):
+                _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
+                if _ea is not None:
+                    _exh_by_tf.append({
+                        "tf":        _etf,
+                        "signals":   _ea["signals"],
+                        "type":      _ea["type"],
+                        "active":    _ea.get("active", _ea["signals"] >= 2),
+                        "price_roc": round(_ea.get("price_roc", 0), 1),
+                        "detail":    _ea.get("detail", ""),
+                    })
 
             _reversal_trade = False
             _raw_display    = round(h_long["strength"], 1)
@@ -802,6 +816,7 @@ def _compute_recommendations() -> dict:
                 "current_price":    tfs[primary_tf].get("current_price"),
                 "reasons":          sig.get("reasons", [])[:3],
                 "exhaustion_alert": _exh,
+                "exhaustion_by_tf": _exh_by_tf if _exh_by_tf else None,
                 "reversal_trade":   _reversal_trade,
             })
 
@@ -852,7 +867,7 @@ def _rec_cache_key() -> str:
     now  = datetime.now(timezone.utc)
     # 30-minute windows: :00 and :30 of each hour
     half = (now.minute // 30) * 30
-    return f"v21_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
+    return f"v22_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 
 _SGT = timezone(timedelta(hours=8))

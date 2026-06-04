@@ -2260,7 +2260,7 @@ function _recCacheKey() {
   const d    = String(now.getUTCDate()).padStart(2, '0');
   const h    = String(now.getUTCHours()).padStart(2, '0');
   const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec29_mtf_${y}${m}${d}${h}${half}`;
+  return `rec30_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
@@ -2351,13 +2351,12 @@ function _buildRecCard(r, i) {
   const detectedShort = r.detected_at
     ? r.detected_at.replace(/\d{4} · /, '').replace(' SGT', '') : '';
 
-  // Exhaustion alert banner
+  // Exhaustion alert banner (active only — ≥2 signals)
   const exhBanner = (() => {
     const exh = r.exhaustion_alert;
     if (!exh) return '';
     const isPump    = exh.type === 'pump';
     const isFlipped = exh.reversal_trade === true || r.reversal_trade === true;
-    const icon      = isPump ? '🔴' : '🟢';
     const rocAbs    = Math.abs(exh.price_roc ?? 0).toFixed(1);
     const cls       = isPump ? 'exh-pump' : 'exh-dump';
     const label     = isFlipped
@@ -2369,6 +2368,30 @@ function _buildRecCard(r, i) {
     </div>`;
   })();
 
+  // Per-timeframe exhaustion grid (shows all TFs where price move is large enough)
+  const exhTfGrid = (() => {
+    const tfData = r.exhaustion_by_tf;
+    if (!tfData || tfData.length === 0) return '';
+    const isPump = tfData[0].type === 'pump';
+    const rocAbs = Math.abs(tfData[0].price_roc ?? 0).toFixed(1);
+    const dir    = isPump ? '▲' : '▼';
+    const cells  = tfData.map(t => {
+      const n   = t.signals;
+      const flip = t.active && n >= 4 ? ' ↩' : '';
+      let lvl;
+      if (n === 0)      lvl = 'exh-tf-0';
+      else if (n === 1) lvl = 'exh-tf-1';
+      else if (n <= 3)  lvl = 'exh-tf-mid';
+      else              lvl = 'exh-tf-high';
+      const tip = t.detail ? ` title="${t.detail}"` : '';
+      return `<span class="exh-tf-cell ${lvl}"${tip}>${t.tf} <strong>${n}/7</strong>${flip}</span>`;
+    }).join('');
+    return `<div class="exh-tf-grid">
+      <span class="exh-tf-label">${isPump ? '🔴' : '🟢'} ${dir}${rocAbs}%</span>
+      ${cells}
+    </div>`;
+  })();
+
   return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}${r.reversal_trade ? ' rec-card-reversal' : ''}" data-rec-sym="${r.symbol}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
@@ -2377,6 +2400,7 @@ function _buildRecCard(r, i) {
       <span class="rec-strength">${r.display_strength ?? r.h2_strength}/100</span>
     </div>
     ${exhBanner}
+    ${exhTfGrid}
     ${tfAlign}
     ${btcWarn}
     ${mtfBadge}

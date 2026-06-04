@@ -1021,7 +1021,9 @@ def generate_signal(analysis: Dict) -> Dict:
         elif not is_pump and _bb.get("breakout") == "bearish":
             rev_signals += 1; rev_details.append("BB lower band breached")
 
-        # Require at least 2 reversal signals (price gate is already strict)
+        # Always record exhaustion state; only apply scoring when ≥2 signals fire
+        _exh_type  = "pump" if is_pump else "dump"
+        detail_str = " · ".join(rev_details[:5]) if rev_details else ""
         if rev_signals >= 2:
             # Exponential scaling — each extra signal compounds the conviction:
             #   2/7 = 15 pts  (early warning)
@@ -1031,22 +1033,31 @@ def generate_signal(analysis: Dict) -> Dict:
             #   6/7 = 85 pts  (extremely rare, max conviction)
             #   7/7 = 100 pts (all signals aligned)
             _EXH_PTS = {2: 15, 3: 25, 4: 40, 5: 60, 6: 85, 7: 100}
-            rev_pts    = _EXH_PTS.get(rev_signals, 100)
-            detail_str = " · ".join(rev_details[:5])
-            _exh_type = "pump" if is_pump else "dump"
-            _exh_msg  = (
+            rev_pts  = _EXH_PTS.get(rev_signals, 100)
+            _exh_msg = (
                 f"🚨 {'Pump' if is_pump else 'Dump'} exhaustion ({rev_signals}/7 signals: {detail_str}) "
                 f"— price {'up' if is_pump else 'down'} {abs(price_roc):.1f}%, "
                 f"{rev_signals} reversal indicators firing ({'+' if not is_pump else '-'}{rev_pts} pts)"
             )
             exhaustion_alert = {"type": _exh_type, "signals": rev_signals, "pts": rev_pts,
-                                "detail": detail_str, "price_roc": price_roc, "message": _exh_msg}
+                                "active": True, "detail": detail_str,
+                                "price_roc": price_roc, "message": _exh_msg}
             if is_pump:
                 combo_pts -= rev_pts
                 bear_reasons.insert(0, _exh_msg)
             else:
                 combo_pts += rev_pts
                 bull_reasons.insert(0, _exh_msg)
+        else:
+            # 0–1 signals: monitoring only, no score impact
+            _watch_msg = (
+                f"👀 {'Pump' if is_pump else 'Dump'} watch ({rev_signals}/7 signals"
+                + (f": {detail_str}" if detail_str else "") + ") "
+                f"— price {'up' if is_pump else 'down'} {abs(price_roc):.1f}%"
+            )
+            exhaustion_alert = {"type": _exh_type, "signals": rev_signals, "pts": 0,
+                                "active": False, "detail": detail_str,
+                                "price_roc": price_roc, "message": _watch_msg}
 
     # Apply combo points
     score += combo_pts
@@ -1104,7 +1115,7 @@ def generate_signal(analysis: Dict) -> Dict:
     #   2/7 = −12   3/7 = −22   4/7 = −35
     #   5/7 = −50   6/7 = −65   7/7 = −80
     _EXH_CUT = {2: 12, 3: 22, 4: 35, 5: 50, 6: 65, 7: 80}
-    if exhaustion_alert:
+    if exhaustion_alert and exhaustion_alert.get("active", True):
         _n   = exhaustion_alert["signals"]
         _cut = _EXH_CUT.get(_n, 80)
         strength = max(0, strength - _cut)

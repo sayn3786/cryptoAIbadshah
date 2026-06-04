@@ -1135,6 +1135,22 @@ a:hover { color: var(--gold2); }
 .exh-flipped { border-width: 2px; font-size: .74rem; }
 .rec-card-reversal { border-color: #a78bfa !important; }
 .rec-card-reversal .rec-card-top { background: rgba(167,139,250,.08); }
+/* Per-TF exhaustion grid */
+.exh-tf-grid {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  margin: 5px 0 3px; padding: 5px 8px;
+  background: rgba(255,255,255,.04); border-radius: 6px;
+  border-left: 2px solid var(--border); font-size: .65rem;
+}
+.exh-tf-label { font-weight: 700; color: var(--muted2); margin-right: 2px; font-size: .67rem; }
+.exh-tf-cell {
+  padding: 2px 6px; border-radius: 4px; font-size: .63rem;
+  border: 1px solid transparent; white-space: nowrap; cursor: default;
+}
+.exh-tf-0   { background: rgba(255,255,255,.05); color: var(--muted2); border-color: var(--border); }
+.exh-tf-1   { background: rgba(251,191,36,.12);  color: #fcd34d; border-color: rgba(251,191,36,.3); }
+.exh-tf-mid { background: rgba(249,115,22,.15);  color: #fdba74; border-color: rgba(249,115,22,.4); }
+.exh-tf-high{ background: rgba(239,68,68,.18);   color: #fca5a5; border-color: rgba(239,68,68,.5); font-weight: 700; }
 .rec-str-track { height: 4px; background: var(--card2); border-radius: 2px; overflow: hidden; }
 .rec-str-fill  { height: 100%; border-radius: 2px; transition: width .5s ease; }
 .rec-str-fill.bull { background: var(--bull); }
