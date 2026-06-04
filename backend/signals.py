@@ -963,12 +963,12 @@ def generate_signal(analysis: Dict) -> Dict:
         rev_signals = 0
         rev_details = []
 
-        # 1. RSI elevated/depressed (65+ on pump, 35- on dump — not waiting for extreme)
+        # 1. RSI elevated/depressed (60+ on pump, 40- on dump)
         _rsi = analysis.get("rsi")
         if _rsi is not None:
-            if is_pump and _rsi >= 65:
+            if is_pump and _rsi >= 60:
                 rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} {'overbought' if _rsi >= 70 else 'elevated'}")
-            elif not is_pump and _rsi <= 35:
+            elif not is_pump and _rsi <= 40:
                 rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} {'oversold' if _rsi <= 30 else 'depressed'}")
 
         # 2. RSI divergence against the move
