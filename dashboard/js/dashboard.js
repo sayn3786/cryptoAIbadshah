@@ -2260,7 +2260,7 @@ function _recCacheKey() {
   const d    = String(now.getUTCDate()).padStart(2, '0');
   const h    = String(now.getUTCHours()).padStart(2, '0');
   const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec25_mtf_${y}${m}${d}${h}${half}`;
+  return `rec26_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
@@ -2351,6 +2351,21 @@ function _buildRecCard(r, i) {
   const detectedShort = r.detected_at
     ? r.detected_at.replace(/\d{4} · /, '').replace(' SGT', '') : '';
 
+  // Exhaustion alert banner
+  const exhBanner = (() => {
+    const exh = r.exhaustion_alert;
+    if (!exh) return '';
+    const isPump  = exh.type === 'pump';
+    const icon    = isPump ? '🔴' : '🟢';
+    const label   = isPump ? 'Pump Exhaustion' : 'Dump Exhaustion';
+    const rocAbs  = Math.abs(exh.price_roc ?? 0).toFixed(1);
+    const cls     = isPump ? 'exh-pump' : 'exh-dump';
+    return `<div class="rec-exhaustion-alert ${cls}">
+      🚨 <strong>${label}</strong> ${exh.signals}/7 signals (${exh.tf}) — ${icon} price ${isPump ? 'up' : 'down'} ${rocAbs}%
+      <div class="exh-detail">${exh.detail}</div>
+    </div>`;
+  })();
+
   return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}" data-rec-sym="${r.symbol}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
@@ -2358,6 +2373,7 @@ function _buildRecCard(r, i) {
       <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
       <span class="rec-strength">${r.display_strength ?? r.h2_strength}/100</span>
     </div>
+    ${exhBanner}
     ${tfAlign}
     ${btcWarn}
     ${mtfBadge}
