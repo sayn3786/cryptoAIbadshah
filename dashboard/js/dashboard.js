@@ -2260,7 +2260,7 @@ function _recCacheKey() {
   const d    = String(now.getUTCDate()).padStart(2, '0');
   const h    = String(now.getUTCHours()).padStart(2, '0');
   const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec30_mtf_${y}${m}${d}${h}${half}`;
+  return `rec31_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
@@ -2373,21 +2373,22 @@ function _buildRecCard(r, i) {
     const tfData = r.exhaustion_by_tf;
     if (!tfData || tfData.length === 0) return '';
     const isPump = tfData[0].type === 'pump';
-    const rocAbs = Math.abs(tfData[0].price_roc ?? 0).toFixed(1);
-    const dir    = isPump ? '▲' : '▼';
     const cells  = tfData.map(t => {
-      const n   = t.signals;
-      const flip = t.active && n >= 4 ? ' ↩' : '';
+      const n      = t.signals;
+      const flip   = t.active && n >= 4 ? ' ↩' : '';
+      const rocAbs = Math.abs(t.price_roc ?? 0).toFixed(1);
+      const dir    = isPump ? '▲' : '▼';
       let lvl;
       if (n === 0)      lvl = 'exh-tf-0';
       else if (n === 1) lvl = 'exh-tf-1';
       else if (n <= 3)  lvl = 'exh-tf-mid';
       else              lvl = 'exh-tf-high';
-      const tip = t.detail ? ` title="${t.detail}"` : '';
-      return `<span class="exh-tf-cell ${lvl}"${tip}>${t.tf} <strong>${n}/7</strong>${flip}</span>`;
+      // Tooltip: signal detail + what the % means (4-candle ROC for that TF)
+      const tipText = `${t.tf} 4-candle move: ${dir}${rocAbs}%${t.detail ? '\n' + t.detail : ''}`;
+      return `<span class="exh-tf-cell ${lvl}" title="${tipText}">${t.tf} <strong>${n}/7</strong> <small>${dir}${rocAbs}%</small>${flip}</span>`;
     }).join('');
     return `<div class="exh-tf-grid">
-      <span class="exh-tf-label">${isPump ? '🔴' : '🟢'} ${dir}${rocAbs}%</span>
+      <span class="exh-tf-label">${isPump ? '🔴 Pump' : '🟢 Dump'} watch:</span>
       ${cells}
     </div>`;
   })();
