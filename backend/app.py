@@ -618,11 +618,12 @@ def _compute_recommendations() -> dict:
                 sig  = data.get("signal", {})
                 direction = sig.get("direction", "NEUTRAL")
                 raw.setdefault(sym, {})[tf] = {
-                    "direction":     direction,
-                    "strength":      sig.get("strength", 0) or 0,
-                    "sig":           sig,
-                    "rsi":           data.get("rsi"),
-                    "current_price": sig.get("current_price"),
+                    "direction":       direction,
+                    "strength":        sig.get("strength", 0) or 0,
+                    "sig":             sig,
+                    "rsi":             data.get("rsi"),
+                    "current_price":   sig.get("current_price"),
+                    "exhaustion_alert": sig.get("exhaustion_alert"),
                 }
             except Exception:
                 pass
@@ -711,14 +712,27 @@ def _compute_recommendations() -> dict:
             mtf_counter  = len(mtf_against_list) >= 2   # against at least 2 HTFs
             mtf_confirm  = mtf_aligned_ct == 3          # all 3 HTFs agree
 
+            # Collect exhaustion alerts across all available timeframes
+            _exh = None
+            for _etf in (tf_short, tf_long, "4H", "1D"):
+                _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
+                if _ea and (_exh is None or _ea["signals"] > _exh["signals"]):
+                    _exh = {**_ea, "tf": _etf}
+            # If exhaustion opposes the trade direction, penalise strength
+            if _exh:
+                _opp = (_exh["type"] == "pump" and direction == "LONG") or \
+                       (_exh["type"] == "dump" and direction == "SHORT")
+                if _opp:
+                    strength = max(0, round(strength - min(_exh["pts"] / 4, 15), 1))
+
             candidates.append({
                 "symbol":         sym,
-                "timeframe":      primary_tf,   # signal source (entry/SL/TP levels)
-                "view_tf":        primary_tf,   # chart to open on "View Analysis"
+                "timeframe":      primary_tf,
+                "view_tf":        primary_tf,
                 "aligned_tfs":    f"{tf_short}·{tf_long}",
                 "direction":      direction,
-                "strength":       strength,          # composite (used for ranking only)
-                "display_strength": round(h_long["strength"], 1),  # raw 2H score shown on card
+                "strength":       strength,
+                "display_strength": round(h_long["strength"], 1),
                 "h1_strength":    round(h_short["strength"], 1),
                 "h2_strength":    round(h_long["strength"], 1),
                 "btc_conflict":   btc_conflict,
@@ -741,10 +755,11 @@ def _compute_recommendations() -> dict:
                 "tp_pcts":        sig.get("tp_pcts", []),
                 "rr_ratio":       sig.get("rr_ratio"),
                 "leverage":       sig.get("leverage"),
-                "vol_tier_label": sig.get("vol_tier_label"),
-                "rsi":            tfs[primary_tf]["rsi"],
-                "current_price":  tfs[primary_tf].get("current_price"),
-                "reasons":        sig.get("reasons", [])[:3],
+                "vol_tier_label":  sig.get("vol_tier_label"),
+                "rsi":             tfs[primary_tf]["rsi"],
+                "current_price":   tfs[primary_tf].get("current_price"),
+                "reasons":         sig.get("reasons", [])[:3],
+                "exhaustion_alert": _exh,
             })
 
         candidates.sort(key=lambda x: x["strength"], reverse=True)

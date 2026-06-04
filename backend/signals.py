@@ -957,6 +957,7 @@ def generate_signal(analysis: Dict) -> Dict:
     _tf          = analysis.get("timeframe", "1D")
     _cap_tier, _, _ = _mcap_tier(analysis.get("market_cap"))
     _roc_thresh  = round(_TF_ROC_BASE.get(_tf, 12.0) * _MCAP_MULT.get(_cap_tier, 1.0), 1)
+    exhaustion_alert = None
     if price_roc is not None and abs(price_roc) >= _roc_thresh:
         is_pump = price_roc > 0  # True = pump, False = dump
         rev_signals = 0
@@ -1022,23 +1023,30 @@ def generate_signal(analysis: Dict) -> Dict:
 
         # Require at least 2 reversal signals (price gate is already strict)
         if rev_signals >= 2:
-            # Scale: 2 signals = +8, 3 = +12, 4 = +16, 5+ = +20
-            rev_pts = min(8 + (rev_signals - 2) * 4, 20)
-            detail_str = " · ".join(rev_details[:4])
+            # Exponential scaling — each extra signal compounds the conviction:
+            #   2/7 = 15 pts  (early warning)
+            #   3/7 = 25 pts  (moderate conviction)
+            #   4/7 = 40 pts  (strong exhaustion)
+            #   5/7 = 60 pts  (very strong — near certain reversal setup)
+            #   6/7 = 85 pts  (extremely rare, max conviction)
+            #   7/7 = 100 pts (all signals aligned)
+            _EXH_PTS = {2: 15, 3: 25, 4: 40, 5: 60, 6: 85, 7: 100}
+            rev_pts    = _EXH_PTS.get(rev_signals, 100)
+            detail_str = " · ".join(rev_details[:5])
+            _exh_type = "pump" if is_pump else "dump"
+            _exh_msg  = (
+                f"🚨 {'Pump' if is_pump else 'Dump'} exhaustion ({rev_signals}/7 signals: {detail_str}) "
+                f"— price {'up' if is_pump else 'down'} {abs(price_roc):.1f}%, "
+                f"{rev_signals} reversal indicators firing ({'+' if not is_pump else '-'}{rev_pts} pts)"
+            )
+            exhaustion_alert = {"type": _exh_type, "signals": rev_signals, "pts": rev_pts,
+                                "detail": detail_str, "price_roc": price_roc, "message": _exh_msg}
             if is_pump:
-                # Pump + multiple reversal signals → push SHORT
                 combo_pts -= rev_pts
-                bear_reasons.insert(0,
-                    f"🚨 Pump exhaustion confluence ({rev_signals}/7 reversal signals: {detail_str}) "
-                    f"— price up {price_roc:.1f}% but {rev_signals} indicators signalling reversal; "
-                    f"−{rev_pts} pts SHORT bias")
+                bear_reasons.insert(0, _exh_msg)
             else:
-                # Dump + multiple reversal signals → push LONG
                 combo_pts += rev_pts
-                bull_reasons.insert(0,
-                    f"🚨 Dump exhaustion confluence ({rev_signals}/7 reversal signals: {detail_str}) "
-                    f"— price down {abs(price_roc):.1f}% but {rev_signals} indicators signalling reversal; "
-                    f"+{rev_pts} pts LONG bias")
+                bull_reasons.insert(0, _exh_msg)
 
     # Apply combo points
     score += combo_pts
@@ -1324,4 +1332,5 @@ def generate_signal(analysis: Dict) -> Dict:
         "rr_ratio": rr_ratio,
         "leverage": suggested_lev,
         "current_price": round(current_price, 8) if current_price else None,
+        "exhaustion_alert": exhaustion_alert,
     }

@@ -80,8 +80,9 @@ def build_rec_message(recs_data: Dict) -> str:
             rr     = r.get("rr_ratio")
             lev    = r.get("leverage")
             tier   = r.get("vol_tier_label", "")
-            htf    = r.get("htf_confluence")
-            htf_line = _htf_badge(htf)
+            htf         = r.get("htf_confluence")
+            htf_line    = _htf_badge(htf)
+            exh         = r.get("exhaustion_alert")
 
             tp_lines = []
             for j, (tp, pct) in enumerate(zip(tps, tp_pct), 1):
@@ -101,6 +102,17 @@ def build_rec_message(recs_data: Dict) -> str:
                 block.append(f"  {htf_line}")
             if tier:
                 block.append(f"  🏷 {tier}")
+            if exh:
+                _exh_tf  = exh.get("tf", "")
+                _n       = exh.get("signals", 0)
+                _detail  = exh.get("detail", "")
+                _etype   = exh.get("type", "")
+                _roc     = exh.get("price_roc", 0)
+                _icon    = "🔴" if _etype == "pump" else "🟢"
+                block.append(
+                    f"  🚨 *{'Pump' if _etype == 'pump' else 'Dump'} Exhaustion* ({_n}/7 signals, {_exh_tf}) "
+                    f"— {_icon} price {'up' if _etype == 'pump' else 'down'} {abs(_roc):.1f}%: _{_detail}_"
+                )
             lines += [l for l in block if l is not None]
 
     lines += [
