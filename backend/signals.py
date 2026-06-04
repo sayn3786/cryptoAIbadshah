@@ -936,25 +936,27 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk")
 
     # ── Combo 11: Extreme pump/dump reversal confluence ──────────────────────────
-    # Threshold adapts per timeframe — shorter candles need less % to be "extreme":
-    #   1H/2H: 5-7% in 4 candles   |   4H/8H: 8-10%   |   1D: 12%   |   1W+: 15-20%
-    # If 3+ reversal indicators simultaneously fire AGAINST that move, it's a
-    # high-conviction exhaustion signal. Each extra indicator adds more weight.
-    # Reversal signals checked (counter to the move):
-    #   1. RSI overbought (>70) on a pump, or oversold (<30) on a dump
-    #   2. RSI divergence (bearish div on pump, bullish div on dump)
-    #   3. CVD weakening against the move (futures-led pump with no spot follow)
-    #   4. Funding rate extreme in direction of move (>0.02% on pump, <-0.02% on dump)
-    #   5. MACD cross against the move (bearish on pump, bullish on dump)
-    #   6. SuperTrend just flipped against the move
-    #   7. Bollinger upper band breach on pump / lower breach on dump
-    _TF_ROC_EXTREME = {
+    # Threshold adapts per TIMEFRAME × MARKET CAP — because a 5% 1H candle move
+    # is catastrophic for BTC but routine for a micro-cap altcoin.
+    #
+    # Base threshold by timeframe (4-candle move):
+    #   1H: 5%  2H: 7%  4H: 8%  8H: 10%  12H: 11%  1D: 12%  1W: 15%  1M: 20%
+    #
+    # Market cap multiplier (applied to base):
+    #   mega  0.75×  — less volatile; smaller moves are already extreme
+    #   large 0.90×
+    #   mid   1.00×  — baseline
+    #   small 1.30×  — naturally more volatile; need bigger move to confirm extreme
+    #   micro 1.60×  — very high volatility; 20%+ daily moves are common
+    _TF_ROC_BASE = {
         "1H": 5.0, "2H": 7.0,
         "4H": 8.0, "8H": 10.0, "12H": 11.0, "1D": 12.0,
         "1W": 15.0, "2W": 18.0, "3W": 20.0, "1M": 20.0,
     }
-    _tf         = analysis.get("timeframe", "1D")
-    _roc_thresh = _TF_ROC_EXTREME.get(_tf, 12.0)
+    _MCAP_MULT = {"mega": 0.75, "large": 0.90, "mid": 1.00, "small": 1.30, "micro": 1.60}
+    _tf          = analysis.get("timeframe", "1D")
+    _cap_tier, _, _ = _mcap_tier(analysis.get("market_cap"))
+    _roc_thresh  = round(_TF_ROC_BASE.get(_tf, 12.0) * _MCAP_MULT.get(_cap_tier, 1.0), 1)
     if price_roc is not None and abs(price_roc) >= _roc_thresh:
         is_pump = price_roc > 0  # True = pump, False = dump
         rev_signals = 0
