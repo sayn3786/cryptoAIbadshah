@@ -565,6 +565,65 @@ def api_analysis(symbol):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Exhaustion check across all intraday TFs ───────────────────────────────────
+_exh_cache: dict = {}
+_exh_cache_lock = __import__("threading").Lock()
+
+def _exh_cache_key(symbol: str) -> str:
+    now  = datetime.now(timezone.utc)
+    half = (now.minute // 30) * 30
+    return f"exhv1_{symbol}_{now.strftime('%Y%m%d%H')}{half:02d}"
+
+@app.get("/api/exhaustion/<symbol>")
+def api_exhaustion(symbol):
+    """
+    Returns pump/dump exhaustion state for a symbol across all intraday TFs.
+    Used by the analysis view to show the multi-TF exhaustion grid for any token,
+    not just those that appear in the recommendations list.
+    Cached 30 minutes (same window as rec cache).
+    """
+    symbol = symbol.upper()
+    if symbol not in SYMBOLS:
+        return jsonify({"error": f"Symbol {symbol} not supported"}), 404
+
+    cache_key = _exh_cache_key(symbol)
+    with _exh_cache_lock:
+        cached = _exh_cache.get(symbol)
+        if cached and cached.get("key") == cache_key:
+            return jsonify(cached["data"])
+
+    TFS = ["1H", "2H", "4H", "8H", "12H", "1D"]
+
+    def _fetch_exh(tf):
+        try:
+            a   = build_analysis(symbol, tf)
+            sig = a.get("signal") or {}
+            exh = sig.get("exhaustion_alert")
+            if exh is None:
+                return None
+            return {
+                "tf":        tf,
+                "signals":   exh["signals"],
+                "type":      exh["type"],
+                "active":    exh.get("active", exh["signals"] >= 2),
+                "price_roc": round(exh.get("price_roc", 0), 1),
+                "detail":    exh.get("detail", ""),
+            }
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        results = list(ex.map(_fetch_exh, TFS))
+
+    by_tf = [r for r in results if r is not None]
+    data  = {"symbol": symbol, "exhaustion_by_tf": by_tf}
+
+    with _exh_cache_lock:
+        _exh_cache[symbol] = {"key": cache_key, "data": data}
+
+    return jsonify(data)
+
+
 @app.get("/api/dashboard")
 def api_dashboard():
     results = {}

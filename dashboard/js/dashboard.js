@@ -137,12 +137,25 @@ async function loadTicker() {
 async function loadAnalysis() {
   setLoading(true);
   try {
-    const res = await fetch(`${API}/analysis/${S.symbol}?timeframe=${S.timeframe}`);
+    // Fetch analysis + exhaustion data in parallel
+    const [res, exhRes] = await Promise.all([
+      fetch(`${API}/analysis/${S.symbol}?timeframe=${S.timeframe}`),
+      fetch(`${API}/exhaustion/${S.symbol}`).catch(() => null),
+    ]);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
     S.analysis = await res.json();
+
+    // Populate per-symbol exhaustion lookup from dedicated endpoint
+    if (exhRes?.ok) {
+      const exhData = await exhRes.json().catch(() => null);
+      if (exhData?.exhaustion_by_tf?.length) {
+        _symExhaustion[S.symbol] = exhData.exhaustion_by_tf;
+      }
+    }
+
     renderAll(S.analysis);
     renderMyTrades();
     document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
