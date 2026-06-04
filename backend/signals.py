@@ -962,13 +962,13 @@ def generate_signal(analysis: Dict) -> Dict:
         rev_signals = 0
         rev_details = []
 
-        # 1. RSI extreme
+        # 1. RSI elevated/depressed (65+ on pump, 35- on dump — not waiting for extreme)
         _rsi = analysis.get("rsi")
         if _rsi is not None:
-            if is_pump and _rsi > 70:
-                rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} overbought")
-            elif not is_pump and _rsi < 30:
-                rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} oversold")
+            if is_pump and _rsi >= 65:
+                rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} {'overbought' if _rsi >= 70 else 'elevated'}")
+            elif not is_pump and _rsi <= 35:
+                rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} {'oversold' if _rsi <= 30 else 'depressed'}")
 
         # 2. RSI divergence against the move
         _rdiv = (analysis.get("rsi_divergence") or {}).get("type")
@@ -978,18 +978,25 @@ def generate_signal(analysis: Dict) -> Dict:
             rev_signals += 1; rev_details.append("RSI bullish divergence")
 
         # 3. CVD weakening against the move
+        # First check divergence type, then fall back to raw spot CVD trend
         _cvd_type = (analysis.get("cvd_divergence") or {}).get("type", "neutral")
-        if is_pump and _cvd_type in ("futures_led_up",):
-            rev_signals += 1; rev_details.append("CVD not confirming pump")
-        elif not is_pump and _cvd_type in ("futures_led_down",):
-            rev_signals += 1; rev_details.append("CVD not confirming dump")
+        _spot_cvd_trend = (analysis.get("spot_cvd") or {}).get("trend", "")
+        _fut_cvd_trend  = (analysis.get("futures_cvd") or {}).get("trend", "")
+        if is_pump and _cvd_type == "futures_led_up":
+            rev_signals += 1; rev_details.append("CVD not confirming pump (futures-led)")
+        elif is_pump and _spot_cvd_trend == "bearish" and _fut_cvd_trend != "bullish":
+            rev_signals += 1; rev_details.append("spot CVD falling during pump")
+        elif not is_pump and _cvd_type == "futures_led_down":
+            rev_signals += 1; rev_details.append("CVD not confirming dump (futures-led)")
+        elif not is_pump and _spot_cvd_trend == "bullish" and _fut_cvd_trend != "bearish":
+            rev_signals += 1; rev_details.append("spot CVD rising during dump")
 
-        # 4. Funding rate extreme in direction of move (crowded trade)
+        # 4. Funding rate elevated in direction of move (crowded trade, lowered to 0.01%)
         _fr = funding.get("current", 0.0) or 0.0
-        if is_pump and _fr >= 0.02:
-            rev_signals += 1; rev_details.append(f"funding {_fr:.3f}% — longs overcrowded")
-        elif not is_pump and _fr <= -0.02:
-            rev_signals += 1; rev_details.append(f"funding {_fr:.3f}% — shorts overcrowded")
+        if is_pump and _fr >= 0.01:
+            rev_signals += 1; rev_details.append(f"funding {_fr:.3f}% — longs crowded")
+        elif not is_pump and _fr <= -0.01:
+            rev_signals += 1; rev_details.append(f"funding {_fr:.3f}% — shorts crowded")
 
         # 5. MACD cross against the move
         _macd = analysis.get("macd") or {}
@@ -1013,10 +1020,10 @@ def generate_signal(analysis: Dict) -> Dict:
         elif not is_pump and _bb.get("breakout") == "bearish":
             rev_signals += 1; rev_details.append("BB lower band breached")
 
-        # Require at least 3 reversal signals to fire the combo
-        if rev_signals >= 3:
-            # Scale: 3 signals = +12, 4 = +16, 5+ = +20
-            rev_pts = min(12 + (rev_signals - 3) * 4, 20)
+        # Require at least 2 reversal signals (price gate is already strict)
+        if rev_signals >= 2:
+            # Scale: 2 signals = +8, 3 = +12, 4 = +16, 5+ = +20
+            rev_pts = min(8 + (rev_signals - 2) * 4, 20)
             detail_str = " · ".join(rev_details[:4])
             if is_pump:
                 # Pump + multiple reversal signals → push SHORT
