@@ -16,7 +16,7 @@ GATE_BASE    = "https://api.gateio.ws/api/v4"
 KUCOIN_BASE  = "https://api.kucoin.com"
 OKX_BASE     = "https://www.okx.com"
 BYBIT_BASE   = "https://api.bybit.com"
-TIMEOUT      = 15
+TIMEOUT      = 5
 BINANCE_RETRIES = int(os.getenv("BINANCE_RETRIES", "1"))
 
 # Approximate market caps (USD) used as fallback when CoinGecko is unavailable.
@@ -701,26 +701,21 @@ class BinanceClient:
                 self.data_source = "kraken"
                 return result
         else:
-            # For intraday requests: try progressively larger real-exchange
-            # intervals (4H → 8H → 1D) before falling back to aggregated daily.
-            # A 4H candle is far more accurate than a daily candle grouped to "2H".
-            _FALLBACK_CHAIN = {
-                "1h":  ["2h",  "4h", "8h",  "12h", "1d"],
-                "2h":  ["4h",  "8h", "12h", "1d"],
-                "4h":  ["8h",  "12h", "1d"],
-                "8h":  ["12h", "1d"],
-                "12h": ["1d"],
-            }
-            for fb_interval in _FALLBACK_CHAIN.get(interval.lower(), []):
-                result = self._binance_klines(symbol, fb_interval, limit)
+            # For intraday: try the single next-larger interval on each exchange.
+            # Stops at one step up (2H→4H, 4H→8H, etc.) to keep latency bounded —
+            # chaining through all intervals caused 15s×12 call timeouts on Vercel.
+            _NEXT_IV = {"1h": "2h", "2h": "4h", "4h": "8h", "8h": "12h", "12h": "1d"}
+            next_iv  = _NEXT_IV.get(interval.lower())
+            if next_iv:
+                result = self._binance_klines(symbol, next_iv, limit)
                 if result:
                     self.data_source = "binance"
                     return result
-                result = self._okx_candles(symbol, fb_interval, limit)
+                result = self._okx_candles(symbol, next_iv, limit)
                 if result:
                     self.data_source = "okx"
                     return result
-                result = self._bybit_candles(symbol, fb_interval, limit)
+                result = self._bybit_candles(symbol, next_iv, limit)
                 if result:
                     self.data_source = "bybit"
                     return result
