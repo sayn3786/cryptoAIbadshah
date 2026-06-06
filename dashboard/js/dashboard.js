@@ -2366,13 +2366,28 @@ async function sendToTelegram() {
 // Session starts at 8AM SGT = 00:00 UTC exactly.
 // 30-min cache key — invalidates at :00 and :30 of each UTC hour.
 function _recCacheKey() {
-  const now  = new Date();
-  const y    = now.getUTCFullYear();
-  const m    = String(now.getUTCMonth() + 1).padStart(2, '0');
-  const d    = String(now.getUTCDate()).padStart(2, '0');
-  const h    = String(now.getUTCHours()).padStart(2, '0');
-  const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec33_mtf_${y}${m}${d}${h}${half}`;
+  // Mirror the server's 3-slot daily schedule (SGT = UTC+8).
+  // Slot boundaries: 08:00, 16:00, 20:00 SGT.
+  // Recs are stable within each slot — they only change when a new alert fires.
+  const sgt  = new Date(Date.now() + 8 * 3600 * 1000); // approximate SGT
+  const h    = sgt.getUTCHours();
+  let slot, date;
+  const yy = sgt.getUTCFullYear();
+  const mm = String(sgt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(sgt.getUTCDate()).padStart(2, '0');
+  if (h >= 20) {
+    slot = '20'; date = `${yy}${mm}${dd}`;
+  } else if (h >= 16) {
+    slot = '16'; date = `${yy}${mm}${dd}`;
+  } else if (h >= 8) {
+    slot = '08'; date = `${yy}${mm}${dd}`;
+  } else {
+    // 00:00–07:59 SGT = previous day's 20:00 slot
+    slot = '20';
+    const prev = new Date(sgt - 24 * 3600 * 1000);
+    date = `${prev.getUTCFullYear()}${String(prev.getUTCMonth()+1).padStart(2,'0')}${String(prev.getUTCDate()).padStart(2,'0')}`;
+  }
+  return `rec34_mtf_${date}_${slot}`;
 }
 
 function _recCacheGet() {

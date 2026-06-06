@@ -922,31 +922,60 @@ def _compute_recommendations() -> dict:
     }
 
 
-def _rec_cache_key() -> str:
-    now  = datetime.now(timezone.utc)
-    # 30-minute windows: :00 and :30 of each hour
-    half = (now.minute // 30) * 30
-    return f"v24_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
-
-
 _SGT = timezone(timedelta(hours=8))
+
+def _rec_cache_key() -> str:
+    """
+    Cache key tied to the three daily signal slots (SGT):
+      08:00 SGT  →  key "08"  (valid 08:00–15:59 SGT)
+      16:00 SGT  →  key "16"  (valid 16:00–19:59 SGT)
+      20:00 SGT  →  key "20"  (valid 20:00–07:59 SGT next day)
+
+    Recs stay identical between alerts — they only change when a new
+    Telegram alert fires, not every 30 minutes.
+    """
+    sgt  = datetime.now(_SGT)
+    hour = sgt.hour
+    if hour >= 20:
+        slot = "20"
+        date = sgt.strftime("%Y%m%d")
+    elif hour >= 16:
+        slot = "16"
+        date = sgt.strftime("%Y%m%d")
+    elif hour >= 8:
+        slot = "08"
+        date = sgt.strftime("%Y%m%d")
+    else:
+        # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
+        slot = "20"
+        date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
+    return f"v24_mtf_{date}_{slot}"
+
+
 def _daily_rec_scheduler():
     """
-    Background thread: refreshes recommendations every 30 minutes.
-    Notifications (Telegram/Twitter) are handled exclusively by GitHub Actions
-    cron + /api/cron/daily — NOT triggered here to avoid duplicate sends on
-    every new Vercel serverless instance.
+    Background thread: pre-warms the rec cache shortly after each
+    signal slot boundary so the first user request doesn't block.
+    Runs at :02 past each slot change (08:02, 16:02, 20:02 SGT).
+    Notifications are handled exclusively by GitHub Actions cron.
     """
-    print("[scheduler] 30-min recommendation scheduler started")
+    print("[scheduler] Signal-slot recommendation scheduler started")
+    _SLOT_HOURS_SGT = (8, 16, 20)
     while True:
-        now  = datetime.now(timezone.utc)
-        half = (now.minute // 30) * 30
-        nxt  = now.replace(minute=half, second=5, microsecond=0)
-        if nxt <= now:
-            nxt += timedelta(minutes=30)
-        wait_s = (nxt - now).total_seconds()
-        print(f"[scheduler] Next rec scan in {wait_s/60:.1f} min")
-        time.sleep(wait_s)
+        sgt  = datetime.now(_SGT)
+        # Find the next slot boundary
+        nxt_hour = next(
+            (h for h in sorted(_SLOT_HOURS_SGT) if h > sgt.hour),
+            _SLOT_HOURS_SGT[0] + 24  # wrap to tomorrow's 08:00
+        )
+        nxt = sgt.replace(hour=nxt_hour % 24, minute=2, second=0, microsecond=0)
+        if nxt_hour >= 24:
+            nxt += timedelta(days=1)
+        if nxt <= sgt:
+            nxt += timedelta(days=1)
+        wait_s = (nxt - sgt).total_seconds()
+        print(f"[scheduler] Next rec pre-warm in {wait_s/60:.1f} min "
+              f"(slot {nxt_hour % 24:02d}:02 SGT)")
 
         key = _rec_cache_key()
         try:
