@@ -1239,6 +1239,13 @@ a:hover { color: var(--gold2); }
 }
 .rec-stale-btn:hover { background: rgba(245,158,11,.4); }
 
+.rec-dir-warn {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 5px 0; padding: 6px 10px; border-radius: 6px;
+  background: rgba(239,68,68,.13); border-left: 3px solid #ef4444;
+  color: #fca5a5; font-size: .7rem; font-weight: 600;
+}
+
 /* Higher-timeframe confluence row — single compact line */
 .rec-mtf-row {
   display: flex; align-items: center; gap: 5px; flex-wrap: nowrap;

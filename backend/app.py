@@ -926,7 +926,7 @@ def _rec_cache_key() -> str:
     now  = datetime.now(timezone.utc)
     # 30-minute windows: :00 and :30 of each hour
     half = (now.minute // 30) * 30
-    return f"v22_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
+    return f"v23_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 
 _SGT = timezone(timedelta(hours=8))
