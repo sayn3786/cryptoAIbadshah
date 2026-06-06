@@ -1196,48 +1196,106 @@ def generate_signal(analysis: Dict) -> Dict:
     max_atr_abs  = current_price * max_atr_pct
 
     if candles and len(candles) >= 14 and current_price > 0:
-        atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
+        # True ATR (accounts for gaps between candles, not just intra-bar range)
+        _tr_vals = []
+        for _i in range(1, 15):
+            _c = candles[-_i]
+            _p = candles[-_i - 1]
+            _tr_vals.append(max(
+                _c["high"] - _c["low"],
+                abs(_c["high"] - _p["close"]),
+                abs(_c["low"]  - _p["close"]),
+            ))
+        atr = sum(_tr_vals) / len(_tr_vals)
 
-        # Dynamic limit-entry: scan real technical levels in priority order.
-        # For LONG: find the nearest support BELOW current price to place a limit buy.
-        # For SHORT: find the nearest resistance ABOVE current price to place a limit sell.
-        # Priority: EMA21 → BB upper/lower → recent 5-candle swing high/low → current price.
-        LEVEL_CAP  = 0.04    # max 4% away — if all levels are further, enter at market
-        SWING_CAP  = 0.025   # swing highs/lows are noisy; tighter cap (2.5%)
-
+        # ── Pull all context used across entry/SL/TP ──────────────────────────
         _ema_t     = analysis.get("ema_trend") or {}
         ema21_val  = _ema_t.get("ema21")
         _bb        = analysis.get("bollinger") or {}
         bb_upper   = _bb.get("upper")
         bb_lower   = _bb.get("lower")
-        # Last 5 closed candles (skip live candle at index -1)
-        _closed    = candles[-6:-1] if len(candles) >= 6 else candles[:-1]
+        bb_bw      = _bb.get("bandwidth")
+
+        _vwap_val  = (analysis.get("vwap") or {}).get("vwap")
+        _ichi      = analysis.get("ichimoku") or {}
+        _kijun     = _ichi.get("kijun")       # mid-term S/R baseline
+        _span_a    = _ichi.get("span_a")
+        _span_b    = _ichi.get("span_b")
+
+        _funding_val = float((analysis.get("funding_rate") or {}).get("current", 0) or 0)
+        _oi_chg      = float((analysis.get("open_interest") or {}).get("change_pct", 0) or 0)
+        _fg_val      = int((analysis.get("fear_greed") or {}).get("value", 50) or 50)
+        _fvgs_all    = analysis.get("fvgs") or []
+        _unfilled    = [f for f in _fvgs_all if not f.get("filled", True)]
+        _ew          = analysis.get("elliott_wave") or {}
+
+        # Fibonacci 61.8% / 38.2% retracement from last 20 closed candles
+        _fib_61 = _fib_38 = None
+        if len(candles) >= 22:
+            _rc = candles[-22:-2]
+            _fhigh = max(c["high"] for c in _rc)
+            _flow  = min(c["low"]  for c in _rc)
+            _fr    = _fhigh - _flow
+            if _fr > 0:
+                _fib_61 = round(_fhigh - 0.618 * _fr, 8)  # deep pullback support
+                _fib_38 = round(_fhigh - 0.382 * _fr, 8)  # shallow pullback support
+
+        # Last 10 closed candles for swing levels (wider window for better S/R)
+        _closed    = candles[-11:-1] if len(candles) >= 11 else candles[:-1]
         swing_high = max((c["high"] for c in _closed), default=None) if _closed else None
         swing_low  = min((c["low"]  for c in _closed), default=None) if _closed else None
 
+        LEVEL_CAP = 0.04    # max 4% away — if all levels further, enter at market
+        SWING_CAP = 0.03    # swing high/low: 10-candle window, slightly noisier
+
         def _within(level, above: bool) -> bool:
-            if level is None or current_price <= 0:
-                return False
+            if level is None or current_price <= 0: return False
             gap = (level - current_price) / current_price if above else (current_price - level) / current_price
             return 0 < gap <= LEVEL_CAP
 
         def _within_swing(level, above: bool) -> bool:
-            if level is None or current_price <= 0:
-                return False
+            if level is None or current_price <= 0: return False
             gap = ((level - current_price) if above else (current_price - level)) / current_price
             return 0 < gap <= SWING_CAP
 
+        # FVG midpoint as entry zone (price gravitates to unfilled gaps)
+        _fvg_entry = None
+        if direction == "LONG":
+            _bull_fvgs = [f for f in _unfilled if f.get("type") == "bullish"
+                          and f.get("bottom", 0) < current_price]
+            if _bull_fvgs:
+                _nf = max(_bull_fvgs, key=lambda f: f.get("midpoint", 0))
+                if (current_price - _nf["midpoint"]) / current_price <= LEVEL_CAP:
+                    _fvg_entry = _nf["midpoint"]
+        elif direction == "SHORT":
+            _bear_fvgs = [f for f in _unfilled if f.get("type") == "bearish"
+                          and f.get("top", 0) > current_price]
+            if _bear_fvgs:
+                _nf = min(_bear_fvgs, key=lambda f: f.get("midpoint", float("inf")))
+                if (_nf["midpoint"] - current_price) / current_price <= LEVEL_CAP:
+                    _fvg_entry = _nf["midpoint"]
+
         if direction == "LONG":
             supports = []
-            if _within(ema21_val, above=False):       supports.append(ema21_val)
-            if _within(bb_lower,  above=False):       supports.append(bb_lower)
+            if _within(ema21_val,   above=False): supports.append(ema21_val)
+            if _within(bb_lower,    above=False): supports.append(bb_lower)
+            if _within(_vwap_val,   above=False): supports.append(_vwap_val)
+            if _within(_kijun,      above=False): supports.append(_kijun)
+            if _within(_fib_61,     above=False): supports.append(_fib_61)
+            if _within(_fib_38,     above=False): supports.append(_fib_38)
+            if _within(_fvg_entry,  above=False): supports.append(_fvg_entry)
             if _within_swing(swing_low, above=False): supports.append(swing_low)
             base = max(supports) if supports else current_price
         elif direction == "SHORT":
             resistances = []
-            if _within(ema21_val, above=True):         resistances.append(ema21_val)
-            if _within(bb_upper,  above=True):         resistances.append(bb_upper)
-            if _within_swing(swing_high, above=True):  resistances.append(swing_high)
+            if _within(ema21_val,   above=True): resistances.append(ema21_val)
+            if _within(bb_upper,    above=True): resistances.append(bb_upper)
+            if _within(_vwap_val,   above=True): resistances.append(_vwap_val)
+            if _within(_kijun,      above=True): resistances.append(_kijun)
+            if _within(_fib_38,     above=True): resistances.append(_fib_38)
+            if _within(_fib_61,     above=True): resistances.append(_fib_61)
+            if _within(_fvg_entry,  above=True): resistances.append(_fvg_entry)
+            if _within_swing(swing_high, above=True): resistances.append(swing_high)
             base = min(resistances) if resistances else current_price
         else:
             base = current_price
@@ -1255,17 +1313,44 @@ def generate_signal(analysis: Dict) -> Dict:
         st_dir   = _st.get("direction")
 
         sl_dist = sl_dist_base
+
+        # Anchor 1: Supertrend — natural trend-invalidation level
         if direction == "LONG" and st_dir == "bull" and st_price and st_price < entry:
             st_gap = entry - st_price
             if 0 < st_gap <= sl_dist_base * 1.5:
-                sl_dist = min(sl_dist_base, st_gap * 1.003)   # just below supertrend
+                sl_dist = min(sl_dist_base, st_gap * 1.003)
         elif direction == "SHORT" and st_dir == "bear" and st_price and st_price > entry:
             st_gap = st_price - entry
             if 0 < st_gap <= sl_dist_base * 1.5:
-                sl_dist = min(sl_dist_base, st_gap * 1.003)   # just above supertrend
+                sl_dist = min(sl_dist_base, st_gap * 1.003)
 
-        # ── TP multiplier: RSI headroom + EMA/MACD trend + BB squeeze ─────────
-        # RSI headroom: how far can price run before RSI becomes extreme?
+        # Anchor 2: Ichimoku cloud boundary — strong structural invalidation
+        if _span_a is not None and _span_b is not None:
+            if direction == "LONG":
+                _cloud_bot = min(_span_a, _span_b)
+                if entry > _cloud_bot:
+                    _cb_gap = entry - _cloud_bot
+                    if 0 < _cb_gap <= sl_dist_base * 2.0:
+                        sl_dist = min(sl_dist, _cb_gap * 1.005)
+            elif direction == "SHORT":
+                _cloud_top = max(_span_a, _span_b)
+                if entry < _cloud_top:
+                    _ct_gap = _cloud_top - entry
+                    if 0 < _ct_gap <= sl_dist_base * 2.0:
+                        sl_dist = min(sl_dist, _ct_gap * 1.005)
+
+        # Buffer 1: Funding rate — overcrowded longs/shorts need wider SL
+        # (cascade liquidations can spike through tight stops)
+        if direction == "LONG" and _funding_val > 0.05:
+            sl_dist *= 1.12
+        elif direction == "SHORT" and _funding_val < -0.05:
+            sl_dist *= 1.12
+
+        # Buffer 2: Extreme Fear & Greed — erratic volatility, give more room
+        if _fg_val <= 15 or _fg_val >= 90:
+            sl_dist *= 1.10
+
+        # ── TP multiplier: RSI headroom + trend + sentiment + momentum ────────
         rsi_val = analysis.get("rsi") or 50
         if direction == "LONG":
             rsi_room = max(0.4, min(1.3, (75.0 - float(rsi_val)) / 30.0))
@@ -1274,12 +1359,12 @@ def generate_signal(analysis: Dict) -> Dict:
         else:
             rsi_room = 0.7
 
-        # Trend alignment: EMA stack + MACD direction
         tp_bonus    = 0.0
-        short_trend = _ema_t.get("short_trend")       # "bullish" / "bearish"
-        ema_trend   = _ema_t.get("trend", "neutral")  # EMA50/200 structural trend
+        short_trend = _ema_t.get("short_trend")
+        ema_trend   = _ema_t.get("trend", "neutral")
         macd_hist   = float((analysis.get("macd") or {}).get("histogram") or 0)
 
+        # Trend alignment bonuses
         if direction == "LONG":
             if short_trend == "bullish":                          tp_bonus += 0.15
             if ema_trend in ("bullish", "mixed_bullish"):         tp_bonus += 0.10
@@ -1289,18 +1374,64 @@ def generate_signal(analysis: Dict) -> Dict:
             if ema_trend in ("bearish", "mixed_bearish"):         tp_bonus += 0.10
             if macd_hist < 0:                                     tp_bonus += 0.10
 
-        # BB squeeze = compressed volatility about to expand → wider TP targets
-        bb_bw = _bb.get("bandwidth")
+        # BB squeeze = volatility compression about to release → wider TPs
         if bb_bw is not None:
-            if bb_bw < 0.03:   tp_bonus += 0.15   # tight squeeze — big move imminent
-            elif bb_bw > 0.08: tp_bonus += 0.10   # already expanding
+            if bb_bw < 0.03:   tp_bonus += 0.15
+            elif bb_bw > 0.08: tp_bonus += 0.10
 
-        tp_factor = rsi_room + tp_bonus   # typically 0.4 – 1.6
+        # Funding rate: overcrowded side = take profits sooner before flush/squeeze
+        if direction == "LONG":
+            if _funding_val > 0.05:    tp_bonus -= 0.20   # longs crowded, flush risk
+            elif _funding_val < -0.01: tp_bonus += 0.10   # shorts paying longs
+        elif direction == "SHORT":
+            if _funding_val < -0.05:   tp_bonus -= 0.20   # short squeeze risk
+            elif _funding_val > 0.05:  tp_bonus += 0.10   # longs paying shorts
 
-        # Apply factor but enforce minimum R:R floors (TP1 ≥ 1.2×, TP2 ≥ 2.0×, TP3 ≥ 3.0×)
+        # OI momentum: OI building with trade direction = momentum carry
+        if abs(_oi_chg) >= 10:
+            if (direction == "LONG" and _oi_chg > 0) or \
+               (direction == "SHORT" and _oi_chg < 0):
+                tp_bonus += 0.15   # OI confirming direction
+            else:
+                tp_bonus -= 0.10   # OI building against — be conservative
+
+        # Fear & Greed extremes: mean reversion setups get wider targets
+        if direction == "LONG" and _fg_val <= 20:
+            tp_bonus += 0.20   # extreme fear → buy = high mean-reversion potential
+        elif direction == "SHORT" and _fg_val >= 80:
+            tp_bonus += 0.20   # extreme greed → short = high mean-reversion potential
+
+        # Elliott Wave 3: strongest impulse wave → push targets wider
+        if _ew.get("wave") in (3, "3"):
+            _ew_dir = str(_ew.get("direction", "")).lower()
+            if (direction == "LONG" and "bull" in _ew_dir) or \
+               (direction == "SHORT" and "bear" in _ew_dir):
+                tp_bonus += 0.20
+
+        tp_factor = max(0.3, min(2.0, rsi_room + tp_bonus))
+
+        # Apply factor; enforce minimum R:R floors
         tp1_dist = sl_dist * max(1.2, TP1_RR * tp_factor)
         tp2_dist = sl_dist * max(2.0, TP2_RR * tp_factor)
         tp3_dist = sl_dist * max(3.0, TP3_RR * tp_factor)
+
+        # FVG magnet: if an unfilled gap is between TP1 and TP2, anchor TP1 to it
+        if direction == "LONG":
+            _tp_fvgs = [f.get("bottom", 0) for f in _unfilled
+                        if f.get("type") == "bearish" and entry < f.get("bottom", 0)]
+            if _tp_fvgs:
+                _nearest_fvg = min(_tp_fvgs)
+                _fvg_d = _nearest_fvg - entry
+                if tp1_dist < _fvg_d <= tp2_dist:
+                    tp1_dist = _fvg_d   # anchor TP1 to the FVG fill level
+        elif direction == "SHORT":
+            _tp_fvgs = [f.get("top", 0) for f in _unfilled
+                        if f.get("type") == "bullish" and entry > f.get("top", 0) > 0]
+            if _tp_fvgs:
+                _nearest_fvg = max(_tp_fvgs)
+                _fvg_d = entry - _nearest_fvg
+                if tp1_dist < _fvg_d <= tp2_dist:
+                    tp1_dist = _fvg_d
 
         def _tp_short(dist):
             target = entry - dist
@@ -1348,6 +1479,22 @@ def generate_signal(analysis: Dict) -> Dict:
             else:                  _str_adj = -1
 
             suggested_lev = int(min(_slab_ceil, max(_slab_floor, _slab_base + _str_adj)))
+
+            # Funding rate: overcrowded side = reduce leverage (squeeze/flush risk)
+            if direction == "LONG":
+                if _funding_val > 0.05:   suggested_lev = max(_slab_floor, suggested_lev - 2)
+                elif _funding_val > 0.03: suggested_lev = max(_slab_floor, suggested_lev - 1)
+            elif direction == "SHORT":
+                if _funding_val < -0.05:  suggested_lev = max(_slab_floor, suggested_lev - 2)
+                elif _funding_val < -0.03:suggested_lev = max(_slab_floor, suggested_lev - 1)
+
+            # Extreme Fear & Greed: elevated volatility → lower leverage
+            if _fg_val <= 15 or _fg_val >= 90:
+                suggested_lev = max(_slab_floor, suggested_lev - 1)
+
+            # BB tight squeeze: direction unconfirmed → conservative until breakout
+            if bb_bw is not None and bb_bw < 0.02:
+                suggested_lev = max(_slab_floor, suggested_lev - 1)
 
 
     return {
