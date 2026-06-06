@@ -408,11 +408,16 @@ class BinanceClient:
 
     # ── KuCoin ────────────────────────────────────────────────────────────────
 
+    _OKX_BAR_SPOT = {
+        "1h": "1H", "2h": "2H", "4h": "4H", "8h": "8H",
+        "12h": "12H", "1d": "1D", "1w": "1W", "1W": "1W", "1M": "1M",
+    }
+
     def _okx_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
         inst_id = OKX_PAIRS.get(symbol)
         if not inst_id:
             return None
-        bar = "1M" if interval == "1M" else "1W"
+        bar = self._OKX_BAR_SPOT.get(interval, "1W")
         try:
             data = self._get(f"{OKX_BASE}/api/v5/market/candles",
                              {"instId": inst_id, "bar": bar, "limit": min(limit, 300)})
@@ -696,9 +701,31 @@ class BinanceClient:
                 self.data_source = "kraken"
                 return result
         else:
-            # For intraday requests with no exchange data: use CoinGecko daily
-            # candles aggregated to approximate the requested timeframe rather
-            # than serving weekly candles with wrong price_roc/RSI values.
+            # For intraday requests: try progressively larger real-exchange
+            # intervals (4H → 8H → 1D) before falling back to aggregated daily.
+            # A 4H candle is far more accurate than a daily candle grouped to "2H".
+            _FALLBACK_CHAIN = {
+                "1h":  ["2h",  "4h", "8h",  "12h", "1d"],
+                "2h":  ["4h",  "8h", "12h", "1d"],
+                "4h":  ["8h",  "12h", "1d"],
+                "8h":  ["12h", "1d"],
+                "12h": ["1d"],
+            }
+            for fb_interval in _FALLBACK_CHAIN.get(interval.lower(), []):
+                result = self._binance_klines(symbol, fb_interval, limit)
+                if result:
+                    self.data_source = "binance"
+                    return result
+                result = self._okx_candles(symbol, fb_interval, limit)
+                if result:
+                    self.data_source = "okx"
+                    return result
+                result = self._bybit_candles(symbol, fb_interval, limit)
+                if result:
+                    self.data_source = "bybit"
+                    return result
+
+            # Last intraday resort: CoinGecko daily aggregated
             result = self._cg_daily_as_candles(symbol, interval, limit)
             if result:
                 self.data_source = "coingecko"
