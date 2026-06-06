@@ -5,7 +5,7 @@ on:
     # All times UTC — SGT is UTC+8
     - cron: '50 23 * * *'  # ~08:00 AM SGT (fires early to absorb GitHub delay)
     - cron: '50 7 * * *'   # ~04:00 PM SGT
-    - cron: '50 15 * * *'  # ~12:00 AM SGT (next day)
+    # 8PM SGT handled by Vercel cron (12:00 UTC)
   workflow_dispatch:       # allow manual trigger from GitHub UI
 
 jobs:
