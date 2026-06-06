@@ -231,6 +231,9 @@ function renderAll(a) {
     kraken:    ['🟢', 'Kraken',    `Live OHLCV via Kraken.${cgSuffix}`, 'cg-banner'],
     gateio:    ['🟢', 'Gate.io',   `Live OHLCV via Gate.io.${cgSuffix}`, 'cg-banner'],
     kucoin:    ['🟢', 'KuCoin',    `Live OHLCV via KuCoin.${cgSuffix}`, 'cg-banner'],
+    mexc:      ['🟢', 'MEXC',    `Live OHLCV via MEXC.${cgSuffix}`, 'cg-banner'],
+    htx:       ['🟢', 'HTX',     `Live OHLCV via HTX (Huobi).${cgSuffix}`, 'cg-banner'],
+    lbank:     ['🟢', 'LBank',   `Live OHLCV via LBank.${cgSuffix}`, 'cg-banner'],
     demo:      ['⚡', 'Demo Mode', 'All APIs unreachable. Synthetic data shown. Check <a href="/api/diagnostics" target="_blank">diagnostics</a>.', ''],
   };
   const info = srcLabels[src];

@@ -16,6 +16,9 @@ GATE_BASE    = "https://api.gateio.ws/api/v4"
 KUCOIN_BASE  = "https://api.kucoin.com"
 OKX_BASE     = "https://www.okx.com"
 BYBIT_BASE   = "https://api.bybit.com"
+MEXC_BASE    = "https://api.mexc.com"
+HTX_BASE     = "https://api.huobi.pro"
+LBANK_BASE   = "https://api.lbkex.com"
 TIMEOUT      = 5
 BINANCE_RETRIES = int(os.getenv("BINANCE_RETRIES", "1"))
 
@@ -214,6 +217,28 @@ KUCOIN_PAIRS = {
     "RENDERUSDT": "RENDER-USDT",
     "BNBUSDT":    "BNB-USDT",
     "BLURUSDT":   "BLUR-USDT",
+}
+
+# MEXC uses Binance-style symbols (XXXUSDT) — same API format as Binance v3
+MEXC_PAIRS = {
+    "BTCUSDT": "BTCUSDT", "ETHUSDT": "ETHUSDT", "BNBUSDT": "BNBUSDT",
+    "XRPUSDT": "XRPUSDT", "SOLUSDT": "SOLUSDT", "TRXUSDT": "TRXUSDT",
+    "ADAUSDT": "ADAUSDT", "XLMUSDT": "XLMUSDT", "AVAXUSDT": "AVAXUSDT",
+    "SUIUSDT": "SUIUSDT", "TONUSDT": "TONUSDT", "LINKUSDT": "LINKUSDT",
+    "HBARUSDT": "HBARUSDT", "KASUSDT": "KASUSDT", "RENDERUSDT": "RENDERUSDT",
+    "HYPEUSDT": "HYPEUSDT", "TAOUSDT": "TAOUSDT", "ONDOUSDT": "ONDOUSDT",
+    "AAVEUSDT": "AAVEUSDT", "XMRUSDT": "XMRUSDT", "INJUSDT": "INJUSDT",
+    "QNTUSDT": "QNTUSDT", "ALGOUSDT": "ALGOUSDT", "FETUSDT": "FETUSDT",
+    "ZECUSDT": "ZECUSDT", "BLURUSDT": "BLURUSDT",
+}
+
+# HTX (Huobi) uses lowercase symbols without separator
+HTX_PAIRS = {sym: sym.lower() for sym in MEXC_PAIRS}
+
+# LBank uses lowercase with underscore before usdt: tao_usdt
+LBANK_PAIRS = {
+    sym: sym.lower().replace("usdt", "_usdt")
+    for sym in MEXC_PAIRS
 }
 
 
@@ -511,6 +536,98 @@ class BinanceClient:
         except Exception:
             return None
 
+    # MEXC — Binance-compatible v3 API; missing 2H/8H/12H intervals
+    _MEXC_IV = {
+        "1h": "1h", "4h": "4h", "1d": "1d",
+        "1w": "1W", "1W": "1W", "1M": "1M",
+    }
+
+    def _mexc_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        pair = MEXC_PAIRS.get(symbol)
+        if not pair:
+            return None
+        iv = self._MEXC_IV.get(interval.lower())
+        if not iv:
+            return None
+        try:
+            data = self._get(f"{MEXC_BASE}/api/v3/klines",
+                             {"symbol": pair, "interval": iv, "limit": min(limit, 1000)})
+            if not isinstance(data, list) or not data:
+                return None
+            return [self._parse_kline(k) for k in data]
+        except Exception:
+            return None
+
+    # HTX (Huobi) — 60min=1H, 4hour=4H, 1day, 1week; missing 2H/8H/12H
+    _HTX_IV = {
+        "1h": "60min", "4h": "4hour", "1d": "1day",
+        "1w": "1week", "1W": "1week", "1M": "1mon",
+    }
+
+    def _htx_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        pair = HTX_PAIRS.get(symbol)
+        if not pair:
+            return None
+        iv = self._HTX_IV.get(interval.lower())
+        if not iv:
+            return None
+        try:
+            data = self._get(f"{HTX_BASE}/market/history/kline",
+                             {"symbol": pair, "period": iv, "size": min(limit, 2000)})
+            rows = (data.get("data") or []) if isinstance(data, dict) else []
+            if not rows:
+                return None
+            out = []
+            for k in reversed(rows):   # HTX returns newest-first
+                out.append({
+                    "timestamp":        int(k["id"]) * 1000,
+                    "open":             float(k["open"]),
+                    "high":             float(k["high"]),
+                    "low":              float(k["low"]),
+                    "close":            float(k["close"]),
+                    "volume":           float(k["vol"]),
+                    "taker_buy_volume": float(k["vol"]) * 0.5,
+                })
+            return out[-limit:] if out else None
+        except Exception:
+            return None
+
+    # LBank — supports 2H/8H/12H which most exchanges miss
+    # Response format: [timestamp_ms, open, close, high, low, volume]
+    _LBANK_IV = {
+        "1h": "hour1", "2h": "hour2", "4h": "hour4", "8h": "hour8",
+        "12h": "hour12", "1d": "day1", "1w": "week1", "1W": "week1",
+    }
+
+    def _lbank_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        pair = LBANK_PAIRS.get(symbol)
+        if not pair:
+            return None
+        iv = self._LBANK_IV.get(interval.lower())
+        if not iv:
+            return None
+        try:
+            data = self._get(f"{LBANK_BASE}/v2/kline",
+                             {"symbol": pair, "size": min(limit, 2000), "type": iv})
+            rows = (data.get("data") or []) if isinstance(data, dict) else []
+            if not rows:
+                return None
+            out = []
+            for k in rows:  # LBank returns oldest-first
+                # LBank format: [timestamp_ms, open, close, high, low, volume]
+                out.append({
+                    "timestamp":        int(k[0]),
+                    "open":             float(k[1]),
+                    "high":             float(k[3]),
+                    "low":              float(k[4]),
+                    "close":            float(k[2]),
+                    "volume":           float(k[5]),
+                    "taker_buy_volume": float(k[5]) * 0.5,
+                })
+            return out[-limit:] if out else None
+        except Exception:
+            return None
+
     _KUCOIN_IV = {
         "1h": "1hour", "2h": "2hour", "4h": "4hour", "8h": "8hour",
         "12h": "12hour", "1d": "1day", "1w": "1week", "1W": "1week", "1M": "1day",
@@ -714,6 +831,21 @@ class BinanceClient:
         result = self._kucoin_candles(symbol, interval, limit)
         if result:
             self.data_source = "kucoin"
+            return result
+
+        result = self._mexc_candles(symbol, interval, limit)
+        if result:
+            self.data_source = "mexc"
+            return result
+
+        result = self._htx_candles(symbol, interval, limit)
+        if result:
+            self.data_source = "htx"
+            return result
+
+        result = self._lbank_candles(symbol, interval, limit)
+        if result:
+            self.data_source = "lbank"
             return result
 
         if use_weekly_fallbacks:
