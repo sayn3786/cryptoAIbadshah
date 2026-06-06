@@ -43,31 +43,37 @@ MOCK_FUNDING = {     # Current funding rate %
 }
 
 
-def _weekly_candles(symbol: str, n: int = 120, seed: int = 0) -> List[Dict]:
-    rng = random.Random(seed + hash(symbol) % 999)
+def _candles(symbol: str, interval: str, n: int = 120, seed: int = 0) -> List[Dict]:
+    """Generate synthetic candles at the correct interval spacing."""
+    _INTERVAL_MS = {
+        "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
+        "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
+        "1w": 604_800_000, "1M": 2_592_000_000,
+    }
+    candle_ms = _INTERVAL_MS.get(interval.lower(), 604_800_000)  # default weekly
+
+    # Scale volatility to the candle size (weekly vol as baseline)
+    week_ms  = 604_800_000
+    vol_wk   = MOCK_VOL.get(symbol, 0.06)
+    vol_candle = vol_wk * math.sqrt(candle_ms / week_ms)
+
+    rng   = random.Random(seed + hash(symbol) % 999)
     price = MOCK_PRICES.get(symbol, 100.0)
-    vol_wk = MOCK_VOL.get(symbol, 0.06)
-
-    # Walk back n weeks from now
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    week_ms = 7 * 24 * 3600 * 1000
 
-    # Generate prices in reverse then reverse back
     closes = [price]
     for _ in range(n - 1):
-        drift = rng.gauss(0.002, vol_wk)       # slight upward drift
+        drift = rng.gauss(0.001, vol_candle)
         closes.append(closes[-1] * (1 + drift))
     closes.reverse()
 
     candles = []
     for i, close in enumerate(closes):
-        ts = now_ms - (n - 1 - i) * week_ms
-        open_ = closes[i - 1] if i > 0 else close * (1 - rng.gauss(0, 0.01))
-        hi_mult = 1 + abs(rng.gauss(0, vol_wk * 0.6))
-        lo_mult = 1 - abs(rng.gauss(0, vol_wk * 0.5))
-        high = max(open_, close) * hi_mult
-        low  = min(open_, close) * lo_mult
-        volume = rng.uniform(0.6, 1.4) * _base_volume(symbol)
+        ts    = now_ms - (n - 1 - i) * candle_ms
+        open_ = closes[i - 1] if i > 0 else close * (1 - rng.gauss(0, 0.005))
+        high  = max(open_, close) * (1 + abs(rng.gauss(0, vol_candle * 0.5)))
+        low   = min(open_, close) * (1 - abs(rng.gauss(0, vol_candle * 0.4)))
+        volume   = rng.uniform(0.6, 1.4) * _base_volume(symbol)
         buy_frac = rng.uniform(0.38, 0.62)
         candles.append({
             "timestamp": ts,
@@ -79,6 +85,10 @@ def _weekly_candles(symbol: str, n: int = 120, seed: int = 0) -> List[Dict]:
             "taker_buy_volume": round(volume * buy_frac, 2),
         })
     return candles
+
+
+def _weekly_candles(symbol: str, n: int = 120, seed: int = 0) -> List[Dict]:
+    return _candles(symbol, "1w", n, seed)
 
 
 def _base_volume(symbol: str) -> float:
@@ -94,11 +104,11 @@ def _base_volume(symbol: str) -> float:
 
 
 def mock_spot_klines(symbol: str, interval: str, limit: int) -> List[Dict]:
-    return _weekly_candles(symbol, n=limit, seed=1)
+    return _candles(symbol, interval, n=limit, seed=1)
 
 
 def mock_futures_klines(symbol: str, interval: str, limit: int) -> List[Dict]:
-    return _weekly_candles(symbol, n=limit, seed=2)
+    return _candles(symbol, interval, n=limit, seed=2)
 
 
 def mock_funding_rate(symbol: str, limit: int = 10) -> Dict:
