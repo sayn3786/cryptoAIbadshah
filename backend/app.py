@@ -1117,9 +1117,9 @@ def api_prices():
         if not bs:
             continue
         try:
-            candles = client.get_spot_klines(bs, "1m", 2)
-            if candles:
-                result[sym] = round(candles[-1]["close"], 8)
+            price = client.get_current_price(bs)
+            if price:
+                result[sym] = round(price, 8)
         except Exception:
             pass
     return jsonify(result)

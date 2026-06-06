@@ -620,6 +620,55 @@ class BinanceClient:
         from mock_data import mock_spot_klines
         return mock_spot_klines(symbol, interval, limit)
 
+    def get_current_price(self, symbol: str) -> Optional[float]:
+        """
+        Lightweight current price fetch — uses ticker endpoints, never falls back
+        to weekly/monthly candles. Used by /api/prices so live rec card prices
+        are always accurate regardless of which exchange serves the data.
+        """
+        # 1. Binance spot ticker (fastest)
+        try:
+            data = self._get(f"{SPOT_BASE}/api/v3/ticker/price", {"symbol": symbol})
+            price = float(data.get("price", 0))
+            if price > 0:
+                return price
+        except Exception:
+            pass
+
+        # 2. OKX ticker
+        try:
+            inst = symbol.replace("USDT", "-USDT")
+            data = self._get(f"{OKX_BASE}/api/v5/market/ticker", {"instId": inst})
+            price = float((data.get("data") or [{}])[0].get("last", 0))
+            if price > 0:
+                return price
+        except Exception:
+            pass
+
+        # 3. Bybit ticker
+        try:
+            data = self._get(f"{BYBIT_BASE}/v5/market/tickers",
+                             {"category": "spot", "symbol": symbol})
+            price = float(((data.get("result") or {}).get("list") or [{}])[0].get("lastPrice", 0))
+            if price > 0:
+                return price
+        except Exception:
+            pass
+
+        # 4. CoinGecko simple price (last resort — no weekly candle confusion)
+        try:
+            cg_id = CG_IDS.get(symbol)
+            if cg_id:
+                data  = self._get(f"{CG_BASE}/simple/price",
+                                  {"ids": cg_id, "vs_currencies": "usd"})
+                price = float((data.get(cg_id) or {}).get("usd", 0))
+                if price > 0:
+                    return price
+        except Exception:
+            pass
+
+        return None
+
     def get_futures_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
         # 1. Binance perpetual futures
         result = self._binance_futures_klines(symbol, interval, limit)
