@@ -2502,7 +2502,7 @@ function _buildRecCard(r, i) {
     </div>`;
   })();
 
-  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}${r.reversal_trade ? ' rec-card-reversal' : ''}" data-rec-sym="${r.symbol}">
+  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}${r.reversal_trade ? ' rec-card-reversal' : ''}" data-rec-sym="${r.symbol}" data-rec-entry="${r.entry || ''}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
       <span class="rec-sym">${r.symbol}/USDT</span>
@@ -2614,9 +2614,38 @@ async function _refreshRecPrices() {
   const syms = [...new Set(els.map(el => el.dataset.sym))].join(',');
   try {
     const prices = await fetch(`${API}/prices?symbols=${syms}`).then(r => r.json());
+    let needsRefresh = false;
     els.forEach(el => {
-      const p = prices[el.dataset.sym];
-      if (p != null) el.textContent = fmtPrice(p);
+      const sym   = el.dataset.sym;
+      const p     = prices[sym];
+      if (p == null) return;
+      el.textContent = fmtPrice(p);
+
+      // Check divergence between live price and the rec entry price
+      const card  = el.closest('.rec-card');
+      if (!card) return;
+      const entryEl = card.querySelector('.rec-lvl .rec-val');
+      // Parse entry from data attribute set on card
+      const entryRaw = card.dataset.recEntry ? parseFloat(card.dataset.recEntry) : null;
+      if (!entryRaw) return;
+      const divPct = Math.abs((p - entryRaw) / entryRaw * 100);
+
+      // Remove any existing stale warning
+      card.querySelector('.rec-stale-warn')?.remove();
+
+      if (divPct >= 10) {
+        needsRefresh = true;
+        const moved = ((p - entryRaw) / entryRaw * 100).toFixed(1);
+        const dir   = p > entryRaw ? '▲' : '▼';
+        const warn  = document.createElement('div');
+        warn.className = 'rec-stale-warn';
+        warn.innerHTML = `⚠️ Price moved ${dir}${Math.abs(moved)}% since signal — levels stale
+          <button class="rec-stale-btn" onclick="loadRecommendations(true)">Refresh</button>`;
+        // Insert after the rec-meta-row
+        const metaRow = card.querySelector('.rec-meta-row');
+        if (metaRow) metaRow.after(warn);
+        else card.querySelector('.rec-card-top').after(warn);
+      }
     });
   } catch (_) {}
 }
