@@ -1239,6 +1239,26 @@ a:hover { color: var(--gold2); }
 }
 .rec-stale-btn:hover { background: rgba(245,158,11,.4); }
 
+.rec-stale-invalid {
+  background: rgba(239,68,68,.18) !important;
+  border-left-color: #ef4444 !important;
+  color: #fca5a5 !important;
+}
+.rec-levels-stale {
+  opacity: 0.35;
+  pointer-events: none;
+  position: relative;
+}
+.rec-levels-stale::after {
+  content: 'STALE — refresh before trading';
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: .65rem; font-weight: 700; color: #ef4444;
+  letter-spacing: .04em; text-transform: uppercase;
+  background: rgba(10,14,26,.45);
+  border-radius: 4px;
+}
+
 .rec-dir-warn {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   margin: 5px 0; padding: 6px 10px; border-radius: 6px;

@@ -2658,15 +2658,24 @@ async function _refreshRecPrices() {
       if (entryRaw) {
         const divPct = Math.abs((p - entryRaw) / entryRaw * 100);
         if (divPct >= 10) {
-          const moved = ((p - entryRaw) / entryRaw * 100).toFixed(1);
-          const dir   = p > entryRaw ? '▲' : '▼';
-          const warn  = document.createElement('div');
-          warn.className = 'rec-stale-warn';
-          warn.innerHTML = `⚠️ Price moved ${dir}${Math.abs(moved)}% since signal — levels stale
-            <button class="rec-stale-btn" onclick="loadRecommendations(true)">Refresh</button>`;
+          const moved  = ((p - entryRaw) / entryRaw * 100).toFixed(1);
+          const dir    = p > entryRaw ? '▲' : '▼';
+          const severe = divPct >= 20;
+          const warn   = document.createElement('div');
+          warn.className = severe ? 'rec-stale-warn rec-stale-invalid' : 'rec-stale-warn';
+          warn.innerHTML = severe
+            ? `🚫 Signal invalid — price moved ${dir}${Math.abs(moved)}% from entry ($${entryRaw.toFixed(2)} → $${p.toFixed(2)}). Do not trade these levels.
+               <button class="rec-stale-btn" onclick="loadRecommendations(true)">Refresh</button>`
+            : `⚠️ Price moved ${dir}${Math.abs(moved)}% since signal — levels stale
+               <button class="rec-stale-btn" onclick="loadRecommendations(true)">Refresh</button>`;
           const metaRow = card.querySelector('.rec-meta-row');
           if (metaRow) metaRow.after(warn);
           else card.querySelector('.rec-card-top').after(warn);
+          // Dim entry/SL/TP levels when severely stale so they aren't acted on
+          if (severe) {
+            const levels = card.querySelector('.rec-levels');
+            if (levels) levels.classList.add('rec-levels-stale');
+          }
         }
       }
 
