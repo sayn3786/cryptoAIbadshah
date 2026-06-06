@@ -322,6 +322,34 @@ class BinanceClient:
             return None
         return self._group_by_month(prices, volumes, limit)
 
+    def _cg_daily_as_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        """
+        For intraday/daily requests that have no CEX candle data: fetch CoinGecko
+        daily data and group it by the requested timeframe so price_roc, RSI etc.
+        are computed on the correct time resolution.
+        Supports: 1h, 2h, 4h, 8h, 12h, 1d (groups per N days where N < 7).
+        Returns None for weekly/monthly (use dedicated methods instead).
+        """
+        _HOURS = {"1h": 1, "2h": 2, "4h": 4, "8h": 8, "12h": 12, "1d": 24}
+        hours = _HOURS.get(interval.lower())
+        if not hours:
+            return None
+        days_per_candle = hours / 24.0
+        # Fetch enough daily data to cover the requested limit
+        fetch_days = min(int(limit * days_per_candle) + 10, 730)
+        prices, volumes = self._cg_daily_data(symbol, fetch_days)
+        if not prices:
+            return None
+        if days_per_candle >= 1.0:
+            # Group daily data into N-day candles
+            n = int(days_per_candle)
+            return self._group_by_n_days(prices, volumes, n, limit)
+        else:
+            # Sub-day: CoinGecko only provides daily resolution, so use daily
+            # candles as the best available approximation (still much better
+            # than weekly data for a 2H request).
+            return self._group_by_n_days(prices, volumes, 1, limit)
+
     # ── Kraken ────────────────────────────────────────────────────────────────
 
     def _kraken_weekly_candles(self, symbol: str, limit: int = 100) -> Optional[List[Dict]]:
@@ -574,10 +602,61 @@ class BinanceClient:
             })
         return result[-limit:]
 
+    def _group_by_n_days(self, prices, volumes, n: int, limit: int) -> List[Dict]:
+        """Group daily CoinGecko data into n-day candles."""
+        vol_map: Dict[int, float] = {}
+        for ts, vol in (volumes or []):
+            day_idx = int(ts / 1000 / 86400)
+            vol_map[day_idx] = vol_map.get(day_idx, 0.0) + vol
+
+        # Sort price points by timestamp
+        sorted_prices = sorted(prices, key=lambda x: x[0])
+        buckets: List[dict] = []
+        bucket: Optional[dict] = None
+        bucket_start_idx = 0
+
+        for ts, price in sorted_prices:
+            day_idx = int(ts / 1000 / 86400)
+            candle_idx = day_idx // n
+            if bucket is None or candle_idx != bucket_start_idx:
+                if bucket:
+                    buckets.append(bucket)
+                bucket = {"timestamp": ts, "open": price, "high": price,
+                          "low": price, "close": price, "volume": 0.0}
+                bucket_start_idx = candle_idx
+            else:
+                bucket["high"]  = max(bucket["high"], price)
+                bucket["low"]   = min(bucket["low"],  price)
+                bucket["close"] = price
+            bucket["volume"] += vol_map.get(day_idx, 0.0)
+
+        if bucket:
+            buckets.append(bucket)
+
+        result = []
+        for b in buckets[-limit:]:
+            vol = round(b["volume"], 2)
+            result.append({
+                "timestamp":        int(b["timestamp"]),
+                "open":             round(b["open"],  8),
+                "high":             round(b["high"],  8),
+                "low":              round(b["low"],   8),
+                "close":            round(b["close"], 8),
+                "volume":           vol,
+                "taker_buy_volume": round(vol * 0.5, 2),
+            })
+        return result if result else None
+
     # ── Public interface ──────────────────────────────────────────────────────
 
     def get_spot_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
         is_monthly = (interval == "1M")
+        is_weekly  = (interval in ("1w", "1W"))
+        # Weekly/monthly fallback sources return weekly candles regardless of the
+        # requested interval — only use them when a weekly/monthly view is intended.
+        # For intraday/daily intervals, stop at Bybit to avoid silently serving
+        # weekly data as if it were 2H/4H/1D data (causes wrong ROC, RSI, etc.)
+        use_weekly_fallbacks = is_weekly or is_monthly
 
         # Always try each source in order — never skip based on shared state
         result = self._binance_klines(symbol, interval, limit)
@@ -595,26 +674,35 @@ class BinanceClient:
             self.data_source = "bybit"
             return result
 
-        result = self._kucoin_weekly_candles(symbol, limit)
-        if result:
-            self.data_source = "kucoin"
-            return result
+        if use_weekly_fallbacks:
+            result = self._kucoin_weekly_candles(symbol, limit)
+            if result:
+                self.data_source = "kucoin"
+                return result
 
-        result = self._gate_weekly_candles(symbol, limit)
-        if result:
-            self.data_source = "gateio"
-            return result
+            result = self._gate_weekly_candles(symbol, limit)
+            if result:
+                self.data_source = "gateio"
+                return result
 
-        result = self._cg_monthly_candles(symbol, limit) if is_monthly \
-                 else self._cg_weekly_candles(symbol, limit)
-        if result:
-            self.data_source = "coingecko"
-            return result
+            result = self._cg_monthly_candles(symbol, limit) if is_monthly \
+                     else self._cg_weekly_candles(symbol, limit)
+            if result:
+                self.data_source = "coingecko"
+                return result
 
-        result = self._kraken_weekly_candles(symbol, limit)
-        if result:
-            self.data_source = "kraken"
-            return result
+            result = self._kraken_weekly_candles(symbol, limit)
+            if result:
+                self.data_source = "kraken"
+                return result
+        else:
+            # For intraday requests with no exchange data: use CoinGecko daily
+            # candles aggregated to approximate the requested timeframe rather
+            # than serving weekly candles with wrong price_roc/RSI values.
+            result = self._cg_daily_as_candles(symbol, interval, limit)
+            if result:
+                self.data_source = "coingecko"
+                return result
 
         self.data_source = "demo"
         from mock_data import mock_spot_klines
