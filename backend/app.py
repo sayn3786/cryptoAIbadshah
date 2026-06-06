@@ -1058,9 +1058,10 @@ def api_twitter_send():
 @app.post("/api/cron/daily")
 def api_cron_daily():
     """
-    Vercel Cron Job endpoint — called automatically at 00:05 UTC (08:05 SGT) daily.
+    Cron endpoint — called by Vercel at 12:00 UTC (20:00 SGT) and by GitHub
+    Actions at ~23:50 UTC (08:00 SGT) and ~07:50 UTC (16:00 SGT).
     Computes fresh recommendations, sends to Telegram, posts BTC+ETH 1D to Twitter.
-    Vercel calls this with a GET; also accepts POST for manual testing.
+    Vercel calls this with a GET; GitHub Actions uses POST with x-cron-secret.
     """
     import os as _os
     # Accept Bearer token (Vercel) or x-cron-secret header (GitHub Actions)
