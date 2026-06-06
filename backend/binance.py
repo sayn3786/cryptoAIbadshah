@@ -511,6 +511,38 @@ class BinanceClient:
         except Exception:
             return None
 
+    _KUCOIN_IV = {
+        "1h": "1hour", "2h": "2hour", "4h": "4hour", "8h": "8hour",
+        "12h": "12hour", "1d": "1day", "1w": "1week", "1W": "1week", "1M": "1day",
+    }
+
+    def _kucoin_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        pair = KUCOIN_PAIRS.get(symbol)
+        if not pair:
+            return None
+        kc_type = self._KUCOIN_IV.get(interval.lower())
+        if not kc_type:
+            return None
+        try:
+            # KuCoin returns newest-first: [time, open, close, high, low, volume, turnover]
+            data = self._get(f"{KUCOIN_BASE}/api/v1/market/candles",
+                             {"type": kc_type, "symbol": pair})
+            raw = (data.get("data") or []) if isinstance(data, dict) else []
+            out = []
+            for k in reversed(raw[-limit:]):
+                out.append({
+                    "timestamp":        int(k[0]) * 1000,
+                    "open":             float(k[1]),
+                    "high":             float(k[3]),
+                    "low":              float(k[4]),
+                    "close":            float(k[2]),
+                    "volume":           float(k[5]),
+                    "taker_buy_volume": float(k[5]) * 0.5,
+                })
+            return out if out else None
+        except Exception:
+            return None
+
     def _kucoin_weekly_candles(self, symbol: str, limit: int = 100) -> Optional[List[Dict]]:
         pair = KUCOIN_PAIRS.get(symbol)
         if not pair:
@@ -677,6 +709,11 @@ class BinanceClient:
         result = self._bybit_candles(symbol, interval, limit)
         if result:
             self.data_source = "bybit"
+            return result
+
+        result = self._kucoin_candles(symbol, interval, limit)
+        if result:
+            self.data_source = "kucoin"
             return result
 
         if use_weekly_fallbacks:
