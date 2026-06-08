@@ -232,7 +232,8 @@ def _get_btc_direction(tf: str) -> str:
     return direction
 
 
-_rec_lock = _threading.Lock()
+_rec_lock  = _threading.Lock()
+_audit_log: list = []   # last 9 slot generations, newest at the end
 _REC_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".rec_cache.json")
 
 def _rec_cache_load() -> Dict:
@@ -565,6 +566,65 @@ def api_analysis(symbol):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Exhaustion check across all intraday TFs ───────────────────────────────────
+_exh_cache: dict = {}
+_exh_cache_lock = __import__("threading").Lock()
+
+def _exh_cache_key(symbol: str) -> str:
+    now  = datetime.now(timezone.utc)
+    half = (now.minute // 30) * 30
+    return f"exhv1_{symbol}_{now.strftime('%Y%m%d%H')}{half:02d}"
+
+@app.get("/api/exhaustion/<symbol>")
+def api_exhaustion(symbol):
+    """
+    Returns pump/dump exhaustion state for a symbol across all intraday TFs.
+    Used by the analysis view to show the multi-TF exhaustion grid for any token,
+    not just those that appear in the recommendations list.
+    Cached 30 minutes (same window as rec cache).
+    """
+    symbol = symbol.upper()
+    if symbol not in SYMBOLS:
+        return jsonify({"error": f"Symbol {symbol} not supported"}), 404
+
+    cache_key = _exh_cache_key(symbol)
+    with _exh_cache_lock:
+        cached = _exh_cache.get(symbol)
+        if cached and cached.get("key") == cache_key:
+            return jsonify(cached["data"])
+
+    TFS = ["1H", "2H", "4H", "8H", "12H", "1D"]
+
+    def _fetch_exh(tf):
+        try:
+            a   = build_analysis(symbol, tf)
+            sig = a.get("signal") or {}
+            exh = sig.get("exhaustion_alert")
+            if exh is None:
+                return None
+            return {
+                "tf":        tf,
+                "signals":   exh["signals"],
+                "type":      exh["type"],
+                "active":    exh.get("active", exh["signals"] >= 2),
+                "price_roc": round(exh.get("price_roc", 0), 1),
+                "detail":    exh.get("detail", ""),
+            }
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        results = list(ex.map(_fetch_exh, TFS))
+
+    by_tf = [r for r in results if r is not None]
+    data  = {"symbol": symbol, "exhaustion_by_tf": by_tf}
+
+    with _exh_cache_lock:
+        _exh_cache[symbol] = {"key": cache_key, "data": data}
+
+    return jsonify(data)
+
+
 @app.get("/api/dashboard")
 def api_dashboard():
     results = {}
@@ -600,11 +660,9 @@ def _compute_recommendations() -> dict:
     Fetches all three timeframes in one parallel pass, then builds each set
     independently. BTC consensus is anchored at 2H+4H (more stable bias).
     """
-    now           = datetime.now(timezone.utc)
-    slot_min      = (now.minute // 30) * 30
-    session_start = now.replace(minute=slot_min, second=0, microsecond=0)
-    SGT           = timezone(timedelta(hours=8))
-    detected_at_fmt = now.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
+    now = datetime.now(timezone.utc)
+    SGT = timezone(timedelta(hours=8))
+    now_sgt = now.astimezone(SGT)
 
     all_syms = list(SYMBOLS)
     raw: dict = {}
@@ -618,11 +676,12 @@ def _compute_recommendations() -> dict:
                 sig  = data.get("signal", {})
                 direction = sig.get("direction", "NEUTRAL")
                 raw.setdefault(sym, {})[tf] = {
-                    "direction":     direction,
-                    "strength":      sig.get("strength", 0) or 0,
-                    "sig":           sig,
-                    "rsi":           data.get("rsi"),
-                    "current_price": sig.get("current_price"),
+                    "direction":       direction,
+                    "strength":        sig.get("strength", 0) or 0,
+                    "sig":             sig,
+                    "rsi":             data.get("rsi"),
+                    "current_price":   sig.get("current_price"),
+                    "exhaustion_alert": sig.get("exhaustion_alert"),
                 }
             except Exception:
                 pass
@@ -711,40 +770,112 @@ def _compute_recommendations() -> dict:
             mtf_counter  = len(mtf_against_list) >= 2   # against at least 2 HTFs
             mtf_confirm  = mtf_aligned_ct == 3          # all 3 HTFs agree
 
+            # ── Exhaustion override ───────────────────────────────────────────
+            # Best active exhaustion (≥2 signals) across timeframes
+            _exh = None
+            for _etf in (tf_short, tf_long, "4H", "1D"):
+                _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
+                if _ea and _ea.get("active", True) and (_exh is None or _ea["signals"] > _exh["signals"]):
+                    _exh = {**_ea, "tf": _etf}
+
+            # Per-TF exhaustion summary (all TFs, including 0–1 signal watch states)
+            _exh_by_tf = []
+            for _etf in ("1H", "2H", "4H", "8H", "12H", "1D"):
+                _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
+                if _ea is not None:
+                    _exh_by_tf.append({
+                        "tf":        _etf,
+                        "signals":   _ea["signals"],
+                        "type":      _ea["type"],
+                        "active":    _ea.get("active", _ea["signals"] >= 2),
+                        "price_roc": round(_ea.get("price_roc", 0), 1),
+                        "detail":    _ea.get("detail", ""),
+                    })
+
+            _reversal_trade = False
+            _raw_display    = round(h_long["strength"], 1)
+            _display_str    = _raw_display
+
+            if _exh:
+                _opp = (_exh["type"] == "pump" and direction == "LONG") or \
+                       (_exh["type"] == "dump" and direction == "SHORT")
+                if _opp:
+                    n = _exh["signals"]
+                    if n >= 3:
+                        # ── FLIP: exhaustion strong enough to reverse the trade ──
+                        # 3 signals = moderate conviction, 7 = maximum conviction.
+                        # Reversal strength scales with signal count.
+                        _REV_STR = {3: 52, 4: 64, 5: 76, 6: 88, 7: 100}
+                        rev_str      = _REV_STR.get(n, 100)
+                        rev_dir      = "SHORT" if direction == "LONG" else "LONG"
+                        # Invert SL/TP: use sl_pct to build levels from the other side
+                        _entry   = sig.get("entry") or sig.get("current_price")
+                        _sl_pct  = sig.get("sl_pct") or 3.0
+                        _tp_pcts = sig.get("tp_pcts") or [4.75, 7.92]
+                        if _entry:
+                            _m = 1 if rev_dir == "LONG" else -1
+                            _sl_rev  = round(_entry * (1 - _m * _sl_pct / 100), 8)
+                            _tp1_rev = round(_entry * (1 + _m * (_tp_pcts[0] if _tp_pcts else 4.75) / 100), 8)
+                            _tp2_rev = round(_entry * (1 + _m * (_tp_pcts[1] if len(_tp_pcts) > 1 else 7.92) / 100), 8)
+                        else:
+                            _sl_rev = _tp1_rev = _tp2_rev = None
+                        direction      = rev_dir
+                        strength       = rev_str
+                        _display_str   = rev_str
+                        _reversal_trade = True
+                        _exh["reversal_trade"]    = True
+                        _exh["reversal_strength"] = rev_str
+                        # Override signal levels with reversal levels
+                        sig = dict(sig)
+                        sig["direction"]  = rev_dir
+                        sig["sl"]         = _sl_rev
+                        sig["sl_pct"]     = _sl_pct
+                        sig["tp_targets"] = [_tp1_rev, _tp2_rev]
+                        sig["tp_pcts"]    = _tp_pcts[:2] if _tp_pcts else [4.75, 7.92]
+                    else:
+                        # 2 signals = caution only, penalise but don't flip
+                        _EXH_PEN = {2: 20}
+                        _pen       = _EXH_PEN.get(n, 20)
+                        strength   = max(0, round(strength - _pen, 1))
+                        _display_str = max(0, round(_raw_display - _pen, 1))
+
             candidates.append({
-                "symbol":         sym,
-                "timeframe":      primary_tf,   # signal source (entry/SL/TP levels)
-                "view_tf":        primary_tf,   # chart to open on "View Analysis"
-                "aligned_tfs":    f"{tf_short}·{tf_long}",
-                "direction":      direction,
-                "strength":       strength,          # composite (used for ranking only)
-                "display_strength": round(h_long["strength"], 1),  # raw 2H score shown on card
-                "h1_strength":    round(h_short["strength"], 1),
-                "h2_strength":    round(h_long["strength"], 1),
-                "btc_conflict":   btc_conflict,
-                "btc_aligned":    btc_aligned,
-                "btc_consensus":  btc_consensus,
-                "btc_adj":        btc_adj,
-                "btc_corr":       corr_factor,
-                "mtf_dirs":       mtf_dirs,
-                "mtf_aligned":    mtf_aligned_ct,
-                "mtf_adj":        mtf_adj,
-                "mtf_counter":    mtf_counter,
-                "mtf_confirm":    mtf_confirm,
-                "score":          sig.get("score", 0),
-                "tier":           sig.get("tier"),
-                "entry":          sig.get("entry"),
-                "detected_at":    detected_at_fmt,
-                "sl":             sig.get("sl"),
-                "sl_pct":         sig.get("sl_pct"),
-                "tp_targets":     sig.get("tp_targets", []),
-                "tp_pcts":        sig.get("tp_pcts", []),
-                "rr_ratio":       sig.get("rr_ratio"),
-                "leverage":       sig.get("leverage"),
-                "vol_tier_label": sig.get("vol_tier_label"),
-                "rsi":            tfs[primary_tf]["rsi"],
-                "current_price":  tfs[primary_tf].get("current_price"),
-                "reasons":        sig.get("reasons", [])[:3],
+                "symbol":           sym,
+                "timeframe":        primary_tf,
+                "view_tf":          primary_tf,
+                "aligned_tfs":      f"{tf_short}·{tf_long}",
+                "direction":        direction,
+                "strength":         strength,
+                "display_strength": _display_str,
+                "h1_strength":      round(h_short["strength"], 1),
+                "h2_strength":      round(h_long["strength"], 1),
+                "btc_conflict":     btc_conflict,
+                "btc_aligned":      btc_aligned,
+                "btc_consensus":    btc_consensus,
+                "btc_adj":          btc_adj,
+                "btc_corr":         corr_factor,
+                "mtf_dirs":         mtf_dirs,
+                "mtf_aligned":      mtf_aligned_ct,
+                "mtf_adj":          mtf_adj,
+                "mtf_counter":      mtf_counter,
+                "mtf_confirm":      mtf_confirm,
+                "score":            sig.get("score", 0),
+                "tier":             sig.get("tier"),
+                "entry":            sig.get("entry"),
+                "detected_at":      detected_at_fmt,
+                "sl":               sig.get("sl"),
+                "sl_pct":           sig.get("sl_pct"),
+                "tp_targets":       sig.get("tp_targets", []),
+                "tp_pcts":          sig.get("tp_pcts", []),
+                "rr_ratio":         sig.get("rr_ratio"),
+                "leverage":         sig.get("leverage"),
+                "vol_tier_label":   sig.get("vol_tier_label"),
+                "rsi":              tfs[primary_tf]["rsi"],
+                "current_price":    tfs[primary_tf].get("current_price"),
+                "reasons":          sig.get("reasons", [])[:3],
+                "exhaustion_alert": _exh,
+                "exhaustion_by_tf": _exh_by_tf if _exh_by_tf else None,
+                "reversal_trade":   _reversal_trade,
             })
 
         candidates.sort(key=lambda x: x["strength"], reverse=True)
@@ -768,51 +899,109 @@ def _compute_recommendations() -> dict:
 
     intraday_recs = _build_set("1H", "2H", "2H")   # 2H levels for 4-24h holds; view 1H chart
 
-    session_start_sgt = session_start.astimezone(SGT)
-    valid_until_sgt   = (session_start + timedelta(minutes=29)).astimezone(SGT)
+    # Next signal slot at 8AM / 4PM / 8PM SGT
+    _slots   = [now_sgt.replace(hour=h, minute=0, second=0, microsecond=0) for h in (8, 16, 20)]
+    _slots  += [s + timedelta(days=1) for s in _slots]
+    valid_until_sgt = next(s for s in sorted(_slots) if s > now_sgt)
 
-    return {
-        "generated_at":    session_start_sgt.isoformat(),
-        "valid_until":     valid_until_sgt.isoformat(),
-        "valid_until_fmt": valid_until_sgt.strftime("%-I:%M %p SGT, %b %d"),
-        "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
-        "btc_consensus":   btc_consensus,
-        "btc_strength":    btc_strength,
-        "btc_4h_dir":      btc_4h_dir,
-        "btc_4h_str":      btc_4h_str,
-        "btc_1d_dir":      btc_tfs.get("1D", {}).get("direction", "NEUTRAL"),
-        "btc_1d_str":      btc_tfs.get("1D", {}).get("strength", 0) or 0,
-        "recommendations": intraday_recs,
+    # Slot label for this generation
+    h = now_sgt.hour
+    slot_label = "8:00 AM" if h < 12 else ("4:00 PM" if h < 20 else "8:00 PM")
+    generated_fmt = now_sgt.strftime(f"%-I:%M:%S %p SGT, %b %d, %Y  [{slot_label} slot]")
+
+    result = {
+        "generated_at":     now_sgt.isoformat(),
+        "generated_fmt":    generated_fmt,
+        "valid_until":      valid_until_sgt.isoformat(),
+        "valid_until_fmt":  valid_until_sgt.strftime("%-I:%M %p SGT, %b %d") + " (next signal)",
+        "date_label":       now_sgt.strftime("%b %d, %Y (SGT)"),
+        "slot":             slot_label,
+        "btc_consensus":    btc_consensus,
+        "btc_strength":     btc_strength,
+        "btc_4h_dir":       btc_4h_dir,
+        "btc_4h_str":       btc_4h_str,
+        "btc_1d_dir":       btc_tfs.get("1D", {}).get("direction", "NEUTRAL"),
+        "btc_1d_str":       btc_tfs.get("1D", {}).get("strength", 0) or 0,
+        "recommendations":  intraday_recs,
     }
 
+    # Audit log — record snapshot of each slot generation (last 9 kept in memory)
+    _audit_log.append({
+        "generated_at": now_sgt.isoformat(),
+        "slot":         slot_label,
+        "key":          _rec_cache_key(),
+        "recs": [
+            {
+                "symbol":    r.get("symbol"),
+                "direction": r.get("direction"),
+                "strength":  r.get("display_strength") or r.get("h2_strength"),
+                "entry":     r.get("entry"),
+                "sl":        r.get("sl"),
+                "tp1":       (r.get("tp_targets") or [None])[0],
+            }
+            for r in intraday_recs
+        ],
+    })
+    if len(_audit_log) > 9:
+        _audit_log.pop(0)
 
-def _rec_cache_key() -> str:
-    now  = datetime.now(timezone.utc)
-    # 30-minute windows: :00 and :30 of each hour
-    half = (now.minute // 30) * 30
-    return f"v17_mtf_{now.strftime('%Y%m%d%H')}{half:02d}"
+    return result
 
 
 _SGT = timezone(timedelta(hours=8))
-_tg_sent_today: set = set()   # tracks "YYYY-MM-DD" dates already sent to Telegram
+
+def _rec_cache_key() -> str:
+    """
+    Cache key tied to the three daily signal slots (SGT):
+      08:00 SGT  →  key "08"  (valid 08:00–15:59 SGT)
+      16:00 SGT  →  key "16"  (valid 16:00–19:59 SGT)
+      20:00 SGT  →  key "20"  (valid 20:00–07:59 SGT next day)
+
+    Recs stay identical between alerts — they only change when a new
+    Telegram alert fires, not every 30 minutes.
+    """
+    sgt  = datetime.now(_SGT)
+    hour = sgt.hour
+    if hour >= 20:
+        slot = "20"
+        date = sgt.strftime("%Y%m%d")
+    elif hour >= 16:
+        slot = "16"
+        date = sgt.strftime("%Y%m%d")
+    elif hour >= 8:
+        slot = "08"
+        date = sgt.strftime("%Y%m%d")
+    else:
+        # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
+        slot = "20"
+        date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
+    return f"v24_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
     """
-    Background thread: refreshes recommendations every 30 minutes.
-    Fires at HH:05 and HH:35 UTC (5 s after each half-hour boundary).
-    Also sends a Telegram notification at the first run at or after 08:00 SGT each day.
+    Background thread: pre-warms the rec cache shortly after each
+    signal slot boundary so the first user request doesn't block.
+    Runs at :02 past each slot change (08:02, 16:02, 20:02 SGT).
+    Notifications are handled exclusively by GitHub Actions cron.
     """
-    print("[scheduler] 30-min recommendation scheduler started")
+    print("[scheduler] Signal-slot recommendation scheduler started")
+    _SLOT_HOURS_SGT = (8, 16, 20)
     while True:
-        now  = datetime.now(timezone.utc)
-        half = (now.minute // 30) * 30
-        nxt  = now.replace(minute=half, second=5, microsecond=0)
-        if nxt <= now:
-            nxt += timedelta(minutes=30)
-        wait_s = (nxt - now).total_seconds()
-        print(f"[scheduler] Next rec scan in {wait_s/60:.1f} min")
-        time.sleep(wait_s)
+        sgt  = datetime.now(_SGT)
+        # Find the next slot boundary
+        nxt_hour = next(
+            (h for h in sorted(_SLOT_HOURS_SGT) if h > sgt.hour),
+            _SLOT_HOURS_SGT[0] + 24  # wrap to tomorrow's 08:00
+        )
+        nxt = sgt.replace(hour=nxt_hour % 24, minute=2, second=0, microsecond=0)
+        if nxt_hour >= 24:
+            nxt += timedelta(days=1)
+        if nxt <= sgt:
+            nxt += timedelta(days=1)
+        wait_s = (nxt - sgt).total_seconds()
+        print(f"[scheduler] Next rec pre-warm in {wait_s/60:.1f} min "
+              f"(slot {nxt_hour % 24:02d}:02 SGT)")
 
         key = _rec_cache_key()
         try:
@@ -821,28 +1010,6 @@ def _daily_rec_scheduler():
             with _rec_lock:
                 _rec_cache_save(key, result)
             print(f"[scheduler] Cached {len(result.get('recommendations', []))} recommendations")
-
-            # ── Daily notifications: Telegram + Twitter at/after 08:00 SGT ──
-            now_sgt    = datetime.now(_SGT)
-            today_str  = now_sgt.strftime("%Y-%m-%d")
-            if now_sgt.hour >= 8 and today_str not in _tg_sent_today:
-                _tg_sent_today.add(today_str)
-                # Telegram — trade recommendations
-                _threading.Thread(
-                    target=_send_telegram_recs, args=(result,), daemon=True,
-                    name="tg-notify"
-                ).start()
-                print(f"[scheduler] Telegram notification dispatched for {today_str}")
-                # Twitter — BTC + ETH 1D signal thread
-                def _tw_task():
-                    try:
-                        btc = build_analysis("BTC", "1D")
-                        eth = build_analysis("ETH", "1D")
-                        _post_twitter_signals(btc, eth)
-                    except Exception as ex:
-                        print(f"[twitter] scheduler error: {ex}")
-                _threading.Thread(target=_tw_task, daemon=True, name="tw-notify").start()
-                print(f"[scheduler] Twitter post dispatched for {today_str}")
         except Exception as exc:
             print(f"[scheduler] ERROR computing recommendations: {exc}")
 
@@ -858,18 +1025,37 @@ def api_recommendations():
     Pre-computed at 08:00 SGT by the daily scheduler; served from cache to all users.
     Falls back to on-demand compute if the scheduler hasn't run yet today.
     """
-    key = _rec_cache_key()
+    force = request.args.get("force") == "1"
+    key   = _rec_cache_key()
 
-    with _rec_lock:
-        mem = _rec_cache_load()
-        if mem.get("key") == key and mem.get("data"):
-            return jsonify(mem["data"])
+    if not force:
+        with _rec_lock:
+            mem = _rec_cache_load()
+            if mem.get("key") == key and mem.get("data"):
+                return jsonify(mem["data"])
 
-    # Scheduler hasn't fired yet (first deploy of the day, or server just restarted)
     result = _compute_recommendations()
     with _rec_lock:
         _rec_cache_save(key, result)
     return jsonify(result)
+
+
+@app.get("/api/rec-audit")
+def api_rec_audit():
+    """
+    Returns the last 9 slot generations with snapshot of symbols, directions,
+    strengths and entry/SL/TP1 at the exact moment they were computed.
+    Use this to verify recs only changed at 8AM / 4PM / 8PM SGT.
+    """
+    with _rec_lock:
+        mem = _rec_cache_load()
+    current_key = _rec_cache_key()
+    return jsonify({
+        "current_key":    current_key,
+        "current_slot":   (mem.get("data") or {}).get("slot"),
+        "current_generated_fmt": (mem.get("data") or {}).get("generated_fmt"),
+        "history":        list(reversed(_audit_log)),  # newest first
+    })
 
 
 @app.post("/api/telegram/send")
@@ -945,16 +1131,19 @@ def api_twitter_send():
 @app.post("/api/cron/daily")
 def api_cron_daily():
     """
-    Vercel Cron Job endpoint — called automatically at 00:05 UTC (08:05 SGT) daily.
+    Cron endpoint — called by Vercel at 12:00 UTC (20:00 SGT) and by GitHub
+    Actions at ~23:50 UTC (08:00 SGT) and ~07:50 UTC (16:00 SGT).
     Computes fresh recommendations, sends to Telegram, posts BTC+ETH 1D to Twitter.
-    Vercel calls this with a GET; also accepts POST for manual testing.
+    Vercel calls this with a GET; GitHub Actions uses POST with x-cron-secret.
     """
     import os as _os
-    # Vercel signs cron requests — verify in production to prevent abuse
-    auth = request.headers.get("authorization", "")
+    # Accept Bearer token (Vercel) or x-cron-secret header (GitHub Actions)
     cron_secret = _os.getenv("CRON_SECRET", "")
-    if cron_secret and auth != f"Bearer {cron_secret}":
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    if cron_secret:
+        auth   = request.headers.get("authorization", "")
+        secret = request.headers.get("x-cron-secret", "")
+        if auth != f"Bearer {cron_secret}" and secret != cron_secret:
+            return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     results = {}
     try:
@@ -1001,9 +1190,9 @@ def api_prices():
         if not bs:
             continue
         try:
-            candles = client.get_spot_klines(bs, "1m", 2)
-            if candles:
-                result[sym] = round(candles[-1]["close"], 8)
+            price = client.get_current_price(bs)
+            if price:
+                result[sym] = round(price, 8)
         except Exception:
             pass
     return jsonify(result)

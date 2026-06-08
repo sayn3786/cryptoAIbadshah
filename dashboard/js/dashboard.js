@@ -2402,6 +2402,11 @@ async function loadRecommendations() {
     if (valEl && data.valid_until_fmt) {
       valEl.textContent = `Valid until ${data.valid_until_fmt}`;
     }
+    const genEl = document.getElementById('recGenerated');
+    if (genEl && data.generated_fmt) {
+      genEl.textContent = `⏱ Generated: ${data.generated_fmt}`;
+      genEl.title = 'Rating & strength are a snapshot from this exact moment. Only changes at 8AM / 4PM / 8PM SGT.';
+    }
 
     // BTC consensus banner (replace if already rendered)
     const btcBanner = (() => {
