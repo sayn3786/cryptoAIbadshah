@@ -653,12 +653,12 @@ def api_dashboard():
 
 def _compute_recommendations() -> dict:
     """
-    Dual recommendation engine:
-    - Intraday (1H+2H aligned): 4–24h holds — user's daily 8AM trades
-    - Swing    (2H+4H aligned): 1–5 day holds — longer position sizing
-
-    Fetches all three timeframes in one parallel pass, then builds each set
-    independently. BTC consensus is anchored at 2H+4H (more stable bias).
+    Simple best-signal engine:
+    - Analyze all tokens at 1H and 2H
+    - Pick tokens where 1H and 2H agree on direction (= confirmed momentum)
+    - Use BTC 2H signal directly for correlation adjustment (not a multi-TF consensus)
+    - Rank by combined strength, pick top 3
+    - Entry/SL/TP come from the 2H signal (primary trading timeframe)
     """
     now = datetime.now(timezone.utc)
     SGT = timezone(timedelta(hours=8))
@@ -666,267 +666,149 @@ def _compute_recommendations() -> dict:
 
     all_syms = list(SYMBOLS)
     raw: dict = {}
-    with ThreadPoolExecutor(max_workers=36) as ex:
+
+    # Only fetch 1H and 2H — clean, fast, directly relevant
+    with ThreadPoolExecutor(max_workers=30) as ex:
         fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
-                for sym in all_syms for tf in ("1H", "2H", "4H", "1D", "1W", "1M")}
+                for sym in all_syms for tf in ("1H", "2H")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
             try:
                 data = future.result()
                 sig  = data.get("signal", {})
-                direction = sig.get("direction", "NEUTRAL")
                 raw.setdefault(sym, {})[tf] = {
-                    "direction":       direction,
-                    "strength":        sig.get("strength", 0) or 0,
-                    "sig":             sig,
-                    "rsi":             data.get("rsi"),
-                    "current_price":   sig.get("current_price"),
-                    "exhaustion_alert": sig.get("exhaustion_alert"),
+                    "direction":     sig.get("direction", "NEUTRAL"),
+                    "strength":      sig.get("strength", 0) or 0,
+                    "sig":           sig,
+                    "rsi":           data.get("rsi"),
+                    "current_price": sig.get("current_price"),
                 }
             except Exception:
                 pass
 
-    # BTC consensus: 2H + 4H must agree (longer frames = more reliable market bias)
-    btc_tfs = raw.get("BTC", {})
-    btc_2h  = btc_tfs.get("2H", {})
-    btc_4h  = btc_tfs.get("4H", {})
-    btc_2h_dir = btc_2h.get("direction", "NEUTRAL")
-    btc_4h_dir = btc_4h.get("direction", "NEUTRAL")
-    btc_2h_str = btc_2h.get("strength", 0) or 0
-    btc_4h_str = btc_4h.get("strength", 0) or 0
-    if btc_2h_dir != "NEUTRAL" and btc_2h_dir == btc_4h_dir:
-        btc_consensus = btc_2h_dir
-        btc_strength  = round((btc_2h_str + btc_4h_str) / 2, 1)
-    else:
-        btc_consensus = "NEUTRAL"
-        btc_strength  = 0
+    # BTC 2H direction — used directly, no multi-TF consensus required
+    btc_2h      = raw.get("BTC", {}).get("2H", {})
+    btc_dir     = btc_2h.get("direction", "NEUTRAL")
+    btc_str     = btc_2h.get("strength", 0) or 0
+    btc_scale   = math.sqrt(btc_str / 100.0) if btc_str > 0 else 0.0
 
-    BTC_MAX_BONUS   = 15
-    BTC_MAX_PENALTY = 25
-    btc_scale       = math.sqrt(btc_strength / 100.0) if btc_strength > 0 else 0.0
+    # Adjusted correlation factors: bonus for aligned, penalty for conflict
+    BTC_BONUS   = 12   # pts added when token agrees with BTC 2H
+    BTC_PENALTY = 18   # pts subtracted when token opposes BTC 2H
 
-    def _apply_btc(sym, direction, strength):
-        btc_conflict = (btc_consensus != "NEUTRAL" and direction != btc_consensus)
-        btc_aligned  = (btc_consensus != "NEUTRAL" and direction == btc_consensus)
-        btc_adj      = 0
+    candidates = []
+    for sym, tfs in raw.items():
+        if sym == "BTC":
+            continue
+
+        h1 = tfs.get("1H")
+        h2 = tfs.get("2H")
+        if not (h1 and h2):
+            continue
+
+        # Both timeframes must agree — this IS the confirmation filter
+        if h1["direction"] == "NEUTRAL" or h2["direction"] == "NEUTRAL":
+            continue
+        if h1["direction"] != h2["direction"]:
+            continue
+
+        direction = h2["direction"]   # 2H is primary
+        # Combined: 2H carries 60% (primary TF), 1H is the 40% confirmation
+        strength = round(h1["strength"] * 0.4 + h2["strength"] * 0.6, 1)
+
+        # BTC 2H correlation — applied at the same timeframe as the signal
         corr_factor  = _BTC_CORR.get(sym, 1.0)
-        if btc_conflict:
-            btc_adj  = -round(BTC_MAX_PENALTY * btc_scale * corr_factor, 1)
-            strength = max(0, round(strength + btc_adj, 1))
-        elif btc_aligned:
-            btc_adj  = round(BTC_MAX_BONUS * btc_scale * corr_factor, 1)
+        btc_aligned  = (btc_dir != "NEUTRAL" and direction == btc_dir)
+        btc_conflict = (btc_dir != "NEUTRAL" and direction != btc_dir)
+        btc_adj      = 0
+        if btc_aligned:
+            btc_adj  = round(BTC_BONUS   * btc_scale * corr_factor, 1)
             strength = min(100, round(strength + btc_adj, 1))
-        return btc_conflict, btc_aligned, btc_adj, corr_factor, strength
+        elif btc_conflict:
+            btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
+            strength = max(0, round(strength + btc_adj, 1))
 
-    def _build_set(tf_short, tf_long, primary_tf):
-        """
-        Build top-3 candidates where tf_short + tf_long directions agree.
-        primary_tf determines which signal is used for entry/SL/TP levels
-        and which chart the "View Analysis" button links to.
-        Longer TF carries 60% weight, shorter 40%.
-        Daily (1D) candle direction is applied as a soft filter: +8 if it
-        confirms the trade direction, -10 if it opposes.
-        """
-        candidates = []
-        for sym, tfs in raw.items():
-            if sym == "BTC":
-                continue
-            h_short = tfs.get(tf_short)
-            h_long  = tfs.get(tf_long)
-            if not (h_short and h_long):
-                continue
-            if h_short["direction"] == "NEUTRAL" or h_long["direction"] == "NEUTRAL":
-                continue
-            if h_short["direction"] != h_long["direction"]:
-                continue
-            # Require at least one TF to have meaningful signal strength
-            if h_short["strength"] < 25 and h_long["strength"] < 25:
+        # Entry/SL/TP from the 2H signal
+        sig = h2["sig"]
+
+        # Skip if entry is >25% from current price (stale/mock data)
+        _entry_p = sig.get("current_price") or sig.get("entry")
+        _live_p  = h2.get("current_price") or _entry_p
+        if _entry_p and _live_p and _live_p > 0:
+            if abs(_entry_p - _live_p) / _live_p > 0.25:
                 continue
 
-            direction = h_long["direction"]
-            strength  = round(h_short["strength"] * 0.4 + h_long["strength"] * 0.6, 1)
-            sig       = tfs[primary_tf]["sig"]
+        # Minimum conviction — skip noise
+        if strength < 32:
+            continue
 
-            # Sanity check: skip if the signal's entry price is >25% away from
-            # current price — almost always means mock/stale data was used.
-            _sig_price   = sig.get("current_price") or sig.get("entry")
-            _live_price  = tfs[primary_tf].get("current_price") or _sig_price
-            if _sig_price and _live_price and _live_price > 0:
-                _price_gap = abs(_sig_price - _live_price) / _live_price
-                if _price_gap > 0.25:
-                    continue
+        candidates.append({
+            "symbol":           sym,
+            "timeframe":        "2H",
+            "view_tf":          "2H",
+            "aligned_tfs":      "1H·2H",
+            "direction":        direction,
+            "strength":         strength,
+            "display_strength": round(strength, 1),
+            "h1_strength":      round(h1["strength"], 1),
+            "h2_strength":      round(h2["strength"], 1),
+            "btc_conflict":     btc_conflict,
+            "btc_aligned":      btc_aligned,
+            "btc_consensus":    btc_dir,
+            "btc_adj":          btc_adj,
+            "btc_corr":         corr_factor,
+            # No complex MTF adjustments — keep it honest
+            "mtf_dirs":         {},
+            "mtf_aligned":      0,
+            "mtf_adj":          0,
+            "mtf_counter":      False,
+            "mtf_confirm":      False,
+            "score":            sig.get("score", 0),
+            "tier":             sig.get("tier"),
+            "entry":            sig.get("entry"),
+            "detected_at":      now_sgt.strftime("%b %d · %I:%M %p SGT"),
+            "sl":               sig.get("sl"),
+            "sl_pct":           sig.get("sl_pct"),
+            "tp_targets":       sig.get("tp_targets", []),
+            "tp_pcts":          sig.get("tp_pcts", []),
+            "rr_ratio":         sig.get("rr_ratio"),
+            "leverage":         sig.get("leverage"),
+            "vol_tier_label":   sig.get("vol_tier_label"),
+            "rsi":              h2.get("rsi"),
+            "current_price":    h2.get("current_price"),
+            "reasons":          sig.get("reasons", [])[:3],
+            "exhaustion_alert": None,
+            "exhaustion_by_tf": None,
+            "reversal_trade":   False,
+        })
 
-            btc_conflict, btc_aligned, btc_adj, corr_factor, strength = _apply_btc(
-                sym, direction, strength)
+    # Sort by strength — best signal first
+    candidates.sort(key=lambda x: x["strength"], reverse=True)
 
-            # Higher-timeframe confluence: 1D + 1W + 1M vs the 2H trade direction.
-            # 3/3 aligned = strong trend continuation (+15).
-            # 2/3 = mostly with trend (+8).
-            # 1/3 = mixed, caution (−5).
-            # 0/3 = counter-trend against all HTFs (−18, reversal/fake-out risk).
-            # Adj applied only when at least 2 HTFs have a non-NEUTRAL signal.
-            _MTF_ADJ = {3: 15, 2: 8, 1: -5, 0: -18}
-            mtf_dirs: dict = {}
-            for _htf in ("1D", "1W", "1M"):
-                _htf_data = tfs.get(_htf)
-                mtf_dirs[_htf] = _htf_data["direction"] if _htf_data else "NEUTRAL"
+    # Pick top 3: try to include both directions if possible
+    top = candidates[:2]
+    if len(candidates) > 2:
+        picked_syms = {c["symbol"] for c in top}
+        if len(top) == 2 and top[0]["direction"] == top[1]["direction"]:
+            opposite = "SHORT" if top[0]["direction"] == "LONG" else "LONG"
+            opp_list = [c for c in candidates if c["direction"] == opposite
+                        and c["symbol"] not in picked_syms]
+            pick3 = opp_list[0] if opp_list else next(
+                (c for c in candidates if c["symbol"] not in picked_syms), None)
+        else:
+            pick3 = next((c for c in candidates if c["symbol"] not in picked_syms), None)
+        if pick3:
+            top.append(pick3)
+    elif len(top) < 2:
+        top = candidates[:3]
 
-            mtf_non_neutral  = [d for d in mtf_dirs.values() if d != "NEUTRAL"]
-            mtf_aligned_list = [d for d in mtf_non_neutral if d == direction]
-            mtf_against_list = [d for d in mtf_non_neutral if d != direction]
-            mtf_aligned_ct   = len(mtf_aligned_list)
-            mtf_adj          = 0
-            if len(mtf_non_neutral) >= 2:
-                mtf_adj  = _MTF_ADJ[mtf_aligned_ct]
-                strength = max(0, min(100, round(strength + mtf_adj, 1)))
-            mtf_counter  = len(mtf_against_list) >= 2   # against at least 2 HTFs
-            mtf_confirm  = mtf_aligned_ct == 3          # all 3 HTFs agree
-
-            # ── Exhaustion override ───────────────────────────────────────────
-            # Best active exhaustion (≥2 signals) across timeframes
-            _exh = None
-            for _etf in (tf_short, tf_long, "4H", "1D"):
-                _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
-                if _ea and _ea.get("active", True) and (_exh is None or _ea["signals"] > _exh["signals"]):
-                    _exh = {**_ea, "tf": _etf}
-
-            # Per-TF exhaustion summary (all TFs, including 0–1 signal watch states)
-            _exh_by_tf = []
-            for _etf in ("1H", "2H", "4H", "8H", "12H", "1D"):
-                _ea = (tfs.get(_etf) or {}).get("exhaustion_alert")
-                if _ea is not None:
-                    _exh_by_tf.append({
-                        "tf":        _etf,
-                        "signals":   _ea["signals"],
-                        "type":      _ea["type"],
-                        "active":    _ea.get("active", _ea["signals"] >= 2),
-                        "price_roc": round(_ea.get("price_roc", 0), 1),
-                        "detail":    _ea.get("detail", ""),
-                    })
-
-            _reversal_trade = False
-            _raw_display    = round(h_long["strength"], 1)
-            _display_str    = _raw_display
-
-            if _exh:
-                _opp = (_exh["type"] == "pump" and direction == "LONG") or \
-                       (_exh["type"] == "dump" and direction == "SHORT")
-                if _opp:
-                    n = _exh["signals"]
-                    if n >= 3:
-                        # ── FLIP: exhaustion strong enough to reverse the trade ──
-                        # 3 signals = moderate conviction, 7 = maximum conviction.
-                        # Reversal strength scales with signal count.
-                        _REV_STR = {3: 52, 4: 64, 5: 76, 6: 88, 7: 100}
-                        rev_str      = _REV_STR.get(n, 100)
-                        rev_dir      = "SHORT" if direction == "LONG" else "LONG"
-                        # Invert SL/TP: use sl_pct to build levels from the other side
-                        _entry   = sig.get("entry") or sig.get("current_price")
-                        _sl_pct  = sig.get("sl_pct") or 3.0
-                        _tp_pcts = sig.get("tp_pcts") or [4.75, 7.92]
-                        if _entry:
-                            _m = 1 if rev_dir == "LONG" else -1
-                            _sl_rev  = round(_entry * (1 - _m * _sl_pct / 100), 8)
-                            _tp1_rev = round(_entry * (1 + _m * (_tp_pcts[0] if _tp_pcts else 4.75) / 100), 8)
-                            _tp2_rev = round(_entry * (1 + _m * (_tp_pcts[1] if len(_tp_pcts) > 1 else 7.92) / 100), 8)
-                        else:
-                            _sl_rev = _tp1_rev = _tp2_rev = None
-                        direction      = rev_dir
-                        strength       = rev_str
-                        _display_str   = rev_str
-                        _reversal_trade = True
-                        _exh["reversal_trade"]    = True
-                        _exh["reversal_strength"] = rev_str
-                        # Override signal levels with reversal levels
-                        sig = dict(sig)
-                        sig["direction"]  = rev_dir
-                        sig["sl"]         = _sl_rev
-                        sig["sl_pct"]     = _sl_pct
-                        sig["tp_targets"] = [_tp1_rev, _tp2_rev]
-                        sig["tp_pcts"]    = _tp_pcts[:2] if _tp_pcts else [4.75, 7.92]
-                    else:
-                        # 2 signals = caution only, penalise but don't flip
-                        _EXH_PEN = {2: 20}
-                        _pen       = _EXH_PEN.get(n, 20)
-                        strength   = max(0, round(strength - _pen, 1))
-                        _display_str = max(0, round(_raw_display - _pen, 1))
-
-            # Skip trades below minimum conviction — better to show fewer high-quality
-            # recs than fill slots with weak / heavily-penalised signals
-            if strength < 32:
-                continue
-
-            # display_strength is the final adjusted strength (what the user sees in the badge).
-            # If the per-TF raw display was zeroed out by exhaustion/penalties but the overall
-            # adjusted strength is meaningful, show the true final score instead of 0.
-            _display_str = max(_display_str, round(strength, 1))
-
-            candidates.append({
-                "symbol":           sym,
-                "timeframe":        primary_tf,
-                "view_tf":          primary_tf,
-                "aligned_tfs":      f"{tf_short}·{tf_long}",
-                "direction":        direction,
-                "strength":         strength,
-                "display_strength": _display_str,
-                "h1_strength":      round(h_short["strength"], 1),
-                "h2_strength":      round(h_long["strength"], 1),
-                "btc_conflict":     btc_conflict,
-                "btc_aligned":      btc_aligned,
-                "btc_consensus":    btc_consensus,
-                "btc_adj":          btc_adj,
-                "btc_corr":         corr_factor,
-                "mtf_dirs":         mtf_dirs,
-                "mtf_aligned":      mtf_aligned_ct,
-                "mtf_adj":          mtf_adj,
-                "mtf_counter":      mtf_counter,
-                "mtf_confirm":      mtf_confirm,
-                "score":            sig.get("score", 0),
-                "tier":             sig.get("tier"),
-                "entry":            sig.get("entry"),
-                "detected_at":      now_sgt.strftime("%b %d · %I:%M %p SGT"),
-                "sl":               sig.get("sl"),
-                "sl_pct":           sig.get("sl_pct"),
-                "tp_targets":       sig.get("tp_targets", []),
-                "tp_pcts":          sig.get("tp_pcts", []),
-                "rr_ratio":         sig.get("rr_ratio"),
-                "leverage":         sig.get("leverage"),
-                "vol_tier_label":   sig.get("vol_tier_label"),
-                "rsi":              tfs[primary_tf]["rsi"],
-                "current_price":    tfs[primary_tf].get("current_price"),
-                "reasons":          sig.get("reasons", [])[:3],
-                "exhaustion_alert": _exh,
-                "exhaustion_by_tf": _exh_by_tf if _exh_by_tf else None,
-                "reversal_trade":   _reversal_trade,
-            })
-
-        candidates.sort(key=lambda x: x["strength"], reverse=True)
-        top = candidates[:2]
-        if len(top) == 2 and len(candidates) > 2:
-            picked_syms = {c["symbol"] for c in top}
-            if top[0]["direction"] == top[1]["direction"]:
-                opposite = "SHORT" if top[0]["direction"] == "LONG" else "LONG"
-                opp_list = [c for c in candidates if c["direction"] == opposite
-                            and c["symbol"] not in picked_syms]
-                pick3 = opp_list[0] if opp_list else next(
-                    (c for c in candidates if c["symbol"] not in picked_syms), None)
-            else:
-                pick3 = next((c for c in candidates if c["symbol"] not in picked_syms), None)
-            if pick3:
-                top.append(pick3)
-        elif len(top) < 2:
-            top = candidates[:3]
-
-        return top[:3]
-
-    intraday_recs = _build_set("1H", "2H", "2H")   # 2H levels for 4-24h holds; view 1H chart
+    intraday_recs = top[:3]
 
     # Next signal slot at 8AM / 4PM / 8PM SGT
     _slots   = [now_sgt.replace(hour=h, minute=0, second=0, microsecond=0) for h in (8, 16, 20)]
     _slots  += [s + timedelta(days=1) for s in _slots]
     valid_until_sgt = next(s for s in sorted(_slots) if s > now_sgt)
 
-    # Slot label for this generation
     h = now_sgt.hour
     slot_label = "8:00 AM" if h < 12 else ("4:00 PM" if h < 20 else "8:00 PM")
     generated_fmt = now_sgt.strftime(f"%-I:%M:%S %p SGT, %b %d, %Y  [{slot_label} slot]")
@@ -938,12 +820,12 @@ def _compute_recommendations() -> dict:
         "valid_until_fmt":  valid_until_sgt.strftime("%-I:%M %p SGT, %b %d") + " (next signal)",
         "date_label":       now_sgt.strftime("%b %d, %Y (SGT)"),
         "slot":             slot_label,
-        "btc_consensus":    btc_consensus,
-        "btc_strength":     btc_strength,
-        "btc_4h_dir":       btc_4h_dir,
-        "btc_4h_str":       btc_4h_str,
-        "btc_1d_dir":       btc_tfs.get("1D", {}).get("direction", "NEUTRAL"),
-        "btc_1d_str":       btc_tfs.get("1D", {}).get("strength", 0) or 0,
+        "btc_consensus":    btc_dir,
+        "btc_strength":     btc_str,
+        "btc_4h_dir":       btc_dir,   # kept for dashboard compat
+        "btc_4h_str":       btc_str,
+        "btc_1d_dir":       "NEUTRAL",
+        "btc_1d_str":       0,
         "recommendations":  intraday_recs,
     }
 
@@ -997,7 +879,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v27_mtf_{date}_{slot}"
+    return f"v28_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
