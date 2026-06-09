@@ -570,7 +570,7 @@ def api_analysis(symbol):
 # Prevents the rec engine from re-fetching data the analysis view already has.
 # 30-minute TTL matches the rec slot window.
 _analysis_cache: dict = {}
-_analysis_cache_lock  = __import__("threading").Lock()
+_analysis_cache_lock  = _threading.Lock()
 
 def _analysis_cache_key(symbol: str, tf: str) -> str:
     now  = datetime.now(timezone.utc)
@@ -592,7 +592,7 @@ def get_analysis(symbol: str, tf: str) -> dict:
 
 # ── Exhaustion check across all intraday TFs ───────────────────────────────────
 _exh_cache: dict = {}
-_exh_cache_lock = __import__("threading").Lock()
+_exh_cache_lock = _threading.Lock()
 
 def _exh_cache_key(symbol: str) -> str:
     now  = datetime.now(timezone.utc)
@@ -692,8 +692,7 @@ def _compute_recommendations() -> dict:
     raw: dict = {}
 
     # Use get_analysis (cached) so rec engine sees the same data as the analysis view.
-    # max_workers=10 avoids thundering-herd rate limits on cold cache.
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         fmap = {ex.submit(get_analysis, sym, tf): (sym, tf)
                 for sym in all_syms for tf in ("1H", "2H")}
         for future in as_completed(fmap):
@@ -915,7 +914,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v32_mtf_{date}_{slot}"
+    return f"v33_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
@@ -942,6 +941,10 @@ def _daily_rec_scheduler():
         wait_s = (nxt - sgt).total_seconds()
         print(f"[scheduler] Next rec pre-warm in {wait_s/60:.1f} min "
               f"(slot {nxt_hour % 24:02d}:02 SGT)")
+
+        # Sleep until the slot boundary — do NOT compute on startup.
+        # api_recommendations falls back to on-demand compute if cache is cold.
+        time.sleep(max(wait_s, 1))
 
         key = _rec_cache_key()
         try:
