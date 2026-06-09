@@ -1117,6 +1117,20 @@ a:hover { color: var(--gold2); }
 .rec-tf-align      { display: inline-block; font-size: .63rem; font-weight: 600; color: var(--bull); }
 .rec-tf-breakdown  { display: flex; gap: 10px; font-size: .63rem; color: var(--muted2); }
 .rec-tf-breakdown strong { color: var(--text); }
+/* Per-TF inline reversal and exhaustion markers */
+.exh-tf-rev  { font-size: .60rem; font-weight: 700; color: #a78bfa; margin-left: 3px; }
+.exh-tf-warn { font-size: .59rem; font-weight: 600; color: #f59e0b; margin-left: 3px; }
+/* Reversal badge — shown when fresh flips boosted the signal */
+.rec-reversal-badge {
+  display: block; margin: 3px 0;
+  font-size: .62rem; font-weight: 700; color: #a78bfa;
+  letter-spacing: .02em;
+}
+/* Exhaustion warning row */
+.rec-exh-warn {
+  display: block; margin: 2px 0 3px;
+  font-size: .61rem; font-weight: 600; color: #f59e0b;
+}
 /* BTC consensus banner */
 .btc-banner        { padding: 7px 12px; border-radius: 6px; font-size: .72rem; font-weight: 600; margin-bottom: 10px; }
 .btc-banner.btc-bull { background: rgba(38,166,91,.15); color: var(--bull); border: 1px solid rgba(38,166,91,.3); }
