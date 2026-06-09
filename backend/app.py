@@ -710,10 +710,13 @@ def _compute_recommendations() -> dict:
             except Exception:
                 pass
 
-    # BTC 2H direction — context label only, does not modify token strength
-    btc_2h  = raw.get("BTC", {}).get("2H", {})
-    btc_dir = btc_2h.get("direction", "NEUTRAL")
-    btc_str = btc_2h.get("strength", 0) or 0
+    # BTC 2H direction — applied at 2H (same TF as the signal)
+    btc_2h    = raw.get("BTC", {}).get("2H", {})
+    btc_dir   = btc_2h.get("direction", "NEUTRAL")
+    btc_str   = btc_2h.get("strength", 0) or 0
+    btc_scale = math.sqrt(btc_str / 100.0) if btc_str > 0 else 0.0
+    BTC_BONUS   = 12   # pts when token aligns with BTC 2H
+    BTC_PENALTY = 18   # pts when token opposes BTC 2H
 
     candidates = []
     for sym, tfs in raw.items():
@@ -732,15 +735,20 @@ def _compute_recommendations() -> dict:
             continue
 
         direction = h2["direction"]   # 2H is primary
-        # Strength = exactly the 2H signal strength — same number the analysis view shows.
-        # 1H is a direction gate only. BTC direction is shown as context, not a score modifier.
+        # Strength = 2H signal strength, then adjusted by BTC 2H direction.
+        # Both are at the same timeframe (2H), so the adjustment is meaningful.
         strength = round(h2["strength"], 1)
 
-        # BTC 2H context — label only, does NOT adjust the strength
         corr_factor  = _BTC_CORR.get(sym, 1.0)
         btc_aligned  = (btc_dir != "NEUTRAL" and direction == btc_dir)
         btc_conflict = (btc_dir != "NEUTRAL" and direction != btc_dir)
-        btc_adj      = 0   # kept for display compat, no longer modifies strength
+        btc_adj      = 0
+        if btc_aligned:
+            btc_adj  = round(BTC_BONUS   * btc_scale * corr_factor, 1)
+            strength = min(100, round(strength + btc_adj, 1))
+        elif btc_conflict:
+            btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
+            strength = max(0, round(strength + btc_adj, 1))
 
         # Metadata only — exhaustion and reversal are shown in the per-TF analysis
         # view, not used to adjust rec ranking (recs are ranked purely on 1H+2H strength)
@@ -903,7 +911,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v34_mtf_{date}_{slot}"
+    return f"v35_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
