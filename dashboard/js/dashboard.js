@@ -828,6 +828,19 @@ function renderBtcMiningCard(mining, symbol) {
   const rev = mining.miner_revenue_usd;
   const revStr = rev != null ? `$${(rev / 1e6).toFixed(1)}M / day` : '—';
 
+  // MVRV Score (90d SMA)
+  const mvrv = mining.mvrv;
+  const mvrvRow = mvrv ? (() => {
+    const score = mvrv.score != null ? mvrv.score.toFixed(2) : '—';
+    const sma   = mvrv.sma90 != null ? mvrv.sma90.toFixed(2) : '—';
+    const cls   = mvrv.cls  || '';
+    const lbl   = mvrv.label || '—';
+    const desc  = mvrv.desc  || '';
+    return `
+    <div class="btcm-row"><span class="btcm-label">MVRV Score</span><span class="btcm-val ${cls}">${score} <small>(90d SMA: ${sma})</small></span></div>
+    <div class="btcm-sub">${lbl} — ${desc}</div>`;
+  })() : '';
+
   rows.innerHTML = `
     <div class="btcm-row"><span class="btcm-label">Hash Ribbon</span><span class="btcm-val ${rm.cls}">${rm.icon} ${rm.label}</span></div>
     <div class="btcm-sub">${rm.desc}</div>
@@ -837,6 +850,7 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-sub">Break-even est. ${beStr} · Revenue ${revStr}</div>
     <div class="btcm-row"><span class="btcm-label">Difficulty Change</span><span class="btcm-val ${diffCls}">${diffStr}</span></div>
     <div class="btcm-sub">Expected at next adjustment</div>
+    ${mvrvRow}
   `;
 }
 

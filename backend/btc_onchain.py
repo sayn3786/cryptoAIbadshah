@@ -99,7 +99,54 @@ def _break_even(hash_rate_hs: float) -> float | None:
     return round(daily_cost / DAILY_BTC_MINED, 0)
 
 
-def get_btc_mining_signals() -> dict:
+def _mvrv_signal(score: float) -> dict:
+    """Classify MVRV score into a market cycle zone."""
+    if score >= 3.7:
+        return {"zone": "extreme_top",   "cls": "bear",    "label": "Extreme Top Zone",     "desc": "Historically rare — major cycle peaks occur here"}
+    if score >= 3.0:
+        return {"zone": "overbought",    "cls": "bear",    "label": "Overbought",            "desc": "Late bull market — elevated distribution risk"}
+    if score >= 2.0:
+        return {"zone": "fair_elevated", "cls": "",        "label": "Fair to Elevated",      "desc": "Healthy bull market range"}
+    if score >= 1.0:
+        return {"zone": "fair_value",    "cls": "bull",    "label": "Fair Value",            "desc": "Accumulation zone — holders near breakeven"}
+    return         {"zone": "oversold",  "cls": "bull",    "label": "Oversold / Bottom",     "desc": "Historically strong buy zone — holders underwater"}
+
+
+def _fetch_mvrv() -> dict:
+    """
+    Fetch BTC MVRV ratio (90d SMA) from CoinMetrics Community API.
+    Free, no API key required. Cached 4 hours.
+    Returns: {score, sma90, signal, zone, cls, label, desc} or empty dict on failure.
+    """
+    url  = (
+        "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+        "?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=120"
+    )
+    data = _get(url, "coinmetrics_mvrv", ttl=4 * 3600)
+    if not data:
+        return {}
+    rows = data.get("data") or []
+    values = []
+    for row in rows:
+        try:
+            v = float(row.get("CapMVRVCur") or 0)
+            if v > 0:
+                values.append(v)
+        except (TypeError, ValueError):
+            pass
+    if not values:
+        return {}
+    score  = values[-1]
+    sma90  = round(sum(values[-90:]) / min(len(values), 90), 3) if len(values) >= 30 else None
+    sig    = _mvrv_signal(sma90 if sma90 else score)
+    return {
+        "score":  round(score, 3),
+        "sma90":  sma90,
+        **sig,
+    }
+
+
+
     """
     Fetch and compute BTC mining / on-chain signals.
 
@@ -130,6 +177,7 @@ def get_btc_mining_signals() -> dict:
         "break_even_usd":     None,
         "miner_revenue_usd":  None,
         "profitability_ratio": None,
+        "mvrv":               None,
         "error":              False,
     }
 
@@ -176,5 +224,10 @@ def get_btc_mining_signals() -> dict:
             result["miner_revenue_usd"] = round(rev_btc * price, 0)
         if price and result["break_even_usd"]:
             result["profitability_ratio"] = round(price / result["break_even_usd"], 2)
+
+    # ── MVRV Score (90d SMA) — CoinMetrics Community API ─────────────────────
+    mvrv = _fetch_mvrv()
+    if mvrv:
+        result["mvrv"] = mvrv
 
     return result
