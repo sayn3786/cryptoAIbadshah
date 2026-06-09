@@ -842,6 +842,11 @@ def _compute_recommendations() -> dict:
                         strength   = max(0, round(strength - _pen, 1))
                         _display_str = max(0, round(_raw_display - _pen, 1))
 
+            # Skip trades below minimum conviction — better to show fewer high-quality
+            # recs than fill slots with weak / heavily-penalised signals
+            if strength < 32:
+                continue
+
             candidates.append({
                 "symbol":           sym,
                 "timeframe":        primary_tf,

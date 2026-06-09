@@ -2280,6 +2280,13 @@ function _recCacheSet(data) {
   } catch (_) {}
 }
 
+function _strengthTier(s) {
+  if (s >= 69) return 'str-confirmed';
+  if (s >= 51) return 'str-strong';
+  if (s >= 33) return 'str-moderate';
+  return 'str-weak';
+}
+
 function _buildRecCard(r, i) {
   const isLong  = r.direction === 'LONG';
   const dirCls  = isLong ? 'bull' : 'bear';
@@ -2356,7 +2363,7 @@ function _buildRecCard(r, i) {
       <span class="rec-rank">#${i+1}</span>
       <span class="rec-sym">${r.symbol}/USDT</span>
       <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
-      <span class="rec-strength">${r.display_strength ?? r.h2_strength}/100</span>
+      <span class="rec-strength ${_strengthTier(r.display_strength ?? r.h2_strength)}">${r.display_strength ?? r.h2_strength}/100</span>
     </div>
     ${tfAlign}
     ${btcWarn}
@@ -2396,7 +2403,19 @@ async function loadRecommendations() {
       data = await res.json();
       if (data.recommendations?.length) _recCacheSet(data);
     }
-    if (!data.recommendations?.length) return;
+    if (!data.recommendations?.length) {
+      // Show section with informative message rather than hiding it
+      section.classList.remove('hidden');
+      if (dateEl) dateEl.textContent = data.date_label || '';
+      cards.innerHTML = `<div class="rec-no-signal">
+        <div class="rec-no-signal-icon">📉</div>
+        <div class="rec-no-signal-title">No High-Quality Signals Right Now</div>
+        <div class="rec-no-signal-desc">All current setups are below the minimum conviction threshold (32/100).
+        Waiting for stronger alignment is the correct decision — a bad trade is worse than no trade.</div>
+        <div class="rec-no-signal-next">Next scan: ${data.valid_until_fmt || 'next slot'}</div>
+      </div>`;
+      return;
+    }
 
     if (dateEl) dateEl.textContent = data.date_label || '';
     if (valEl && data.valid_until_fmt) {
