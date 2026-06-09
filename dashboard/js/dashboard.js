@@ -1,9 +1,4 @@
 /* ─── State ───────────────────────────────────────────────────────────────── */
-// Per-symbol exhaustion lookup — populated when recommendations are loaded so
-// the analysis view can show the multi-TF exhaustion grid regardless of which
-// timeframe is currently being viewed.
-const _symExhaustion = {};
-
 const S = {
   symbol: 'BTC',
   timeframe: '1W',
@@ -137,25 +132,12 @@ async function loadTicker() {
 async function loadAnalysis() {
   setLoading(true);
   try {
-    // Fetch analysis + exhaustion data in parallel
-    const [res, exhRes] = await Promise.all([
-      fetch(`${API}/analysis/${S.symbol}?timeframe=${S.timeframe}`),
-      fetch(`${API}/exhaustion/${S.symbol}`).catch(() => null),
-    ]);
+    const res = await fetch(`${API}/analysis/${S.symbol}?timeframe=${S.timeframe}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
     S.analysis = await res.json();
-
-    // Populate per-symbol exhaustion lookup from dedicated endpoint
-    if (exhRes?.ok) {
-      const exhData = await exhRes.json().catch(() => null);
-      if (exhData?.exhaustion_by_tf?.length) {
-        _symExhaustion[S.symbol] = exhData.exhaustion_by_tf;
-      }
-    }
-
     renderAll(S.analysis);
     renderMyTrades();
     document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -165,59 +147,6 @@ async function loadAnalysis() {
   } finally {
     setLoading(false);
   }
-}
-
-/* ─── Multi-TF exhaustion grid for analysis view ─────────────────────────── */
-function renderAnalysisExhaustion(symbol, currentTfSignal) {
-  const el = document.getElementById('analysisExhGrid');
-  if (!el) return;
-
-  // Combine: per-TF data from rec cache + current TF's live signal
-  const fromRec = _symExhaustion[symbol] || [];
-  // Merge: rec data as base, override/add current TF from live signal
-  const byTf = {};
-  fromRec.forEach(t => { byTf[t.tf] = t; });
-  const curExh = currentTfSignal?.exhaustion_alert;
-  // Always add current TF data even if not in rec cache
-  if (curExh) {
-    const curTf = currentTfSignal?.timeframe;
-    if (curTf) byTf[curTf] = {
-      tf: curTf, signals: curExh.signals, type: curExh.type,
-      active: curExh.active !== false, price_roc: curExh.price_roc ?? 0,
-      detail: curExh.detail || '',
-    };
-  }
-
-  const tfData = ['1H','2H','4H','8H','12H','1D'].map(tf => byTf[tf]).filter(Boolean);
-  if (tfData.length === 0) { el.style.display = 'none'; el.innerHTML = ''; return; }
-
-  const isPump = tfData[0].type === 'pump';
-  const hasActive = tfData.some(t => t.active);
-
-  const cells = tfData.map(t => {
-    const n      = t.signals;
-    const roc    = Math.abs(t.price_roc ?? 0).toFixed(1);
-    const dir    = t.type === 'pump' ? '▲' : '▼';
-    const flip   = t.active && n >= 4 ? ' ↩' : '';
-    let lvl;
-    if (n === 0)      lvl = 'exh-tf-0';
-    else if (n === 1) lvl = 'exh-tf-1';
-    else if (n <= 3)  lvl = 'exh-tf-mid';
-    else              lvl = 'exh-tf-high';
-    const tip = t.detail ? ` title="${t.detail}"` : '';
-    return `<span class="exh-tf-cell ${lvl}"${tip}>${t.tf} <strong>${n}/7</strong> <small>${dir}${roc}%</small>${flip}</span>`;
-  }).join('');
-
-  const icon  = isPump ? '🔴' : '🟢';
-  const label = hasActive
-    ? (isPump ? 'Pump Exhaustion' : 'Dump Exhaustion')
-    : (isPump ? 'Pump Watch' : 'Dump Watch');
-
-  el.style.display = '';
-  el.innerHTML = `<div class="card analysis-exh-card">
-    <div class="exh-grid-title">${icon} ${label} <span class="exh-grid-sub">— reversal signals across timeframes</span></div>
-    <div class="exh-tf-grid analysis-exh-tf-grid">${cells}</div>
-  </div>`;
 }
 
 function renderAll(a) {
@@ -231,9 +160,6 @@ function renderAll(a) {
     kraken:    ['🟢', 'Kraken',    `Live OHLCV via Kraken.${cgSuffix}`, 'cg-banner'],
     gateio:    ['🟢', 'Gate.io',   `Live OHLCV via Gate.io.${cgSuffix}`, 'cg-banner'],
     kucoin:    ['🟢', 'KuCoin',    `Live OHLCV via KuCoin.${cgSuffix}`, 'cg-banner'],
-    mexc:      ['🟢', 'MEXC',    `Live OHLCV via MEXC.${cgSuffix}`, 'cg-banner'],
-    htx:       ['🟢', 'HTX',     `Live OHLCV via HTX (Huobi).${cgSuffix}`, 'cg-banner'],
-    lbank:     ['🟢', 'LBank',   `Live OHLCV via LBank.${cgSuffix}`, 'cg-banner'],
     demo:      ['⚡', 'Demo Mode', 'All APIs unreachable. Synthetic data shown. Check <a href="/api/diagnostics" target="_blank">diagnostics</a>.', ''],
   };
   const info = srcLabels[src];
@@ -247,7 +173,6 @@ function renderAll(a) {
 
   renderPrice(a);
   renderSignal(a.signal);
-  renderAnalysisExhaustion(a.symbol, a.signal);
   renderMACDCard(a.macd);
   renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
@@ -342,43 +267,6 @@ function renderSignal(s) {
   document.getElementById('lvlTP2').textContent = price(tps[1]);
   document.getElementById('lvlTP3').textContent = price(tps[2]);
   document.getElementById('lvlRR').textContent  = s.rr_ratio ? `${s.rr_ratio}x` : '—';
-
-  // Exhaustion alert inside signal card
-  const exhEl = document.getElementById('signalExhaustion');
-  const exh   = s.exhaustion_alert;
-  if (exh && exhEl) {
-    const isPump    = exh.type === 'pump';
-    const isActive  = exh.active !== false;
-    const isFlipped = exh.flipped === true;
-    const rocAbs    = Math.abs(exh.price_roc ?? 0).toFixed(1);
-    const dirArrow  = isPump ? '▲' : '▼';
-    const cls       = isPump ? 'exh-pump' : 'exh-dump';
-    const n         = exh.signals;
-
-    let lvlCls;
-    if (!isActive)    lvlCls = 'exh-tf-1';     // 0–1 signals: watching
-    else if (n <= 3)  lvlCls = 'exh-tf-mid';   // 2–3: warning
-    else              lvlCls = 'exh-tf-high';   // 4+: strong
-
-    const title = isFlipped
-      ? (isPump ? '🔄 Reversal → SHORT (pump exhausted)' : '🔄 Reversal → LONG (dump exhausted)')
-      : isActive
-        ? (isPump ? '🚨 Pump Exhaustion' : '🚨 Dump Exhaustion')
-        : (isPump ? '👀 Pump Watch' : '👀 Dump Watch');
-
-    exhEl.className   = `signal-exhaustion-alert ${lvlCls}${isFlipped ? ' exh-flipped' : ''}`;
-    exhEl.style.display = '';
-    exhEl.innerHTML = `
-      <div class="exh-header"><strong>${title}</strong>
-        <span class="exh-badge">${n}/7 signals</span>
-        <span class="exh-roc">${dirArrow}${rocAbs}% (4-candle)</span>
-      </div>
-      ${exh.detail ? `<div class="exh-detail">${exh.detail}</div>` : ''}
-    `;
-  } else if (exhEl) {
-    exhEl.style.display = 'none';
-    exhEl.innerHTML = '';
-  }
 }
 
 /* ─── RSI gauge (canvas arc) ──────────────────────────────────────────────── */
@@ -2366,28 +2254,13 @@ async function sendToTelegram() {
 // Session starts at 8AM SGT = 00:00 UTC exactly.
 // 30-min cache key — invalidates at :00 and :30 of each UTC hour.
 function _recCacheKey() {
-  // Mirror the server's 3-slot daily schedule (SGT = UTC+8).
-  // Slot boundaries: 08:00, 16:00, 20:00 SGT.
-  // Recs are stable within each slot — they only change when a new alert fires.
-  const sgt  = new Date(Date.now() + 8 * 3600 * 1000); // approximate SGT
-  const h    = sgt.getUTCHours();
-  let slot, date;
-  const yy = sgt.getUTCFullYear();
-  const mm = String(sgt.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(sgt.getUTCDate()).padStart(2, '0');
-  if (h >= 20) {
-    slot = '20'; date = `${yy}${mm}${dd}`;
-  } else if (h >= 16) {
-    slot = '16'; date = `${yy}${mm}${dd}`;
-  } else if (h >= 8) {
-    slot = '08'; date = `${yy}${mm}${dd}`;
-  } else {
-    // 00:00–07:59 SGT = previous day's 20:00 slot
-    slot = '20';
-    const prev = new Date(sgt - 24 * 3600 * 1000);
-    date = `${prev.getUTCFullYear()}${String(prev.getUTCMonth()+1).padStart(2,'0')}${String(prev.getUTCDate()).padStart(2,'0')}`;
-  }
-  return `rec34_mtf_${date}_${slot}`;
+  const now  = new Date();
+  const y    = now.getUTCFullYear();
+  const m    = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d    = String(now.getUTCDate()).padStart(2, '0');
+  const h    = String(now.getUTCHours()).padStart(2, '0');
+  const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
+  return `rec25_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
@@ -2405,6 +2278,13 @@ function _recCacheSet(data) {
       .forEach(k => localStorage.removeItem(k));
     localStorage.setItem(_recCacheKey(), JSON.stringify(data));
   } catch (_) {}
+}
+
+function _strengthTier(s) {
+  if (s >= 69) return 'str-confirmed';
+  if (s >= 51) return 'str-strong';
+  if (s >= 33) return 'str-moderate';
+  return 'str-weak';
 }
 
 function _buildRecCard(r, i) {
@@ -2478,57 +2358,13 @@ function _buildRecCard(r, i) {
   const detectedShort = r.detected_at
     ? r.detected_at.replace(/\d{4} · /, '').replace(' SGT', '') : '';
 
-  // Exhaustion alert banner (active only — ≥2 signals)
-  const exhBanner = (() => {
-    const exh = r.exhaustion_alert;
-    if (!exh) return '';
-    const isPump    = exh.type === 'pump';
-    const isFlipped = exh.reversal_trade === true || r.reversal_trade === true;
-    const rocAbs    = Math.abs(exh.price_roc ?? 0).toFixed(1);
-    const cls       = isPump ? 'exh-pump' : 'exh-dump';
-    const label     = isFlipped
-      ? (isPump ? '🔄 Reversal → SHORT (pump exhausted)' : '🔄 Reversal → LONG (dump exhausted)')
-      : (isPump ? 'Pump Exhaustion — caution' : 'Dump Exhaustion — caution');
-    return `<div class="rec-exhaustion-alert ${cls}${isFlipped ? ' exh-flipped' : ''}">
-      🚨 <strong>${label}</strong> — ${exh.signals}/7 signals (${exh.tf}), price ${isPump ? 'up' : 'down'} ${rocAbs}%
-      <div class="exh-detail">${exh.detail}</div>
-    </div>`;
-  })();
-
-  // Per-timeframe exhaustion grid (shows all TFs where price move is large enough)
-  const exhTfGrid = (() => {
-    const tfData = r.exhaustion_by_tf;
-    if (!tfData || tfData.length === 0) return '';
-    const isPump = tfData[0].type === 'pump';
-    const cells  = tfData.map(t => {
-      const n      = t.signals;
-      const flip   = t.active && n >= 4 ? ' ↩' : '';
-      const rocAbs = Math.abs(t.price_roc ?? 0).toFixed(1);
-      const dir    = isPump ? '▲' : '▼';
-      let lvl;
-      if (n === 0)      lvl = 'exh-tf-0';
-      else if (n === 1) lvl = 'exh-tf-1';
-      else if (n <= 3)  lvl = 'exh-tf-mid';
-      else              lvl = 'exh-tf-high';
-      // Tooltip: signal detail + what the % means (4-candle ROC for that TF)
-      const tipText = `${t.tf} 4-candle move: ${dir}${rocAbs}%${t.detail ? '\n' + t.detail : ''}`;
-      return `<span class="exh-tf-cell ${lvl}" title="${tipText}">${t.tf} <strong>${n}/7</strong> <small>${dir}${rocAbs}%</small>${flip}</span>`;
-    }).join('');
-    return `<div class="exh-tf-grid">
-      <span class="exh-tf-label">${isPump ? '🔴 Pump' : '🟢 Dump'} watch:</span>
-      ${cells}
-    </div>`;
-  })();
-
-  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}${r.reversal_trade ? ' rec-card-reversal' : ''}" data-rec-sym="${r.symbol}" data-rec-entry="${r.entry || ''}" data-rec-dir="${r.direction || ''}" data-rec-tf="${r.timeframe || r.primary_tf || '2H'}">
+  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}" data-rec-sym="${r.symbol}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
       <span class="rec-sym">${r.symbol}/USDT</span>
-      <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}${r.reversal_trade ? ' ↩' : ''}</span>
-      <span class="rec-strength">${r.display_strength ?? r.h2_strength}/100</span>
+      <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
+      <span class="rec-strength ${_strengthTier(r.display_strength ?? r.h2_strength)}">${r.display_strength ?? r.h2_strength}/100</span>
     </div>
-    ${exhBanner}
-    ${exhTfGrid}
     ${tfAlign}
     ${btcWarn}
     ${mtfBadge}
@@ -2552,7 +2388,7 @@ function _buildRecCard(r, i) {
   </div>`;
 }
 
-async function loadRecommendations(force = false) {
+async function loadRecommendations() {
   const section = document.getElementById('recSection');
   const cards   = document.getElementById('recCards');
   const dateEl  = document.getElementById('recDateLabel');
@@ -2560,18 +2396,35 @@ async function loadRecommendations(force = false) {
   if (!section || !cards) return;
 
   try {
-    let data = force ? null : _recCacheGet();
+    // Use localStorage cache for token list / entry-SL-TP — always refresh scores live
+    let data = _recCacheGet();
     if (!data) {
-      const url = `${API}/recommendations` + (force ? '?force=1' : '');
-      const res = await fetch(url);
+      const res = await fetch(`${API}/recommendations`);
       data = await res.json();
       if (data.recommendations?.length) _recCacheSet(data);
     }
-    if (!data.recommendations?.length) return;
+    if (!data.recommendations?.length) {
+      // Show section with informative message rather than hiding it
+      section.classList.remove('hidden');
+      if (dateEl) dateEl.textContent = data.date_label || '';
+      cards.innerHTML = `<div class="rec-no-signal">
+        <div class="rec-no-signal-icon">📉</div>
+        <div class="rec-no-signal-title">No High-Quality Signals Right Now</div>
+        <div class="rec-no-signal-desc">All current setups are below the minimum conviction threshold (32/100).
+        Waiting for stronger alignment is the correct decision — a bad trade is worse than no trade.</div>
+        <div class="rec-no-signal-next">Next scan: ${data.valid_until_fmt || 'next slot'}</div>
+      </div>`;
+      return;
+    }
 
     if (dateEl) dateEl.textContent = data.date_label || '';
     if (valEl && data.valid_until_fmt) {
       valEl.textContent = `Valid until ${data.valid_until_fmt}`;
+    }
+    const genEl = document.getElementById('recGenerated');
+    if (genEl && data.generated_fmt) {
+      genEl.textContent = `⏱ Generated: ${data.generated_fmt}`;
+      genEl.title = 'Rating & strength are a snapshot from this exact moment. Only changes at 8AM / 4PM / 8PM SGT.';
     }
 
     // BTC consensus banner (replace if already rendered)
@@ -2590,12 +2443,6 @@ async function loadRecommendations(force = false) {
     cards.insertAdjacentHTML('beforebegin', btcBanner);
 
     const recs = data.recommendations || [];
-    // Store per-symbol exhaustion so the analysis view can show it
-    recs.forEach(r => {
-      if (r.symbol && r.exhaustion_by_tf) {
-        _symExhaustion[r.symbol] = r.exhaustion_by_tf;
-      }
-    });
     cards.innerHTML = recs.length
       ? recs.map(_buildRecCard).join('')
       : '<p class="rec-empty">No signals aligned today.</p>';
@@ -2630,83 +2477,11 @@ async function _refreshRecPrices() {
   const els  = [...document.querySelectorAll('.rec-live-price[data-sym]')];
   if (!els.length) return;
   const syms = [...new Set(els.map(el => el.dataset.sym))].join(',');
-
-  // Collect the primary TF per symbol for direction check
-  const cards = [...document.querySelectorAll('.rec-card[data-rec-sym]')];
-  const tfBySym = {};
-  cards.forEach(c => { tfBySym[c.dataset.recSym] = c.dataset.recTf || '2H'; });
-  // Group symbols by tf so we minimise /api/scores calls
-  const tfGroups = {};
-  Object.entries(tfBySym).forEach(([sym, tf]) => {
-    (tfGroups[tf] = tfGroups[tf] || []).push(sym);
-  });
-
   try {
-    // Fetch prices + per-TF current directions in parallel
-    const [prices, ...scoreMaps] = await Promise.all([
-      fetch(`${API}/prices?symbols=${syms}`).then(r => r.json()),
-      ...Object.entries(tfGroups).map(([tf, ss]) =>
-        fetch(`${API}/scores?symbols=${ss.join(',')}&tf=${tf}`)
-          .then(r => r.json()).catch(() => ({}))
-      ),
-    ]);
-
-    // Merge score maps: { SYM: { direction, strength } }
-    const liveDir = {};
-    scoreMaps.forEach(m => Object.assign(liveDir, m));
-
+    const prices = await fetch(`${API}/prices?symbols=${syms}`).then(r => r.json());
     els.forEach(el => {
-      const sym = el.dataset.sym;
-      const p   = prices[sym];
-      if (p == null) return;
-      el.textContent = fmtPrice(p);
-
-      const card = el.closest('.rec-card');
-      if (!card) return;
-
-      // Remove any previous stale/conflict warnings
-      card.querySelector('.rec-stale-warn')?.remove();
-      card.querySelector('.rec-dir-warn')?.remove();
-
-      // Price staleness check
-      const entryRaw = card.dataset.recEntry ? parseFloat(card.dataset.recEntry) : null;
-      if (entryRaw) {
-        const divPct = Math.abs((p - entryRaw) / entryRaw * 100);
-        if (divPct >= 10) {
-          const moved  = ((p - entryRaw) / entryRaw * 100).toFixed(1);
-          const dir    = p > entryRaw ? '▲' : '▼';
-          const severe = divPct >= 20;
-          const warn   = document.createElement('div');
-          warn.className = severe ? 'rec-stale-warn rec-stale-invalid' : 'rec-stale-warn';
-          warn.innerHTML = severe
-            ? `🚫 Signal invalid — price moved ${dir}${Math.abs(moved)}% from entry ($${entryRaw.toFixed(2)} → $${p.toFixed(2)}). Do not trade these levels.
-               <button class="rec-stale-btn" onclick="loadRecommendations(true)">Refresh</button>`
-            : `⚠️ Price moved ${dir}${Math.abs(moved)}% since signal — levels stale
-               <button class="rec-stale-btn" onclick="loadRecommendations(true)">Refresh</button>`;
-          const metaRow = card.querySelector('.rec-meta-row');
-          if (metaRow) metaRow.after(warn);
-          else card.querySelector('.rec-card-top').after(warn);
-          // Dim entry/SL/TP levels when severely stale so they aren't acted on
-          if (severe) {
-            const levels = card.querySelector('.rec-levels');
-            if (levels) levels.classList.add('rec-levels-stale');
-          }
-        }
-      }
-
-      // Direction conflict check — rec direction vs current TF signal
-      const recDir  = (card.dataset.recDir || '').toUpperCase();
-      const nowDir  = (liveDir[sym]?.direction || '').toUpperCase();
-      if (recDir && nowDir && nowDir !== 'NEUTRAL' && nowDir !== recDir) {
-        const tf    = tfBySym[sym] || '2H';
-        const warn2 = document.createElement('div');
-        warn2.className = 'rec-dir-warn';
-        warn2.innerHTML = `⚡ ${tf} signal now <strong>${nowDir}</strong> — conflicts with ${recDir} rec
-          <button class="rec-stale-btn" onclick="loadRecommendations(true)">Refresh</button>`;
-        // Insert below price stale warn (or after card top)
-        const anchor = card.querySelector('.rec-stale-warn') || card.querySelector('.rec-meta-row') || card.querySelector('.rec-card-top');
-        anchor?.after(warn2);
-      }
+      const p = prices[el.dataset.sym];
+      if (p != null) el.textContent = fmtPrice(p);
     });
   } catch (_) {}
 }
@@ -2725,11 +2500,8 @@ function jumpTo(sym, tf) {
 }
 
 async function refresh() {
-  // Clear rec localStorage cache so fresh data (with latest leverage) is fetched
-  Object.keys(localStorage).filter(k => /^rec\d*_/.test(k)).forEach(k => localStorage.removeItem(k));
   await loadAnalysis();
   await loadTicker();
-  await loadRecommendations(true);
 }
 
 /* ─── Order Book Walls ────────────────────────────────────────────────────── */

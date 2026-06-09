@@ -1060,8 +1060,9 @@ a:hover { color: var(--gold2); }
   margin-bottom: 10px;
 }
 .rec-title  { font-size: .95rem; font-weight: 700; color: var(--gold); }
-.rec-date   { font-size: .75rem; color: var(--muted2); }
-.rec-validity { font-size: .7rem; color: var(--muted); margin-left: auto; }
+.rec-date      { font-size: .75rem; color: var(--muted2); }
+.rec-generated { font-size: .68rem; color: #6ee7b7; opacity: .8; cursor: default; }
+.rec-validity  { font-size: .7rem; color: var(--muted); margin-left: auto; }
 .btn-tg {
   display: flex; align-items: center; gap: 5px;
   background: #229ED9; color: #fff; border: none; border-radius: 7px;
@@ -1207,6 +1208,19 @@ a:hover { color: var(--gold2); }
 @media (min-width: 601px) and (max-width: 900px) { .rec-cards-inner { grid-template-columns: repeat(2, 1fr); } }
 .rec-swing-block { margin-top: 20px; }
 .rec-empty { font-size: .75rem; color: var(--muted); padding: 8px 0; }
+
+/* Strength tier color coding on the badge */
+.rec-strength.str-confirmed { color: #34d399; font-weight: 700; }
+.rec-strength.str-strong    { color: #6ee7b7; font-weight: 600; }
+.rec-strength.str-moderate  { color: #fbbf24; font-weight: 500; }
+.rec-strength.str-weak      { color: #f87171; font-weight: 500; }
+
+/* No-signal placeholder */
+.rec-no-signal { text-align: center; padding: 28px 16px; color: var(--muted); }
+.rec-no-signal-icon  { font-size: 2.2rem; margin-bottom: 8px; }
+.rec-no-signal-title { font-size: .9rem; color: #f87171; font-weight: 600; margin-bottom: 6px; }
+.rec-no-signal-desc  { font-size: .75rem; line-height: 1.5; max-width: 340px; margin: 0 auto 10px; }
+.rec-no-signal-next  { font-size: .7rem; color: #6ee7b7; opacity: .7; }
 
 /* Compact meta row: detected time + live price on one line */
 .rec-meta-row {

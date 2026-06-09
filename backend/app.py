@@ -232,7 +232,8 @@ def _get_btc_direction(tf: str) -> str:
     return direction
 
 
-_rec_lock = _threading.Lock()
+_rec_lock  = _threading.Lock()
+_audit_log: list = []   # last 9 slot generations, newest at the end
 _REC_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".rec_cache.json")
 
 def _rec_cache_load() -> Dict:
@@ -659,11 +660,9 @@ def _compute_recommendations() -> dict:
     Fetches all three timeframes in one parallel pass, then builds each set
     independently. BTC consensus is anchored at 2H+4H (more stable bias).
     """
-    now           = datetime.now(timezone.utc)
-    slot_min      = (now.minute // 30) * 30
-    session_start = now.replace(minute=slot_min, second=0, microsecond=0)
-    SGT           = timezone(timedelta(hours=8))
-    detected_at_fmt = now.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
+    now = datetime.now(timezone.utc)
+    SGT = timezone(timedelta(hours=8))
+    now_sgt = now.astimezone(SGT)
 
     all_syms = list(SYMBOLS)
     raw: dict = {}
@@ -739,6 +738,9 @@ def _compute_recommendations() -> dict:
             if h_short["direction"] == "NEUTRAL" or h_long["direction"] == "NEUTRAL":
                 continue
             if h_short["direction"] != h_long["direction"]:
+                continue
+            # Require at least one TF to have meaningful signal strength
+            if h_short["strength"] < 25 and h_long["strength"] < 25:
                 continue
 
             direction = h_long["direction"]
@@ -840,6 +842,11 @@ def _compute_recommendations() -> dict:
                         strength   = max(0, round(strength - _pen, 1))
                         _display_str = max(0, round(_raw_display - _pen, 1))
 
+            # Skip trades below minimum conviction — better to show fewer high-quality
+            # recs than fill slots with weak / heavily-penalised signals
+            if strength < 32:
+                continue
+
             candidates.append({
                 "symbol":           sym,
                 "timeframe":        primary_tf,
@@ -863,7 +870,7 @@ def _compute_recommendations() -> dict:
                 "score":            sig.get("score", 0),
                 "tier":             sig.get("tier"),
                 "entry":            sig.get("entry"),
-                "detected_at":      detected_at_fmt,
+                "detected_at":      now_sgt.strftime("%b %d · %I:%M %p SGT"),
                 "sl":               sig.get("sl"),
                 "sl_pct":           sig.get("sl_pct"),
                 "tp_targets":       sig.get("tp_targets", []),
@@ -900,26 +907,53 @@ def _compute_recommendations() -> dict:
 
     intraday_recs = _build_set("1H", "2H", "2H")   # 2H levels for 4-24h holds; view 1H chart
 
-    session_start_sgt = session_start.astimezone(SGT)
-    # Next signal slot: midnight, 8 AM, or 4 PM SGT (whichever comes next)
-    _now_sgt     = session_start_sgt
-    _today       = [_now_sgt.replace(hour=h, minute=0, second=0, microsecond=0) for h in (0, 8, 16)]
-    _tomorrow    = [s + timedelta(days=1) for s in _today]
-    valid_until_sgt = next(s for s in sorted(_today + _tomorrow) if s > _now_sgt)
+    # Next signal slot at 8AM / 4PM / 8PM SGT
+    _slots   = [now_sgt.replace(hour=h, minute=0, second=0, microsecond=0) for h in (8, 16, 20)]
+    _slots  += [s + timedelta(days=1) for s in _slots]
+    valid_until_sgt = next(s for s in sorted(_slots) if s > now_sgt)
 
-    return {
-        "generated_at":    session_start_sgt.isoformat(),
-        "valid_until":     valid_until_sgt.isoformat(),
-        "valid_until_fmt": valid_until_sgt.strftime("%-I:%M %p SGT, %b %d") + " (next signal)",
-        "date_label":      session_start_sgt.strftime("%b %d, %Y (SGT)"),
-        "btc_consensus":   btc_consensus,
-        "btc_strength":    btc_strength,
-        "btc_4h_dir":      btc_4h_dir,
-        "btc_4h_str":      btc_4h_str,
-        "btc_1d_dir":      btc_tfs.get("1D", {}).get("direction", "NEUTRAL"),
-        "btc_1d_str":      btc_tfs.get("1D", {}).get("strength", 0) or 0,
-        "recommendations": intraday_recs,
+    # Slot label for this generation
+    h = now_sgt.hour
+    slot_label = "8:00 AM" if h < 12 else ("4:00 PM" if h < 20 else "8:00 PM")
+    generated_fmt = now_sgt.strftime(f"%-I:%M:%S %p SGT, %b %d, %Y  [{slot_label} slot]")
+
+    result = {
+        "generated_at":     now_sgt.isoformat(),
+        "generated_fmt":    generated_fmt,
+        "valid_until":      valid_until_sgt.isoformat(),
+        "valid_until_fmt":  valid_until_sgt.strftime("%-I:%M %p SGT, %b %d") + " (next signal)",
+        "date_label":       now_sgt.strftime("%b %d, %Y (SGT)"),
+        "slot":             slot_label,
+        "btc_consensus":    btc_consensus,
+        "btc_strength":     btc_strength,
+        "btc_4h_dir":       btc_4h_dir,
+        "btc_4h_str":       btc_4h_str,
+        "btc_1d_dir":       btc_tfs.get("1D", {}).get("direction", "NEUTRAL"),
+        "btc_1d_str":       btc_tfs.get("1D", {}).get("strength", 0) or 0,
+        "recommendations":  intraday_recs,
     }
+
+    # Audit log — record snapshot of each slot generation (last 9 kept in memory)
+    _audit_log.append({
+        "generated_at": now_sgt.isoformat(),
+        "slot":         slot_label,
+        "key":          _rec_cache_key(),
+        "recs": [
+            {
+                "symbol":    r.get("symbol"),
+                "direction": r.get("direction"),
+                "strength":  r.get("display_strength") or r.get("h2_strength"),
+                "entry":     r.get("entry"),
+                "sl":        r.get("sl"),
+                "tp1":       (r.get("tp_targets") or [None])[0],
+            }
+            for r in intraday_recs
+        ],
+    })
+    if len(_audit_log) > 9:
+        _audit_log.pop(0)
+
+    return result
 
 
 _SGT = timezone(timedelta(hours=8))
@@ -949,7 +983,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v24_mtf_{date}_{slot}"
+    return f"v25_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
@@ -1012,6 +1046,24 @@ def api_recommendations():
     with _rec_lock:
         _rec_cache_save(key, result)
     return jsonify(result)
+
+
+@app.get("/api/rec-audit")
+def api_rec_audit():
+    """
+    Returns the last 9 slot generations with snapshot of symbols, directions,
+    strengths and entry/SL/TP1 at the exact moment they were computed.
+    Use this to verify recs only changed at 8AM / 4PM / 8PM SGT.
+    """
+    with _rec_lock:
+        mem = _rec_cache_load()
+    current_key = _rec_cache_key()
+    return jsonify({
+        "current_key":    current_key,
+        "current_slot":   (mem.get("data") or {}).get("slot"),
+        "current_generated_fmt": (mem.get("data") or {}).get("generated_fmt"),
+        "history":        list(reversed(_audit_log)),  # newest first
+    })
 
 
 @app.post("/api/telegram/send")

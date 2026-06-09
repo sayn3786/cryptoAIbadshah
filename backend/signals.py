@@ -935,130 +935,6 @@ def generate_signal(analysis: Dict) -> Dict:
             combo_pts -= pts
             bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk")
 
-    # ── Combo 11: Extreme pump/dump reversal confluence ──────────────────────────
-    # Threshold adapts per TIMEFRAME × MARKET CAP — because a 5% 1H candle move
-    # is catastrophic for BTC but routine for a micro-cap altcoin.
-    #
-    # Base threshold by timeframe (4-candle move):
-    #   1H: 5%  2H: 7%  4H: 8%  8H: 10%  12H: 11%  1D: 12%  1W: 15%  1M: 20%
-    #
-    # Market cap multiplier (applied to base):
-    #   mega  0.75×  — less volatile; smaller moves are already extreme
-    #   large 0.90×
-    #   mid   1.00×  — baseline
-    #   small 1.30×  — naturally more volatile; need bigger move to confirm extreme
-    #   micro 1.60×  — very high volatility; 20%+ daily moves are common
-    _TF_ROC_BASE = {
-        "1H": 5.0, "2H": 7.0,
-        "4H": 8.0, "8H": 10.0, "12H": 11.0, "1D": 12.0,
-        "1W": 15.0, "2W": 18.0, "3W": 20.0, "1M": 20.0,
-    }
-    _MCAP_MULT = {"mega": 0.75, "large": 0.90, "mid": 1.00, "small": 1.30, "micro": 1.60}
-    _tf          = analysis.get("timeframe", "1D")
-    _cap_tier, _, _ = _mcap_tier(analysis.get("market_cap"))
-    _roc_thresh  = round(_TF_ROC_BASE.get(_tf, 12.0) * _MCAP_MULT.get(_cap_tier, 1.0), 1)
-    exhaustion_alert = None
-    if price_roc is not None and abs(price_roc) >= _roc_thresh:
-        is_pump = price_roc > 0  # True = pump, False = dump
-        rev_signals = 0
-        rev_details = []
-
-        # 1. RSI elevated/depressed (60+ on pump, 40- on dump)
-        _rsi = analysis.get("rsi")
-        if _rsi is not None:
-            if is_pump and _rsi >= 60:
-                rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} {'overbought' if _rsi >= 70 else 'elevated'}")
-            elif not is_pump and _rsi <= 40:
-                rev_signals += 1; rev_details.append(f"RSI {_rsi:.0f} {'oversold' if _rsi <= 30 else 'depressed'}")
-
-        # 2. RSI divergence against the move
-        _rdiv = (analysis.get("rsi_divergence") or {}).get("type")
-        if is_pump and _rdiv == "bearish":
-            rev_signals += 1; rev_details.append("RSI bearish divergence")
-        elif not is_pump and _rdiv == "bullish":
-            rev_signals += 1; rev_details.append("RSI bullish divergence")
-
-        # 3. CVD weakening against the move
-        # First check divergence type, then fall back to raw spot CVD trend
-        _cvd_type = (analysis.get("cvd_divergence") or {}).get("type", "neutral")
-        _spot_cvd_trend = (analysis.get("spot_cvd") or {}).get("trend", "")
-        _fut_cvd_trend  = (analysis.get("futures_cvd") or {}).get("trend", "")
-        if is_pump and _cvd_type == "futures_led_up":
-            rev_signals += 1; rev_details.append("CVD not confirming pump (futures-led)")
-        elif is_pump and _spot_cvd_trend == "bearish" and _fut_cvd_trend != "bullish":
-            rev_signals += 1; rev_details.append("spot CVD falling during pump")
-        elif not is_pump and _cvd_type == "futures_led_down":
-            rev_signals += 1; rev_details.append("CVD not confirming dump (futures-led)")
-        elif not is_pump and _spot_cvd_trend == "bullish" and _fut_cvd_trend != "bearish":
-            rev_signals += 1; rev_details.append("spot CVD rising during dump")
-
-        # 4. Funding rate elevated in direction of move (crowded trade, lowered to 0.01%)
-        _fr = funding.get("current", 0.0) or 0.0
-        if is_pump and _fr >= 0.01:
-            rev_signals += 1; rev_details.append(f"funding {_fr:.3f}% — longs crowded")
-        elif not is_pump and _fr <= -0.01:
-            rev_signals += 1; rev_details.append(f"funding {_fr:.3f}% — shorts crowded")
-
-        # 5. MACD cross against the move
-        _macd = analysis.get("macd") or {}
-        if is_pump and (_macd.get("cross") == "bearish" or _macd.get("zero_cross") == "bearish"):
-            rev_signals += 1; rev_details.append("MACD bearish cross")
-        elif not is_pump and (_macd.get("cross") == "bullish" or _macd.get("zero_cross") == "bullish"):
-            rev_signals += 1; rev_details.append("MACD bullish cross")
-
-        # 6. SuperTrend just flipped against the move
-        _st = analysis.get("supertrend") or {}
-        if _st.get("flipped", False):
-            if is_pump and _st.get("direction") == "bear":
-                rev_signals += 1; rev_details.append("SuperTrend just flipped bearish")
-            elif not is_pump and _st.get("direction") == "bull":
-                rev_signals += 1; rev_details.append("SuperTrend just flipped bullish")
-
-        # 7. Bollinger band breach in direction of move (overextension)
-        _bb = analysis.get("bollinger") or {}
-        if is_pump and _bb.get("breakout") == "bullish":
-            rev_signals += 1; rev_details.append("BB upper band breached")
-        elif not is_pump and _bb.get("breakout") == "bearish":
-            rev_signals += 1; rev_details.append("BB lower band breached")
-
-        # Always record exhaustion state; only apply scoring when ≥2 signals fire
-        _exh_type  = "pump" if is_pump else "dump"
-        detail_str = " · ".join(rev_details[:5]) if rev_details else ""
-        if rev_signals >= 2:
-            # Exponential scaling — each extra signal compounds the conviction:
-            #   2/7 = 15 pts  (early warning)
-            #   3/7 = 25 pts  (moderate conviction)
-            #   4/7 = 40 pts  (strong exhaustion)
-            #   5/7 = 60 pts  (very strong — near certain reversal setup)
-            #   6/7 = 85 pts  (extremely rare, max conviction)
-            #   7/7 = 100 pts (all signals aligned)
-            _EXH_PTS = {2: 15, 3: 25, 4: 40, 5: 60, 6: 85, 7: 100}
-            rev_pts  = _EXH_PTS.get(rev_signals, 100)
-            _exh_msg = (
-                f"🚨 {'Pump' if is_pump else 'Dump'} exhaustion ({rev_signals}/7 signals: {detail_str}) "
-                f"— price {'up' if is_pump else 'down'} {abs(price_roc):.1f}%, "
-                f"{rev_signals} reversal indicators firing ({'+' if not is_pump else '-'}{rev_pts} pts)"
-            )
-            exhaustion_alert = {"type": _exh_type, "signals": rev_signals, "pts": rev_pts,
-                                "active": True, "detail": detail_str,
-                                "price_roc": price_roc, "message": _exh_msg}
-            if is_pump:
-                combo_pts -= rev_pts
-                bear_reasons.insert(0, _exh_msg)
-            else:
-                combo_pts += rev_pts
-                bull_reasons.insert(0, _exh_msg)
-        else:
-            # 0–1 signals: monitoring only, no score impact
-            _watch_msg = (
-                f"👀 {'Pump' if is_pump else 'Dump'} watch ({rev_signals}/7 signals"
-                + (f": {detail_str}" if detail_str else "") + ") "
-                f"— price {'up' if is_pump else 'down'} {abs(price_roc):.1f}%"
-            )
-            exhaustion_alert = {"type": _exh_type, "signals": rev_signals, "pts": 0,
-                                "active": False, "detail": detail_str,
-                                "price_roc": price_roc, "message": _watch_msg}
-
     # Apply combo points
     score += combo_pts
 
@@ -1103,31 +979,6 @@ def generate_signal(analysis: Dict) -> Dict:
     MAX_SCORE = 220.0
 
     strength = min(int(abs(score) / MAX_SCORE * 100), 100)
-
-    # ── Exhaustion post-multiplier correction ─────────────────────────────────
-    # Combo 11 adds pts BEFORE the confluence multiplier, so a 1.30x multiplier
-    # inflates the score back up and the exhaustion penalty gets wiped out.
-    # Fix: cut strength directly on the final 0–100 value, bypassing the mult.
-    # If the cut pushes strength below the flip threshold AND signals >= 4,
-    # also flip direction to the reversal side.
-    #
-    # Strength cut per signal count:
-    #   2/7 = −12   3/7 = −22   4/7 = −35
-    #   5/7 = −50   6/7 = −65   7/7 = −80
-    _EXH_CUT = {2: 12, 3: 22, 4: 35, 5: 50, 6: 65, 7: 80}
-    if exhaustion_alert and exhaustion_alert.get("active", True):
-        _n   = exhaustion_alert["signals"]
-        _cut = _EXH_CUT.get(_n, 80)
-        strength = max(0, strength - _cut)
-        # If exhaustion is strong (4+) and has knocked strength down far enough,
-        # flip direction to the reversal side
-        _FLIP_THRESHOLD = 35   # same as direction threshold
-        if _n >= 4 and strength <= _FLIP_THRESHOLD:
-            _rev = "SHORT" if exhaustion_alert["type"] == "pump" else "LONG"
-            score = -abs(score) if _rev == "SHORT" else abs(score)
-            _FLIP_STR = {4: 48, 5: 60, 6: 74, 7: 88}
-            strength = _FLIP_STR.get(_n, 88)
-            exhaustion_alert["flipped"] = True
 
     # Threshold at 35 pts — requires at least 2-3 real signals agreeing.
     DIRECTION_THRESHOLD = 35
@@ -1195,12 +1046,11 @@ def generate_signal(analysis: Dict) -> Dict:
     max_atr_pct  = base_pct * atr_mult          # e.g. 0.015 × 3.0 = 0.045 (4.5%)
     max_atr_abs  = current_price * max_atr_pct
 
-    if candles and len(candles) >= 14 and current_price > 0:
-        # True ATR (accounts for gaps between candles, not just intra-bar range)
+    if candles and len(candles) >= 15 and current_price > 0:
+        # True ATR — includes gap opens via previous close
         _tr_vals = []
         for _i in range(1, 15):
-            _c = candles[-_i]
-            _p = candles[-_i - 1]
+            _c = candles[-_i]; _p = candles[-_i - 1]
             _tr_vals.append(max(
                 _c["high"] - _c["low"],
                 abs(_c["high"] - _p["close"]),
@@ -1208,154 +1058,93 @@ def generate_signal(analysis: Dict) -> Dict:
             ))
         atr = sum(_tr_vals) / len(_tr_vals)
 
-        # ── Pull all context used across entry/SL/TP ──────────────────────────
+        # Technical levels for entry and SL anchoring
+        # Entry: enter at/near current price (market or ≤1% limit for tight levels)
+        # SL: placed just beyond the nearest technical invalidation level (up to 7% away)
+        ENTRY_LIMIT   = 0.010   # max 1% pullback for limit entry
+        SL_ANCHOR_MAX = 0.07    # search for SL anchor up to 7% from entry
+
         _ema_t     = analysis.get("ema_trend") or {}
         ema21_val  = _ema_t.get("ema21")
         _bb        = analysis.get("bollinger") or {}
         bb_upper   = _bb.get("upper")
         bb_lower   = _bb.get("lower")
-        bb_bw      = _bb.get("bandwidth")
-
-        _vwap_val  = (analysis.get("vwap") or {}).get("vwap")
-        _ichi      = analysis.get("ichimoku") or {}
-        _kijun     = _ichi.get("kijun")       # mid-term S/R baseline
-        _span_a    = _ichi.get("span_a")
-        _span_b    = _ichi.get("span_b")
-
-        _funding_val = float((analysis.get("funding_rate") or {}).get("current", 0) or 0)
-        _oi_chg      = float((analysis.get("open_interest") or {}).get("change_pct", 0) or 0)
-        _fg_val      = int((analysis.get("fear_greed") or {}).get("value", 50) or 50)
-        _fvgs_all    = analysis.get("fvgs") or []
-        _unfilled    = [f for f in _fvgs_all if not f.get("filled", True)]
-        _ew          = analysis.get("elliott_wave") or {}
-
-        # Fibonacci 61.8% / 38.2% retracement from last 20 closed candles
-        _fib_61 = _fib_38 = None
-        if len(candles) >= 22:
-            _rc = candles[-22:-2]
-            _fhigh = max(c["high"] for c in _rc)
-            _flow  = min(c["low"]  for c in _rc)
-            _fr    = _fhigh - _flow
-            if _fr > 0:
-                _fib_61 = round(_fhigh - 0.618 * _fr, 8)  # deep pullback support
-                _fib_38 = round(_fhigh - 0.382 * _fr, 8)  # shallow pullback support
-
-        # Last 10 closed candles for swing levels (wider window for better S/R)
-        _closed    = candles[-11:-1] if len(candles) >= 11 else candles[:-1]
+        # Last 5 closed candles (skip live candle at index -1)
+        _closed    = candles[-6:-1] if len(candles) >= 6 else candles[:-1]
         swing_high = max((c["high"] for c in _closed), default=None) if _closed else None
         swing_low  = min((c["low"]  for c in _closed), default=None) if _closed else None
 
-        LEVEL_CAP = 0.04    # max 4% away — if all levels further, enter at market
-        SWING_CAP = 0.03    # swing high/low: 10-candle window, slightly noisier
-
-        def _within(level, above: bool) -> bool:
-            if level is None or current_price <= 0: return False
-            gap = (level - current_price) / current_price if above else (current_price - level) / current_price
-            return 0 < gap <= LEVEL_CAP
-
-        def _within_swing(level, above: bool) -> bool:
-            if level is None or current_price <= 0: return False
-            gap = ((level - current_price) if above else (current_price - level)) / current_price
-            return 0 < gap <= SWING_CAP
-
-        # FVG midpoint as entry zone (price gravitates to unfilled gaps)
-        _fvg_entry = None
-        if direction == "LONG":
-            _bull_fvgs = [f for f in _unfilled if f.get("type") == "bullish"
-                          and f.get("bottom", 0) < current_price]
-            if _bull_fvgs:
-                _nf = max(_bull_fvgs, key=lambda f: f.get("midpoint", 0))
-                if (current_price - _nf["midpoint"]) / current_price <= LEVEL_CAP:
-                    _fvg_entry = _nf["midpoint"]
-        elif direction == "SHORT":
-            _bear_fvgs = [f for f in _unfilled if f.get("type") == "bearish"
-                          and f.get("top", 0) > current_price]
-            if _bear_fvgs:
-                _nf = min(_bear_fvgs, key=lambda f: f.get("midpoint", float("inf")))
-                if (_nf["midpoint"] - current_price) / current_price <= LEVEL_CAP:
-                    _fvg_entry = _nf["midpoint"]
-
-        if direction == "LONG":
-            supports = []
-            if _within(ema21_val,   above=False): supports.append(ema21_val)
-            if _within(bb_lower,    above=False): supports.append(bb_lower)
-            if _within(_vwap_val,   above=False): supports.append(_vwap_val)
-            if _within(_kijun,      above=False): supports.append(_kijun)
-            if _within(_fib_61,     above=False): supports.append(_fib_61)
-            if _within(_fib_38,     above=False): supports.append(_fib_38)
-            if _within(_fvg_entry,  above=False): supports.append(_fvg_entry)
-            if _within_swing(swing_low, above=False): supports.append(swing_low)
-            base = max(supports) if supports else current_price
-        elif direction == "SHORT":
-            resistances = []
-            if _within(ema21_val,   above=True): resistances.append(ema21_val)
-            if _within(bb_upper,    above=True): resistances.append(bb_upper)
-            if _within(_vwap_val,   above=True): resistances.append(_vwap_val)
-            if _within(_kijun,      above=True): resistances.append(_kijun)
-            if _within(_fib_38,     above=True): resistances.append(_fib_38)
-            if _within(_fib_61,     above=True): resistances.append(_fib_61)
-            if _within(_fvg_entry,  above=True): resistances.append(_fvg_entry)
-            if _within_swing(swing_high, above=True): resistances.append(swing_high)
-            base = min(resistances) if resistances else current_price
-        else:
-            base = current_price
-
-        entry = round(base, 8)
-
-        eff_atr      = min(atr, max_atr_abs)
-        sl_dist_base = eff_atr * sl_m
-
-        # ── SL: anchor to Supertrend when it's nearby ─────────────────────────
-        # Supertrend is a natural invalidation level — if it's within 1.5× ATR range
-        # and on the correct side, use it instead of pure ATR to get a tighter stop.
         _st      = analysis.get("supertrend") or {}
         st_price = _st.get("value")
         st_dir   = _st.get("direction")
 
-        sl_dist = sl_dist_base
+        eff_atr = min(atr, max_atr_abs)
 
-        # Anchor 1: Supertrend — natural trend-invalidation level
-        if direction == "LONG" and st_dir == "bull" and st_price and st_price < entry:
-            st_gap = entry - st_price
-            if 0 < st_gap <= sl_dist_base * 1.5:
-                sl_dist = min(sl_dist_base, st_gap * 1.003)
-        elif direction == "SHORT" and st_dir == "bear" and st_price and st_price > entry:
-            st_gap = st_price - entry
-            if 0 < st_gap <= sl_dist_base * 1.5:
-                sl_dist = min(sl_dist_base, st_gap * 1.003)
+        def _gap(level, above: bool) -> float:
+            if level is None or current_price <= 0:
+                return float("inf")
+            return ((level - current_price) if above else (current_price - level)) / current_price
 
-        # Anchor 2: Ichimoku cloud boundary — strong structural invalidation
-        if _span_a is not None and _span_b is not None:
-            if direction == "LONG":
-                _cloud_bot = min(_span_a, _span_b)
-                if entry > _cloud_bot:
-                    _cb_gap = entry - _cloud_bot
-                    if 0 < _cb_gap <= sl_dist_base * 2.0:
-                        sl_dist = min(sl_dist, _cb_gap * 1.005)
-            elif direction == "SHORT":
-                _cloud_top = max(_span_a, _span_b)
-                if entry < _cloud_top:
-                    _ct_gap = _cloud_top - entry
-                    if 0 < _ct_gap <= sl_dist_base * 2.0:
-                        sl_dist = min(sl_dist, _ct_gap * 1.005)
+        if direction == "LONG":
+            # Entry: market price or limit within 1% at a nearby support
+            _close_sup = [lv for lv in [ema21_val, bb_lower]
+                          if lv and 0 <= _gap(lv, above=False) <= ENTRY_LIMIT]
+            if swing_low and 0 <= _gap(swing_low, above=False) <= ENTRY_LIMIT * 0.7:
+                _close_sup.append(swing_low)
+            entry = round(max(_close_sup) if _close_sup else current_price, 8)
 
-        # Buffer 1: Funding rate — overcrowded longs/shorts need wider SL
-        # (cascade liquidations can spike through tight stops)
-        if direction == "LONG" and _funding_val > 0.05:
-            sl_dist *= 1.12
-        elif direction == "SHORT" and _funding_val < -0.05:
-            sl_dist *= 1.12
+            # SL: just below nearest technical invalidation level
+            _sl_anchors = []
+            for _lv in [ema21_val, bb_lower, swing_low]:
+                if _lv and 0 < (entry - _lv) / entry <= SL_ANCHOR_MAX:
+                    _sl_anchors.append(_lv)
+            if st_price and st_dir == "bullish" and 0 < (entry - st_price) / entry <= SL_ANCHOR_MAX:
+                _sl_anchors.append(st_price)
 
-        # Buffer 2: Extreme Fear & Greed — erratic volatility, give more room
-        if _fg_val <= 15 or _fg_val >= 90:
-            sl_dist *= 1.10
+            if _sl_anchors:
+                _anchor  = max(_sl_anchors)   # closest (highest) support below entry
+                _buf     = min(eff_atr * 0.4, entry * 0.004)   # small buffer below anchor
+                sl_dist  = (entry - _anchor) + _buf
+            else:
+                sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)   # min 1.5%
 
-        # ── TP multiplier: RSI headroom + trend + sentiment + momentum ────────
+            sl = round(max(entry * 0.001, entry - sl_dist), 8)
+
+        elif direction == "SHORT":
+            # Entry: market price or limit within 1% at a nearby resistance
+            _close_res = [lv for lv in [ema21_val, bb_upper]
+                          if lv and 0 <= _gap(lv, above=True) <= ENTRY_LIMIT]
+            if swing_high and 0 <= _gap(swing_high, above=True) <= ENTRY_LIMIT * 0.7:
+                _close_res.append(swing_high)
+            entry = round(min(_close_res) if _close_res else current_price, 8)
+
+            _sl_anchors = []
+            for _lv in [ema21_val, bb_upper, swing_high]:
+                if _lv and 0 < (_lv - entry) / entry <= SL_ANCHOR_MAX:
+                    _sl_anchors.append(_lv)
+            if st_price and st_dir == "bearish" and 0 < (st_price - entry) / entry <= SL_ANCHOR_MAX:
+                _sl_anchors.append(st_price)
+
+            if _sl_anchors:
+                _anchor  = min(_sl_anchors)   # closest (lowest) resistance above entry
+                _buf     = min(eff_atr * 0.4, entry * 0.004)
+                sl_dist  = (_anchor - entry) + _buf
+            else:
+                sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
+
+            sl = round(entry + sl_dist, 8)
+
+        else:
+            entry   = round(current_price, 8)
+            sl      = None
+            sl_dist = eff_atr * sl_m
+
+        # ── TP multiplier: RSI headroom + EMA/MACD trend + BB squeeze ─────────
         rsi_val = analysis.get("rsi") or 50
         if direction == "LONG":
-            rsi_room = max(0.4, min(1.3, (75.0 - float(rsi_val)) / 30.0))
+            rsi_room = max(0.5, min(1.4, (75.0 - float(rsi_val)) / 30.0))
         elif direction == "SHORT":
-            rsi_room = max(0.4, min(1.3, (float(rsi_val) - 25.0) / 30.0))
+            rsi_room = max(0.5, min(1.4, (float(rsi_val) - 25.0) / 30.0))
         else:
             rsi_room = 0.7
 
@@ -1364,7 +1153,6 @@ def generate_signal(analysis: Dict) -> Dict:
         ema_trend   = _ema_t.get("trend", "neutral")
         macd_hist   = float((analysis.get("macd") or {}).get("histogram") or 0)
 
-        # Trend alignment bonuses
         if direction == "LONG":
             if short_trend == "bullish":                          tp_bonus += 0.15
             if ema_trend in ("bullish", "mixed_bullish"):         tp_bonus += 0.10
@@ -1374,80 +1162,32 @@ def generate_signal(analysis: Dict) -> Dict:
             if ema_trend in ("bearish", "mixed_bearish"):         tp_bonus += 0.10
             if macd_hist < 0:                                     tp_bonus += 0.10
 
-        # BB squeeze = volatility compression about to release → wider TPs
+        bb_bw = _bb.get("bandwidth")
         if bb_bw is not None:
-            if bb_bw < 0.03:   tp_bonus += 0.15
-            elif bb_bw > 0.08: tp_bonus += 0.10
+            if bb_bw < 0.03:   tp_bonus += 0.20   # tight squeeze — big move imminent
+            elif bb_bw > 0.08: tp_bonus += 0.10   # already expanding
 
-        # Funding rate: overcrowded side = take profits sooner before flush/squeeze
-        if direction == "LONG":
-            if _funding_val > 0.05:    tp_bonus -= 0.20   # longs crowded, flush risk
-            elif _funding_val < -0.01: tp_bonus += 0.10   # shorts paying longs
-        elif direction == "SHORT":
-            if _funding_val < -0.05:   tp_bonus -= 0.20   # short squeeze risk
-            elif _funding_val > 0.05:  tp_bonus += 0.10   # longs paying shorts
+        tp_factor = max(0.5, min(2.0, rsi_room + tp_bonus))
 
-        # OI momentum: OI building with trade direction = momentum carry
-        if abs(_oi_chg) >= 10:
-            if (direction == "LONG" and _oi_chg > 0) or \
-               (direction == "SHORT" and _oi_chg < 0):
-                tp_bonus += 0.15   # OI confirming direction
-            else:
-                tp_bonus -= 0.10   # OI building against — be conservative
-
-        # Fear & Greed extremes: mean reversion setups get wider targets
-        if direction == "LONG" and _fg_val <= 20:
-            tp_bonus += 0.20   # extreme fear → buy = high mean-reversion potential
-        elif direction == "SHORT" and _fg_val >= 80:
-            tp_bonus += 0.20   # extreme greed → short = high mean-reversion potential
-
-        # Elliott Wave 3: strongest impulse wave → push targets wider
-        if _ew.get("wave") in (3, "3"):
-            _ew_dir = str(_ew.get("direction", "")).lower()
-            if (direction == "LONG" and "bull" in _ew_dir) or \
-               (direction == "SHORT" and "bear" in _ew_dir):
-                tp_bonus += 0.20
-
-        tp_factor = max(0.3, min(2.0, rsi_room + tp_bonus))
-
-        # Apply factor; enforce minimum R:R floors
-        tp1_dist = sl_dist * max(1.2, TP1_RR * tp_factor)
-        tp2_dist = sl_dist * max(2.0, TP2_RR * tp_factor)
-        tp3_dist = sl_dist * max(3.0, TP3_RR * tp_factor)
-
-        # FVG magnet: if an unfilled gap is between TP1 and TP2, anchor TP1 to it
-        if direction == "LONG":
-            _tp_fvgs = [f.get("bottom", 0) for f in _unfilled
-                        if f.get("type") == "bearish" and entry < f.get("bottom", 0)]
-            if _tp_fvgs:
-                _nearest_fvg = min(_tp_fvgs)
-                _fvg_d = _nearest_fvg - entry
-                if tp1_dist < _fvg_d <= tp2_dist:
-                    tp1_dist = _fvg_d   # anchor TP1 to the FVG fill level
-        elif direction == "SHORT":
-            _tp_fvgs = [f.get("top", 0) for f in _unfilled
-                        if f.get("type") == "bullish" and entry > f.get("top", 0) > 0]
-            if _tp_fvgs:
-                _nearest_fvg = max(_tp_fvgs)
-                _fvg_d = entry - _nearest_fvg
-                if tp1_dist < _fvg_d <= tp2_dist:
-                    tp1_dist = _fvg_d
+        # Higher R:R minimums — TP1 at least 2:1, TP2 at least 3:1, TP3 at least 5:1
+        TP1_RR, TP2_RR, TP3_RR = 2.0, 3.5, 5.5
+        tp1_dist = sl_dist * max(2.0, TP1_RR * tp_factor)
+        tp2_dist = sl_dist * max(3.0, TP2_RR * tp_factor)
+        tp3_dist = sl_dist * max(5.0, TP3_RR * tp_factor)
 
         def _tp_short(dist):
             target = entry - dist
-            if target <= entry * 0.05:   # >95% drop — not achievable
+            if target <= entry * 0.05:
                 return None
             return round(target, 8)
 
-        if direction == "LONG":
-            sl = round(max(entry * 0.001, entry - sl_dist), 8)
+        if direction == "LONG" and sl:
             tp_targets = [
                 round(entry + tp1_dist, 8),
                 round(entry + tp2_dist, 8),
                 round(entry + tp3_dist, 8),
             ]
-        elif direction == "SHORT":
-            sl = round(entry + sl_dist, 8)
+        elif direction == "SHORT" and sl:
             tp_targets = [
                 _tp_short(tp1_dist),
                 _tp_short(tp2_dist),
@@ -1461,40 +1201,26 @@ def generate_signal(analysis: Dict) -> Dict:
             tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
 
-
-            # ── Leverage suggestion ───────────────────────────────────────────
-            # Slab base by market cap tier
-            _SLAB_BASE  = {"mega": 8, "large": 6, "mid": 5, "small": 3, "micro": 3}
-            _SLAB_FLOOR = {"mega": 5, "large": 4, "mid": 3, "small": 2, "micro": 2}
-            _SLAB_CEIL  = {"mega": 12, "large": 10, "mid": 8, "small": 5, "micro": 5}
-            _slab_base  = _SLAB_BASE.get(vol_tier_id, 5)
+            # ── Leverage: market cap tier, capped by SL size for risk management ─
+            _SLAB_BASE  = {"mega": 7, "large": 5, "mid": 4, "small": 3, "micro": 2}
+            _SLAB_FLOOR = {"mega": 3, "large": 3, "mid": 2, "small": 2, "micro": 1}
+            _SLAB_CEIL  = {"mega": 10, "large": 8, "mid": 6, "small": 4, "micro": 3}
+            _slab_base  = _SLAB_BASE.get(vol_tier_id, 4)
             _slab_floor = _SLAB_FLOOR.get(vol_tier_id, 2)
-            _slab_ceil  = _SLAB_CEIL.get(vol_tier_id, 8)
+            _slab_ceil  = _SLAB_CEIL.get(vol_tier_id, 6)
 
-            # Strength adjustment within slab: -1 to +3
-            if strength >= 80:     _str_adj = 3
-            elif strength >= 65:   _str_adj = 2
-            elif strength >= 50:   _str_adj = 1
-            elif strength >= 35:   _str_adj = 0
+            if strength >= 80:     _str_adj = 2
+            elif strength >= 65:   _str_adj = 1
+            elif strength >= 50:   _str_adj = 0
             else:                  _str_adj = -1
 
-            suggested_lev = int(min(_slab_ceil, max(_slab_floor, _slab_base + _str_adj)))
-
-            # Funding rate: overcrowded side = reduce leverage (squeeze/flush risk)
-            if direction == "LONG":
-                if _funding_val > 0.05:   suggested_lev = max(_slab_floor, suggested_lev - 2)
-                elif _funding_val > 0.03: suggested_lev = max(_slab_floor, suggested_lev - 1)
-            elif direction == "SHORT":
-                if _funding_val < -0.05:  suggested_lev = max(_slab_floor, suggested_lev - 2)
-                elif _funding_val < -0.03:suggested_lev = max(_slab_floor, suggested_lev - 1)
-
-            # Extreme Fear & Greed: elevated volatility → lower leverage
-            if _fg_val <= 15 or _fg_val >= 90:
-                suggested_lev = max(_slab_floor, suggested_lev - 1)
-
-            # BB tight squeeze: direction unconfirmed → conservative until breakout
-            if bb_bw is not None and bb_bw < 0.02:
-                suggested_lev = max(_slab_floor, suggested_lev - 1)
+            # Hard cap based on SL size — wider SL = lower leverage
+            _sl_size_cap = (3 if sl_pct > 5.0 else
+                            5 if sl_pct > 3.0 else
+                            7 if sl_pct > 2.0 else
+                            10 if sl_pct > 1.0 else _slab_ceil)
+            suggested_lev = int(min(_sl_size_cap, _slab_ceil,
+                                    max(_slab_floor, _slab_base + _str_adj)))
 
 
     return {
@@ -1515,5 +1241,4 @@ def generate_signal(analysis: Dict) -> Dict:
         "rr_ratio": rr_ratio,
         "leverage": suggested_lev,
         "current_price": round(current_price, 8) if current_price else None,
-        "exhaustion_alert": exhaustion_alert,
     }
