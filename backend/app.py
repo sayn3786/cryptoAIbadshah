@@ -747,6 +747,15 @@ def _compute_recommendations() -> dict:
             strength  = round(h_short["strength"] * 0.4 + h_long["strength"] * 0.6, 1)
             sig       = tfs[primary_tf]["sig"]
 
+            # Sanity check: skip if the signal's entry price is >25% away from
+            # current price — almost always means mock/stale data was used.
+            _sig_price   = sig.get("current_price") or sig.get("entry")
+            _live_price  = tfs[primary_tf].get("current_price") or _sig_price
+            if _sig_price and _live_price and _live_price > 0:
+                _price_gap = abs(_sig_price - _live_price) / _live_price
+                if _price_gap > 0.25:
+                    continue
+
             btc_conflict, btc_aligned, btc_adj, corr_factor, strength = _apply_btc(
                 sym, direction, strength)
 
@@ -988,7 +997,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v26_mtf_{date}_{slot}"
+    return f"v27_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

@@ -2260,7 +2260,7 @@ function _recCacheKey() {
   const d    = String(now.getUTCDate()).padStart(2, '0');
   const h    = String(now.getUTCHours()).padStart(2, '0');
   const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec26_mtf_${y}${m}${d}${h}${half}`;
+  return `rec27_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
@@ -2481,7 +2481,35 @@ async function _refreshRecPrices() {
     const prices = await fetch(`${API}/prices?symbols=${syms}`).then(r => r.json());
     els.forEach(el => {
       const p = prices[el.dataset.sym];
-      if (p != null) el.textContent = fmtPrice(p);
+      if (p == null) return;
+      el.textContent = fmtPrice(p);
+
+      // Stale detection: compare live price against entry price stored on card
+      const card = el.closest('.rec-card');
+      if (!card) return;
+      const entryEl = card.querySelector('.rec-val');   // first rec-val = entry
+      const entryText = entryEl?.textContent?.replace(/[$,]/g, '').trim();
+      const entry = entryText ? parseFloat(entryText) : null;
+      if (!entry || !p || p <= 0) return;
+
+      const drift = Math.abs(p - entry) / entry;
+      // Remove any existing stale banner
+      card.querySelector('.rec-price-stale')?.remove();
+
+      if (drift >= 0.20) {
+        const pct   = (drift * 100).toFixed(0);
+        const cls   = drift >= 0.35 ? 'rec-price-stale-critical' : 'rec-price-stale-warn';
+        const banner = document.createElement('div');
+        banner.className = `rec-price-stale ${cls}`;
+        banner.innerHTML = drift >= 0.35
+          ? `⛔ Entry ${pct}% from live price — signal is stale, do NOT trade`
+          : `⚠️ Entry ${pct}% from live price — verify before trading`;
+        card.querySelector('.rec-levels')?.before(banner);
+        // Dim the entry/SL/TP levels
+        card.querySelector('.rec-levels')?.classList.add('rec-levels-stale');
+      } else {
+        card.querySelector('.rec-levels')?.classList.remove('rec-levels-stale');
+      }
     });
   } catch (_) {}
 }

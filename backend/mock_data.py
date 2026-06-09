@@ -20,7 +20,7 @@ MOCK_PRICES = {
     "LINKUSDT":     14.5,
     "HBARUSDT":      0.195,
     "KASUSDT":       0.115,
-    "RENDERUSDT":    4.50,
+    "RENDERUSDT":    1.65,
     "HYPEUSDT":     27.0,
     "TAOUSDT":     193.0,   # was $420 in May 2025
     "ONDOUSDT":      0.92,
