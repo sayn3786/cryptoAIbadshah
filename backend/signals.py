@@ -1223,6 +1223,46 @@ def generate_signal(analysis: Dict) -> Dict:
                                     max(_slab_floor, _slab_base + _str_adj)))
 
 
+    # ── Exhaustion flag: signal direction fighting momentum extremes at this TF ──
+    # True when a LONG is overbought, or a SHORT is oversold — risky entry zone.
+    # Used by rec engine to apply a per-TF exhaustion penalty at the respective TF.
+    _exh_overbought = (
+        (rsi is not None and rsi > 65) or
+        (srsi_signal in ("overbought", "bear_cross_overbought", "near_overbought"))
+    )
+    _exh_oversold = (
+        (rsi is not None and rsi < 35) or
+        (srsi_signal in ("oversold", "bull_cross_oversold", "near_oversold"))
+    )
+    exhaustion_flag = (
+        (direction == "LONG"  and _exh_overbought) or
+        (direction == "SHORT" and _exh_oversold)
+    )
+
+    # ── Reversal count: fresh directional flip indicators at this TF ──
+    # Counts how many independent indicators just changed direction in the trade direction.
+    # A flip means a momentum event (not just sustained state) — earliest entry signal.
+    _bull_flips = sum([
+        1 if (m_cross == "bullish"  or m_zero == "bullish")  else 0,  # MACD cross
+        1 if ema7_cross == "bullish"                          else 0,  # EMA7/21 cross
+        1 if (st_dir == "bullish"   and st_flipped)          else 0,  # SuperTrend flip
+        1 if vwap_cross == "bullish"                         else 0,  # VWAP cross
+        1 if srsi_signal == "bull_cross_oversold"            else 0,  # Stoch RSI reversal
+        1 if tk_cross == "bullish"                           else 0,  # Ichimoku TK cross
+    ])
+    _bear_flips = sum([
+        1 if (m_cross == "bearish"  or m_zero == "bearish")  else 0,
+        1 if ema7_cross == "bearish"                          else 0,
+        1 if (st_dir == "bearish"   and st_flipped)          else 0,
+        1 if vwap_cross == "bearish"                         else 0,
+        1 if srsi_signal == "bear_cross_overbought"          else 0,
+        1 if tk_cross == "bearish"                           else 0,
+    ])
+    reversal_count = (
+        _bull_flips if direction == "LONG"  else
+        _bear_flips if direction == "SHORT" else 0
+    )
+
     return {
         "direction": direction,
         "score": score,
@@ -1241,4 +1281,6 @@ def generate_signal(analysis: Dict) -> Dict:
         "rr_ratio": rr_ratio,
         "leverage": suggested_lev,
         "current_price": round(current_price, 8) if current_price else None,
+        "exhaustion_flag": exhaustion_flag,
+        "reversal_count":  reversal_count,
     }
