@@ -739,6 +739,9 @@ def _compute_recommendations() -> dict:
                 continue
             if h_short["direction"] != h_long["direction"]:
                 continue
+            # Require at least one TF to have meaningful signal strength
+            if h_short["strength"] < 25 and h_long["strength"] < 25:
+                continue
 
             direction = h_long["direction"]
             strength  = round(h_short["strength"] * 0.4 + h_long["strength"] * 0.6, 1)
@@ -862,7 +865,7 @@ def _compute_recommendations() -> dict:
                 "score":            sig.get("score", 0),
                 "tier":             sig.get("tier"),
                 "entry":            sig.get("entry"),
-                "detected_at":      detected_at_fmt,
+                "detected_at":      now_sgt.strftime("%b %d · %I:%M %p SGT"),
                 "sl":               sig.get("sl"),
                 "sl_pct":           sig.get("sl_pct"),
                 "tp_targets":       sig.get("tp_targets", []),
@@ -975,7 +978,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v24_mtf_{date}_{slot}"
+    return f"v25_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

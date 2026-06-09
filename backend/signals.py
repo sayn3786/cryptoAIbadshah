@@ -1046,15 +1046,23 @@ def generate_signal(analysis: Dict) -> Dict:
     max_atr_pct  = base_pct * atr_mult          # e.g. 0.015 × 3.0 = 0.045 (4.5%)
     max_atr_abs  = current_price * max_atr_pct
 
-    if candles and len(candles) >= 14 and current_price > 0:
-        atr = sum(c["high"] - c["low"] for c in candles[-14:]) / 14
+    if candles and len(candles) >= 15 and current_price > 0:
+        # True ATR — includes gap opens via previous close
+        _tr_vals = []
+        for _i in range(1, 15):
+            _c = candles[-_i]; _p = candles[-_i - 1]
+            _tr_vals.append(max(
+                _c["high"] - _c["low"],
+                abs(_c["high"] - _p["close"]),
+                abs(_c["low"]  - _p["close"]),
+            ))
+        atr = sum(_tr_vals) / len(_tr_vals)
 
-        # Dynamic limit-entry: scan real technical levels in priority order.
-        # For LONG: find the nearest support BELOW current price to place a limit buy.
-        # For SHORT: find the nearest resistance ABOVE current price to place a limit sell.
-        # Priority: EMA21 → BB upper/lower → recent 5-candle swing high/low → current price.
-        LEVEL_CAP  = 0.04    # max 4% away — if all levels are further, enter at market
-        SWING_CAP  = 0.025   # swing highs/lows are noisy; tighter cap (2.5%)
+        # Technical levels for entry and SL anchoring
+        # Entry: enter at/near current price (market or ≤1% limit for tight levels)
+        # SL: placed just beyond the nearest technical invalidation level (up to 7% away)
+        ENTRY_LIMIT   = 0.010   # max 1% pullback for limit entry
+        SL_ANCHOR_MAX = 0.07    # search for SL anchor up to 7% from entry
 
         _ema_t     = analysis.get("ema_trend") or {}
         ema21_val  = _ema_t.get("ema21")
@@ -1066,69 +1074,83 @@ def generate_signal(analysis: Dict) -> Dict:
         swing_high = max((c["high"] for c in _closed), default=None) if _closed else None
         swing_low  = min((c["low"]  for c in _closed), default=None) if _closed else None
 
-        def _within(level, above: bool) -> bool:
-            if level is None or current_price <= 0:
-                return False
-            gap = (level - current_price) / current_price if above else (current_price - level) / current_price
-            return 0 < gap <= LEVEL_CAP
-
-        def _within_swing(level, above: bool) -> bool:
-            if level is None or current_price <= 0:
-                return False
-            gap = ((level - current_price) if above else (current_price - level)) / current_price
-            return 0 < gap <= SWING_CAP
-
-        if direction == "LONG":
-            supports = []
-            if _within(ema21_val, above=False):       supports.append(ema21_val)
-            if _within(bb_lower,  above=False):       supports.append(bb_lower)
-            if _within_swing(swing_low, above=False): supports.append(swing_low)
-            base = max(supports) if supports else current_price
-        elif direction == "SHORT":
-            resistances = []
-            if _within(ema21_val, above=True):         resistances.append(ema21_val)
-            if _within(bb_upper,  above=True):         resistances.append(bb_upper)
-            if _within_swing(swing_high, above=True):  resistances.append(swing_high)
-            base = min(resistances) if resistances else current_price
-        else:
-            base = current_price
-
-        entry = round(base, 8)
-
-        eff_atr      = min(atr, max_atr_abs)
-        sl_dist_base = eff_atr * sl_m
-
-        # ── SL: anchor to Supertrend when it's nearby ─────────────────────────
-        # Supertrend is a natural invalidation level — if it's within 1.5× ATR range
-        # and on the correct side, use it instead of pure ATR to get a tighter stop.
         _st      = analysis.get("supertrend") or {}
         st_price = _st.get("value")
         st_dir   = _st.get("direction")
 
-        sl_dist = sl_dist_base
-        if direction == "LONG" and st_dir == "bull" and st_price and st_price < entry:
-            st_gap = entry - st_price
-            if 0 < st_gap <= sl_dist_base * 1.5:
-                sl_dist = min(sl_dist_base, st_gap * 1.003)   # just below supertrend
-        elif direction == "SHORT" and st_dir == "bear" and st_price and st_price > entry:
-            st_gap = st_price - entry
-            if 0 < st_gap <= sl_dist_base * 1.5:
-                sl_dist = min(sl_dist_base, st_gap * 1.003)   # just above supertrend
+        eff_atr = min(atr, max_atr_abs)
+
+        def _gap(level, above: bool) -> float:
+            if level is None or current_price <= 0:
+                return float("inf")
+            return ((level - current_price) if above else (current_price - level)) / current_price
+
+        if direction == "LONG":
+            # Entry: market price or limit within 1% at a nearby support
+            _close_sup = [lv for lv in [ema21_val, bb_lower]
+                          if lv and 0 <= _gap(lv, above=False) <= ENTRY_LIMIT]
+            if swing_low and 0 <= _gap(swing_low, above=False) <= ENTRY_LIMIT * 0.7:
+                _close_sup.append(swing_low)
+            entry = round(max(_close_sup) if _close_sup else current_price, 8)
+
+            # SL: just below nearest technical invalidation level
+            _sl_anchors = []
+            for _lv in [ema21_val, bb_lower, swing_low]:
+                if _lv and 0 < (entry - _lv) / entry <= SL_ANCHOR_MAX:
+                    _sl_anchors.append(_lv)
+            if st_price and st_dir == "bullish" and 0 < (entry - st_price) / entry <= SL_ANCHOR_MAX:
+                _sl_anchors.append(st_price)
+
+            if _sl_anchors:
+                _anchor  = max(_sl_anchors)   # closest (highest) support below entry
+                _buf     = min(eff_atr * 0.4, entry * 0.004)   # small buffer below anchor
+                sl_dist  = (entry - _anchor) + _buf
+            else:
+                sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)   # min 1.5%
+
+            sl = round(max(entry * 0.001, entry - sl_dist), 8)
+
+        elif direction == "SHORT":
+            # Entry: market price or limit within 1% at a nearby resistance
+            _close_res = [lv for lv in [ema21_val, bb_upper]
+                          if lv and 0 <= _gap(lv, above=True) <= ENTRY_LIMIT]
+            if swing_high and 0 <= _gap(swing_high, above=True) <= ENTRY_LIMIT * 0.7:
+                _close_res.append(swing_high)
+            entry = round(min(_close_res) if _close_res else current_price, 8)
+
+            _sl_anchors = []
+            for _lv in [ema21_val, bb_upper, swing_high]:
+                if _lv and 0 < (_lv - entry) / entry <= SL_ANCHOR_MAX:
+                    _sl_anchors.append(_lv)
+            if st_price and st_dir == "bearish" and 0 < (st_price - entry) / entry <= SL_ANCHOR_MAX:
+                _sl_anchors.append(st_price)
+
+            if _sl_anchors:
+                _anchor  = min(_sl_anchors)   # closest (lowest) resistance above entry
+                _buf     = min(eff_atr * 0.4, entry * 0.004)
+                sl_dist  = (_anchor - entry) + _buf
+            else:
+                sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
+
+            sl = round(entry + sl_dist, 8)
+
+        else:
+            entry   = round(current_price, 8)
+            sl      = None
+            sl_dist = eff_atr * sl_m
 
         # ── TP multiplier: RSI headroom + EMA/MACD trend + BB squeeze ─────────
-        # RSI headroom: how far can price run before RSI becomes extreme?
         rsi_val = analysis.get("rsi") or 50
         if direction == "LONG":
-            rsi_room = max(0.4, min(1.3, (75.0 - float(rsi_val)) / 30.0))
+            rsi_room = max(0.5, min(1.4, (75.0 - float(rsi_val)) / 30.0))
         elif direction == "SHORT":
-            rsi_room = max(0.4, min(1.3, (float(rsi_val) - 25.0) / 30.0))
+            rsi_room = max(0.5, min(1.4, (float(rsi_val) - 25.0) / 30.0))
         else:
             rsi_room = 0.7
 
-        # Trend alignment: EMA stack + MACD direction
         tp_bonus    = 0.0
-        short_trend = _ema_t.get("short_trend")       # "bullish" / "bearish"
-        ema_trend   = _ema_t.get("trend", "neutral")  # EMA50/200 structural trend
+        short_trend = _ema_t.get("short_trend")
+        ema_trend   = _ema_t.get("trend", "neutral")
         macd_hist   = float((analysis.get("macd") or {}).get("histogram") or 0)
 
         if direction == "LONG":
@@ -1140,34 +1162,32 @@ def generate_signal(analysis: Dict) -> Dict:
             if ema_trend in ("bearish", "mixed_bearish"):         tp_bonus += 0.10
             if macd_hist < 0:                                     tp_bonus += 0.10
 
-        # BB squeeze = compressed volatility about to expand → wider TP targets
         bb_bw = _bb.get("bandwidth")
         if bb_bw is not None:
-            if bb_bw < 0.03:   tp_bonus += 0.15   # tight squeeze — big move imminent
+            if bb_bw < 0.03:   tp_bonus += 0.20   # tight squeeze — big move imminent
             elif bb_bw > 0.08: tp_bonus += 0.10   # already expanding
 
-        tp_factor = rsi_room + tp_bonus   # typically 0.4 – 1.6
+        tp_factor = max(0.5, min(2.0, rsi_room + tp_bonus))
 
-        # Apply factor but enforce minimum R:R floors (TP1 ≥ 1.2×, TP2 ≥ 2.0×, TP3 ≥ 3.0×)
-        tp1_dist = sl_dist * max(1.2, TP1_RR * tp_factor)
-        tp2_dist = sl_dist * max(2.0, TP2_RR * tp_factor)
-        tp3_dist = sl_dist * max(3.0, TP3_RR * tp_factor)
+        # Higher R:R minimums — TP1 at least 2:1, TP2 at least 3:1, TP3 at least 5:1
+        TP1_RR, TP2_RR, TP3_RR = 2.0, 3.5, 5.5
+        tp1_dist = sl_dist * max(2.0, TP1_RR * tp_factor)
+        tp2_dist = sl_dist * max(3.0, TP2_RR * tp_factor)
+        tp3_dist = sl_dist * max(5.0, TP3_RR * tp_factor)
 
         def _tp_short(dist):
             target = entry - dist
-            if target <= entry * 0.05:   # >95% drop — not achievable
+            if target <= entry * 0.05:
                 return None
             return round(target, 8)
 
-        if direction == "LONG":
-            sl = round(max(entry * 0.001, entry - sl_dist), 8)
+        if direction == "LONG" and sl:
             tp_targets = [
                 round(entry + tp1_dist, 8),
                 round(entry + tp2_dist, 8),
                 round(entry + tp3_dist, 8),
             ]
-        elif direction == "SHORT":
-            sl = round(entry + sl_dist, 8)
+        elif direction == "SHORT" and sl:
             tp_targets = [
                 _tp_short(tp1_dist),
                 _tp_short(tp2_dist),
@@ -1181,24 +1201,26 @@ def generate_signal(analysis: Dict) -> Dict:
             tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
 
-
-            # ── Leverage suggestion ───────────────────────────────────────────
-            # Slab base by market cap tier
-            _SLAB_BASE  = {"mega": 8, "large": 6, "mid": 5, "small": 3, "micro": 3}
-            _SLAB_FLOOR = {"mega": 5, "large": 4, "mid": 3, "small": 2, "micro": 2}
-            _SLAB_CEIL  = {"mega": 12, "large": 10, "mid": 8, "small": 5, "micro": 5}
-            _slab_base  = _SLAB_BASE.get(vol_tier_id, 5)
+            # ── Leverage: market cap tier, capped by SL size for risk management ─
+            _SLAB_BASE  = {"mega": 7, "large": 5, "mid": 4, "small": 3, "micro": 2}
+            _SLAB_FLOOR = {"mega": 3, "large": 3, "mid": 2, "small": 2, "micro": 1}
+            _SLAB_CEIL  = {"mega": 10, "large": 8, "mid": 6, "small": 4, "micro": 3}
+            _slab_base  = _SLAB_BASE.get(vol_tier_id, 4)
             _slab_floor = _SLAB_FLOOR.get(vol_tier_id, 2)
-            _slab_ceil  = _SLAB_CEIL.get(vol_tier_id, 8)
+            _slab_ceil  = _SLAB_CEIL.get(vol_tier_id, 6)
 
-            # Strength adjustment within slab: -1 to +3
-            if strength >= 80:     _str_adj = 3
-            elif strength >= 65:   _str_adj = 2
-            elif strength >= 50:   _str_adj = 1
-            elif strength >= 35:   _str_adj = 0
+            if strength >= 80:     _str_adj = 2
+            elif strength >= 65:   _str_adj = 1
+            elif strength >= 50:   _str_adj = 0
             else:                  _str_adj = -1
 
-            suggested_lev = int(min(_slab_ceil, max(_slab_floor, _slab_base + _str_adj)))
+            # Hard cap based on SL size — wider SL = lower leverage
+            _sl_size_cap = (3 if sl_pct > 5.0 else
+                            5 if sl_pct > 3.0 else
+                            7 if sl_pct > 2.0 else
+                            10 if sl_pct > 1.0 else _slab_ceil)
+            suggested_lev = int(min(_sl_size_cap, _slab_ceil,
+                                    max(_slab_floor, _slab_base + _str_adj)))
 
 
     return {
