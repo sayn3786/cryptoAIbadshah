@@ -829,16 +829,24 @@ function renderBtcMiningCard(mining, symbol) {
   const revStr = rev != null ? `$${(rev / 1e6).toFixed(1)}M / day` : '—';
 
   // MVRV Score (90d SMA)
-  const mvrv = mining.mvrv;
+  const mvrv    = mining.mvrv;
+  const btcPriceUsd = mining.btc_price_usd || null;
   const mvrvRow = mvrv ? (() => {
     const score = mvrv.score != null ? mvrv.score.toFixed(2) : '—';
     const sma   = mvrv.sma90 != null ? mvrv.sma90.toFixed(2) : '—';
     const cls   = mvrv.cls  || '';
     const lbl   = mvrv.label || '—';
     const desc  = mvrv.desc  || '';
+    const fmtK  = v => v >= 1000 ? '$' + (v / 1000).toFixed(1) + 'K' : '$' + v.toFixed(0);
+    const priceStr    = btcPriceUsd ? `BTC ${fmtK(btcPriceUsd)}` : '';
+    const realizedStr = mvrv.realized_price ? `· Realized Price ~${fmtK(mvrv.realized_price)}` : '';
+    const priceLine   = (priceStr || realizedStr)
+      ? `<div class="btcm-sub btcm-price-ctx">${priceStr} ${realizedStr}</div>`
+      : '';
     return `
     <div class="btcm-row"><span class="btcm-label">MVRV Score</span><span class="btcm-val ${cls}">${score} <small>(90d SMA: ${sma})</small></span></div>
-    <div class="btcm-sub">${lbl} — ${desc}</div>`;
+    <div class="btcm-sub">${lbl} — ${desc}</div>
+    ${priceLine}`;
   })() : '';
 
   rows.innerHTML = `

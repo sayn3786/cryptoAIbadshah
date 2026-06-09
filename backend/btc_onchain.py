@@ -217,17 +217,22 @@ def get_btc_mining_signals() -> dict:
 
     # ── Miner revenue + profitability ratio ──────────────────────────────────
     stats = _get("https://blockchain.info/stats?format=json", "blockchain_stats")
+    btc_price = 0
     if stats:
-        price   = stats.get("market_price_usd") or 0
-        rev_btc = stats.get("miners_revenue_btc") or 0
-        if price and rev_btc:
-            result["miner_revenue_usd"] = round(rev_btc * price, 0)
-        if price and result["break_even_usd"]:
-            result["profitability_ratio"] = round(price / result["break_even_usd"], 2)
+        btc_price = stats.get("market_price_usd") or 0
+        rev_btc   = stats.get("miners_revenue_btc") or 0
+        if btc_price and rev_btc:
+            result["miner_revenue_usd"] = round(rev_btc * btc_price, 0)
+        if btc_price and result["break_even_usd"]:
+            result["profitability_ratio"] = round(btc_price / result["break_even_usd"], 2)
+        if btc_price:
+            result["btc_price_usd"] = round(btc_price, 0)
 
     # ── MVRV Score (90d SMA) — CoinMetrics Community API ─────────────────────
     mvrv = _fetch_mvrv()
     if mvrv:
+        if btc_price and mvrv.get("score") and mvrv["score"] > 0:
+            mvrv["realized_price"] = round(btc_price / mvrv["score"], 0)
         result["mvrv"] = mvrv
 
     return result
