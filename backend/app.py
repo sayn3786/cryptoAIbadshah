@@ -561,9 +561,33 @@ def api_analysis(symbol):
     if symbol not in SYMBOLS:
         return jsonify({"error": f"Symbol {symbol} not supported"}), 404
     try:
-        return jsonify(build_analysis(symbol, timeframe))
+        return jsonify(get_analysis(symbol, timeframe))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Shared analysis cache — used by both API endpoint and rec engine ───────────
+# Prevents the rec engine from re-fetching data the analysis view already has.
+# 30-minute TTL matches the rec slot window.
+_analysis_cache: dict = {}
+_analysis_cache_lock  = __import__("threading").Lock()
+
+def _analysis_cache_key(symbol: str, tf: str) -> str:
+    now  = datetime.now(timezone.utc)
+    half = (now.minute // 30) * 30
+    return f"av1_{symbol}_{tf}_{now.strftime('%Y%m%d%H')}{half:02d}"
+
+def get_analysis(symbol: str, tf: str) -> dict:
+    """Cached wrapper around build_analysis — 30-min TTL per symbol+TF."""
+    key = _analysis_cache_key(symbol, tf)
+    with _analysis_cache_lock:
+        entry = _analysis_cache.get((symbol, tf))
+        if entry and entry.get("key") == key:
+            return entry["data"]
+    data = build_analysis(symbol, tf)
+    with _analysis_cache_lock:
+        _analysis_cache[(symbol, tf)] = {"key": key, "data": data}
+    return data
 
 
 # ── Exhaustion check across all intraday TFs ───────────────────────────────────
@@ -597,7 +621,7 @@ def api_exhaustion(symbol):
 
     def _fetch_exh(tf):
         try:
-            a   = build_analysis(symbol, tf)
+            a   = get_analysis(symbol, tf)
             sig = a.get("signal") or {}
             exh = sig.get("exhaustion_alert")
             if exh is None:
@@ -667,9 +691,10 @@ def _compute_recommendations() -> dict:
     all_syms = list(SYMBOLS)
     raw: dict = {}
 
-    # Only fetch 1H and 2H — clean, fast, directly relevant
-    with ThreadPoolExecutor(max_workers=30) as ex:
-        fmap = {ex.submit(build_analysis, sym, tf): (sym, tf)
+    # Use get_analysis (cached) so rec engine sees the same data as the analysis view.
+    # max_workers=10 avoids thundering-herd rate limits on cold cache.
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        fmap = {ex.submit(get_analysis, sym, tf): (sym, tf)
                 for sym in all_syms for tf in ("1H", "2H")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
@@ -890,7 +915,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v31_mtf_{date}_{slot}"
+    return f"v32_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
