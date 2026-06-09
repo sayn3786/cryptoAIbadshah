@@ -847,6 +847,11 @@ def _compute_recommendations() -> dict:
             if strength < 32:
                 continue
 
+            # display_strength is the final adjusted strength (what the user sees in the badge).
+            # If the per-TF raw display was zeroed out by exhaustion/penalties but the overall
+            # adjusted strength is meaningful, show the true final score instead of 0.
+            _display_str = max(_display_str, round(strength, 1))
+
             candidates.append({
                 "symbol":           sym,
                 "timeframe":        primary_tf,
@@ -983,7 +988,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v25_mtf_{date}_{slot}"
+    return f"v26_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
