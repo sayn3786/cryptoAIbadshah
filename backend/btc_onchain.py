@@ -146,7 +146,7 @@ def _fetch_mvrv() -> dict:
     }
 
 
-
+def get_btc_mining_signals() -> dict:
     """
     Fetch and compute BTC mining / on-chain signals.
 
