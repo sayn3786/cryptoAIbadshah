@@ -259,6 +259,33 @@ function renderSignal(s) {
     tierWrap.style.display = 'none';
   }
 
+  // Exhaustion & reversal analysis for this specific TF
+  const exhEl = document.getElementById('signalExhaustion');
+  if (exhEl) {
+    const exhFlag  = s.exhaustion_flag;
+    const revCount = s.reversal_count || 0;
+    const parts = [];
+    if (exhFlag) {
+      const zone = dir === 'LONG' ? 'overbought' : 'oversold';
+      parts.push(`<span class="sig-exh-warn">⚠ ${zone} at this TF — entry is overextended</span>`);
+    }
+    if (revCount > 0) {
+      const flipLabels = {
+        1: '1 indicator just flipped',
+        2: '2 indicators just flipped',
+        3: '3 indicators just flipped',
+      };
+      parts.push(`<span class="sig-rev-badge">⚡ ${flipLabels[revCount] || revCount + ' indicators just flipped'} direction</span>`);
+    }
+    if (parts.length) {
+      exhEl.innerHTML = parts.join('');
+      exhEl.style.display = '';
+    } else {
+      exhEl.innerHTML = '';
+      exhEl.style.display = 'none';
+    }
+  }
+
   const price = (n) => n ? `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
   document.getElementById('lvlEntry').textContent = price(s.entry);
   document.getElementById('lvlSL').textContent    = price(s.sl);
@@ -2260,7 +2287,7 @@ function _recCacheKey() {
   const d    = String(now.getUTCDate()).padStart(2, '0');
   const h    = String(now.getUTCHours()).padStart(2, '0');
   const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec29_mtf_${y}${m}${d}${h}${half}`;
+  return `rec30_mtf_${y}${m}${d}${h}${half}`;
 }
 
 function _recCacheGet() {
@@ -2321,36 +2348,11 @@ function _buildRecCard(r, i) {
 
   // Parse tf labels from aligned_tfs (e.g. "1H·2H" or "2H·4H")
   const [tfLabel1, tfLabel2] = (r.aligned_tfs || '').split('·');
-  const h1FlipsTotal = r.h1_reversal_count || 0;
-  const h2FlipsTotal = r.h2_reversal_count || 0;
-  const h1RevMark = h1FlipsTotal > 0
-    ? ` <span class="exh-tf-rev">⚡${h1FlipsTotal}</span>` : '';
-  const h2RevMark = h2FlipsTotal > 0
-    ? ` <span class="exh-tf-rev">⚡${h2FlipsTotal}</span>` : '';
-  const h1ExhMark = r.h1_exhausted
-    ? ` <span class="exh-tf-warn">⚠ exhausted</span>` : '';
-  const h2ExhMark = r.h2_exhausted
-    ? ` <span class="exh-tf-warn">⚠ exhausted</span>` : '';
   const tfBreakdown = (r.h1_strength != null && tfLabel1 && tfLabel2)
     ? `<div class="rec-tf-breakdown">
-        <span>${tfLabel1} <strong>${r.h1_strength}</strong>${h1RevMark}${h1ExhMark}</span>
-        <span>${tfLabel2} <strong>${r.h2_strength}</strong>${h2RevMark}${h2ExhMark}</span>
+        <span>${tfLabel1} <strong>${r.h1_strength}</strong></span>
+        <span>${tfLabel2} <strong>${r.h2_strength}</strong></span>
        </div>` : '';
-
-  // Reversal badge — shown when fresh flips boosted the signal
-  const totalFlips = h1FlipsTotal + h2FlipsTotal;
-  const revBadge = (r.rev_bonus > 0)
-    ? `<span class="rec-reversal-badge">⚡ ${totalFlips} reversal flip${totalFlips > 1 ? 's' : ''} · +${r.rev_bonus} pts</span>`
-    : '';
-
-  // Exhaustion warning — shown when one or both TFs are overextended
-  const exhParts = [
-    r.h1_exhausted ? `${tfLabel1 || '1H'} overextended` : '',
-    r.h2_exhausted ? `${tfLabel2 || '2H'} overextended` : '',
-  ].filter(Boolean);
-  const exhWarn = exhParts.length
-    ? `<span class="rec-exh-warn">⚠ ${exhParts.join(' · ')} (${r.exh_penalty} pts)</span>`
-    : '';
 
   // Higher-timeframe confluence badge: 1D + 1W + 1M
   const mtfBadge = (() => {
@@ -2383,7 +2385,7 @@ function _buildRecCard(r, i) {
   const detectedShort = r.detected_at
     ? r.detected_at.replace(/\d{4} · /, '').replace(' SGT', '') : '';
 
-  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}${r.reversal_trade ? ' rec-card-reversal' : ''}" data-rec-sym="${r.symbol}">
+  return `<div class="rec-card rec-card-${dirCls}${r.btc_conflict ? ' rec-card-conflict' : ''}" data-rec-sym="${r.symbol}">
     <div class="rec-card-top">
       <span class="rec-rank">#${i+1}</span>
       <span class="rec-sym">${r.symbol}/USDT</span>
@@ -2392,8 +2394,6 @@ function _buildRecCard(r, i) {
     </div>
     ${tfAlign}
     ${btcWarn}
-    ${revBadge}
-    ${exhWarn}
     ${mtfBadge}
     ${tfBreakdown}
     <div class="rec-meta-row">

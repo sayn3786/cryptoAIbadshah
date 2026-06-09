@@ -728,32 +728,12 @@ def _compute_recommendations() -> dict:
             btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
             strength = max(0, round(strength + btc_adj, 1))
 
-        # ── Per-TF exhaustion penalty (checked at each token's respective TF) ──
-        # If the 1H signal is overbought/oversold against the direction → reduce
-        # that TF's effective contribution. 2H penalty is heavier (primary TF).
+        # Metadata only — exhaustion and reversal are shown in the per-TF analysis
+        # view, not used to adjust rec ranking (recs are ranked purely on 1H+2H strength)
         h1_exh = h1["sig"].get("exhaustion_flag", False)
         h2_exh = h2["sig"].get("exhaustion_flag", False)
-        exh_penalty = 0
-        if h1_exh:
-            exh_penalty -= 8    # 1H exhaustion: 40% weight → ~8 pt effective drag
-        if h2_exh:
-            exh_penalty -= 14   # 2H exhaustion: 60% weight → ~14 pt effective drag
-        if exh_penalty:
-            strength = max(0, round(strength + exh_penalty, 1))
-
-        # ── Reversal bonus: fresh factor flips at each TF ──
-        # When an indicator just changed direction (MACD cross, SuperTrend flip,
-        # EMA7/21 cross, VWAP cross, Stoch RSI reversal, Ichimoku TK cross),
-        # it's a momentum event, not just a sustained state — higher probability entry.
         h1_rev = h1["sig"].get("reversal_count", 0)
         h2_rev = h2["sig"].get("reversal_count", 0)
-        rev_bonus = 0
-        total_flips = (h1_rev or 0) + (h2_rev or 0)
-        if total_flips > 0:
-            # +8 for first flip, +7 for second, +6 for third — diminishing returns
-            _flip_pts = [8, 7, 6]
-            rev_bonus = round(sum(_flip_pts[:min(total_flips, 3)]), 1)
-            strength  = min(100, round(strength + rev_bonus, 1))
 
         # Entry/SL/TP from the 2H signal
         sig = h2["sig"]
@@ -784,13 +764,10 @@ def _compute_recommendations() -> dict:
             "btc_consensus":    btc_dir,
             "btc_adj":          btc_adj,
             "btc_corr":         corr_factor,
-            "exh_penalty":      exh_penalty,
-            "h1_exhausted":     h1_exh,
-            "h2_exhausted":     h2_exh,
-            "rev_bonus":        rev_bonus,
+            "h1_exhausted":      h1_exh,
+            "h2_exhausted":      h2_exh,
             "h1_reversal_count": h1_rev,
             "h2_reversal_count": h2_rev,
-            "reversal_trade":   (total_flips >= 2),   # True when ≥2 independent flips agree
             # No complex MTF adjustments — keep it honest
             "mtf_dirs":         {},
             "mtf_aligned":      0,
@@ -912,7 +889,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v29_mtf_{date}_{slot}"
+    return f"v30_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
