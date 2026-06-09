@@ -713,8 +713,9 @@ def _compute_recommendations() -> dict:
             continue
 
         direction = h2["direction"]   # 2H is primary
-        # Combined: 2H carries 60% (primary TF), 1H is the 40% confirmation
-        strength = round(h1["strength"] * 0.4 + h2["strength"] * 0.6, 1)
+        # Use 2H strength directly — 1H is a direction filter only, not a score blender.
+        # This matches what the user sees in the 2H analysis view for that token.
+        strength = round(h2["strength"], 1)
 
         # BTC 2H correlation — applied at the same timeframe as the signal
         corr_factor  = _BTC_CORR.get(sym, 1.0)
@@ -889,7 +890,7 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v30_mtf_{date}_{slot}"
+    return f"v31_mtf_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
