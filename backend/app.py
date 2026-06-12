@@ -65,6 +65,9 @@ SYMBOLS = {
     "QNT":    "QNTUSDT",
     "INJ":    "INJUSDT",
     "FET":    "FETUSDT",
+    # Tokenised commodities — low BTC correlation, move on macro/USD/inflation
+    "XAUT":   "XAUTUSDT",   # Tether Gold  (1 troy oz)
+    "PAXG":   "PAXGUSDT",   # PAX Gold      (1 troy oz)
 }
 
 # BTC correlation tier — controls how much the BTC consensus penalty/bonus applies.
@@ -80,6 +83,8 @@ _BTC_CORR = {
     "XRP": 0.4,
     # Moderate decouplers — own L1 ecosystems but still react to BTC risk-off
     "SOL": 0.7, "TON": 0.6, "HYPE": 0.6, "KAS": 0.5,
+    # Tokenised gold — moves on macro/USD/inflation, not BTC cycles
+    "XAUT": 0.1, "PAXG": 0.1,
 }
 TF_INTERVAL = {
     "1H": "1h", "2H": "2h",

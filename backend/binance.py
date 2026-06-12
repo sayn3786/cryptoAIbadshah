@@ -82,6 +82,8 @@ CG_IDS = {
     "QNTUSDT":    "quant-network",
     "INJUSDT":    "injective-protocol",
     "FETUSDT":    "fetch-ai",
+    "XAUTUSDT":   "tether-gold",
+    "PAXGUSDT":   "pax-gold",
 }
 
 # Kraken pairs (weekly interval = 10080 min)
@@ -109,6 +111,8 @@ KRAKEN_PAIRS = {
     "QNTUSDT":    "QNTUSD",
     "INJUSDT":    "INJUSD",
     "FETUSDT":    "FETUSD",
+    "XAUTUSDT":   "XAUTUSD",
+    "PAXGUSDT":   "PAXGUSD",
 }
 
 # Gate.io currency pairs
@@ -139,6 +143,8 @@ GATE_PAIRS = {
     "QNTUSDT":    "QNT_USDT",
     "INJUSDT":    "INJ_USDT",
     "FETUSDT":    "FET_USDT",
+    "XAUTUSDT":   "XAUT_USDT",
+    "PAXGUSDT":   "PAXG_USDT",
 }
 
 OKX_PAIRS = {
@@ -167,6 +173,8 @@ OKX_PAIRS = {
     "QNTUSDT":    "QNT-USDT",
     "INJUSDT":    "INJ-USDT",
     "FETUSDT":    "FET-USDT",
+    "XAUTUSDT":   "XAUT-USDT",
+    "PAXGUSDT":   "PAXG-USDT",
 }
 
 BYBIT_PAIRS = {
@@ -196,6 +204,8 @@ BYBIT_PAIRS = {
     "QNTUSDT":    "QNTUSDT",
     "INJUSDT":    "INJUSDT",
     "FETUSDT":    "FETUSDT",
+    "XAUTUSDT":   "XAUTUSDT",
+    "PAXGUSDT":   "PAXGUSDT",
 }
 
 # KuCoin trading pairs
@@ -217,6 +227,8 @@ KUCOIN_PAIRS = {
     "RENDERUSDT": "RENDER-USDT",
     "BNBUSDT":    "BNB-USDT",
     "BLURUSDT":   "BLUR-USDT",
+    "XAUTUSDT":   "XAUT-USDT",
+    "PAXGUSDT":   "PAXG-USDT",
 }
 
 # MEXC uses Binance-style symbols (XXXUSDT) — same API format as Binance v3
@@ -230,6 +242,7 @@ MEXC_PAIRS = {
     "AAVEUSDT": "AAVEUSDT", "XMRUSDT": "XMRUSDT", "INJUSDT": "INJUSDT",
     "QNTUSDT": "QNTUSDT", "ALGOUSDT": "ALGOUSDT", "FETUSDT": "FETUSDT",
     "ZECUSDT": "ZECUSDT", "BLURUSDT": "BLURUSDT",
+    "XAUTUSDT": "XAUTUSDT", "PAXGUSDT": "PAXGUSDT",
 }
 
 # HTX (Huobi) uses lowercase symbols without separator
