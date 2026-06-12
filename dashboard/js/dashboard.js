@@ -818,9 +818,26 @@ function renderBtcMiningCard(mining, symbol) {
     else                   { profCls = '';      profLabel = `${prof}×`; }
   }
 
-  const diff = mining.difficulty_change;
-  const diffStr = diff != null ? (diff >= 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`) : '—';
-  const diffCls = diff == null ? '' : diff >= 3 ? 'bear' : diff <= -3 ? 'bull' : '';
+  const diff        = mining.difficulty_change;
+  const diffLast    = mining.difficulty_last_change;
+  const diffBlocks  = mining.difficulty_remaining_blocks;
+  const diffTimeSec = mining.difficulty_remaining_time;
+  const diffPct     = mining.difficulty_progress_pct;
+
+  const fmtDiff = v => v != null ? (v >= 0 ? `+${v.toFixed(1)}%` : `${v.toFixed(1)}%`) : '—';
+  const diffCls     = diff == null     ? '' : diff     >= 3 ? 'bear' : diff     <= -3 ? 'bull' : '';
+  const diffLastCls = diffLast == null ? '' : diffLast >= 3 ? 'bear' : diffLast <= -3 ? 'bull' : '';
+  const diffStr     = fmtDiff(diff);
+  const diffLastStr = fmtDiff(diffLast);
+
+  let diffTimeStr = '';
+  if (diffTimeSec != null) {
+    const hrs  = Math.floor(diffTimeSec / 3600);
+    const days = Math.floor(hrs / 24);
+    diffTimeStr = days > 0 ? `~${days}d ${hrs % 24}h` : `~${hrs}h`;
+  }
+  const diffProgressStr = diffPct != null ? `${diffPct.toFixed(0)}% through epoch` : '';
+  const diffBlocksStr   = diffBlocks != null ? `${diffBlocks.toLocaleString()} blocks remaining` : '';
 
   const be = mining.break_even_usd;
   const beStr = be != null ? `$${be.toLocaleString()}` : '—';
@@ -878,8 +895,10 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-row"><span class="btcm-label">Miner Profitability</span><span class="btcm-val ${profCls}">${profLabel}</span></div>
     <div class="btcm-sub">Break-even est. ${beStr} · Revenue ${revStr}</div>
     ${rewardRow}
-    <div class="btcm-row"><span class="btcm-label">Difficulty Change</span><span class="btcm-val ${diffCls}">${diffStr}</span></div>
-    <div class="btcm-sub">Expected at next adjustment · rising = more competition · falling = fewer miners</div>
+    <div class="btcm-row"><span class="btcm-label">Last Difficulty Adj</span><span class="btcm-val ${diffLastCls}">${diffLastStr}</span></div>
+    <div class="btcm-sub">Completed at last epoch — directly set current reward per TH</div>
+    <div class="btcm-row"><span class="btcm-label">Next Difficulty Adj</span><span class="btcm-val ${diffCls}">${diffStr} <small style="opacity:.6">${diffTimeStr}</small></span></div>
+    <div class="btcm-sub">${diffProgressStr} · ${diffBlocksStr} · rising = more competition · falling = fewer miners</div>
     ${mvrvRow}
   `;
 }

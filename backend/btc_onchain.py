@@ -220,7 +220,11 @@ def get_btc_mining_signals() -> dict:
         "mempool_difficulty_adj"
     )
     if diff_data:
-        result["difficulty_change"] = diff_data.get("difficultyChange")
+        result["difficulty_change"]      = diff_data.get("difficultyChange")
+        result["difficulty_last_change"] = diff_data.get("previousRetarget")
+        result["difficulty_remaining_blocks"] = diff_data.get("remainingBlocks")
+        result["difficulty_remaining_time"]   = diff_data.get("remainingTime")  # seconds
+        result["difficulty_progress_pct"]     = diff_data.get("progressPercent")
 
     # ── Miner revenue + profitability ratio ──────────────────────────────────
     stats = _get("https://blockchain.info/stats?format=json", "blockchain_stats")
