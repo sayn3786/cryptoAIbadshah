@@ -832,7 +832,8 @@ function renderBtcMiningCard(mining, symbol) {
 
   let diffTimeStr = '';
   if (diffTimeSec != null) {
-    const hrs  = Math.floor(diffTimeSec / 3600);
+    const totalSec = diffTimeSec / 1000;  // API returns milliseconds
+    const hrs  = Math.floor(totalSec / 3600);
     const days = Math.floor(hrs / 24);
     diffTimeStr = days > 0 ? `~${days}d ${hrs % 24}h` : `~${hrs}h`;
   }
