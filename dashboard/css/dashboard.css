@@ -794,6 +794,16 @@ a:hover { color: var(--gold2); }
 .btcm-label { color: var(--muted2); font-weight: 500; }
 .btcm-val   { font-weight: 700; text-align: right; }
 .btcm-sub   { font-size: .60rem; color: var(--muted); margin-bottom: 4px; }
+.btcm-price-ctx { color: var(--muted2); font-size: .62rem; }
+
+.btcm-oc-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.btcm-oc-title  { font-size: .68rem; color: var(--muted2); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.btcm-oc-score  { font-size: 1.5rem; font-weight: 800; line-height: 1; }
+.btcm-oc-bar    { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
+.btcm-oc-fill   { height: 100%; border-radius: 3px; transition: width .4s ease; background: var(--muted2); }
+.btcm-oc-fill.bull { background: var(--bull); }
+.btcm-oc-fill.bear { background: var(--bear); }
+.btcm-divider   { border: none; border-top: 1px solid var(--border); margin: 6px 0 8px; }
 
 .ls-bar-wrap { margin: 6px 0 3px; width: 100%; }
 .ls-bar-bg   { height: 6px; background: var(--bear); border-radius: 3px; overflow: hidden; }

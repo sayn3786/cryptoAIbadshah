@@ -146,6 +146,49 @@ def _fetch_mvrv() -> dict:
     }
 
 
+def _onchain_score(ribbon: str, phase: str, prof_ratio, mvrv_zone: str, diff_last) -> dict:
+    """
+    Combine on-chain/mining signals into a single 0-100 score.
+    Higher = more bullish on-chain context for BTC price.
+    """
+    pts = 0
+
+    # Hash Ribbon (0-25)
+    pts += {"buy": 25, "bull": 20, "neutral": 12, "bear": 5, "capitulation": 0}.get(ribbon, 12)
+
+    # Halving phase (0-20)
+    pts += {"mid": 20, "early": 15, "pre": 12, "late": 5}.get(phase, 10)
+
+    # Miner profitability (0-25)
+    if prof_ratio is not None:
+        if   prof_ratio >= 2.0: pts += 25
+        elif prof_ratio >= 1.5: pts += 20
+        elif prof_ratio >= 1.2: pts += 15
+        elif prof_ratio >= 1.0: pts += 10
+        else:                   pts += 3
+
+    # MVRV zone (0-25)
+    pts += {"oversold": 25, "fair_value": 20, "fair_elevated": 12,
+            "overbought": 5, "extreme_top": 0}.get(mvrv_zone or "", 12)
+
+    # Last difficulty change (0-5) — rising = miners joining = long-term bullish
+    if diff_last is not None:
+        if   diff_last >= 5:  pts += 5
+        elif diff_last >= 0:  pts += 4
+        elif diff_last >= -5: pts += 2
+        else:                 pts += 0
+
+    score = min(100, max(0, pts))
+
+    if   score >= 75: label, cls = "Strong On-Chain Bull",    "bull"
+    elif score >= 55: label, cls = "Moderately Bullish",      "bull"
+    elif score >= 45: label, cls = "Neutral / Mixed",         ""
+    elif score >= 30: label, cls = "Moderately Bearish",      "bear"
+    else:             label, cls = "Strong On-Chain Bear",    "bear"
+
+    return {"score": score, "label": label, "cls": cls}
+
+
 def get_btc_mining_signals() -> dict:
     """
     Fetch and compute BTC mining / on-chain signals.
@@ -258,5 +301,14 @@ def get_btc_mining_signals() -> dict:
         if btc_price and mvrv.get("score") and mvrv["score"] > 0:
             mvrv["realized_price"] = round(btc_price / mvrv["score"], 0)
         result["mvrv"] = mvrv
+
+    # ── On-Chain Composite Score ──────────────────────────────────────────────
+    result["onchain_score"] = _onchain_score(
+        ribbon     = result.get("hash_ribbon", "neutral"),
+        phase      = result.get("halving_phase", "pre"),
+        prof_ratio = result.get("profitability_ratio"),
+        mvrv_zone  = (result.get("mvrv") or {}).get("zone"),
+        diff_last  = result.get("difficulty_last_change"),
+    )
 
     return result

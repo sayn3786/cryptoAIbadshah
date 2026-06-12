@@ -718,6 +718,14 @@ def _compute_recommendations() -> dict:
     BTC_BONUS   = 12   # pts when token aligns with BTC 2H
     BTC_PENALTY = 18   # pts when token opposes BTC 2H
 
+    # On-chain score: shifts BTC_BONUS/PENALTY by up to ±20%
+    # score 75+ → amplify BTC effect; score <30 → dampen it
+    _oc = get_btc_mining_signals()
+    _oc_score = (_oc.get("onchain_score") or {}).get("score", 50)
+    _oc_mult  = 0.8 + 0.4 * (_oc_score / 100.0)   # 0.80 at score=0, 1.20 at score=100
+    BTC_BONUS   = round(BTC_BONUS   * _oc_mult, 1)
+    BTC_PENALTY = round(BTC_PENALTY * _oc_mult, 1)
+
     candidates = []
     for sym, tfs in raw.items():
         if sym == "BTC":

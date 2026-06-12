@@ -888,7 +888,25 @@ function renderBtcMiningCard(mining, symbol) {
     ${priceLine}`;
   })() : '';
 
+  // On-chain composite score
+  const oc    = mining.onchain_score || {};
+  const ocScore = oc.score != null ? oc.score : null;
+  const ocCls   = oc.cls   || '';
+  const ocLabel = oc.label || '—';
+  const ocBar   = ocScore != null
+    ? `<div class="btcm-oc-bar"><div class="btcm-oc-fill ${ocCls}" style="width:${ocScore}%"></div></div>`
+    : '';
+  const ocRow = ocScore != null ? `
+    <div class="btcm-oc-header">
+      <span class="btcm-oc-title">On-Chain Score</span>
+      <span class="btcm-oc-score ${ocCls}">${ocScore}<span style="opacity:.5;font-size:.8em">/100</span></span>
+    </div>
+    ${ocBar}
+    <div class="btcm-sub" style="margin-bottom:10px">${ocLabel} — combined signal: Hash Ribbon + Halving + Profitability + MVRV + Difficulty</div>
+    <hr class="btcm-divider">` : '';
+
   rows.innerHTML = `
+    ${ocRow}
     <div class="btcm-row"><span class="btcm-label">Hash Ribbon</span><span class="btcm-val ${rm.cls}">${rm.icon} ${rm.label}</span></div>
     <div class="btcm-sub">${rm.desc}</div>
     <div class="btcm-row"><span class="btcm-label">Halving Phase</span><span class="btcm-val ${pm.cls}">${pm.label}</span></div>
