@@ -173,12 +173,15 @@ def get_btc_mining_signals() -> dict:
         "halving_days_since": None,
         "halving_days_until": None,
         "halving_months_since": None,
-        "difficulty_change":  None,
-        "break_even_usd":     None,
-        "miner_revenue_usd":  None,
-        "profitability_ratio": None,
-        "mvrv":               None,
-        "error":              False,
+        "difficulty_change":        None,
+        "break_even_usd":           None,
+        "miner_revenue_usd":        None,
+        "profitability_ratio":      None,
+        "reward_per_th_btc":        None,
+        "reward_per_th_usd":        None,
+        "reward_per_th_after_adj":  None,
+        "mvrv":                     None,
+        "error":                    False,
     }
 
     # ── Halving phase (deterministic, always available) ──────────────────────
@@ -200,10 +203,14 @@ def get_btc_mining_signals() -> dict:
         result["hash_ribbon_ma30"] = ribbon["ma30"]
         result["hash_ribbon_ma60"] = ribbon["ma60"]
 
-        # Break-even using the latest hash rate reading
         if rates:
-            be = _break_even(rates[-1])
+            latest_hs = rates[-1]
+            be = _break_even(latest_hs)
             result["break_even_usd"] = be
+            # Reward per TH/day = total daily BTC / network hashrate in TH
+            if latest_hs > 0:
+                reward_btc = DAILY_BTC_MINED / (latest_hs / 1e12)
+                result["reward_per_th_btc"] = round(reward_btc, 10)
     else:
         result["error"] = True
 
@@ -227,6 +234,19 @@ def get_btc_mining_signals() -> dict:
             result["profitability_ratio"] = round(btc_price / result["break_even_usd"], 2)
         if btc_price:
             result["btc_price_usd"] = round(btc_price, 0)
+        # Reward per TH in USD once we have price
+        if btc_price and result["reward_per_th_btc"]:
+            result["reward_per_th_usd"] = round(result["reward_per_th_btc"] * btc_price, 6)
+
+    # ── Projected reward after difficulty adjustment ──────────────────────────
+    diff_chg = result.get("difficulty_change")
+    rw_btc   = result.get("reward_per_th_btc")
+    if diff_chg is not None and rw_btc:
+        # Difficulty drop → fewer effective TH competing → reward per TH rises (and vice versa)
+        # Factor: reward_after = reward_now / (1 + diff_chg/100)
+        factor = 1.0 + diff_chg / 100.0
+        if factor > 0:
+            result["reward_per_th_after_adj"] = round(rw_btc / factor, 10)
 
     # ── MVRV Score (90d SMA) — CoinMetrics Community API ─────────────────────
     mvrv = _fetch_mvrv()

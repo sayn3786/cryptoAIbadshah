@@ -820,13 +820,34 @@ function renderBtcMiningCard(mining, symbol) {
 
   const diff = mining.difficulty_change;
   const diffStr = diff != null ? (diff >= 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`) : '—';
-  const diffCls = diff == null ? '' : diff >= 3 ? 'bull' : diff <= -3 ? 'bear' : '';
+  const diffCls = diff == null ? '' : diff >= 3 ? 'bear' : diff <= -3 ? 'bull' : '';
 
   const be = mining.break_even_usd;
   const beStr = be != null ? `$${be.toLocaleString()}` : '—';
 
   const rev = mining.miner_revenue_usd;
   const revStr = rev != null ? `$${(rev / 1e6).toFixed(1)}M / day` : '—';
+
+  // Reward per TH/day
+  const fmtSats = v => v != null ? `${(v * 1e8).toFixed(2)} sats` : '—';
+  const fmtUsd  = v => v != null ? `$${v.toFixed(4)}` : '—';
+  const rwBtc   = mining.reward_per_th_btc;
+  const rwUsd   = mining.reward_per_th_usd;
+  const rwAfter = mining.reward_per_th_after_adj;
+  let rewardRow = '';
+  if (rwBtc != null) {
+    const nowStr  = `${fmtSats(rwBtc)} (${fmtUsd(rwUsd)})`;
+    let afterStr  = '';
+    if (rwAfter != null && diff != null) {
+      const pctChange = ((rwAfter - rwBtc) / rwBtc * 100);
+      const sign      = pctChange >= 0 ? '+' : '';
+      const adjCls    = pctChange >= 1 ? 'bull' : pctChange <= -1 ? 'bear' : '';
+      afterStr = `<span class="btcm-val ${adjCls}" style="font-size:0.78rem">${sign}${pctChange.toFixed(1)}% after adj</span>`;
+    }
+    rewardRow = `
+    <div class="btcm-row"><span class="btcm-label">Reward / TH / Day</span><span class="btcm-val">${nowStr}</span></div>
+    <div class="btcm-sub">Gross BTC reward at current network hashrate ${afterStr}</div>`;
+  }
 
   // MVRV Score (90d SMA)
   const mvrv    = mining.mvrv;
@@ -856,8 +877,9 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-sub">${months} since halving · ${daysUntil} until next · ${pm.desc}</div>
     <div class="btcm-row"><span class="btcm-label">Miner Profitability</span><span class="btcm-val ${profCls}">${profLabel}</span></div>
     <div class="btcm-sub">Break-even est. ${beStr} · Revenue ${revStr}</div>
+    ${rewardRow}
     <div class="btcm-row"><span class="btcm-label">Difficulty Change</span><span class="btcm-val ${diffCls}">${diffStr}</span></div>
-    <div class="btcm-sub">Expected at next adjustment</div>
+    <div class="btcm-sub">Expected at next adjustment · rising = more competition · falling = fewer miners</div>
     ${mvrvRow}
   `;
 }
