@@ -270,20 +270,35 @@ def get_btc_mining_signals() -> dict:
         result["difficulty_progress_pct"]     = diff_data.get("progressPercent")
 
     # ── Miner revenue + profitability ratio ──────────────────────────────────
+    # Primary: blockchain.info stats (has live price + revenue)
+    # Fallback price: mempool.space price endpoint
     stats = _get("https://blockchain.info/stats?format=json", "blockchain_stats")
     btc_price = 0
     if stats:
         btc_price = stats.get("market_price_usd") or 0
-        rev_btc   = stats.get("miners_revenue_btc") or 0
-        if btc_price and rev_btc:
+        # Try multiple field names blockchain.info has used over time
+        rev_usd = stats.get("miners_revenue_usd") or 0
+        rev_btc = stats.get("miners_revenue_btc") or 0
+        if rev_usd:
+            result["miner_revenue_usd"] = round(rev_usd, 0)
+        elif btc_price and rev_btc:
             result["miner_revenue_usd"] = round(rev_btc * btc_price, 0)
-        if btc_price and result["break_even_usd"]:
+
+    # Fallback price from mempool if blockchain.info failed
+    if not btc_price:
+        price_data = _get("https://mempool.space/api/v1/prices", "mempool_price", ttl=300)
+        if price_data:
+            btc_price = price_data.get("USD") or 0
+
+    if btc_price:
+        result["btc_price_usd"] = round(btc_price, 0)
+        if result["break_even_usd"]:
             result["profitability_ratio"] = round(btc_price / result["break_even_usd"], 2)
-        if btc_price:
-            result["btc_price_usd"] = round(btc_price, 0)
-        # Reward per TH in USD once we have price
-        if btc_price and result["reward_per_th_btc"]:
+        if result["reward_per_th_btc"]:
             result["reward_per_th_usd"] = round(result["reward_per_th_btc"] * btc_price, 6)
+        # Revenue fallback: subsidy-only estimate (450 BTC/day × price) if API missed it
+        if not result["miner_revenue_usd"]:
+            result["miner_revenue_usd"] = round(DAILY_BTC_MINED * btc_price, 0)
 
     # ── Projected reward after difficulty adjustment ──────────────────────────
     diff_chg = result.get("difficulty_change")
