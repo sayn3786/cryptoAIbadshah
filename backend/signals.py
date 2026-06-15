@@ -1084,22 +1084,26 @@ def generate_signal(analysis: Dict) -> Dict:
             ))
         atr = sum(_tr_vals) / len(_tr_vals)
 
-        # Hard SL cap per timeframe — regardless of ATR or market cap
+        # Hard SL cap per timeframe — base values for mega cap (BTC/ETH).
+        # Scaled by atr_mult so smaller caps get proportionally wider room.
+        # atr_mult: mega=1.0, large=1.5, mid=2.0, small=3.0, micro=4.0
+        # Cap the multiplier at 2.5 so micro caps don't go completely unconstrained.
+        _cap_mult = min(atr_mult, 2.5)
         _TF_MAX_SL = {
             "1H":  0.025, "2H":  0.035,
             "4H":  0.050, "8H":  0.065, "12H": 0.080,
             "1D":  0.100, "1W":  0.140,
             "2W":  0.160, "3W":  0.160, "1M":  0.180,
         }
-        # Hard TP3 cap per timeframe — stops absurd targets on long TFs
+        # TP3 cap also scales — smaller caps have bigger swing targets
         _TF_MAX_TP3 = {
             "1H":  0.045, "2H":  0.065,
             "4H":  0.090, "8H":  0.120, "12H": 0.150,
             "1D":  0.200, "1W":  0.280,
             "2W":  0.320, "3W":  0.320, "1M":  0.350,
         }
-        _max_sl_abs  = current_price * _TF_MAX_SL.get(timeframe, 0.10)
-        _max_tp3_abs = current_price * _TF_MAX_TP3.get(timeframe, 0.20)
+        _max_sl_abs  = current_price * _TF_MAX_SL.get(timeframe, 0.10)  * _cap_mult
+        _max_tp3_abs = current_price * _TF_MAX_TP3.get(timeframe, 0.20) * _cap_mult
 
         # Clamp effective ATR so SL can't exceed the hard cap
         eff_atr = min(atr, max_atr_abs, _max_sl_abs / max(sl_m, 1.5))
