@@ -426,17 +426,24 @@ def detect_liquidity_grab(candles: List[Dict], window: int = 3, lookback: int = 
     if not ph and not pl:
         return {"signal": "none"}
 
-    recent = candles[-lookback:]
-    best: Dict = {"signal": "none"}
-    best_wick = 0.0
+    recent       = candles[-lookback:]
+    current_price = candles[-1]["close"]
+    best: Dict   = {"signal": "none"}
+    best_wick    = 0.0
+    # If price has moved >1.5% past the swept level AFTER the grab, the setup
+    # is invalidated — bulls/bears won and the grab was a fakeout continuation.
+    INVALIDATION_PCT = 1.5
 
     for i, c in enumerate(recent):
         candles_ago = lookback - 1 - i
 
         # Bearish grab: wick above swing high, closes below it
-        for pivot in ph[-3:]:  # check last 3 swing highs
+        for pivot in ph[-3:]:
             lvl = pivot["price"]
             if c["high"] > lvl and c["close"] < lvl:
+                # Invalidated if current price is now clearly above the swept level
+                if (current_price - lvl) / lvl * 100 > INVALIDATION_PCT:
+                    continue
                 wick_pct = (c["high"] - lvl) / lvl * 100
                 if wick_pct > best_wick:
                     best_wick = wick_pct
@@ -449,9 +456,12 @@ def detect_liquidity_grab(candles: List[Dict], window: int = 3, lookback: int = 
                     }
 
         # Bullish grab: wick below swing low, closes above it
-        for pivot in pl[-3:]:  # check last 3 swing lows
+        for pivot in pl[-3:]:
             lvl = pivot["price"]
             if c["low"] < lvl and c["close"] > lvl:
+                # Invalidated if current price has since fallen clearly below the level
+                if (lvl - current_price) / lvl * 100 > INVALIDATION_PCT:
+                    continue
                 wick_pct = (lvl - c["low"]) / lvl * 100
                 if wick_pct > best_wick:
                     best_wick = wick_pct
