@@ -1266,7 +1266,7 @@ def generate_signal(analysis: Dict) -> Dict:
             tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
 
-            # ── Leverage: market cap tier, capped by SL size for risk management ─
+            # ── Leverage: market cap tier × timeframe × SL size ──────────────────
             _SLAB_BASE  = {"mega": 7, "large": 5, "mid": 4, "small": 3, "micro": 2}
             _SLAB_FLOOR = {"mega": 3, "large": 3, "mid": 2, "small": 2, "micro": 1}
             _SLAB_CEIL  = {"mega": 10, "large": 8, "mid": 6, "small": 4, "micro": 3}
@@ -1274,16 +1274,31 @@ def generate_signal(analysis: Dict) -> Dict:
             _slab_floor = _SLAB_FLOOR.get(vol_tier_id, 2)
             _slab_ceil  = _SLAB_CEIL.get(vol_tier_id, 6)
 
+            # Longer timeframes = lower ceiling (more overnight risk, larger swings)
+            _TF_LEV_MULT = {
+                "1H": 1.0, "2H": 0.9,
+                "4H": 0.8, "8H": 0.7,  "12H": 0.6,
+                "1D": 0.5, "1W": 0.3,
+                "2W": 0.25, "3W": 0.25, "1M": 0.2,
+            }
+            _tf_mult    = _TF_LEV_MULT.get(timeframe, 0.5)
+            _slab_ceil  = max(_slab_floor, round(_slab_ceil * _tf_mult))
+
             if strength >= 80:     _str_adj = 2
             elif strength >= 65:   _str_adj = 1
             elif strength >= 50:   _str_adj = 0
             else:                  _str_adj = -1
 
-            # Hard cap based on SL size — wider SL = lower leverage
-            _sl_size_cap = (3 if sl_pct > 5.0 else
-                            5 if sl_pct > 3.0 else
-                            7 if sl_pct > 2.0 else
-                            10 if sl_pct > 1.0 else _slab_ceil)
+            # SL size cap — thresholds scale with market cap tier so small caps
+            # aren't unfairly capped (their wider SL is expected, not a risk warning)
+            _sl_t1 = 5.0 * _cap_mult   # above this → max 3x
+            _sl_t2 = 3.0 * _cap_mult   # above this → max 5x
+            _sl_t3 = 2.0 * _cap_mult   # above this → max 7x
+            _sl_t4 = 1.0 * _cap_mult   # above this → max 10x
+            _sl_size_cap = (3  if sl_pct > _sl_t1 else
+                            5  if sl_pct > _sl_t2 else
+                            7  if sl_pct > _sl_t3 else
+                            10 if sl_pct > _sl_t4 else _slab_ceil)
             suggested_lev = int(min(_sl_size_cap, _slab_ceil,
                                     max(_slab_floor, _slab_base + _str_adj)))
 
