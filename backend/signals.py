@@ -1084,10 +1084,29 @@ def generate_signal(analysis: Dict) -> Dict:
             ))
         atr = sum(_tr_vals) / len(_tr_vals)
 
+        # Hard SL cap per timeframe — regardless of ATR or market cap
+        _TF_MAX_SL = {
+            "1H":  0.025, "2H":  0.035,
+            "4H":  0.050, "8H":  0.065, "12H": 0.080,
+            "1D":  0.100, "1W":  0.140,
+            "2W":  0.160, "3W":  0.160, "1M":  0.180,
+        }
+        # Hard TP3 cap per timeframe — stops absurd targets on long TFs
+        _TF_MAX_TP3 = {
+            "1H":  0.045, "2H":  0.065,
+            "4H":  0.090, "8H":  0.120, "12H": 0.150,
+            "1D":  0.200, "1W":  0.280,
+            "2W":  0.320, "3W":  0.320, "1M":  0.350,
+        }
+        _max_sl_abs  = current_price * _TF_MAX_SL.get(timeframe, 0.10)
+        _max_tp3_abs = current_price * _TF_MAX_TP3.get(timeframe, 0.20)
+
+        # Clamp effective ATR so SL can't exceed the hard cap
+        eff_atr = min(atr, max_atr_abs, _max_sl_abs / max(sl_m, 1.5))
+
         # Technical levels for entry and SL anchoring
-        # Entry: enter at/near current price (market or ≤1% limit for tight levels)
-        # SL: placed just beyond the nearest technical invalidation level (up to 7% away)
-        ENTRY_LIMIT   = 0.010   # max 1% pullback for limit entry
+        # Widen entry search to 2% so nearby levels are actually found
+        ENTRY_LIMIT   = 0.020   # max 2% from current price for limit entry
         SL_ANCHOR_MAX = 0.07    # search for SL anchor up to 7% from entry
 
         _ema_t     = analysis.get("ema_trend") or {}
@@ -1104,8 +1123,6 @@ def generate_signal(analysis: Dict) -> Dict:
         st_price = _st.get("value")
         st_dir   = _st.get("direction")
 
-        eff_atr = min(atr, max_atr_abs)
-
         def _gap(level, above: bool) -> float:
             if level is None or current_price <= 0:
                 return float("inf")
@@ -1113,11 +1130,16 @@ def generate_signal(analysis: Dict) -> Dict:
 
         if direction == "LONG":
             # Entry: market price or limit within 1% at a nearby support
-            _close_sup = [lv for lv in [ema21_val, bb_lower]
+            _vwap_val  = (analysis.get("vwap") or {}).get("vwap")
+            _close_sup = [lv for lv in [ema21_val, bb_lower, _vwap_val]
                           if lv and 0 <= _gap(lv, above=False) <= ENTRY_LIMIT]
-            if swing_low and 0 <= _gap(swing_low, above=False) <= ENTRY_LIMIT * 0.7:
+            if swing_low and 0 <= _gap(swing_low, above=False) <= ENTRY_LIMIT:
                 _close_sup.append(swing_low)
-            entry = round(max(_close_sup) if _close_sup else current_price, 8)
+            # If no support level found nearby, set limit slightly below current price
+            if _close_sup:
+                entry = round(max(_close_sup), 8)
+            else:
+                entry = round(current_price * 0.998, 8)  # 0.2% pullback limit
 
             # SL: just below nearest technical invalidation level
             _sl_anchors = []
@@ -1128,21 +1150,26 @@ def generate_signal(analysis: Dict) -> Dict:
                 _sl_anchors.append(st_price)
 
             if _sl_anchors:
-                _anchor  = max(_sl_anchors)   # closest (highest) support below entry
-                _buf     = min(eff_atr * 0.4, entry * 0.004)   # small buffer below anchor
+                _anchor  = max(_sl_anchors)
+                _buf     = min(eff_atr * 0.4, entry * 0.004)
                 sl_dist  = (entry - _anchor) + _buf
             else:
-                sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)   # min 1.5%
+                sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
 
+            sl_dist = min(sl_dist, _max_sl_abs)   # hard cap
             sl = round(max(entry * 0.001, entry - sl_dist), 8)
 
         elif direction == "SHORT":
-            # Entry: market price or limit within 1% at a nearby resistance
-            _close_res = [lv for lv in [ema21_val, bb_upper]
+            _vwap_val  = (analysis.get("vwap") or {}).get("vwap")
+            _close_res = [lv for lv in [ema21_val, bb_upper, _vwap_val]
                           if lv and 0 <= _gap(lv, above=True) <= ENTRY_LIMIT]
-            if swing_high and 0 <= _gap(swing_high, above=True) <= ENTRY_LIMIT * 0.7:
+            if swing_high and 0 <= _gap(swing_high, above=True) <= ENTRY_LIMIT:
                 _close_res.append(swing_high)
-            entry = round(min(_close_res) if _close_res else current_price, 8)
+            # If no resistance found nearby, set limit slightly above current price
+            if _close_res:
+                entry = round(min(_close_res), 8)
+            else:
+                entry = round(current_price * 1.002, 8)  # 0.2% bounce limit
 
             _sl_anchors = []
             for _lv in [ema21_val, bb_upper, swing_high]:
@@ -1158,6 +1185,7 @@ def generate_signal(analysis: Dict) -> Dict:
             else:
                 sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
 
+            sl_dist = min(sl_dist, _max_sl_abs)   # hard cap
             sl = round(entry + sl_dist, 8)
 
         else:
@@ -1195,11 +1223,18 @@ def generate_signal(analysis: Dict) -> Dict:
 
         tp_factor = max(0.5, min(2.0, rsi_room + tp_bonus))
 
-        # Higher R:R minimums — TP1 at least 2:1, TP2 at least 3:1, TP3 at least 5:1
         TP1_RR, TP2_RR, TP3_RR = 2.0, 3.5, 5.5
         tp1_dist = sl_dist * max(2.0, TP1_RR * tp_factor)
         tp2_dist = sl_dist * max(3.0, TP2_RR * tp_factor)
         tp3_dist = sl_dist * max(5.0, TP3_RR * tp_factor)
+
+        # Hard cap TP distances — proportional to TF max, keeps targets realistic
+        tp3_dist = min(tp3_dist, _max_tp3_abs)
+        tp2_dist = min(tp2_dist, _max_tp3_abs * 0.60)
+        tp1_dist = min(tp1_dist, _max_tp3_abs * 0.35)
+        # Preserve ordering if caps collapsed the distances
+        tp1_dist = min(tp1_dist, tp2_dist * 0.60)
+        tp2_dist = min(tp2_dist, tp3_dist * 0.65)
 
         def _tp_short(dist):
             target = entry - dist
