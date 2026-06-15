@@ -27,7 +27,7 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     calculate_vwap, calculate_stoch_rsi, calculate_volume_signal)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
-from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots
+from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab
 from signals import generate_signal
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs
@@ -341,9 +341,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     fvgs = detect_fvg(spot)
     engulfing = detect_engulfing(spot)
 
-    # Elliott Wave pivots
-    ph, pl = find_pivots(spot, window=2)
+    # Elliott Wave pivots + SMC structure
+    ph, pl  = find_pivots(spot, window=2)
     elliott = analyze_elliott_wave(spot, ph, pl)
+    choch   = detect_choch(spot, window=3)
+    liq_grab = detect_liquidity_grab(spot, window=3, lookback=5)
 
     # Flag patterns — detect on the same candles already fetched for this TF.
     # One flag set per timeframe, no cross-TF duplication.
@@ -383,6 +385,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "open_interest": oi,
         "liquidations": liq,
         "fvgs":         fvgs[:15],
+        "choch":        choch,
+        "liq_grab":     liq_grab,
         "engulfing":    engulfing,
         "flags":        flags,
         "elliott_wave": elliott,

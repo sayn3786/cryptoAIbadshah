@@ -339,3 +339,128 @@ def find_pivots(
             pl.append({"index": i, "price": lows[i], "timestamp": candles[i]["timestamp"]})
 
     return ph, pl
+
+
+def detect_choch(candles: List[Dict], window: int = 3) -> Dict:
+    """
+    Change of Character (CHoCH) — SMC market structure shift.
+
+    Bullish CHoCH: price was making lower highs/lower lows (downtrend),
+                   then breaks ABOVE the most recent swing high → structure flipped bullish.
+    Bearish CHoCH: price was making higher highs/higher lows (uptrend),
+                   then breaks BELOW the most recent swing low → structure flipped bearish.
+
+    Returns: {
+        signal:    'bullish' | 'bearish' | 'none'
+        level:     price level that was broken
+        candles_ago: how many candles ago the break occurred (freshness)
+        broken_high: for bullish — the swing high that was broken
+        broken_low:  for bearish — the swing low that was broken
+    }
+    """
+    if len(candles) < window * 2 + 5:
+        return {"signal": "none"}
+
+    ph, pl = find_pivots(candles[:-1], window=window)  # exclude current candle for pivots
+    if not ph or not pl:
+        return {"signal": "none"}
+
+    current = candles[-1]
+    cur_close = current["close"]
+
+    # Need at least 2 pivot highs and 2 pivot lows to establish trend
+    # Bearish CHoCH: was uptrend (HH, HL) → price breaks below last swing low
+    if len(pl) >= 2:
+        last_low  = pl[-1]
+        prev_low  = pl[-2]
+        if last_low["price"] > prev_low["price"]:  # higher lows = uptrend
+            if cur_close < last_low["price"]:
+                candles_ago = len(candles) - 1 - last_low["index"]
+                return {
+                    "signal":     "bearish",
+                    "level":      round(last_low["price"], 8),
+                    "candles_ago": candles_ago,
+                    "label":      f"Broke below swing low ${last_low['price']:,.4f}",
+                }
+
+    # Bullish CHoCH: was downtrend (LH, LL) → price breaks above last swing high
+    if len(ph) >= 2:
+        last_high = ph[-1]
+        prev_high = ph[-2]
+        if last_high["price"] < prev_high["price"]:  # lower highs = downtrend
+            if cur_close > last_high["price"]:
+                candles_ago = len(candles) - 1 - last_high["index"]
+                return {
+                    "signal":     "bullish",
+                    "level":      round(last_high["price"], 8),
+                    "candles_ago": candles_ago,
+                    "label":      f"Broke above swing high ${last_high['price']:,.4f}",
+                }
+
+    return {"signal": "none"}
+
+
+def detect_liquidity_grab(candles: List[Dict], window: int = 3, lookback: int = 5) -> Dict:
+    """
+    Liquidity Grab — wick sweeps a key swing level then closes back.
+
+    Bearish grab: recent candle wick exceeded a swing HIGH but CLOSED below it
+                  → stop hunt above highs, likely reversal down.
+    Bullish grab: recent candle wick exceeded a swing LOW but CLOSED above it
+                  → stop hunt below lows, likely reversal up.
+
+    Returns: {
+        signal:    'bullish' | 'bearish' | 'none'
+        level:     the swing level that was swept
+        wick_pct:  how far the wick exceeded the level (%)
+        candles_ago: how recent (0 = current candle)
+        label:     human-readable description
+    }
+    """
+    if len(candles) < window * 2 + lookback + 2:
+        return {"signal": "none"}
+
+    # Find pivots on candles BEFORE the recent lookback window
+    base_candles = candles[:-(lookback)]
+    ph, pl = find_pivots(base_candles, window=window)
+    if not ph and not pl:
+        return {"signal": "none"}
+
+    recent = candles[-lookback:]
+    best: Dict = {"signal": "none"}
+    best_wick = 0.0
+
+    for i, c in enumerate(recent):
+        candles_ago = lookback - 1 - i
+
+        # Bearish grab: wick above swing high, closes below it
+        for pivot in ph[-3:]:  # check last 3 swing highs
+            lvl = pivot["price"]
+            if c["high"] > lvl and c["close"] < lvl:
+                wick_pct = (c["high"] - lvl) / lvl * 100
+                if wick_pct > best_wick:
+                    best_wick = wick_pct
+                    best = {
+                        "signal":      "bearish",
+                        "level":       round(lvl, 8),
+                        "wick_pct":    round(wick_pct, 3),
+                        "candles_ago": candles_ago,
+                        "label":       f"Wick swept high ${lvl:,.4f} (+{wick_pct:.2f}%), closed below",
+                    }
+
+        # Bullish grab: wick below swing low, closes above it
+        for pivot in pl[-3:]:  # check last 3 swing lows
+            lvl = pivot["price"]
+            if c["low"] < lvl and c["close"] > lvl:
+                wick_pct = (lvl - c["low"]) / lvl * 100
+                if wick_pct > best_wick:
+                    best_wick = wick_pct
+                    best = {
+                        "signal":      "bullish",
+                        "level":       round(lvl, 8),
+                        "wick_pct":    round(wick_pct, 3),
+                        "candles_ago": candles_ago,
+                        "label":       f"Wick swept low ${lvl:,.4f} (-{wick_pct:.2f}%), closed above",
+                    }
+
+    return best

@@ -286,6 +286,44 @@ function renderSignal(s) {
     }
   }
 
+  // SMC structure: CHoCH + Liquidity Grab + FVG summary
+  const smcEl = document.getElementById('signalSMC');
+  if (smcEl) {
+    const choch   = s.choch;
+    const liq     = s.liq_grab;
+    const rows = [];
+
+    if (choch) {
+      const cls  = choch.signal === 'bullish' ? 'bull' : 'bear';
+      const icon = choch.signal === 'bullish' ? '▲' : '▼';
+      const age  = choch.candles_ago === 0 ? 'this candle' : `${choch.candles_ago}c ago`;
+      rows.push(`<div class="smc-row">
+        <span class="smc-label">CHoCH</span>
+        <span class="smc-val ${cls}">${icon} ${choch.signal.charAt(0).toUpperCase()+choch.signal.slice(1)}</span>
+        <span class="smc-sub">${choch.label} · ${age}</span>
+      </div>`);
+    }
+
+    if (liq) {
+      const cls  = liq.signal === 'bullish' ? 'bull' : 'bear';
+      const icon = liq.signal === 'bullish' ? '⚡↑' : '⚡↓';
+      const age  = liq.candles_ago === 0 ? 'this candle' : `${liq.candles_ago}c ago`;
+      rows.push(`<div class="smc-row">
+        <span class="smc-label">Liq. Grab</span>
+        <span class="smc-val ${cls}">${icon} ${liq.signal.charAt(0).toUpperCase()+liq.signal.slice(1)}</span>
+        <span class="smc-sub">${liq.label} · ${age}</span>
+      </div>`);
+    }
+
+    if (rows.length) {
+      smcEl.innerHTML = `<div class="smc-header">SMART MONEY STRUCTURE</div>${rows.join('')}`;
+      smcEl.style.display = '';
+    } else {
+      smcEl.innerHTML = '';
+      smcEl.style.display = 'none';
+    }
+  }
+
   const price = (n) => n ? `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
   document.getElementById('lvlEntry').textContent = price(s.entry);
   document.getElementById('lvlSL').textContent    = price(s.sl);

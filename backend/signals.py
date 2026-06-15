@@ -46,6 +46,8 @@ def generate_signal(analysis: Dict) -> Dict:
     funding     = analysis.get("funding_rate") or {}
     oi          = analysis.get("open_interest") or {}
     fvgs        = analysis.get("fvgs") or []
+    choch       = analysis.get("choch") or {}
+    liq_grab    = analysis.get("liq_grab") or {}
     flags       = analysis.get("flags") or []
     elliott     = analysis.get("elliott_wave") or {}
     candles     = analysis.get("candles") or []
@@ -300,6 +302,30 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(
             f"{len(above)} bearish FVG(s) as resistance above (nearest: ${above[0]['midpoint']:,.4f})"
         )
+
+    # ── CHoCH — Change of Character (structure shift) ────────────────────────
+    choch_sig = choch.get("signal", "none")
+    if choch_sig != "none":
+        freshness = max(0, 1 - choch.get("candles_ago", 99) / 10)  # 1.0 if current, 0 if 10+ ago
+        _choch_pts = round(18 * freshness)
+        if choch_sig == "bullish":
+            score += _choch_pts; g['pattern'] += _choch_pts
+            bull_reasons.append(f"Bullish CHoCH — structure flipped: {choch.get('label', '')}")
+        elif choch_sig == "bearish":
+            score -= _choch_pts; g['pattern'] -= _choch_pts
+            bear_reasons.append(f"Bearish CHoCH — structure flipped: {choch.get('label', '')}")
+
+    # ── Liquidity Grab ────────────────────────────────────────────────────────
+    liq_sig = liq_grab.get("signal", "none")
+    if liq_sig != "none":
+        freshness = max(0, 1 - liq_grab.get("candles_ago", 99) / 5)  # decays faster
+        _liq_pts  = round(15 * freshness)
+        if liq_sig == "bullish":
+            score += _liq_pts; g['pattern'] += _liq_pts
+            bull_reasons.append(f"Bullish liq. grab — {liq_grab.get('label', '')}")
+        elif liq_sig == "bearish":
+            score -= _liq_pts; g['pattern'] -= _liq_pts
+            bear_reasons.append(f"Bearish liq. grab — {liq_grab.get('label', '')}")
 
     # ── Pre-compute trend context for counter-trend discounts ─────────────────
     # t_bull / t_bear are the raw trend bucket values (before capping).
@@ -1283,4 +1309,6 @@ def generate_signal(analysis: Dict) -> Dict:
         "current_price": round(current_price, 8) if current_price else None,
         "exhaustion_flag": exhaustion_flag,
         "reversal_count":  reversal_count,
+        "choch":           choch   if choch.get("signal")    != "none" else None,
+        "liq_grab":        liq_grab if liq_grab.get("signal") != "none" else None,
     }

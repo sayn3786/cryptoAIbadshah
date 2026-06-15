@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=30" />
+  <link rel="stylesheet" href="css/dashboard.css?v=31" />
 </head>
 <body>
 
@@ -131,6 +131,7 @@
         <span class="signal-size-guide" id="signalSizeGuide"></span>
       </div>
       <div id="signalExhaustion" style="display:none"></div>
+      <div id="signalSMC" style="display:none"></div>
       <div class="trade-levels" id="tradeLevels">
         <div class="level entry"><span>Entry</span><span id="lvlEntry">—</span></div>
         <div class="level sl"><span>Stop Loss</span><span id="lvlSL">—</span></div>
@@ -532,7 +533,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=30"></script>
+<script src="js/dashboard.js?v=31"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
