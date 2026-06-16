@@ -286,12 +286,28 @@ function renderSignal(s) {
     }
   }
 
-  // SMC structure: CHoCH + Liquidity Grab + FVG summary
+  // SMC structure: Acc+EQL/EQH+FVG setup + CHoCH + Liquidity Grab
   const smcEl = document.getElementById('signalSMC');
   if (smcEl) {
-    const choch   = s.choch;
-    const liq     = s.liq_grab;
-    const rows = [];
+    const acc   = s.acc_setup;
+    const choch = s.choch;
+    const liq   = s.liq_grab;
+    const rows  = [];
+
+    // ICT Triple-combo setup — shown first as highest-confidence signal
+    if (acc) {
+      const isBull = acc.signal === 'bullish';
+      const cls    = isBull ? 'bull' : 'bear';
+      const icon   = isBull ? '🚀 PUMP' : '💣 DUMP';
+      const eq     = acc.eq_level;
+      const eqTxt  = eq ? `${eq.touches}× @ ${fmtPrice(eq.price)}` : '';
+      const rngTxt = acc.range ? `range ${acc.range.range_pct}%` : '';
+      rows.push(`<div class="smc-row smc-acc-setup">
+        <span class="smc-label">ICT Setup</span>
+        <span class="smc-val ${cls}">${icon}</span>
+        <span class="smc-sub">${isBull ? 'EQL' : 'EQH'} ${eqTxt} · ${rngTxt} · strength ${acc.strength}</span>
+      </div>`);
+    }
 
     if (choch) {
       const cls  = choch.signal === 'bullish' ? 'bull' : 'bear';

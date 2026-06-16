@@ -1147,6 +1147,7 @@ a:hover { color: var(--gold2); }
 .smc-label      { font-size: .68rem; font-weight: 700; color: var(--muted2); }
 .smc-val        { font-size: .72rem; font-weight: 800; }
 .smc-sub        { font-size: .60rem; color: var(--muted); }
+.smc-acc-setup  { background: rgba(99,102,241,.13); border-radius: 5px; padding: 3px 4px; margin-bottom: 6px; }
 
 /* BTC consensus banner */
 .btc-banner        { padding: 7px 12px; border-radius: 6px; font-size: .72rem; font-weight: 600; margin-bottom: 10px; }

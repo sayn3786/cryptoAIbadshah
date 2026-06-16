@@ -48,6 +48,7 @@ def generate_signal(analysis: Dict) -> Dict:
     fvgs        = analysis.get("fvgs") or []
     choch       = analysis.get("choch") or {}
     liq_grab    = analysis.get("liq_grab") or {}
+    acc_setup   = analysis.get("acc_setup") or {}
     flags       = analysis.get("flags") or []
     elliott     = analysis.get("elliott_wave") or {}
     candles     = analysis.get("candles") or []
@@ -326,6 +327,20 @@ def generate_signal(analysis: Dict) -> Dict:
         elif liq_sig == "bearish":
             score -= _liq_pts; g['pattern'] -= _liq_pts
             bear_reasons.append(f"Bearish liq. grab — {liq_grab.get('label', '')}")
+
+    # ── Accumulation + Equal H/L + FVG setup (ICT/SMC triple combo) ─────────
+    _acc_sig = acc_setup.get("signal", "none")
+    if _acc_sig != "none":
+        # Setup strength is 55-100 from the detector; scale to max ±25 pts here
+        _acc_str = acc_setup.get("strength", 55)
+        _acc_pts = round(25 * (_acc_str - 55) / 45) if _acc_str > 55 else 0
+        _acc_pts = max(8, _acc_pts)   # minimum 8 pts when setup is confirmed
+        if _acc_sig == "bullish":
+            score += _acc_pts; g['pattern'] += _acc_pts
+            bull_reasons.append(f"ICT Setup: {acc_setup.get('label', 'Acc+EQL+FVG pump setup')}")
+        elif _acc_sig == "bearish":
+            score -= _acc_pts; g['pattern'] -= _acc_pts
+            bear_reasons.append(f"ICT Setup: {acc_setup.get('label', 'Acc+EQH+FVG dump setup')}")
 
     # ── Pre-compute trend context for counter-trend discounts ─────────────────
     # t_bull / t_bear are the raw trend bucket values (before capping).
@@ -1363,6 +1378,7 @@ def generate_signal(analysis: Dict) -> Dict:
         "current_price": round(current_price, 8) if current_price else None,
         "exhaustion_flag": exhaustion_flag,
         "reversal_count":  reversal_count,
-        "choch":           choch   if choch.get("signal")    != "none" else None,
-        "liq_grab":        liq_grab if liq_grab.get("signal") != "none" else None,
+        "choch":           choch     if choch.get("signal")     != "none" else None,
+        "liq_grab":        liq_grab  if liq_grab.get("signal")  != "none" else None,
+        "acc_setup":       acc_setup if acc_setup.get("signal") != "none" else None,
     }
