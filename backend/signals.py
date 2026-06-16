@@ -1109,9 +1109,12 @@ def generate_signal(analysis: Dict) -> Dict:
         eff_atr = min(atr, max_atr_abs, _max_sl_abs / max(sl_m, 1.5))
 
         # Technical levels for entry and SL anchoring
-        # Widen entry search to 2% so nearby levels are actually found
-        ENTRY_LIMIT   = 0.020   # max 2% from current price for limit entry
+        ENTRY_LIMIT   = 0.040   # search up to 4% away for a real technical level
         SL_ANCHOR_MAX = 0.07    # search for SL anchor up to 7% from entry
+
+        # ATR-based minimum buffer so fallback entries aren't at-market
+        _atr_pct       = eff_atr / current_price if current_price > 0 else 0.01
+        _entry_buf_pct = max(0.005, min(_atr_pct * 0.5, 0.015))  # 0.5%–1.5%
 
         _ema_t     = analysis.get("ema_trend") or {}
         ema21_val  = _ema_t.get("ema21")
@@ -1139,11 +1142,11 @@ def generate_signal(analysis: Dict) -> Dict:
                           if lv and 0 <= _gap(lv, above=False) <= ENTRY_LIMIT]
             if swing_low and 0 <= _gap(swing_low, above=False) <= ENTRY_LIMIT:
                 _close_sup.append(swing_low)
-            # If no support level found nearby, set limit slightly below current price
             if _close_sup:
                 entry = round(max(_close_sup), 8)
             else:
-                entry = round(current_price * 0.998, 8)  # 0.2% pullback limit
+                # No support level found — set a genuine dip-limit below market
+                entry = round(current_price * (1 - _entry_buf_pct), 8)
 
             # SL: just below nearest technical invalidation level
             _sl_anchors = []
@@ -1169,11 +1172,11 @@ def generate_signal(analysis: Dict) -> Dict:
                           if lv and 0 <= _gap(lv, above=True) <= ENTRY_LIMIT]
             if swing_high and 0 <= _gap(swing_high, above=True) <= ENTRY_LIMIT:
                 _close_res.append(swing_high)
-            # If no resistance found nearby, set limit slightly above current price
             if _close_res:
                 entry = round(min(_close_res), 8)
             else:
-                entry = round(current_price * 1.002, 8)  # 0.2% bounce limit
+                # No resistance level found — set a genuine bounce-limit above market
+                entry = round(current_price * (1 + _entry_buf_pct), 8)
 
             _sl_anchors = []
             for _lv in [ema21_val, bb_upper, swing_high]:

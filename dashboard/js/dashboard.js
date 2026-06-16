@@ -325,7 +325,17 @@ function renderSignal(s) {
   }
 
   const price = (n) => n ? `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
-  document.getElementById('lvlEntry').textContent = price(s.entry);
+
+  // Staleness badge: if live price has moved >1.5% from entry, warn the user
+  const _entryEl = document.getElementById('lvlEntry');
+  _entryEl.textContent = price(s.entry);
+  const _staleEl = document.getElementById('lvlEntryStale');
+  if (_staleEl && s.entry && s.current_price) {
+    const _drift = Math.abs(s.entry - s.current_price) / s.current_price * 100;
+    _staleEl.style.display = _drift > 1.5 ? 'inline' : 'none';
+    _staleEl.title = `Entry was set when price was ${price(s.current_price)}; now ${_drift.toFixed(1)}% away`;
+  }
+
   document.getElementById('lvlSL').textContent    = price(s.sl);
   const tps = s.tp_targets || [];
   document.getElementById('lvlTP1').textContent = price(tps[0]);
