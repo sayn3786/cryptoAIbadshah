@@ -1337,25 +1337,42 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Reversal count: fresh directional flip indicators at this TF ──
     # Counts how many independent indicators just changed direction in the trade direction.
     # A flip means a momentum event (not just sustained state) — earliest entry signal.
-    _bull_flips = sum([
-        1 if (m_cross == "bullish"  or m_zero == "bullish")  else 0,  # MACD cross
-        1 if ema7_cross == "bullish"                          else 0,  # EMA7/21 cross
-        1 if (st_dir == "bullish"   and st_flipped)          else 0,  # SuperTrend flip
-        1 if vwap_cross == "bullish"                         else 0,  # VWAP cross
-        1 if srsi_signal == "bull_cross_oversold"            else 0,  # Stoch RSI reversal
-        1 if tk_cross == "bullish"                           else 0,  # Ichimoku TK cross
-    ])
-    _bear_flips = sum([
-        1 if (m_cross == "bearish"  or m_zero == "bearish")  else 0,
-        1 if ema7_cross == "bearish"                          else 0,
-        1 if (st_dir == "bearish"   and st_flipped)          else 0,
-        1 if vwap_cross == "bearish"                         else 0,
-        1 if srsi_signal == "bear_cross_overbought"          else 0,
-        1 if tk_cross == "bearish"                           else 0,
-    ])
+    _bull_flip_names = []
+    _bear_flip_names = []
+    if m_cross == "bullish" or m_zero == "bullish":
+        _bull_flip_names.append("MACD " + ("line cross" if m_cross == "bullish" else "zero cross"))
+    if m_cross == "bearish" or m_zero == "bearish":
+        _bear_flip_names.append("MACD " + ("line cross" if m_cross == "bearish" else "zero cross"))
+    if ema7_cross == "bullish":
+        _bull_flip_names.append("EMA 7/21 cross ↑")
+    if ema7_cross == "bearish":
+        _bear_flip_names.append("EMA 7/21 cross ↓")
+    if st_dir == "bullish" and st_flipped:
+        _bull_flip_names.append(f"SuperTrend flipped bullish (${st_val:,.2f})" if st_val else "SuperTrend flipped bullish")
+    if st_dir == "bearish" and st_flipped:
+        _bear_flip_names.append(f"SuperTrend flipped bearish (${st_val:,.2f})" if st_val else "SuperTrend flipped bearish")
+    if vwap_cross == "bullish":
+        _bull_flip_names.append("VWAP cross ↑")
+    if vwap_cross == "bearish":
+        _bear_flip_names.append("VWAP cross ↓")
+    if srsi_signal == "bull_cross_oversold":
+        _bull_flip_names.append("Stoch RSI bull cross (oversold)")
+    if srsi_signal == "bear_cross_overbought":
+        _bear_flip_names.append("Stoch RSI bear cross (overbought)")
+    if tk_cross == "bullish":
+        _bull_flip_names.append("Ichimoku TK cross ↑")
+    if tk_cross == "bearish":
+        _bear_flip_names.append("Ichimoku TK cross ↓")
+
+    _bull_flips = len(_bull_flip_names)
+    _bear_flips = len(_bear_flip_names)
     reversal_count = (
         _bull_flips if direction == "LONG"  else
         _bear_flips if direction == "SHORT" else 0
+    )
+    flipped_indicators = (
+        _bull_flip_names if direction == "LONG"  else
+        _bear_flip_names if direction == "SHORT" else []
     )
 
     return {
@@ -1376,8 +1393,9 @@ def generate_signal(analysis: Dict) -> Dict:
         "rr_ratio": rr_ratio,
         "leverage": suggested_lev,
         "current_price": round(current_price, 8) if current_price else None,
-        "exhaustion_flag": exhaustion_flag,
-        "reversal_count":  reversal_count,
+        "exhaustion_flag":    exhaustion_flag,
+        "reversal_count":     reversal_count,
+        "flipped_indicators": flipped_indicators,
         "choch":           choch     if choch.get("signal")     != "none" else None,
         "liq_grab":        liq_grab  if liq_grab.get("signal")  != "none" else None,
         "acc_setup":       acc_setup if acc_setup.get("signal") != "none" else None,

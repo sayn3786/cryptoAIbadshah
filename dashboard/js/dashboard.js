@@ -270,12 +270,12 @@ function renderSignal(s) {
       parts.push(`<span class="sig-exh-warn">⚠ ${zone} at this TF — entry is overextended</span>`);
     }
     if (revCount > 0) {
-      const flipLabels = {
-        1: '1 indicator just flipped',
-        2: '2 indicators just flipped',
-        3: '3 indicators just flipped',
-      };
-      parts.push(`<span class="sig-rev-badge">⚡ ${flipLabels[revCount] || revCount + ' indicators just flipped'} direction</span>`);
+      const names  = s.flipped_indicators || [];
+      const label  = revCount === 1 ? '1 indicator just flipped' : `${revCount} indicators just flipped`;
+      const detail = names.length
+        ? `<div class="sig-flip-list">${names.map(n => `<span class="sig-flip-item">⚡ ${n}</span>`).join('')}</div>`
+        : '';
+      parts.push(`<span class="sig-rev-badge">⚡ ${label} direction</span>${detail}`);
     }
     if (parts.length) {
       exhEl.innerHTML = parts.join('');
