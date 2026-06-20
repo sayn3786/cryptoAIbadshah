@@ -2812,8 +2812,9 @@ function renderOptionsBanner(opts) {
   let biasHtml = '';
   if (bias.bias && bias.bias !== 'neutral') {
     const biasCls  = bias.bias === 'bearish' ? 'opts-bear' : 'opts-bull';
-    const biasIcon = bias.bias === 'bearish' ? '▼ BEARISH PIN' : '▲ BULLISH PIN';
-    biasHtml = `<span class="opts-bias-badge ${biasCls}">${biasIcon}${inWin ? ` · str ${bias.strength}` : ' (outside window)'}</span>`;
+    const biasIcon = bias.bias === 'bearish' ? '▼ Price pinning DOWN' : '▲ Price pinning UP';
+    const strLabel = inWin ? ` · signal strength ${bias.strength}/100` : ' (outside pinning window)';
+    biasHtml = `<span class="opts-bias-badge ${biasCls}" title="Max pain is ${bias.bias === 'bullish' ? 'above' : 'below'} current price — market makers benefit from price moving ${bias.bias === 'bullish' ? 'up' : 'down'} toward max pain before expiry">${biasIcon}${strLabel}</span>`;
   }
 
   // Live data row: max pain + put/call + notional
@@ -2822,7 +2823,9 @@ function renderOptionsBanner(opts) {
     return v >= 1e9 ? `$${(v/1e9).toFixed(1)}B` : `$${(v/1e6).toFixed(0)}M`;
   };
   const maxPain   = bias.max_pain   ? `Max Pain $${Number(bias.max_pain).toLocaleString()}` : null;
-  const pcRatio   = bias.put_call_ratio != null ? `P/C ${bias.put_call_ratio.toFixed(2)}` : null;
+  const pc        = bias.put_call_ratio != null ? bias.put_call_ratio : null;
+  const pcLabel   = pc != null ? (pc > 1.2 ? 'put-heavy (bearish bets)' : pc < 0.8 ? 'call-heavy (bullish bets)' : 'balanced') : null;
+  const pcRatio   = pc != null ? `Put/Call ${pc.toFixed(2)} — ${pcLabel}` : null;
   const notional  = fmtN(ne.notional_usd || opts.total_notional);
   const liveStats = [maxPain, pcRatio, notional].filter(Boolean);
   const liveHtml  = liveStats.length
