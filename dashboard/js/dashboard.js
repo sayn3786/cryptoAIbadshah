@@ -2800,25 +2800,42 @@ function renderOptionsBanner(opts) {
   const etype   = ne.type || 'weekly';
   const inWin   = bias.in_window;
 
-  // Only show if quarterly/monthly or within 7 days
+  // Only show if quarterly/monthly or within 7 days of weekly
   if (etype === 'weekly' && days > 3) { el.classList.add('hidden'); return; }
 
   const typeEmoji = { quarterly: '🔴', monthly: '🟡', weekly: '🟢' }[etype] || '📅';
   const typeLabel = { quarterly: 'QUARTERLY', monthly: 'Monthly', weekly: 'Weekly' }[etype] || '';
   const countdown = days === 0 ? `${hours}h left` : `${days}d ${hours}h`;
+  const isLive    = opts.data_source === 'deribit';
 
+  // Bias badge
   let biasHtml = '';
-  if (inWin && bias.bias !== 'neutral') {
-    const biasCls = bias.bias === 'bearish' ? 'opts-bear' : 'opts-bull';
+  if (bias.bias && bias.bias !== 'neutral') {
+    const biasCls  = bias.bias === 'bearish' ? 'opts-bear' : 'opts-bull';
     const biasIcon = bias.bias === 'bearish' ? '▼ BEARISH PIN' : '▲ BULLISH PIN';
-    biasHtml = `<span class="opts-bias-badge ${biasCls}">${biasIcon} pressure · strength ${bias.strength}</span>`;
+    biasHtml = `<span class="opts-bias-badge ${biasCls}">${biasIcon}${inWin ? ` · str ${bias.strength}` : ' (outside window)'}</span>`;
   }
 
-  // Upcoming expiries mini-row
+  // Live data row: max pain + put/call + notional
+  const fmtN = (v) => {
+    if (!v) return null;
+    return v >= 1e9 ? `$${(v/1e9).toFixed(1)}B` : `$${(v/1e6).toFixed(0)}M`;
+  };
+  const maxPain   = bias.max_pain   ? `Max Pain $${Number(bias.max_pain).toLocaleString()}` : null;
+  const pcRatio   = bias.put_call_ratio != null ? `P/C ${bias.put_call_ratio.toFixed(2)}` : null;
+  const notional  = fmtN(ne.notional_usd || opts.total_notional);
+  const liveStats = [maxPain, pcRatio, notional].filter(Boolean);
+  const liveHtml  = liveStats.length
+    ? `<div class="opts-live-stats">${liveStats.map(s => `<span class="opts-stat">${s}</span>`).join('')}${isLive ? '<span class="opts-src">live · Deribit</span>' : ''}</div>`
+    : (isLive ? '<div class="opts-live-stats"><span class="opts-src">live · Deribit</span></div>' : '');
+
+  // Upcoming expiries mini-row (show notional if available)
   const upcoming = (opts.upcoming || []).slice(0, 4);
-  const upcomingHtml = upcoming.map((u, i) => {
-    const cls = { quarterly: 'opts-q', monthly: 'opts-m', weekly: 'opts-w' }[u.type] || '';
-    return `<span class="opts-cal-pill ${cls}" title="${u.type}">${u.label} <small>${u.days_to_expiry}d</small></span>`;
+  const upcomingHtml = upcoming.map(u => {
+    const cls  = { quarterly: 'opts-q', monthly: 'opts-m', weekly: 'opts-w' }[u.type] || '';
+    const pain = u.max_pain ? ` pain $${Number(u.max_pain).toLocaleString()}` : '';
+    const not  = u.notional_usd ? ` ${fmtN(u.notional_usd)}` : '';
+    return `<span class="opts-cal-pill ${cls}" title="${u.type}${pain}${not}">${u.label} <small>${u.days_to_expiry}d${not}</small></span>`;
   }).join('');
 
   el.className = `options-banner opts-${etype}${inWin ? ' opts-active' : ''}`;
@@ -2829,6 +2846,7 @@ function renderOptionsBanner(opts) {
       <span class="opts-countdown">${countdown}</span>
       ${biasHtml}
     </div>
+    ${liveHtml}
     ${bias.description ? `<div class="opts-desc">${bias.description}</div>` : ''}
     <div class="opts-cal">${upcomingHtml}</div>
   `;
