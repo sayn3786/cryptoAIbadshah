@@ -564,6 +564,12 @@ def api_symbols():
     return jsonify(list(SYMBOLS.keys()))
 
 
+@app.get("/api/news")
+def api_news():
+    symbol = request.args.get("symbol", "BTCUSDT").upper()
+    return jsonify(fetch_news_sentiment(symbol))
+
+
 @app.get("/api/scores")
 def api_scores():
     """
