@@ -476,6 +476,20 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
+@app.get("/api/test-deribit")
+def api_test_deribit():
+    """Quick connectivity test — open this URL in browser after deploying to Vercel."""
+    import urllib.request
+    url = "https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd"
+    try:
+        with urllib.request.urlopen(url, timeout=6) as r:
+            data = json.loads(r.read())
+            return jsonify({"ok": True, "btc_index": data.get("result", {}).get("index_price"), "msg": "Deribit reachable from Vercel ✅"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "msg": "Deribit blocked — see guide below",
+                        "fix": "vercel.com → Project → Settings → Networking → add deribit.com to Allowed Hostnames"})
+
+
 @app.get("/api/symbols")
 def api_symbols():
     return jsonify(list(SYMBOLS.keys()))
