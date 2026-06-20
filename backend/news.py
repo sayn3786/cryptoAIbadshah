@@ -88,15 +88,17 @@ LC_SYMBOLS = {
 }
 
 
-def _fetch_lunarcrush(symbol: str) -> List[Dict]:
+def _fetch_lunarcrush(symbol: str) -> tuple:
+    """Returns (articles, error_str). error_str is None on success."""
     api_key = os.getenv("LUNARCRUSH_API_KEY", "").strip()
     if not api_key:
-        return []
+        return [], "LUNARCRUSH_API_KEY not set"
     lc_sym = LC_SYMBOLS.get(symbol)
     if not lc_sym:
-        return []
+        return [], f"no LC symbol mapping for {symbol}"
 
     articles = []
+    lc_error = None
 
     # Coin-level aggregate sentiment (galaxy score + bullish %)
     try:
@@ -127,8 +129,8 @@ def _fetch_lunarcrush(symbol: str) -> List[Dict]:
             "bearish_votes": int(100 - bull_pct),
             "sentiment":    agg_sent,
         })
-    except Exception:
-        pass
+    except Exception as e:
+        lc_error = f"coin endpoint: {str(e)[:120]}"
 
     # Per-article news feed
     try:
@@ -175,10 +177,10 @@ def _fetch_lunarcrush(symbol: str) -> List[Dict]:
                 })
             except Exception:
                 continue
-    except Exception:
-        pass
+    except Exception as e:
+        lc_error = (lc_error + " | " if lc_error else "") + f"news endpoint: {str(e)[:120]}"
 
-    return articles
+    return articles, lc_error
 
 
 # ── RSS fallback ──────────────────────────────────────────────────────────────
@@ -278,7 +280,7 @@ def fetch_news_sentiment(symbol: str) -> Dict:
         if cached and time.time() - cached["ts"] < CACHE_TTL:
             return cached["data"]
 
-    lc_articles  = _fetch_lunarcrush(symbol)
+    lc_articles, lc_error = _fetch_lunarcrush(symbol)
     rss_articles = _fetch_rss(symbol)
 
     # Deduplicate RSS vs LunarCrush by title similarity
@@ -296,6 +298,8 @@ def fetch_news_sentiment(symbol: str) -> Dict:
 
     result = _aggregate(articles)
     result["source"] = src
+    if lc_error:
+        result["lc_error"] = lc_error
 
     with _cache_lock:
         _cache[symbol] = {"data": result, "ts": time.time()}
