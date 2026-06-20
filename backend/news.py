@@ -1,7 +1,12 @@
 """
-Crypto news sentiment — CryptoPanic free API (primary) + RSS fallback.
-Cached per coin for 30 minutes. No API key required.
+Crypto news sentiment — CryptoPanic API (with key) → RSS fallback.
+Cached per coin for 30 minutes.
+
+CryptoPanic deprecated their unauthenticated free endpoint in 2025.
+Set CRYPTOPANIC_API_KEY env var (free at cryptopanic.com) to enable it.
+Without key, news falls back to RSS feeds (CoinDesk + Cointelegraph).
 """
+import os
 import time
 import threading
 import urllib.request
@@ -98,10 +103,13 @@ def _fetch_cryptopanic(symbol: str) -> List[Dict]:
     currency = CP_CURRENCIES.get(symbol)
     if not currency:
         return []
+    api_key = os.getenv("CRYPTOPANIC_API_KEY", "").strip()
+    if not api_key:
+        return []   # no key → skip to RSS fallback
     try:
         url = (
-            f"https://cryptopanic.com/api/free/v1/posts/"
-            f"?currencies={currency}&kind=news&public=true"
+            f"https://cryptopanic.com/api/v1/posts/"
+            f"?auth_token={api_key}&currencies={currency}&kind=news&public=true"
         )
         req = urllib.request.Request(url, headers={"User-Agent": "CryptoBadshah/2.0"})
         with urllib.request.urlopen(req, timeout=7) as r:
