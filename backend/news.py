@@ -1,7 +1,12 @@
 """
-Crypto news sentiment — CryptoPanic free API (primary) + RSS fallback.
-Cached per coin for 30 minutes. No API key required.
+Crypto news sentiment — LunarCrush (primary) → CryptoPanic → RSS fallback.
+Cached per coin for 30 minutes.
+
+Set LUNARCRUSH_API_KEY env var (free at lunarcrush.com) for rich social sentiment.
+Set CRYPTOPANIC_API_KEY env var for CryptoPanic (paid plan required).
+Without keys, news falls back to RSS feeds (CoinDesk + Cointelegraph).
 """
+import os
 import time
 import threading
 import urllib.request
@@ -90,6 +95,119 @@ def _recency_weight(pub_iso: str) -> float:
         return 1.0 / hours
     except Exception:
         return 0.2
+
+
+# LunarCrush coin symbol mapping (they use lowercase tickers)
+LC_SYMBOLS = {
+    "BTCUSDT": "btc",   "ETHUSDT": "eth",   "LINKUSDT": "link",
+    "TAOUSDT": "tao",   "HYPEUSDT": "hype", "ONDOUSDT": "ondo",
+    "SUIUSDT": "sui",   "KASUSDT": "kas",   "ALGOUSDT": "algo",
+    "XMRUSDT": "xmr",  "XRPUSDT": "xrp",  "TONUSDT": "ton",
+    "SOLUSDT": "sol",   "AAVEUSDT": "aave", "RENDERUSDT": "render",
+    "BNBUSDT": "bnb",   "BLURUSDT": "blur",
+}
+
+
+def _fetch_lunarcrush(symbol: str) -> List[Dict]:
+    """
+    LunarCrush v4 public API — coin news + social sentiment.
+    Requires LUNARCRUSH_API_KEY env var (free tier available).
+    Returns articles with sentiment derived from LunarCrush scores.
+    """
+    api_key = os.getenv("LUNARCRUSH_API_KEY", "").strip()
+    if not api_key:
+        return []
+    lc_sym = LC_SYMBOLS.get(symbol)
+    if not lc_sym:
+        return []
+
+    articles = []
+
+    # 1. Coin-level sentiment metrics (galaxy score, sentiment, bullish %)
+    try:
+        url = f"https://lunarcrush.com/api4/public/coins/{lc_sym}/v1"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "CryptoBadshah/2.0",
+        })
+        with urllib.request.urlopen(req, timeout=7) as r:
+            coin_data = json.loads(r.read()).get("data", {})
+
+        # LunarCrush gives bullish_sentiment as 0-100 percentage
+        bull_pct = float(coin_data.get("bullish_sentiment", 50) or 50)
+        galaxy   = float(coin_data.get("galaxy_score", 50) or 50)
+        sentiment_score = bull_pct  # >60 = bullish lean, <40 = bearish lean
+
+        # Inject a synthetic "market pulse" article representing aggregate social mood
+        if bull_pct > 0:
+            if bull_pct >= 62:
+                agg_sent = "bullish"
+            elif bull_pct <= 38:
+                agg_sent = "bearish"
+            else:
+                agg_sent = "neutral"
+            articles.append({
+                "title":        f"{lc_sym.upper()} social sentiment: {bull_pct:.0f}% bullish · Galaxy score {galaxy:.0f}/100",
+                "url":          f"https://lunarcrush.com/coins/{lc_sym}",
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "source":       "lunarcrush",
+                "bullish_votes": int(bull_pct),
+                "bearish_votes": int(100 - bull_pct),
+                "sentiment":    agg_sent,
+            })
+    except Exception:
+        pass
+
+    # 2. Coin news feed
+    try:
+        url = f"https://lunarcrush.com/api4/public/coins/{lc_sym}/news/v1"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "CryptoBadshah/2.0",
+        })
+        with urllib.request.urlopen(req, timeout=7) as r:
+            news_data = json.loads(r.read())
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        for item in (news_data.get("data") or [])[:20]:
+            try:
+                created = item.get("post_created") or item.get("time")
+                if created:
+                    pub = datetime.fromtimestamp(int(created), tz=timezone.utc)
+                    if pub < cutoff:
+                        continue
+                    pub_iso = pub.isoformat()
+                else:
+                    pub_iso = datetime.now(timezone.utc).isoformat()
+
+                title = item.get("post_title") or item.get("title") or ""
+                if not title:
+                    continue
+
+                # LunarCrush provides sentiment score per post (0-100, >50 = bullish)
+                post_sent = float(item.get("post_sentiment", 50) or 50)
+                if post_sent >= 60:
+                    sentiment = "bullish"
+                elif post_sent <= 40:
+                    sentiment = "bearish"
+                else:
+                    sentiment = _keyword_sentiment(title)
+
+                articles.append({
+                    "title":        title,
+                    "url":          item.get("post_link") or item.get("url", ""),
+                    "published_at": pub_iso,
+                    "source":       item.get("post_url_domain", "lunarcrush.com"),
+                    "bullish_votes": int(post_sent),
+                    "bearish_votes": int(100 - post_sent),
+                    "sentiment":    sentiment,
+                })
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return articles
 
 
 # ── Fetchers ──────────────────────────────────────────────────────────────────
@@ -225,14 +343,17 @@ def _aggregate(articles: List[Dict]) -> Dict:
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def fetch_news_sentiment(symbol: str) -> Dict:
-    """Return cached news sentiment for a symbol. CryptoPanic → RSS fallback."""
+    """Return cached news sentiment. LunarCrush → CryptoPanic → RSS fallback."""
     with _cache_lock:
         cached = _cache.get(symbol)
         if cached and time.time() - cached["ts"] < CACHE_TTL:
             return cached["data"]
 
-    articles = _fetch_cryptopanic(symbol)
-    src = "cryptopanic"
+    articles = _fetch_lunarcrush(symbol)
+    src = "lunarcrush"
+    if not articles:
+        articles = _fetch_cryptopanic(symbol)
+        src = "cryptopanic"
     if not articles:
         articles = _fetch_rss(symbol)
         src = "rss"
