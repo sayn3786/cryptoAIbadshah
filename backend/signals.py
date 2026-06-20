@@ -1030,6 +1030,24 @@ def generate_signal(analysis: Dict) -> Dict:
     else:
         direction = "NEUTRAL"
 
+    # ── Options expiry pin pressure ───────────────────────────────────────────
+    # Only applied when inside the pinning window and direction is not NEUTRAL.
+    # Amplifies strength when options align with signal; reduces when they oppose.
+    _opts        = analysis.get("options_expiry") or {}
+    _opts_bias   = (_opts.get("bias") or {})
+    _opts_pts    = int(_opts_bias.get("signal_pts") or 0)   # -20 to +20
+    _opts_in_win = _opts_bias.get("in_window", False)
+    opts_adj     = 0
+    if _opts_in_win and _opts_pts != 0 and direction != "NEUTRAL":
+        opts_adj = abs(_opts_pts)
+        if (_opts_pts > 0 and direction == "LONG") or (_opts_pts < 0 and direction == "SHORT"):
+            strength = min(100, strength + opts_adj)
+            bull_reasons.append(f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{opts_adj} pts)")
+        else:
+            strength = max(0, strength - round(opts_adj * 0.5))
+            bear_reasons.append(f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, -{round(opts_adj*0.5)} pts)")
+        g['sentiment'] += opts_adj if direction == "LONG" else -opts_adj
+
     # Strength tiers (strength = score / 220 * 100):
     # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size
     # Moderate (33–50): score  73–110 — several aligned, 50% size
