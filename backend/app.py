@@ -501,13 +501,17 @@ def api_connectivity():
         ("blockchain.info","https://blockchain.info/stats?format=json",                                    "BTC miner revenue"),
         ("CoinMetrics",    "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=1", "MVRV score"),
         ("Fear & Greed",   "https://api.alternative.me/fng/?limit=1",                                     "market sentiment"),
-        ("CryptoPanic",    "https://cryptopanic.com/api/v1/posts/?auth_token=" + (os.getenv("CRYPTOPANIC_API_KEY","none")) + "&currencies=BTC&kind=news&public=true", "news sentiment (needs CRYPTOPANIC_API_KEY)"),
+        ("LunarCrush",     "https://lunarcrush.com/api4/public/coins/btc/v1",                                   "news/social sentiment (needs LUNARCRUSH_API_KEY)"),
         ("CoinGlass",      "https://open-api.coinglass.com/public/v2/funding_usd_history?symbol=BTC&time_type=h8&limit=1", "funding / OI / liquidations"),
     ]
 
     def _test(name, url, purpose):
+        hdrs = {"User-Agent": "CryptoSTARS/1.0"}
+        lc_key = os.getenv("LUNARCRUSH_API_KEY", "")
+        if name == "LunarCrush" and lc_key:
+            hdrs["Authorization"] = f"Bearer {lc_key}"
         try:
-            req = _ur.Request(url, headers={"User-Agent": "CryptoSTARS/1.0"})
+            req = _ur.Request(url, headers=hdrs)
             with _ur.urlopen(req, timeout=5) as r:
                 status = r.status
             return {"name": name, "ok": True,  "purpose": purpose, "status": status}
@@ -542,7 +546,7 @@ def api_connectivity():
             "Binance":    "HTTP 451 = geo-blocked (Singapore/US). App auto-falls-back to OKX. Not a problem.",
             "CoinGlass":  f"API key configured: {cg_key}. Without key, funding/OI/liquidations use Binance only.",
             "Bybit":      "403 on time endpoint is normal — candle endpoint works without key.",
-            "CryptoPanic":f"Key configured: {bool(os.getenv('CRYPTOPANIC_API_KEY'))}. Free key at cryptopanic.com/api → add CRYPTOPANIC_API_KEY to Vercel env vars. RSS fallback always active.",
+            "LunarCrush": f"Key configured: {bool(os.getenv('LUNARCRUSH_API_KEY'))}. Free key at lunarcrush.com → add LUNARCRUSH_API_KEY to Vercel env vars. RSS fallback always active.",
         },
         "live":      live,
         "blocked":   blocked,
