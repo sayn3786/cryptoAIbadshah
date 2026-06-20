@@ -486,22 +486,23 @@ def api_connectivity():
     import concurrent.futures
 
     TESTS = [
-        ("Binance",       "https://api.binance.com/api/v3/ping",                                   "prices / candles"),
-        ("OKX",           "https://www.okx.com/api/v5/public/time",                                "prices / candles fallback"),
-        ("Bybit",         "https://api.bybit.com/v5/market/time",                                  "prices / candles fallback"),
-        ("KuCoin",        "https://api.kucoin.com/api/v1/timestamp",                               "prices / candles fallback"),
-        ("Gate.io",       "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT",     "prices / candles fallback"),
-        ("MEXC",          "https://api.mexc.com/api/v3/time",                                      "prices / candles fallback"),
-        ("Kraken",        "https://api.kraken.com/0/public/Time",                                  "prices fallback"),
-        ("LBank",         "https://api.lbkex.com/v2/accuracy.do",                                  "prices fallback"),
-        ("CoinGecko",     "https://api.coingecko.com/api/v3/ping",                                 "market caps / fallback prices"),
-        ("Deribit",       "https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd", "options expiry / max pain"),
-        ("mempool.space", "https://mempool.space/api/v1/difficulty-adjustment",                    "BTC mining / difficulty"),
-        ("blockchain.info","https://blockchain.info/stats?format=json",                            "BTC miner revenue"),
-        ("CoinMetrics",   "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVFF&limit=1", "MVRV score"),
-        ("Fear & Greed",  "https://api.alternative.me/fng/?limit=1",                               "market sentiment"),
-        ("CryptoPanic",   "https://cryptopanic.com/api/free/v1/posts/?auth_token=x&public=true",  "news sentiment"),
-        ("CoinGlass",     "https://open-api.coinglass.com/public/v2/funding_usd_history",          "funding / OI / liquidations (needs API key)"),
+        # Exact URLs used in production code (not generic pings)
+        ("Binance",        "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1",    "prices/candles (geo-blocked → falls back to OKX)"),
+        ("OKX ✦primary",  "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1D&limit=1",    "prices/candles — PRIMARY when Binance blocked"),
+        ("Bybit",          "https://api.bybit.com/v5/market/kline?symbol=BTCUSDT&interval=D&limit=1",     "prices/candles fallback"),
+        ("KuCoin",         "https://api.kucoin.com/api/v1/market/candles?type=1day&symbol=BTC-USDT&startAt=1&endAt=9999999999", "prices/candles fallback"),
+        ("Gate.io",        "https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=BTC_USDT&interval=1d&limit=1", "prices/candles fallback"),
+        ("MEXC",           "https://api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1",       "prices/candles fallback"),
+        ("Kraken",         "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1440",              "prices fallback"),
+        ("LBank",          "https://api.lbkex.com/v2/kline.do?symbol=btc_usdt&size=1&type=day1",          "prices fallback"),
+        ("CoinGecko",      "https://api.coingecko.com/api/v3/ping",                                       "market caps / fallback prices"),
+        ("Deribit",        "https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd",    "options expiry / max pain ✅"),
+        ("mempool.space",  "https://mempool.space/api/v1/difficulty-adjustment",                           "BTC mining / difficulty"),
+        ("blockchain.info","https://blockchain.info/stats?format=json",                                    "BTC miner revenue"),
+        ("CoinMetrics",    "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=1", "MVRV score"),
+        ("Fear & Greed",   "https://api.alternative.me/fng/?limit=1",                                     "market sentiment"),
+        ("CryptoPanic",    "https://cryptopanic.com/api/free/v1/posts/?currencies=BTC&kind=news&public=true", "news sentiment"),
+        ("CoinGlass",      "https://open-api.coinglass.com/public/v2/funding_usd_history?symbol=BTC&time_type=h8&limit=1", "funding / OI / liquidations"),
     ]
 
     def _test(name, url, purpose):
@@ -529,12 +530,19 @@ def api_connectivity():
     key_req = [r for r in results if not r["ok"] and r.get("needs_key")]
     other   = [r for r in results if not r["ok"] and not r.get("blocked") and not r.get("needs_key")]
 
+    cg_key  = bool(os.getenv("COINGLASS_API_KEY", ""))
     return jsonify({
         "summary": {
-            "live":         len(live),
-            "blocked":      len(blocked),
-            "needs_api_key":len(key_req),
-            "other_error":  len(other),
+            "live":          len(live),
+            "blocked":       len(blocked),
+            "needs_api_key": len(key_req),
+            "other_error":   len(other),
+        },
+        "notes": {
+            "Binance":    "HTTP 451 = geo-blocked (Singapore/US). App auto-falls-back to OKX. Not a problem.",
+            "CoinGlass":  f"API key configured: {cg_key}. Without key, funding/OI/liquidations use Binance only.",
+            "Bybit":      "403 on time endpoint is normal — candle endpoint works without key.",
+            "CryptoPanic":"Requires free API key at cryptopanic.com for news. RSS fallback is active.",
         },
         "live":      live,
         "blocked":   blocked,
