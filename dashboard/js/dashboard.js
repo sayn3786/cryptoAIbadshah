@@ -206,6 +206,7 @@ function renderAll(a) {
   renderBtcContext(a);
   renderOrderBook(a.order_book);
   renderHolidayBanner(a.upcoming_holidays);
+  renderOptionsBanner(a.options_expiry);
   document.getElementById('chartTitle').textContent = `${a.symbol}/USDT · ${a.timeframe}`;
 }
 
@@ -2590,6 +2591,9 @@ async function loadRecommendations() {
       genEl.title = 'Rating & strength are a snapshot from this exact moment. Only changes at 8AM / 4PM / 8PM SGT.';
     }
 
+    // Options expiry banner — update with full BTC-priced data from recs endpoint
+    if (data.options_expiry) renderOptionsBanner(data.options_expiry);
+
     // BTC consensus banner (replace if already rendered)
     const btcBanner = (() => {
       const bc = data.btc_consensus;
@@ -2781,6 +2785,54 @@ function renderOrderBook(ob) {
     + airHTML(ob.air_pocket_below, 'below');
   sellEl.innerHTML = wallsHTML(ob.top_asks, 'sell')
     + airHTML(ob.air_pocket_above, 'above');
+}
+
+/* ─── Options Expiry Banner ───────────────────────────────────────────────── */
+function renderOptionsBanner(opts) {
+  const el = document.getElementById('optionsBanner');
+  if (!el) return;
+  if (!opts || !opts.next_expiry) { el.classList.add('hidden'); return; }
+
+  const ne      = opts.next_expiry;
+  const bias    = opts.bias || {};
+  const days    = ne.days_to_expiry;
+  const hours   = ne.hours_to_expiry;
+  const etype   = ne.type || 'weekly';
+  const inWin   = bias.in_window;
+
+  // Only show if quarterly/monthly or within 7 days
+  if (etype === 'weekly' && days > 3) { el.classList.add('hidden'); return; }
+
+  const typeEmoji = { quarterly: '🔴', monthly: '🟡', weekly: '🟢' }[etype] || '📅';
+  const typeLabel = { quarterly: 'QUARTERLY', monthly: 'Monthly', weekly: 'Weekly' }[etype] || '';
+  const countdown = days === 0 ? `${hours}h left` : `${days}d ${hours}h`;
+
+  let biasHtml = '';
+  if (inWin && bias.bias !== 'neutral') {
+    const biasCls = bias.bias === 'bearish' ? 'opts-bear' : 'opts-bull';
+    const biasIcon = bias.bias === 'bearish' ? '▼ BEARISH PIN' : '▲ BULLISH PIN';
+    biasHtml = `<span class="opts-bias-badge ${biasCls}">${biasIcon} pressure · strength ${bias.strength}</span>`;
+  }
+
+  // Upcoming expiries mini-row
+  const upcoming = (opts.upcoming || []).slice(0, 4);
+  const upcomingHtml = upcoming.map((u, i) => {
+    const cls = { quarterly: 'opts-q', monthly: 'opts-m', weekly: 'opts-w' }[u.type] || '';
+    return `<span class="opts-cal-pill ${cls}" title="${u.type}">${u.label} <small>${u.days_to_expiry}d</small></span>`;
+  }).join('');
+
+  el.className = `options-banner opts-${etype}${inWin ? ' opts-active' : ''}`;
+  el.innerHTML = `
+    <div class="opts-main">
+      ${typeEmoji} <strong>${typeLabel} Options Expiry</strong>
+      <span class="opts-date">${ne.label}</span>
+      <span class="opts-countdown">${countdown}</span>
+      ${biasHtml}
+    </div>
+    ${bias.description ? `<div class="opts-desc">${bias.description}</div>` : ''}
+    <div class="opts-cal">${upcomingHtml}</div>
+  `;
+  el.classList.remove('hidden');
 }
 
 /* ─── Holiday Banner ──────────────────────────────────────────────────────── */

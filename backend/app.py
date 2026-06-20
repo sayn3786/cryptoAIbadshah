@@ -6,6 +6,7 @@ import time
 import math
 sys.path.insert(0, os.path.dirname(__file__))
 from btc_onchain import get_btc_mining_signals
+from options import get_options_expiry_data
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -370,6 +371,16 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
 
+    # Options expiry: use 28 daily candles for 4-week range context (all symbols)
+    _daily_candles = spot[-28:] if len(spot) >= 28 else spot
+    _btc_price_for_opts = (spot[-1]["close"] if spot else 0) if symbol == "BTC" else 0
+    # Only compute full bias for BTC; for ALTs we reuse BTC options data from the
+    # recommendations engine so we don't refetch here
+    options_expiry = get_options_expiry_data(
+        current_price=_btc_price_for_opts,
+        candles_4w=_daily_candles,
+    ) if symbol == "BTC" else get_options_expiry_data()  # calendar-only for ALTs
+
     analysis = {
         "symbol":       symbol,
         "timeframe":    timeframe,
@@ -414,7 +425,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "vwap":          vwap,
         "stoch_rsi":     stoch_rsi,
         "vol_signal":    vol_signal,
-        "btc_mining":    btc_mining,
+        "btc_mining":      btc_mining,
+        "options_expiry":  options_expiry,
     }
     analysis["signal"] = generate_signal(analysis)
 
@@ -730,12 +742,23 @@ def _compute_recommendations() -> dict:
     BTC_PENALTY = 18   # pts when token opposes BTC 2H
 
     # On-chain score: shifts BTC_BONUS/PENALTY by up to ±20%
-    # score 75+ → amplify BTC effect; score <30 → dampen it
     _oc = get_btc_mining_signals()
     _oc_score = (_oc.get("onchain_score") or {}).get("score", 50)
-    _oc_mult  = 0.8 + 0.4 * (_oc_score / 100.0)   # 0.80 at score=0, 1.20 at score=100
+    _oc_mult  = 0.8 + 0.4 * (_oc_score / 100.0)
     BTC_BONUS   = round(BTC_BONUS   * _oc_mult, 1)
     BTC_PENALTY = round(BTC_PENALTY * _oc_mult, 1)
+
+    # Options expiry: BTC options pinning pressure cascades to all ALTs
+    # — in the expiry window, bearish pin on BTC → increase ALT bearish bias
+    #                         bullish pin on BTC → increase ALT bullish bias
+    _opts = get_options_expiry_data(
+        current_price=raw.get("BTC", {}).get("2H", {}).get("current_price", 0) or 0,
+        candles_4w=[],   # conservative — use calendar-only when no candle context
+    )
+    _opts_bias   = (_opts.get("bias") or {}).get("bias", "neutral")
+    _opts_pts    = (_opts.get("signal_pts") or 0)       # -20 to +20
+    _opts_in_win = (_opts.get("bias") or {}).get("in_window", False)
+    _opts_summary = _opts.get("summary", "")
 
     candidates = []
     for sym, tfs in raw.items():
@@ -768,6 +791,18 @@ def _compute_recommendations() -> dict:
         elif btc_conflict:
             btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
             strength = max(0, round(strength + btc_adj, 1))
+
+        # Options expiry pin pressure: scale by BTC correlation so high-corr ALTs
+        # are more affected by BTC pinning than low-corr assets (e.g. XAUT)
+        opts_adj = 0
+        if _opts_in_win and _opts_pts != 0:
+            opts_adj  = round(_opts_pts * corr_factor, 1)
+            # Only apply if it amplifies the current signal direction
+            # (don't let options bias flip a strong opposite signal)
+            if (opts_adj > 0 and direction == "LONG") or (opts_adj < 0 and direction == "SHORT"):
+                strength = min(100, max(0, round(strength + abs(opts_adj), 1)))
+            else:
+                strength = min(100, max(0, round(strength - abs(opts_adj) * 0.5, 1)))
 
         # Metadata only — exhaustion and reversal are shown in the per-TF analysis
         # view, not used to adjust rec ranking (recs are ranked purely on 1H+2H strength)
@@ -805,6 +840,10 @@ def _compute_recommendations() -> dict:
             "btc_consensus":    btc_dir,
             "btc_adj":          btc_adj,
             "btc_corr":         corr_factor,
+            "opts_adj":         opts_adj,
+            "opts_in_window":   _opts_in_win,
+            "opts_bias":        _opts_bias,
+            "opts_summary":     _opts_summary,
             "h1_exhausted":      h1_exh,
             "h2_exhausted":      h2_exh,
             "h1_reversal_count": h1_rev,
@@ -877,6 +916,7 @@ def _compute_recommendations() -> dict:
         "btc_4h_str":       btc_str,
         "btc_1d_dir":       "NEUTRAL",
         "btc_1d_str":       0,
+        "options_expiry":   _opts,
         "recommendations":  intraday_recs,
     }
 

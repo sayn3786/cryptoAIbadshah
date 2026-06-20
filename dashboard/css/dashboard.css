@@ -686,6 +686,31 @@ a:hover { color: var(--gold2); }
 .holiday-banner .hol-pill.impact-medium { border: 1px solid #d97706; opacity: .85; }
 .holiday-banner .hol-pill.impact-low    { border: 1px solid #92400e; opacity: .7; }
 
+/* ─── Options Expiry Banner ──────────────────────────────────────────────────── */
+.options-banner {
+  font-size: .80rem; padding: 8px 16px 6px;
+  border-bottom: 1px solid #374151;
+  background: #0d1b2e;
+}
+.options-banner.opts-quarterly { background: linear-gradient(90deg,#1a0a2e,#1e1035); border-bottom-color: #7c3aed; }
+.options-banner.opts-quarterly.opts-active { background: linear-gradient(90deg,#200a35,#2d1060); }
+.options-banner.opts-monthly   { background: linear-gradient(90deg,#0a1a2e,#0f2040); border-bottom-color: #2563eb; }
+.options-banner.opts-weekly    { background: linear-gradient(90deg,#0a1a1a,#0f2820); border-bottom-color: #059669; }
+.opts-main { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.opts-main strong { color:#e2e8f0; }
+.opts-date { color:#94a3b8; font-size:.75rem; }
+.opts-countdown { background:rgba(255,255,255,.08); border-radius:4px; padding:1px 7px; font-size:.72rem; font-weight:700; color:#e2e8f0; }
+.opts-bias-badge { font-size:.68rem; font-weight:800; border-radius:4px; padding:2px 8px; letter-spacing:.04em; }
+.opts-bear { background:rgba(239,68,68,.18); color:#f87171; border:1px solid #ef444455; }
+.opts-bull { background:rgba(16,185,129,.18); color:#34d399; border:1px solid #10b98155; }
+.opts-desc { font-size:.66rem; color:#94a3b8; margin-top:4px; line-height:1.4; }
+.opts-cal { display:flex; gap:6px; flex-wrap:wrap; margin-top:5px; }
+.opts-cal-pill { font-size:.60rem; font-weight:600; border-radius:3px; padding:1px 7px; border:1px solid; }
+.opts-cal-pill.opts-q { color:#a78bfa; border-color:#7c3aed44; background:rgba(124,58,237,.1); }
+.opts-cal-pill.opts-m { color:#60a5fa; border-color:#2563eb44; background:rgba(37,99,235,.1); }
+.opts-cal-pill.opts-w { color:#6ee7b7; border-color:#05996944; background:rgba(5,150,105,.1); }
+.opts-cal-pill small  { opacity:.7; }
+
 /* ─── Order Book Walls ───────────────────────────────────────────────────────── */
 .card-sub { font-size: .7rem; font-weight: 400; color: var(--muted); margin-left: 6px; }
 .row-volume { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
