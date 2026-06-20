@@ -517,8 +517,12 @@ def api_connectivity():
             return {"name": name, "ok": True,  "purpose": purpose, "status": status}
         except Exception as e:
             msg = str(e)
+            rate_limited = "429" in msg
             blocked = "allowlist" in msg or ("403" in msg and "allowlist" in msg)
             needs_key = "401" in msg or ("403" in msg and "allowlist" not in msg)
+            if rate_limited:
+                return {"name": name, "ok": True, "purpose": purpose,
+                        "status": 429, "note": "Rate limited — key is valid, reduce call frequency"}
             return {"name": name, "ok": False, "purpose": purpose,
                     "blocked": blocked, "needs_key": needs_key, "error": msg[:120]}
 

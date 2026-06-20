@@ -51,7 +51,7 @@ _BEAR_KW = [
 
 _cache: Dict[str, Dict] = {}
 _cache_lock = threading.Lock()
-CACHE_TTL = 1800  # 30 min
+CACHE_TTL = 3600  # 60 min — LunarCrush has strict rate limits
 
 
 # ── Sentiment helpers ─────────────────────────────────────────────────────────
