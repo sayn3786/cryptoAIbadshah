@@ -1,9 +1,9 @@
 """
-Crypto news sentiment — LunarCrush (primary) → RSS fallback.
-Cached per coin for 30 minutes.
+Crypto news sentiment — LunarCrush + RSS combined.
+Cached per coin for 60 minutes.
 
-Set LUNARCRUSH_API_KEY env var (free at lunarcrush.com) for rich social sentiment.
-Without a key, news falls back to RSS feeds (CoinDesk + Cointelegraph).
+Set LUNARCRUSH_API_KEY env var (free at lunarcrush.com) for social sentiment.
+RSS feeds (CoinDesk + Cointelegraph) are always fetched alongside LunarCrush.
 """
 import os
 import time
@@ -272,16 +272,26 @@ def _aggregate(articles: List[Dict]) -> Dict:
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def fetch_news_sentiment(symbol: str) -> Dict:
-    """Return cached news sentiment. LunarCrush → RSS fallback."""
+    """Return cached news sentiment. Merges LunarCrush + RSS."""
     with _cache_lock:
         cached = _cache.get(symbol)
         if cached and time.time() - cached["ts"] < CACHE_TTL:
             return cached["data"]
 
-    articles = _fetch_lunarcrush(symbol)
-    src = "lunarcrush"
-    if not articles:
-        articles = _fetch_rss(symbol)
+    lc_articles  = _fetch_lunarcrush(symbol)
+    rss_articles = _fetch_rss(symbol)
+
+    # Deduplicate RSS vs LunarCrush by title similarity
+    lc_titles = {a["title"].lower()[:60] for a in lc_articles}
+    rss_unique = [a for a in rss_articles if a["title"].lower()[:60] not in lc_titles]
+
+    articles = lc_articles + rss_unique
+
+    if lc_articles and rss_unique:
+        src = "lunarcrush+rss"
+    elif lc_articles:
+        src = "lunarcrush"
+    else:
         src = "rss"
 
     result = _aggregate(articles)
