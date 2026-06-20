@@ -476,18 +476,71 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
-@app.get("/api/test-deribit")
-def api_test_deribit():
-    """Quick connectivity test — open this URL in browser after deploying to Vercel."""
-    import urllib.request
-    url = "https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd"
-    try:
-        with urllib.request.urlopen(url, timeout=6) as r:
-            data = json.loads(r.read())
-            return jsonify({"ok": True, "btc_index": data.get("result", {}).get("index_price"), "msg": "Deribit reachable from Vercel ✅"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "msg": "Deribit blocked — see guide below",
-                        "fix": "vercel.com → Project → Settings → Networking → add deribit.com to Allowed Hostnames"})
+@app.get("/api/connectivity")
+def api_connectivity():
+    """
+    Test all external APIs from inside Vercel.
+    Open https://your-app.vercel.app/api/connectivity to see what's live vs blocked.
+    """
+    import urllib.request as _ur
+    import concurrent.futures
+
+    TESTS = [
+        ("Binance",       "https://api.binance.com/api/v3/ping",                                   "prices / candles"),
+        ("OKX",           "https://www.okx.com/api/v5/public/time",                                "prices / candles fallback"),
+        ("Bybit",         "https://api.bybit.com/v5/market/time",                                  "prices / candles fallback"),
+        ("KuCoin",        "https://api.kucoin.com/api/v1/timestamp",                               "prices / candles fallback"),
+        ("Gate.io",       "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT",     "prices / candles fallback"),
+        ("MEXC",          "https://api.mexc.com/api/v3/time",                                      "prices / candles fallback"),
+        ("Kraken",        "https://api.kraken.com/0/public/Time",                                  "prices fallback"),
+        ("LBank",         "https://api.lbkex.com/v2/accuracy.do",                                  "prices fallback"),
+        ("CoinGecko",     "https://api.coingecko.com/api/v3/ping",                                 "market caps / fallback prices"),
+        ("Deribit",       "https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd", "options expiry / max pain"),
+        ("mempool.space", "https://mempool.space/api/v1/difficulty-adjustment",                    "BTC mining / difficulty"),
+        ("blockchain.info","https://blockchain.info/stats?format=json",                            "BTC miner revenue"),
+        ("CoinMetrics",   "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVFF&limit=1", "MVRV score"),
+        ("Fear & Greed",  "https://api.alternative.me/fng/?limit=1",                               "market sentiment"),
+        ("CryptoPanic",   "https://cryptopanic.com/api/free/v1/posts/?auth_token=x&public=true",  "news sentiment"),
+        ("CoinGlass",     "https://open-api.coinglass.com/public/v2/funding_usd_history",          "funding / OI / liquidations (needs API key)"),
+    ]
+
+    def _test(name, url, purpose):
+        try:
+            req = _ur.Request(url, headers={"User-Agent": "CryptoSTARS/1.0"})
+            with _ur.urlopen(req, timeout=5) as r:
+                status = r.status
+            return {"name": name, "ok": True,  "purpose": purpose, "status": status}
+        except Exception as e:
+            msg = str(e)
+            blocked = "allowlist" in msg or ("403" in msg and "allowlist" in msg)
+            needs_key = "401" in msg or ("403" in msg and "allowlist" not in msg)
+            return {"name": name, "ok": False, "purpose": purpose,
+                    "blocked": blocked, "needs_key": needs_key, "error": msg[:120]}
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_test, n, u, p): n for n, u, p in TESTS}
+        for fut in concurrent.futures.as_completed(futs):
+            results.append(fut.result())
+
+    results.sort(key=lambda r: (not r["ok"], r["name"]))
+    live    = [r for r in results if r["ok"]]
+    blocked = [r for r in results if not r["ok"] and r.get("blocked")]
+    key_req = [r for r in results if not r["ok"] and r.get("needs_key")]
+    other   = [r for r in results if not r["ok"] and not r.get("blocked") and not r.get("needs_key")]
+
+    return jsonify({
+        "summary": {
+            "live":         len(live),
+            "blocked":      len(blocked),
+            "needs_api_key":len(key_req),
+            "other_error":  len(other),
+        },
+        "live":      live,
+        "blocked":   blocked,
+        "needs_key": key_req,
+        "errors":    other,
+    })
 
 
 @app.get("/api/symbols")
