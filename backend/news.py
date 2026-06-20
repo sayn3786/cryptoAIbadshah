@@ -89,7 +89,10 @@ LC_SYMBOLS = {
 
 
 def _fetch_lunarcrush(symbol: str) -> tuple:
-    """Returns (articles, error_str). error_str is None on success."""
+    """Returns (articles, error_str).
+    Only fetches coin-level sentiment pulse (bullish% + galaxy score).
+    Articles/news come from RSS; LunarCrush adds the social sentiment card.
+    """
     api_key = os.getenv("LUNARCRUSH_API_KEY", "").strip()
     if not api_key:
         return [], "LUNARCRUSH_API_KEY not set"
@@ -97,10 +100,6 @@ def _fetch_lunarcrush(symbol: str) -> tuple:
     if not lc_sym:
         return [], f"no LC symbol mapping for {symbol}"
 
-    articles = []
-    lc_error = None
-
-    # Coin-level aggregate sentiment (galaxy score + bullish %)
     try:
         url = f"https://lunarcrush.com/api4/public/coins/{lc_sym}/v1"
         req = urllib.request.Request(url, headers={
@@ -120,7 +119,7 @@ def _fetch_lunarcrush(symbol: str) -> tuple:
         else:
             agg_sent = "neutral"
 
-        articles.append({
+        return [{
             "title":        f"{lc_sym.upper()} social sentiment: {bull_pct:.0f}% bullish · Galaxy score {galaxy:.0f}/100",
             "url":          f"https://lunarcrush.com/coins/{lc_sym}",
             "published_at": datetime.now(timezone.utc).isoformat(),
@@ -128,59 +127,10 @@ def _fetch_lunarcrush(symbol: str) -> tuple:
             "bullish_votes": int(bull_pct),
             "bearish_votes": int(100 - bull_pct),
             "sentiment":    agg_sent,
-        })
+        }], None
+
     except Exception as e:
-        lc_error = f"coin endpoint: {str(e)[:120]}"
-
-    # Per-article news feed
-    try:
-        url = f"https://lunarcrush.com/api4/public/coins/{lc_sym}/news/v1"
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": "CryptoBadshah/2.0",
-        })
-        with urllib.request.urlopen(req, timeout=7) as r:
-            news_data = json.loads(r.read())
-
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
-        for item in (news_data.get("data") or [])[:20]:
-            try:
-                created = item.get("post_created") or item.get("time")
-                if created:
-                    pub = datetime.fromtimestamp(int(created), tz=timezone.utc)
-                    if pub < cutoff:
-                        continue
-                    pub_iso = pub.isoformat()
-                else:
-                    pub_iso = datetime.now(timezone.utc).isoformat()
-
-                title = item.get("post_title") or item.get("title") or ""
-                if not title:
-                    continue
-
-                post_sent = float(item.get("post_sentiment", 50) or 50)
-                if post_sent >= 60:
-                    sentiment = "bullish"
-                elif post_sent <= 40:
-                    sentiment = "bearish"
-                else:
-                    sentiment = _keyword_sentiment(title)
-
-                articles.append({
-                    "title":        title,
-                    "url":          item.get("post_link") or item.get("url", ""),
-                    "published_at": pub_iso,
-                    "source":       item.get("post_url_domain", "lunarcrush.com"),
-                    "bullish_votes": int(post_sent),
-                    "bearish_votes": int(100 - post_sent),
-                    "sentiment":    sentiment,
-                })
-            except Exception:
-                continue
-    except Exception as e:
-        lc_error = (lc_error + " | " if lc_error else "") + f"news endpoint: {str(e)[:120]}"
-
-    return articles, lc_error
+        return [], str(e)[:120]
 
 
 # ── RSS fallback ──────────────────────────────────────────────────────────────

@@ -501,7 +501,7 @@ def api_connectivity():
         ("blockchain.info","https://blockchain.info/stats?format=json",                                    "BTC miner revenue"),
         ("CoinMetrics",    "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=1", "MVRV score"),
         ("Fear & Greed",   "https://api.alternative.me/fng/?limit=1",                                     "market sentiment"),
-        ("LunarCrush",     "https://lunarcrush.com/api4/public/coins/btc/v1",                                   "news/social sentiment (needs LUNARCRUSH_API_KEY)"),
+        # LunarCrush omitted — free tier rate-limits aggressively; key status shown in notes below
         ("CoinGlass",      "https://open-api.coinglass.com/public/v2/funding_usd_history?symbol=BTC&time_type=h8&limit=1", "funding / OI / liquidations"),
     ]
 
@@ -550,7 +550,7 @@ def api_connectivity():
             "Binance":    "HTTP 451 = geo-blocked (Singapore/US). App auto-falls-back to OKX. Not a problem.",
             "CoinGlass":  f"API key configured: {cg_key}. Without key, funding/OI/liquidations use Binance only.",
             "Bybit":      "403 on time endpoint is normal — candle endpoint works without key.",
-            "LunarCrush": f"Key configured: {bool(os.getenv('LUNARCRUSH_API_KEY'))}. Free key at lunarcrush.com → add LUNARCRUSH_API_KEY to Vercel env vars. RSS fallback always active.",
+            "LunarCrush": f"Key configured: {bool(os.getenv('LUNARCRUSH_API_KEY'))}. Not tested here (rate-limited). Check /api/news?symbol=BTCUSDT for 'lc_error' field.",
         },
         "live":      live,
         "blocked":   blocked,
