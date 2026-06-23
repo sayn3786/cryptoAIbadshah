@@ -295,10 +295,11 @@ def find_volume_spikes(candles: List[Dict]) -> Dict:
     }
 
 
-def detect_engulfing(candles: List[Dict], lookback: int = 4) -> List[Dict]:
+def detect_engulfing(candles: List[Dict], lookback: int = 1) -> List[Dict]:
     """Detect confirmed bullish/bearish engulfing patterns.
 
-    Only checks closed candles — candles[-1] (still forming) is excluded.
+    Only checks the last closed candle (candles[-2]) against its prior candle.
+    candles[-1] is excluded as it may still be forming.
     """
     patterns: List[Dict] = []
     # Exclude the last (potentially forming) candle
@@ -308,7 +309,8 @@ def detect_engulfing(candles: List[Dict], lookback: int = 4) -> List[Dict]:
 
     current_price = candles[-1]["close"]
 
-    start = max(1, len(closed) - lookback)
+    # Only check the single most recent closed candle
+    start = len(closed) - 1
     for i in range(start, len(closed)):
         prev = closed[i - 1]
         curr = closed[i]
