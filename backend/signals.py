@@ -292,16 +292,19 @@ def generate_signal(analysis: Dict) -> Dict:
     above = [f for f in unfilled if f["type"] == "bearish" and f["midpoint"] > current_price]
 
     if below:
-        _fvg_bull_pts = min(len(below) * 8, 20)
+        # BAGs score higher (strong support, less likely to fill) than plain FVGs
+        _fvg_bull_pts = min(sum(14 if f.get("gap_type") == "bag" else 8 for f in below), 24)
         score += _fvg_bull_pts; g['pattern'] += _fvg_bull_pts
+        _near_label = f"{'BAG' if below[0].get('gap_type')=='bag' else 'FVG'} ${below[0]['midpoint']:,.4f}"
         bull_reasons.append(
-            f"{len(below)} bullish FVG(s) acting as support below (nearest: ${below[0]['midpoint']:,.4f})"
+            f"{len(below)} bullish gap(s) acting as support below (nearest: {_near_label})"
         )
     if above:
-        _fvg_bear_pts = min(len(above) * 8, 20)
+        _fvg_bear_pts = min(sum(14 if f.get("gap_type") == "bag" else 8 for f in above), 24)
         score -= _fvg_bear_pts; g['pattern'] -= _fvg_bear_pts
+        _near_label = f"{'BAG' if above[0].get('gap_type')=='bag' else 'FVG'} ${above[0]['midpoint']:,.4f}"
         bear_reasons.append(
-            f"{len(above)} bearish FVG(s) as resistance above (nearest: ${above[0]['midpoint']:,.4f})"
+            f"{len(above)} bearish gap(s) as resistance above (nearest: {_near_label})"
         )
 
     # ── CHoCH — Change of Character (structure shift) ────────────────────────

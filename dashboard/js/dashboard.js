@@ -499,15 +499,14 @@ function renderMainChart(candles, fvgs) {
     const unfilled = fvgs.filter(f => !f.filled).slice(0, 6);
     unfilled.forEach(f => {
       const isBull = f.type === 'bullish';
+      const isBag  = f.gap_type === 'bag';
       const color  = isBull ? 'rgba(16,185,129,0.6)' : 'rgba(239,68,68,0.6)';
       const dimCol = isBull ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)';
       const arrow  = isBull ? '↑' : '↓';
-      // Top boundary
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,      color: dimCol, lineWidth: 1, lineStyle: 2, title: '' }));
-      // Midpoint — labelled
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color,         lineWidth: 1, lineStyle: 3, title: `${arrow} FVG ${f.size_pct.toFixed(1)}%` }));
-      // Bottom boundary
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: 1, lineStyle: 2, title: '' }));
+      const label  = isBag ? 'BAG' : 'FVG';
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,      color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '' }));
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color,         lineWidth: isBag ? 2 : 1, lineStyle: 3, title: `${arrow} ${label} ${f.size_pct.toFixed(1)}%` }));
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '' }));
     });
   }
 
@@ -1160,12 +1159,17 @@ function renderFVGTable(fvgs) {
   }
 
   tbody.innerHTML = fvgs.slice(0, 12).map(f => {
-    const cls = f.type === 'bullish' ? 'bull' : 'bear';
+    const cls    = f.type === 'bullish' ? 'bull' : 'bear';
+    const isBag  = f.gap_type === 'bag';
+    const typeLabel = isBag
+      ? `<span class="tag ${cls} tag-bag">BAG</span>`
+      : `<span class="tag ${cls}">FVG</span>`;
+    const dirLabel = `<span class="tag ${cls}">${f.type}</span>`;
     const status = f.filled
       ? '<span class="tag filled">Filled</span>'
-      : `<span class="tag ${cls}">${f.type}</span>`;
-    return `<tr>
-      <td><span class="tag ${cls}">${f.type}</span></td>
+      : dirLabel;
+    return `<tr${isBag ? ' class="fvg-bag-row"' : ''}>
+      <td>${typeLabel}</td>
       <td>$${Number(f.top).toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>
       <td>$${Number(f.bottom).toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>
       <td>${f.size_pct.toFixed(3)}%</td>

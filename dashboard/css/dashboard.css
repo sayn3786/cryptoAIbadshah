@@ -329,6 +329,8 @@ a:hover { color: var(--gold2); }
 .tag.bull  { background: rgba(16,185,129,.15); color: var(--bull); }
 .tag.bear  { background: rgba(239,68,68,.15);  color: var(--bear); }
 .tag.filled { background: rgba(100,116,139,.15); color: var(--muted2); }
+.tag-bag { outline: 1px solid currentColor; outline-offset: 1px; font-weight: 800; letter-spacing: .04em; }
+.fvg-bag-row td { background: rgba(255,255,255,.025); }
 .empty { color: var(--muted); font-style: italic; font-family: var(--font); padding: 12px 10px !important; }
 
 .badge {

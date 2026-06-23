@@ -216,17 +216,25 @@ def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
 
     current_price = candles[-1]["close"]
 
+    # Avg candle range over last 20 candles — used to classify BAG vs FVG
+    _lookback = min(20, len(candles))
+    avg_range = sum(c["high"] - c["low"] for c in candles[-_lookback:]) / _lookback
+
     for i in range(1, len(candles) - 1):
         prev = candles[i - 1]
         curr = candles[i]
         nxt  = candles[i + 1]
+
+        # BAG: middle candle range >= 2.5× avg range (explosive breakout candle)
+        is_bag = avg_range > 0 and (curr["high"] - curr["low"]) >= avg_range * 2.5
 
         if prev["high"] < nxt["low"]:
             gap = (nxt["low"] - prev["high"]) / prev["high"] * 100
             if gap >= min_size_pct:
                 mid = (nxt["low"] + prev["high"]) / 2
                 fvgs.append({
-                    "type": "bullish",
+                    "type":     "bullish",
+                    "gap_type": "bag" if is_bag else "fvg",
                     "top":      round(nxt["low"],  8),
                     "bottom":   round(prev["high"], 8),
                     "midpoint": round(mid, 8),
@@ -241,7 +249,8 @@ def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
             if gap >= min_size_pct:
                 mid = (prev["low"] + nxt["high"]) / 2
                 fvgs.append({
-                    "type": "bearish",
+                    "type":     "bearish",
+                    "gap_type": "bag" if is_bag else "fvg",
                     "top":      round(prev["low"],  8),
                     "bottom":   round(nxt["high"],  8),
                     "midpoint": round(mid, 8),
