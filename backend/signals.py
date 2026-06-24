@@ -512,6 +512,48 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= 6; g['momentum'] -= 6
         bear_reasons.append("EMA7 below EMA21 — short-term trend bearish; near-term sellers in control")
 
+    # ── Order Book Imbalance ──────────────────────────────────────────────────
+    # Live bid/ask walls aggregated across exchanges. Timeframe-independent —
+    # it's a market snapshot, not candle-derived. Not scaled by tf_macro_w.
+    ob = analysis.get("order_book") or {}
+    ob_imbalance = ob.get("imbalance")
+    ob_ratio     = ob.get("bid_ask_ratio", 1.0) or 1.0
+    ob_big_bid   = ob.get("biggest_bid") or {}
+    ob_big_ask   = ob.get("biggest_ask") or {}
+
+    if ob_imbalance == "strong_bid":
+        score += 18; g['flow'] += 18
+        bull_reasons.append(
+            f"Order book: strong bid pressure ({ob_ratio:.2f}× more bids than asks near price)"
+        )
+    elif ob_imbalance == "bid_heavy":
+        score += 10; g['flow'] += 10
+        bull_reasons.append(
+            f"Order book: bid-heavy ({ob_ratio:.2f}×) — buyers dominating near price"
+        )
+    elif ob_imbalance == "strong_ask":
+        score -= 18; g['flow'] -= 18
+        bear_reasons.append(
+            f"Order book: strong ask pressure ({ob_ratio:.2f}× more asks than bids near price)"
+        )
+    elif ob_imbalance == "ask_heavy":
+        score -= 10; g['flow'] -= 10
+        bear_reasons.append(
+            f"Order book: ask-heavy ({ob_ratio:.2f}×) — sellers dominating near price"
+        )
+
+    # High-significance wall on bid = strong support; on ask = strong resistance
+    if ob_big_bid.get("significance") == "high" and ob_big_bid.get("distance_pct", -99) > -2:
+        score += 8; g['flow'] += 8
+        bull_reasons.append(
+            f"Large bid wall ${ob_big_bid.get('usd_value',0):,.0f} at ${ob_big_bid.get('price',0):,.2f} ({ob_big_bid.get('dist_label','Near')})"
+        )
+    if ob_big_ask.get("significance") == "high" and ob_big_ask.get("distance_pct", 99) < 2:
+        score -= 8; g['flow'] -= 8
+        bear_reasons.append(
+            f"Large ask wall ${ob_big_ask.get('usd_value',0):,.0f} at ${ob_big_ask.get('price',0):,.2f} ({ob_big_ask.get('dist_label','Near')})"
+        )
+
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,
