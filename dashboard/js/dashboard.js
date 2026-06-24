@@ -1151,30 +1151,28 @@ function renderCVDPanel(id, cvd, series, valId, trendId) {
 /* ─── FVG Table ───────────────────────────────────────────────────────────── */
 function renderFVGTable(fvgs) {
   const tbody = document.getElementById('fvgBody');
-  document.getElementById('fvgCount').textContent = (fvgs || []).filter(f => !f.filled).length;
+  const unfilled = (fvgs || []).filter(f => !f.filled);
+  document.getElementById('fvgCount').textContent = unfilled.length;
 
-  if (!fvgs?.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">No FVGs detected</td></tr>';
+  if (!unfilled.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No unfilled FVGs detected</td></tr>';
     return;
   }
 
-  tbody.innerHTML = fvgs.slice(0, 12).map(f => {
+  tbody.innerHTML = unfilled.slice(0, 12).map(f => {
     const cls    = f.type === 'bullish' ? 'bull' : 'bear';
     const isBag  = f.gap_type === 'bag';
     const typeLabel = isBag
       ? `<span class="tag ${cls} tag-bag">BAG</span>`
       : `<span class="tag ${cls}">FVG</span>`;
     const dirLabel = `<span class="tag ${cls}">${f.type}</span>`;
-    const status = f.filled
-      ? '<span class="tag filled">Filled</span>'
-      : dirLabel;
     return `<tr${isBag ? ' class="fvg-bag-row"' : ''}>
       <td>${typeLabel}</td>
       <td>$${Number(f.top).toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>
       <td>$${Number(f.bottom).toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>
       <td>${f.size_pct.toFixed(3)}%</td>
       <td class="${Number(f.distance_pct) >= 0 ? 'bull' : 'bear'}">${pct(f.distance_pct)}</td>
-      <td>${status}</td>
+      <td>${dirLabel}</td>
     </tr>`;
   }).join('');
 }
