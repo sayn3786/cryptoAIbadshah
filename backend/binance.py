@@ -1042,72 +1042,73 @@ class BinanceClient:
         return mock_liquidations(symbol)
 
     def get_long_short_ratio(self, symbol: str) -> Dict:
-        """Global long/short account ratio — Binance fapi → Bybit → OKX fallback."""
-        # ── Binance fapi ─────────────────────────────────────────────────────
-        try:
+        """Aggregated long/short ratio — fetches Binance, Bybit, OKX in parallel
+        and averages long_pct across all exchanges that respond."""
+        import concurrent.futures as _cf
+
+        results = []  # list of (long_pct, short_pct, exchange_name)
+
+        def _binance():
             data = self._get(f"{FUTURES_BASE}/futures/data/globalLongShortAccountRatio",
                              {"symbol": symbol, "period": "1h", "limit": 1})
             if data:
                 d = data[-1] if isinstance(data, list) else data
-                ratio     = float(d["longShortRatio"])
-                long_pct  = float(d["longAccount"])  * 100
-                short_pct = float(d["shortAccount"]) * 100
-                return {
-                    "ratio":     round(ratio,     4),
-                    "long_pct":  round(long_pct,  2),
-                    "short_pct": round(short_pct, 2),
-                }
-        except Exception:
-            pass
+                lp = float(d["longAccount"]) * 100
+                sp = float(d["shortAccount"]) * 100
+                return lp, sp, "binance"
+            return None
 
-        # ── Bybit linear ─────────────────────────────────────────────────────
-        bybit_sym = BYBIT_PAIRS.get(symbol)
-        if bybit_sym:
-            try:
-                data = self._get(f"{BYBIT_BASE}/v5/market/account-ratio", {
-                    "category": "linear",
-                    "symbol":   bybit_sym,
-                    "period":   "1h",
-                    "limit":    1,
-                })
-                rows = (data or {}).get("result", {}).get("list", [])
-                if rows:
-                    d          = rows[0]
-                    buy_ratio  = float(d.get("buyRatio",  0))
-                    sell_ratio = float(d.get("sellRatio", 0))
-                    total      = buy_ratio + sell_ratio or 1
-                    ratio      = round(buy_ratio / sell_ratio, 4) if sell_ratio else 0
-                    return {
-                        "ratio":     ratio,
-                        "long_pct":  round(buy_ratio  / total * 100, 2),
-                        "short_pct": round(sell_ratio / total * 100, 2),
-                    }
-            except Exception:
-                pass
+        def _bybit():
+            bybit_sym = BYBIT_PAIRS.get(symbol)
+            if not bybit_sym:
+                return None
+            data = self._get(f"{BYBIT_BASE}/v5/market/account-ratio", {
+                "category": "linear", "symbol": bybit_sym, "period": "1h", "limit": 1,
+            })
+            rows = (data or {}).get("result", {}).get("list", [])
+            if rows:
+                d = rows[0]
+                buy  = float(d.get("buyRatio",  0))
+                sell = float(d.get("sellRatio", 0))
+                total = buy + sell or 1
+                return round(buy / total * 100, 2), round(sell / total * 100, 2), "bybit"
+            return None
 
-        # ── OKX swap ─────────────────────────────────────────────────────────
-        # OKX returns {"data": [["timestamp", "ratio"], ...]} — index 1 is the ratio
-        okx_base = symbol.replace("USDT", "")
-        try:
+        def _okx():
+            okx_base = symbol.replace("USDT", "")
             data = self._get(f"{OKX_BASE}/api/v5/rubik/stat/contracts/long-short-account-ratio", {
-                "ccy":    okx_base,
-                "period": "1H",
+                "ccy": okx_base, "period": "1H",
             })
             rows = (data or {}).get("data", [])
             if rows:
                 ratio = float(rows[0][1])
                 if ratio > 0:
-                    long_pct  = round(ratio / (1 + ratio) * 100, 2)
-                    short_pct = round(100 - long_pct, 2)
-                    return {
-                        "ratio":     round(ratio, 4),
-                        "long_pct":  long_pct,
-                        "short_pct": short_pct,
-                    }
-        except Exception:
-            pass
+                    lp = round(ratio / (1 + ratio) * 100, 2)
+                    return lp, round(100 - lp, 2), "okx"
+            return None
 
-        return {}
+        with _cf.ThreadPoolExecutor(max_workers=3) as ex:
+            for fut in _cf.as_completed([ex.submit(f) for f in (_binance, _bybit, _okx)]):
+                try:
+                    r = fut.result()
+                    if r:
+                        results.append(r)
+                except Exception:
+                    pass
+
+        if not results:
+            return {}
+
+        avg_long  = round(sum(r[0] for r in results) / len(results), 2)
+        avg_short = round(100 - avg_long, 2)
+        avg_ratio = round(avg_long / avg_short, 4) if avg_short else 0
+        return {
+            "ratio":     avg_ratio,
+            "long_pct":  avg_long,
+            "short_pct": avg_short,
+            "sources":   [r[2] for r in results],
+            "exchange_count": len(results),
+        }
 
     def get_market_cap(self, symbol: str) -> Optional[float]:
         return self._get_market_cap(symbol)
