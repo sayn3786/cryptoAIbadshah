@@ -27,7 +27,6 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     calculate_bollinger_bands, detect_rsi_divergence,
     calculate_vwap, calculate_stoch_rsi, calculate_volume_signal)
 from news import fetch_news_sentiment
-from whale_alert import get_whale_sells
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup
 from signals import generate_signal
@@ -367,8 +366,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     stoch_rsi     = calculate_stoch_rsi([c["close"] for c in spot])
     vol_signal    = calculate_volume_signal(spot)
 
-    # On-chain whale sells: large deposits to exchanges = potential sell pressure
-    whale_sells = get_whale_sells(bs)
+    # Exchange netflow: coins flowing into exchanges (sell pressure) vs out (HODLing).
+    # Only available for BTC/ETH via CoinGlass. Panel stays hidden for other tokens.
+    whale_sells = cg_client.get_exchange_netflow(bs) if cg_client.enabled else None
 
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
@@ -554,7 +554,6 @@ def api_connectivity():
             "CoinGlass":  f"API key configured: {cg_key}. Without key, funding/OI/liquidations use Binance only.",
             "Bybit":      "403 on time endpoint is normal — candle endpoint works without key.",
             "LunarCrush":  f"Key configured: {bool(os.getenv('LUNARCRUSH_API_KEY'))}. Not tested here (rate-limited). Check /api/news?symbol=BTCUSDT for 'lc_error' field.",
-            "WhaleAlert":  f"Key configured: {bool(os.getenv('WHALE_ALERT_API_KEY'))}. Free tier at whale-alert.io — no CC required. Powers on-chain sell detection.",
         },
         "live":      live,
         "blocked":   blocked,
@@ -574,10 +573,15 @@ def api_news():
     return jsonify(fetch_news_sentiment(symbol))
 
 
-@app.get("/api/whale-sells")
-def api_whale_sells():
+@app.get("/api/exchange-netflow")
+def api_exchange_netflow():
     symbol = request.args.get("symbol", "BTCUSDT").upper()
-    return jsonify(get_whale_sells(symbol))
+    if not cg_client.enabled:
+        return jsonify({"error": "CoinGlass key not configured"}), 503
+    data = cg_client.get_exchange_netflow(symbol)
+    if data is None:
+        return jsonify({"error": f"No netflow data for {symbol}"}), 404
+    return jsonify(data)
 
 
 @app.get("/api/scores")

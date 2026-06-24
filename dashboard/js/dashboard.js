@@ -1020,53 +1020,71 @@ function renderArkhamPanel(ws) {
   const sub     = document.getElementById('arkhamSub');
   if (!section || !tbody) return;
 
-  // Hide panel entirely when Arkham key not configured
-  if (!ws || !ws.enabled) {
+  // Hide when CoinGlass not configured or no data (only BTC/ETH)
+  if (!ws || !ws.source) {
     section.style.display = 'none';
     return;
   }
 
   section.style.display = '';
 
-  const flows    = ws.flows || [];
-  const pressure = ws.sell_pressure || 'none';
-  const totalUsd = ws.total_usd || 0;
+  const pressure = ws.pressure || 'neutral';
+  const netflow  = ws.netflow  || 0;
+  const inflow   = ws.inflow   || 0;
+  const outflow  = ws.outflow  || 0;
   const pts      = ws.signal_pts || 0;
+  const sym      = ws.symbol || '';
 
-  const PRESSURE_LABEL = {
-    high:   '🔴 HIGH SELL PRESSURE',
-    medium: '🟠 MEDIUM SELL PRESSURE',
-    low:    '🟡 LOW SELL FLOW',
-    none:   '🟢 NO LARGE SELLS',
+  const PRESSURE_META = {
+    high:         { cls: 'high',   icon: '🔴', label: 'HIGH SELL PRESSURE'  },
+    medium:       { cls: 'medium', icon: '🟠', label: 'MEDIUM SELL PRESSURE' },
+    low:          { cls: 'low',    icon: '🟡', label: 'LIGHT SELL FLOW'      },
+    neutral:      { cls: 'none',   icon: '⚪', label: 'BALANCED FLOW'        },
+    withdrawal:   { cls: 'none',   icon: '🟢', label: 'EXCHANGE WITHDRAWAL'  },
+    accumulation: { cls: 'none',   icon: '💚', label: 'STRONG ACCUMULATION'  },
   };
+  const meta = PRESSURE_META[pressure] || PRESSURE_META.neutral;
+
+  const sign = netflow >= 0 ? '+' : '';
+  const ptsLabel = pts > 0
+    ? `<span class="arkham-pts" style="color:var(--bull)">+${pts} signal pts</span>`
+    : pts < 0 ? `<span class="arkham-pts">${pts} signal pts</span>` : '';
 
   summary.innerHTML = `
-    <span class="arkham-pressure ${pressure}">${PRESSURE_LABEL[pressure] || pressure.toUpperCase()}</span>
-    <span class="arkham-total">Total: <strong>${fmtK(totalUsd)}</strong> to exchanges</span>
-    ${pts < 0 ? `<span class="arkham-pts">${pts} signal pts</span>` : ''}
-    ${ws.error ? `<span class="arkham-pts" style="color:var(--muted2)" title="${ws.error}">⚠ data partial</span>` : ''}
+    <span class="arkham-pressure ${meta.cls}">${meta.icon} ${meta.label}</span>
+    <span class="arkham-total">Netflow: <strong>${sign}${Number(netflow).toLocaleString('en-US', {maximumFractionDigits: 1})} ${sym}</strong></span>
+    <span class="arkham-total" style="font-size:.68rem">↑ ${Number(inflow).toLocaleString('en-US', {maximumFractionDigits:1})} in · ↓ ${Number(outflow).toLocaleString('en-US', {maximumFractionDigits:1})} out</span>
+    ${ptsLabel}
   `;
 
-  if (sub) sub.textContent = `Exchange deposits last ${ws.window_hours || 1}h · min ${fmtK(ws.min_usd || 500000)}`;
+  if (sub) sub.textContent = `CoinGlass exchange netflow · last ${ws.window || '8h'}`;
 
-  if (!flows.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="arkham-empty">No large on-chain deposits detected${ws.error ? ' — ' + ws.error.slice(0, 80) : ''}</td></tr>`;
+  // History table — one row per 8h period
+  const history = ws.history || [];
+  if (!history.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="arkham-empty">No netflow data available</td></tr>`;
     return;
   }
 
-  tbody.innerHTML = flows.map(f => {
-    const ago = f.ago_min != null
-      ? (f.ago_min < 2 ? 'just now' : `${f.ago_min}m ago`)
-      : '—';
-    const amt = f.amount
-      ? `${Number(f.amount).toLocaleString('en-US', { maximumFractionDigits: 4 })} ${f.symbol || ''}`
-      : '—';
+  // Replace table headers for netflow view
+  const thead = tbody.closest('table')?.querySelector('thead tr');
+  if (thead) {
+    thead.innerHTML = `
+      <th>Period</th>
+      <th style="text-align:right">Netflow (${sym})</th>
+      <th style="text-align:right">Signal</th>
+    `;
+  }
+
+  tbody.innerHTML = [...history].reverse().map(h => {
+    const nf  = h.netflow || 0;
+    const cls = nf > 0 ? 'arkham-usd' : nf < 0 ? 'arkham-to' : '';
+    const lbl = nf > 500 ? '🔴 sell' : nf > 0 ? '⚠ mild sell' : nf < -500 ? '💚 accumulate' : nf < 0 ? '🟢 withdraw' : '⚪ neutral';
+    const dt  = h.timestamp ? new Date(h.timestamp * 1000).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
     return `<tr>
-      <td class="arkham-from" title="${f.from_entity}">${f.from_entity || '—'}</td>
-      <td class="arkham-to">${f.to_entity || '—'}</td>
-      <td>${amt}</td>
-      <td class="arkham-usd">${fmtK(f.usd_value)}</td>
-      <td class="arkham-ago">${ago}</td>
+      <td class="arkham-ago">${dt}</td>
+      <td class="${cls}" style="text-align:right;font-weight:600">${nf >= 0 ? '+' : ''}${Number(nf).toLocaleString('en-US', {maximumFractionDigits:1})}</td>
+      <td style="text-align:right;font-size:.68rem">${lbl}</td>
     </tr>`;
   }).join('');
 }
