@@ -554,6 +554,28 @@ def generate_signal(analysis: Dict) -> Dict:
             f"Large ask wall ${ob_big_ask.get('usd_value',0):,.0f} at ${ob_big_ask.get('price',0):,.2f} ({ob_big_ask.get('dist_label','Near')})"
         )
 
+    # ── Arkham Whale Sells ────────────────────────────────────────────────────
+    # On-chain exchange deposits: large transfers TO exchanges = sell pressure.
+    # Timeframe-independent (1h rolling window of on-chain activity).
+    ws = analysis.get("whale_sells") or {}
+    ws_pressure = ws.get("sell_pressure", "none") if ws.get("enabled") else "none"
+    ws_usd      = ws.get("total_usd", 0) or 0
+    if ws_pressure == "high":
+        score -= 15; g['flow'] -= 15
+        bear_reasons.append(
+            f"Arkham: ${ws_usd/1e6:.1f}M in large on-chain deposits to exchanges (last 1h) — heavy sell pressure"
+        )
+    elif ws_pressure == "medium":
+        score -= 8; g['flow'] -= 8
+        bear_reasons.append(
+            f"Arkham: ${ws_usd/1e6:.1f}M in whale deposits to exchanges (last 1h) — moderate sell pressure"
+        )
+    elif ws_pressure == "low":
+        score -= 3; g['flow'] -= 3
+        bear_reasons.append(
+            f"Arkham: ${ws_usd/1e6:.1f}M in on-chain exchange deposits (last 1h) — light sell flow"
+        )
+
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,

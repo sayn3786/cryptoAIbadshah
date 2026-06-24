@@ -27,6 +27,7 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     calculate_bollinger_bands, detect_rsi_divergence,
     calculate_vwap, calculate_stoch_rsi, calculate_volume_signal)
 from news import fetch_news_sentiment
+from arkham import get_whale_sells
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup
 from signals import generate_signal
@@ -366,6 +367,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     stoch_rsi     = calculate_stoch_rsi([c["close"] for c in spot])
     vol_signal    = calculate_volume_signal(spot)
 
+    # On-chain whale sells: large deposits to exchanges = potential sell pressure
+    whale_sells = get_whale_sells(bs)
+
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
 
@@ -425,6 +429,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "vol_signal":    vol_signal,
         "btc_mining":      btc_mining,
         "options_expiry":  options_expiry,
+        "whale_sells":     whale_sells,
     }
     analysis["signal"] = generate_signal(analysis)
 
@@ -566,6 +571,12 @@ def api_symbols():
 def api_news():
     symbol = request.args.get("symbol", "BTCUSDT").upper()
     return jsonify(fetch_news_sentiment(symbol))
+
+
+@app.get("/api/whale-sells")
+def api_whale_sells():
+    symbol = request.args.get("symbol", "BTCUSDT").upper()
+    return jsonify(get_whale_sells(symbol))
 
 
 @app.get("/api/scores")

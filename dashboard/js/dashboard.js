@@ -186,6 +186,7 @@ function renderAll(a) {
   renderBtcMiningCard(a.btc_mining, a.symbol);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
+  renderArkhamPanel(a.whale_sells);
   renderFNGCard(a.fear_greed);
   renderRSICard(a.rsi);
   renderFunding(a.funding_rate);
@@ -1009,6 +1010,64 @@ function renderWhaleActivity(events) {
       </div>
       <div class="whale-desc">${m.desc}</div>
     </div>`;
+  }).join('');
+}
+
+function renderArkhamPanel(ws) {
+  const section = document.getElementById('arkhamSection');
+  const tbody   = document.getElementById('arkhamBody');
+  const summary = document.getElementById('arkhamSummary');
+  const sub     = document.getElementById('arkhamSub');
+  if (!section || !tbody) return;
+
+  // Hide panel entirely when Arkham key not configured
+  if (!ws || !ws.enabled) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = '';
+
+  const flows    = ws.flows || [];
+  const pressure = ws.sell_pressure || 'none';
+  const totalUsd = ws.total_usd || 0;
+  const pts      = ws.signal_pts || 0;
+
+  const PRESSURE_LABEL = {
+    high:   '🔴 HIGH SELL PRESSURE',
+    medium: '🟠 MEDIUM SELL PRESSURE',
+    low:    '🟡 LOW SELL FLOW',
+    none:   '🟢 NO LARGE SELLS',
+  };
+
+  summary.innerHTML = `
+    <span class="arkham-pressure ${pressure}">${PRESSURE_LABEL[pressure] || pressure.toUpperCase()}</span>
+    <span class="arkham-total">Total: <strong>${fmtK(totalUsd)}</strong> to exchanges</span>
+    ${pts < 0 ? `<span class="arkham-pts">${pts} signal pts</span>` : ''}
+    ${ws.error ? `<span class="arkham-pts" style="color:var(--muted2)" title="${ws.error}">⚠ data partial</span>` : ''}
+  `;
+
+  if (sub) sub.textContent = `Exchange deposits last ${ws.window_hours || 1}h · min ${fmtK(ws.min_usd || 500000)}`;
+
+  if (!flows.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="arkham-empty">No large on-chain deposits detected${ws.error ? ' — ' + ws.error.slice(0, 80) : ''}</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = flows.map(f => {
+    const ago = f.ago_min != null
+      ? (f.ago_min < 2 ? 'just now' : `${f.ago_min}m ago`)
+      : '—';
+    const amt = f.amount
+      ? `${Number(f.amount).toLocaleString('en-US', { maximumFractionDigits: 4 })} ${f.symbol || ''}`
+      : '—';
+    return `<tr>
+      <td class="arkham-from" title="${f.from_entity}">${f.from_entity || '—'}</td>
+      <td class="arkham-to">${f.to_entity || '—'}</td>
+      <td>${amt}</td>
+      <td class="arkham-usd">${fmtK(f.usd_value)}</td>
+      <td class="arkham-ago">${ago}</td>
+    </tr>`;
   }).join('');
 }
 

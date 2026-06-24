@@ -1486,3 +1486,28 @@ a:hover { color: var(--gold2); }
 .whale-stat       { font-size: .68rem; color: var(--muted2); }
 .whale-stat strong{ color: var(--text); }
 .whale-desc       { font-size: .65rem; color: var(--muted); font-style: italic; }
+
+/* ── Arkham Whale Sells ──────────────────────────────────────────────────── */
+.arkham-summary   { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.arkham-pressure  { font-size: .75rem; font-weight: 700; padding: 3px 10px; border-radius: 6px; }
+.arkham-pressure.high   { background: rgba(239,68,68,.2);  color: var(--bear); }
+.arkham-pressure.medium { background: rgba(239,68,68,.12); color: #f87171; }
+.arkham-pressure.low    { background: rgba(239,68,68,.07); color: #fca5a5; }
+.arkham-pressure.none   { background: rgba(100,116,139,.12); color: var(--muted2); }
+.arkham-total     { font-size: .8rem; color: var(--muted2); }
+.arkham-total strong { color: var(--text); }
+.arkham-pts       { font-size: .7rem; color: var(--bear); }
+.arkham-table     { width: 100%; border-collapse: collapse; font-size: .72rem; }
+.arkham-table th  { color: var(--muted); font-weight: 600; text-transform: uppercase;
+                    font-size: .63rem; letter-spacing: .05em; padding: 4px 6px;
+                    border-bottom: 1px solid var(--border); text-align: left; }
+.arkham-table td  { padding: 6px 6px; border-bottom: 1px solid rgba(30,45,68,.5);
+                    font-family: var(--mono); color: var(--text); vertical-align: middle; }
+.arkham-table tr:last-child td { border-bottom: none; }
+.arkham-from      { color: var(--muted2); max-width: 140px; white-space: nowrap;
+                    overflow: hidden; text-overflow: ellipsis; }
+.arkham-to        { color: #f87171; }
+.arkham-usd       { color: var(--bear); font-weight: 600; }
+.arkham-ago       { color: var(--muted); }
+.arkham-empty     { color: var(--muted); font-style: italic; text-align: center;
+                    padding: 14px 0; font-family: var(--font); font-size: .75rem; }
