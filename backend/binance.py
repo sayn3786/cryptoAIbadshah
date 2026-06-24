@@ -1261,107 +1261,82 @@ class BinanceClient:
                 "market_cap":       round(mcap, 0) if mcap else None,
             }
 
-        # 1. Binance futures
-        try:
-            data = self._get(f"{FUTURES_BASE}/fapi/v1/depth",
-                             {"symbol": symbol, "limit": 1000})
+        import concurrent.futures as _cf
+
+        def _fetch_binance_futures():
+            data = self._get(f"{FUTURES_BASE}/fapi/v1/depth", {"symbol": symbol, "limit": 1000})
             bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
             asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
-            walls = build_walls(bids, asks)
-            if walls:
-                walls["source"] = "binance_futures"
-                return walls
-        except Exception:
-            pass
+            return bids, asks, "binance_futures"
 
-        # 2. Binance spot
-        try:
-            data = self._get(f"{SPOT_BASE}/api/v3/depth",
-                             {"symbol": symbol, "limit": 1000})
+        def _fetch_binance_spot():
+            data = self._get(f"{SPOT_BASE}/api/v3/depth", {"symbol": symbol, "limit": 1000})
             bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
             asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
-            walls = build_walls(bids, asks)
-            if walls:
-                walls["source"] = "binance"
-                return walls
-        except Exception:
-            pass
+            return bids, asks, "binance"
 
-        # 3. OKX spot
-        try:
+        def _fetch_okx():
             inst_id = OKX_PAIRS.get(symbol)
-            if inst_id:
-                data = self._get(f"{OKX_BASE}/api/v5/market/books",
-                                 {"instId": inst_id, "sz": "400"})
-                book = (data.get("data") or [{}])[0]
-                bids = [(float(p), float(q)) for p, q, *_ in book.get("bids", [])]
-                asks = [(float(p), float(q)) for p, q, *_ in book.get("asks", [])]
-                walls = build_walls(bids, asks)
-                if walls:
-                    walls["source"] = "okx"
-                    return walls
-        except Exception:
-            pass
+            if not inst_id:
+                return [], [], "okx"
+            data = self._get(f"{OKX_BASE}/api/v5/market/books", {"instId": inst_id, "sz": "400"})
+            book = (data.get("data") or [{}])[0]
+            bids = [(float(p), float(q)) for p, q, *_ in book.get("bids", [])]
+            asks = [(float(p), float(q)) for p, q, *_ in book.get("asks", [])]
+            return bids, asks, "okx"
 
-        # 4. Bybit spot
-        try:
+        def _fetch_bybit():
             pair = BYBIT_PAIRS.get(symbol)
-            if pair:
-                data = self._get(f"{BYBIT_BASE}/v5/market/orderbook",
-                                 {"category": "spot", "symbol": pair, "limit": 200})
-                result = (data.get("result") or {}) if isinstance(data, dict) else {}
-                bids = [(float(p), float(q)) for p, q in result.get("b", [])]
-                asks = [(float(p), float(q)) for p, q in result.get("a", [])]
-                walls = build_walls(bids, asks)
-                if walls:
-                    walls["source"] = "bybit"
-                    return walls
-        except Exception:
-            pass
+            if not pair:
+                return [], [], "bybit"
+            data = self._get(f"{BYBIT_BASE}/v5/market/orderbook",
+                             {"category": "linear", "symbol": pair, "limit": 200})
+            result = (data.get("result") or {}) if isinstance(data, dict) else {}
+            bids = [(float(p), float(q)) for p, q in result.get("b", [])]
+            asks = [(float(p), float(q)) for p, q in result.get("a", [])]
+            return bids, asks, "bybit"
 
-        # 5. KuCoin spot
-        try:
+        def _fetch_kucoin():
             pair = KUCOIN_PAIRS.get(symbol)
-            if pair:
-                data = self._get(f"{KUCOIN_BASE}/api/v1/market/orderbook/level2_100",
-                                 {"symbol": pair})
-                book = (data.get("data") or {}) if isinstance(data, dict) else {}
-                bids = [(float(p), float(q)) for p, q in book.get("bids", [])]
-                asks = [(float(p), float(q)) for p, q in book.get("asks", [])]
-                walls = build_walls(bids, asks)
-                if walls:
-                    walls["source"] = "kucoin"
-                    return walls
-        except Exception:
-            pass
+            if not pair:
+                return [], [], "kucoin"
+            data = self._get(f"{KUCOIN_BASE}/api/v1/market/orderbook/level2_100", {"symbol": pair})
+            book = (data.get("data") or {}) if isinstance(data, dict) else {}
+            bids = [(float(p), float(q)) for p, q in book.get("bids", [])]
+            asks = [(float(p), float(q)) for p, q in book.get("asks", [])]
+            return bids, asks, "kucoin"
 
-        # 6. Gate.io spot
-        try:
+        def _fetch_gate():
             pair = GATE_PAIRS.get(symbol)
-            if pair:
-                data = self._get(f"{GATE_BASE}/spot/order_book",
-                                 {"currency_pair": pair, "limit": 100})
-                bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
-                asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
-                walls = build_walls(bids, asks)
-                if walls:
-                    walls["source"] = "gateio"
-                    return walls
-        except Exception:
-            pass
-
-        # 7. MEXC spot (Binance-compatible)
-        try:
-            data = self._get(f"https://api.mexc.com/api/v3/depth",
-                             {"symbol": symbol, "limit": 1000})
+            if not pair:
+                return [], [], "gateio"
+            data = self._get(f"{GATE_BASE}/spot/order_book", {"currency_pair": pair, "limit": 100})
             bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
             asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
-            walls = build_walls(bids, asks)
+            return bids, asks, "gateio"
+
+        # Fetch all exchanges in parallel and aggregate
+        fetchers = [_fetch_binance_futures, _fetch_binance_spot, _fetch_okx,
+                    _fetch_bybit, _fetch_kucoin, _fetch_gate]
+        all_bids, all_asks, sources = [], [], []
+        with _cf.ThreadPoolExecutor(max_workers=6) as ex:
+            futs = [ex.submit(fn) for fn in fetchers]
+            for fut in _cf.as_completed(futs):
+                try:
+                    b, a, src = fut.result()
+                    if b or a:
+                        all_bids.extend(b)
+                        all_asks.extend(a)
+                        sources.append(src)
+                except Exception:
+                    pass
+
+        if all_bids or all_asks:
+            walls = build_walls(all_bids, all_asks)
             if walls:
-                walls["source"] = "mexc"
+                walls["source"] = "aggregated:" + "+".join(sorted(sources))
+                walls["exchange_count"] = len(sources)
                 return walls
-        except Exception:
-            pass
 
         return {}
 
