@@ -1052,13 +1052,17 @@ function renderOnchainMetrics(mining, symbol) {
       profit:       'Taking profits — watch for distribution',
       euphoria:     'Euphoric profit taking — cycle top signal',
     };
+    const soprName = sopr.metric_name || 'SOPR';
+    const soprSub  = soprName === 'NUPL'
+      ? `Net Unrealized P/L · <0 = all underwater · >0.75 = euphoria`
+      : `7d avg ${sopr.sma7?.toFixed(4) ?? '—'} · ${SOPR_DESC[sopr.zone] || ''}`;
     tiles.push(`
       <div class="ocm-tile ${sopr.cls || ''}">
-        <div class="ocm-name">SOPR</div>
-        <div class="ocm-value">${sopr.value?.toFixed(4) ?? '—'}</div>
+        <div class="ocm-name">${soprName}</div>
+        <div class="ocm-value">${sopr.value?.toFixed(soprName === 'NUPL' ? 3 : 4) ?? '—'}</div>
         <div class="ocm-zone ${sopr.cls || ''}">${(sopr.zone||'').replace(/_/g,' ')}</div>
         <div class="ocm-desc">${sopr.label || ''}</div>
-        <div class="ocm-sub">7d avg ${sopr.sma7?.toFixed(4) ?? '—'} · ${SOPR_DESC[sopr.zone] || ''}</div>
+        <div class="ocm-sub">${soprSub}</div>
       </div>`);
   }
 
@@ -1073,9 +1077,10 @@ function renderOnchainMetrics(mining, symbol) {
       extreme:          'Peak revenue — historical cycle top',
     };
     const rev = puell.daily_rev_usd ? '$' + (puell.daily_rev_usd/1e6).toFixed(1) + 'M/day' : '';
+    const puellEst = puell.estimated ? ' (est)' : '';
     tiles.push(`
       <div class="ocm-tile ${puell.cls || ''}">
-        <div class="ocm-name">Puell Multiple</div>
+        <div class="ocm-name">Puell Multiple${puellEst}</div>
         <div class="ocm-value">${puell.value?.toFixed(2) ?? '—'}</div>
         <div class="ocm-zone ${puell.cls || ''}">${(puell.zone||'').replace(/_/g,' ')}</div>
         <div class="ocm-desc">${puell.label || ''}</div>

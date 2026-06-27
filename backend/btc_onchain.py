@@ -154,24 +154,22 @@ def _fetch_sopr_realized_puell() -> dict:
     """
     out = {}
 
-    # ── SOPR — use explicit date range so we get actual recent values ──────────
+    # ── SOPR — page_size=60, skip null rows (CoinMetrics lags 1-2 days) ────────
     try:
-        end_dt   = datetime.now(timezone.utc)
-        start_dt = end_dt - timedelta(days=14)
-        end_s    = end_dt.strftime("%Y-%m-%dT00:00:00Z")
-        start_s  = start_dt.strftime("%Y-%m-%dT00:00:00Z")
         sopr_url = (
             "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
-            f"?assets=btc&metrics=Sopr&frequency=1d&start_time={start_s}&end_time={end_s}"
+            "?assets=btc&metrics=Sopr&frequency=1d&page_size=60"
         )
         sopr_data = _get(sopr_url, "coinmetrics_sopr", ttl=4 * 3600)
         sopr_vals = []
         for row in (sopr_data or {}).get("data") or []:
-            try:
-                s = float(row.get("Sopr") or 0)
-                if s > 0: sopr_vals.append(s)
-            except (TypeError, ValueError):
-                pass
+            v = row.get("Sopr")          # must check None explicitly
+            if v is not None:
+                try:
+                    s = float(v)
+                    if s > 0: sopr_vals.append(s)
+                except (TypeError, ValueError):
+                    pass
         if sopr_vals:
             sopr  = sopr_vals[-1]
             sma7  = round(sum(sopr_vals[-7:]) / min(len(sopr_vals), 7), 4)
@@ -190,17 +188,19 @@ def _fetch_sopr_realized_puell() -> dict:
     except Exception:
         pass
 
-    # ── Puell Multiple — blockchain.info 2yr revenue chart ────────────────────
+    # ── Puell Multiple — blockchain.info 2yr miner revenue chart ─────────────
     try:
-        rev_url  = "https://blockchain.info/charts/miners-revenue?timespan=2years&format=json&sampled=false"
+        rev_url  = "https://blockchain.info/charts/miners-revenue?timespan=2years&format=json"
         rev_data = _get(rev_url, "blockchain_miners_revenue", ttl=4 * 3600)
         rev_vals = []
         for pt in (rev_data or {}).get("values") or []:
-            try:
-                v = float(pt.get("y") or 0)
-                if v > 0: rev_vals.append(v)
-            except (TypeError, ValueError):
-                pass
+            y = pt.get("y")              # must check None explicitly
+            if y is not None:
+                try:
+                    v = float(y)
+                    if v > 0: rev_vals.append(v)
+                except (TypeError, ValueError):
+                    pass
         if len(rev_vals) >= 30:
             today_rev = rev_vals[-1]
             ma365     = sum(rev_vals[-365:]) / min(len(rev_vals), 365)
@@ -403,12 +403,63 @@ def get_btc_mining_signals() -> dict:
             mvrv["realized_price"] = round(btc_price / mvrv["score"], 0)
         result["mvrv"] = mvrv
 
-    # ── SOPR + Puell Multiple — CoinMetrics Community API ────────────────────
+    # ── SOPR + Puell Multiple — CoinMetrics / blockchain.info ────────────────
     srp = _fetch_sopr_realized_puell()
     if srp.get("sopr"):
         result["sopr"] = srp["sopr"]
     if srp.get("puell_multiple"):
         result["puell_multiple"] = srp["puell_multiple"]
+
+    # ── SOPR fallback: compute NUPL from MVRV when API unavailable ───────────
+    # NUPL = 1 - (1/MVRV): same signal family as SOPR, always available.
+    if not result.get("sopr") and mvrv and mvrv.get("score") and mvrv["score"] > 0:
+        nupl = round(1.0 - (1.0 / mvrv["score"]), 3)
+        if nupl < 0:
+            nz, nc, nl = "capitulation", "bull", "All Holders Underwater — Accumulate"
+        elif nupl < 0.25:
+            nz, nc, nl = "loss",         "bull", "Below Cost Basis — Accumulate"
+        elif nupl < 0.5:
+            nz, nc, nl = "neutral",      "",     "Moderate Profit — Neutral"
+        elif nupl < 0.75:
+            nz, nc, nl = "profit",       "",     "Taking Profits — Watch"
+        else:
+            nz, nc, nl = "euphoria",     "bear", "Euphoric — Cycle Top Warning"
+        result["sopr"] = {
+            "value":       nupl,
+            "sma7":        None,
+            "zone":        nz,
+            "cls":         nc,
+            "label":       nl,
+            "metric_name": "NUPL",
+        }
+
+    # ── Puell Multiple fallback: use today's miner revenue from stats ─────────
+    # If blockchain.info charts call fails, use the revenue already fetched from
+    # blockchain.info /stats, divided by a cycle-average estimate (~$35M/day
+    # post-2024-halving cycle average, covers ~$25M bear to ~$65M bull peaks).
+    if not result.get("puell_multiple") and result.get("miner_revenue_usd"):
+        CYCLE_AVG_REVENUE_USD = 35_000_000
+        today_rev = result["miner_revenue_usd"]
+        puell_est = round(today_rev / CYCLE_AVG_REVENUE_USD, 3)
+        if puell_est < 0.5:
+            pz, pc, pl = "deep_undervalued", "bull", "Miners Capitulating — STRONG BUY"
+        elif puell_est < 0.8:
+            pz, pc, pl = "undervalued",      "bull", "Low Miner Revenue — Accumulate"
+        elif puell_est < 1.5:
+            pz, pc, pl = "fair",             "",     "Fair Miner Revenue — Neutral"
+        elif puell_est < 2.5:
+            pz, pc, pl = "elevated",         "",     "High Miner Revenue — Caution"
+        else:
+            pz, pc, pl = "extreme",          "bear", "Peak Miner Revenue — SELL"
+        result["puell_multiple"] = {
+            "value":         puell_est,
+            "zone":          pz,
+            "cls":           pc,
+            "label":         pl,
+            "daily_rev_usd": round(today_rev, 0),
+            "ma365_rev_usd": CYCLE_AVG_REVENUE_USD,
+            "estimated":     True,
+        }
 
     # ── Realized Price — derived from MVRV (btc_price / mvrv_score) ──────────
     # MVRV = market cap / realized cap, so realized price = btc_price / mvrv
