@@ -331,7 +331,7 @@ def get_btc_mining_signals() -> dict:
 
 # ── GoMining Strategy Advisor ──────────────────────────────────────────────────
 
-def get_gomining_strategy(m: dict) -> dict:
+def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
     """
     Derive optimal GoMining farm settings from current on-chain signals.
 
@@ -341,11 +341,15 @@ def get_gomining_strategy(m: dict) -> dict:
       phase_cls          — css class ('bull' | 'bear' | 'neutral' | 'gold')
       maintenance_on     — always True (20%+ discount always worth it)
       reward_protection  — True when near/below break-even
-      reinvestment       — True only in compound phase
-      reinvest_to        — 'th' | 'tokens' | None
+      reinvestment       — True only in compound phase (buy GOMINING tokens)
+      reinvest_to        — 'tokens' | None
       reasons            — list of bullet points explaining why
       watch_for          — what signal would change the phase
       metrics            — key numbers for display
+
+    gm_token: optional dict from GOMINING 1D signal analysis:
+      { direction, strength, price, change_30d_pct }
+      Used to refine reinvestment timing — suppressed if token is in downtrend.
     """
     prof       = m.get("profitability_ratio") or 1.0
     ribbon     = m.get("hash_ribbon", "neutral")
@@ -380,8 +384,13 @@ def get_gomining_strategy(m: dict) -> dict:
     # ── Setting Recommendations ────────────────────────────────────────────────
     maintenance_on    = True                          # ALWAYS on — free discount
     reward_protection = prof < 1.15                  # ON when near/below break-even
-    reinvestment      = phase == "compound"
-    reinvest_to       = "th" if reinvestment else None
+
+    # Reinvest into GOMINING tokens (Greedy Machine auto-converts to TH).
+    # Suppressed if GOMINING token signal is bearish (SHORT direction).
+    _gm_dir = (gm_token or {}).get("direction", "NEUTRAL")
+    _gm_override_off = _gm_dir == "SHORT" and phase == "compound"
+    reinvestment = phase == "compound" and not _gm_override_off
+    reinvest_to  = "tokens" if reinvestment else None
 
     # ── Phase Metadata ─────────────────────────────────────────────────────────
     PHASE_META = {
@@ -395,19 +404,19 @@ def get_gomining_strategy(m: dict) -> dict:
             "label": "HOLD & MONITOR",
             "cls":   "neutral",
             "icon":  "🟡",
-            "desc":  "Conditions mixed. Keep collecting BTC, watch for hash ribbon to turn bullish before reinvesting.",
+            "desc":  "Conditions mixed. Keep collecting BTC, watch for hash ribbon to turn bullish before buying GOMINING tokens.",
         },
         "compound": {
-            "label": "COMPOUND — ADD TH",
+            "label": "COMPOUND — BUY GOMINING TOKENS",
             "cls":   "bull",
             "icon":  "🟢",
-            "desc":  "Mining is profitable and trend is up. Turn on reinvestment to convert rewards into more hashpower — compound while conditions are good.",
+            "desc":  "Mining is profitable and trend is up. Buy GOMINING tokens — Greedy Machine automatically converts them into more TH hashpower.",
         },
         "harvest": {
             "label": "HARVEST PROFITS",
             "cls":   "gold",
             "icon":  "🟠",
-            "desc":  "Late cycle / high MVRV — do NOT add TH now. Collect BTC rewards and consider selling some mining output at these elevated prices.",
+            "desc":  "Late cycle / high MVRV — do NOT buy more GOMINING tokens now. Collect BTC rewards and consider selling some mining output at these elevated prices.",
         },
     }
     meta = PHASE_META.get(phase, PHASE_META["hold"])
@@ -457,19 +466,36 @@ def get_gomining_strategy(m: dict) -> dict:
     elif halv_phase == "mid":
         reasons.append("Mid halving cycle (6–18 months post-halving) — historically the strongest bull window")
 
+    # GOMINING token signal
+    if gm_token:
+        gm_dir  = gm_token.get("direction", "NEUTRAL")
+        gm_str  = gm_token.get("strength", 0)
+        gm_p    = gm_token.get("price")
+        gm_30d  = gm_token.get("change_30d_pct")
+        price_note = f" at ${float(gm_p):.4f}" if gm_p else ""
+        chg_note   = f", {gm_30d:+.1f}% (30d)" if gm_30d is not None else ""
+        if gm_dir == "LONG":
+            reasons.append(f"GOMINING token {gm_dir} ({gm_str}%){price_note}{chg_note} — good entry for buying tokens to compound TH via Greedy Machine")
+        elif gm_dir == "SHORT":
+            reasons.append(f"GOMINING token {gm_dir} ({gm_str}%){price_note}{chg_note} — token in downtrend, wait for reversal before buying")
+        else:
+            reasons.append(f"GOMINING token NEUTRAL ({gm_str}%){price_note}{chg_note} — no strong directional signal yet")
+
     # ── Watch For ──────────────────────────────────────────────────────────────
     watch = []
     if phase == "accumulate":
         watch.append(f"BTC price breaking above ${breakeven:,.0f} (miner break-even) — signals profitability returning")
-        watch.append("Hash Ribbon turning bullish (30d MA crossing above 60d MA) — best compound entry signal")
+        watch.append("Hash Ribbon turning bullish (30d MA crossing above 60d MA) — best GOMINING token buy signal")
     elif phase == "hold":
-        watch.append("Hash Ribbon turning to 'buy' signal — switch to compound phase")
+        watch.append("Hash Ribbon turning to 'buy' signal — switch to compound phase, start buying GOMINING tokens")
         watch.append(f"BTC price dropping below ${breakeven:,.0f} — switch back to accumulate phase")
     elif phase == "compound":
-        watch.append(f"MVRV rising above 2.5–3.0 — switch to harvest phase (stop adding TH)")
-        watch.append("Hash Ribbon turning bearish — reduce reinvestment, protect capital")
+        watch.append(f"MVRV rising above 2.5–3.0 — switch to harvest phase (stop buying GOMINING tokens)")
+        watch.append("Hash Ribbon turning bearish — pause token purchases, protect capital")
+        if _gm_override_off:
+            watch.append("GOMINING token signal turning LONG — resume buying tokens for Greedy Machine")
     elif phase == "harvest":
-        watch.append("MVRV dropping below 2.0 — safe to resume compounding")
+        watch.append("MVRV dropping below 2.0 — safe to resume buying GOMINING tokens")
         watch.append("Hash Ribbon capitulation followed by recovery — new cycle starting")
 
     return {

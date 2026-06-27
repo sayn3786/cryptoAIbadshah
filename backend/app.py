@@ -69,6 +69,7 @@ SYMBOLS = {
     # Tokenised commodities — low BTC correlation, move on macro/USD/inflation
     "XAUT":   "XAUTUSDT",   # Tether Gold  (1 troy oz)
     "PAXG":   "PAXGUSDT",   # PAX Gold      (1 troy oz)
+    "GOMINING": "GOMININGUSDT",  # GoMining platform token — KuCoin primary, CoinGecko fallback
 }
 
 # BTC correlation tier — controls how much the BTC consensus penalty/bonus applies.
@@ -86,6 +87,7 @@ _BTC_CORR = {
     "SOL": 0.7, "TON": 0.6, "HYPE": 0.6, "KAS": 0.5,
     # Tokenised gold — moves on macro/USD/inflation, not BTC cycles
     "XAUT": 0.1, "PAXG": 0.1,
+    "GOMINING": 0.5,  # Mining platform token — moderately correlated with BTC mining profitability
 }
 TF_INTERVAL = {
     "1H": "1h", "2H": "2h",
@@ -372,7 +374,26 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
-    gomining_strategy = get_gomining_strategy(btc_mining) if btc_mining else None
+
+    # GoMining advisor: fetch GOMINING 1D signal for reinvestment timing (BTC view only)
+    gomining_token_signal = None
+    if symbol == "BTC" and "GOMINING" in SYMBOLS:
+        try:
+            _gm = get_analysis("GOMINING", "1D")
+            _gm_sig = _gm.get("signal", {})
+            _gm_candles = _gm.get("candles") or []
+            _gm_price_now = _gm_candles[-1]["close"] if _gm_candles else None
+            _gm_price_30d = _gm_candles[0]["close"] if _gm_candles else None
+            gomining_token_signal = {
+                "direction": _gm_sig.get("direction", "NEUTRAL"),
+                "strength":  _gm_sig.get("strength", 0),
+                "price":     _gm_price_now,
+                "change_30d_pct": round((_gm_price_now - _gm_price_30d) / _gm_price_30d * 100, 1)
+                    if _gm_price_now and _gm_price_30d and _gm_price_30d > 0 else None,
+            }
+        except Exception:
+            pass
+    gomining_strategy = get_gomining_strategy(btc_mining, gomining_token_signal) if btc_mining else None
 
     # Options expiry: use 28 daily candles for 4-week range context (all symbols)
     _daily_candles = spot[-28:] if len(spot) >= 28 else spot
@@ -428,10 +449,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "vwap":          vwap,
         "stoch_rsi":     stoch_rsi,
         "vol_signal":    vol_signal,
-        "btc_mining":        btc_mining,
-        "gomining_strategy": gomining_strategy,
-        "options_expiry":    options_expiry,
-        "whale_sells":     whale_sells,
+        "btc_mining":             btc_mining,
+        "gomining_strategy":      gomining_strategy,
+        "gomining_token_signal":  gomining_token_signal,
+        "options_expiry":         options_expiry,
+        "whale_sells":            whale_sells,
     }
     analysis["signal"] = generate_signal(analysis)
 

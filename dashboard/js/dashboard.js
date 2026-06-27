@@ -184,7 +184,7 @@ function renderAll(a) {
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
   renderBtcMiningCard(a.btc_mining, a.symbol);
-  renderGoMiningAdvisor(a.gomining_strategy, a.symbol);
+  renderGoMiningAdvisor(a.gomining_strategy, a.symbol, a.gomining_token_signal);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
   renderArkhamPanel(a.whale_sells);
@@ -979,7 +979,7 @@ function renderBtcMiningCard(mining, symbol) {
 }
 
 /* ─── GoMining Strategy Advisor ───────────────────────────────────────────── */
-function renderGoMiningAdvisor(strategy, symbol) {
+function renderGoMiningAdvisor(strategy, symbol, gmTokenSignal) {
   const section = document.getElementById('gominingSection');
   if (!section) return;
 
@@ -1020,21 +1020,32 @@ function renderGoMiningAdvisor(strategy, symbol) {
     protReason.textContent = `Mining profitable at ${(metrics.profitability || 0).toFixed(2)}× — protection optional`;
   }
 
-  // Reinvestment toggle
+  // Reinvestment toggle — buy GOMINING tokens (Greedy Machine converts to TH)
   const reinvEl = document.getElementById('gmToggleReinvest');
   const reinvReason = document.getElementById('gmReasonReinvest');
+  const gmDir = gmTokenSignal?.direction || 'NEUTRAL';
+  const gmStr = gmTokenSignal?.strength || 0;
+  const gmPrice = gmTokenSignal?.price;
+  const gm30d = gmTokenSignal?.change_30d_pct;
+  const priceNote = gmPrice ? ` · $${Number(gmPrice).toFixed(4)}` : '';
+  const chgNote = gm30d != null ? ` (${gm30d > 0 ? '+' : ''}${gm30d}% 30d)` : '';
+
   if (reinvestment) {
     reinvEl.className = 'gm-toggle on';
-    reinvEl.textContent = 'ON → TH ✓';
-    reinvReason.textContent = 'Mining profitable + bullish ribbon — compound rewards into more hashpower';
+    reinvEl.textContent = 'ON → GOMINING tokens ✓';
+    reinvReason.textContent = `Mining profitable + Hash Ribbon bullish + GOMINING ${gmDir} ${gmStr}%${priceNote}${chgNote} — Greedy Machine auto-converts tokens → TH`;
   } else if (phase_cls === 'gold') {
     reinvEl.className = 'gm-toggle warn';
     reinvEl.textContent = 'OFF ⚠';
-    reinvReason.textContent = 'Late cycle — collect BTC rewards, do not add TH at high valuations';
+    reinvReason.textContent = 'Late cycle — collect BTC rewards, do not buy GOMINING tokens at high valuations';
+  } else if (gmDir === 'SHORT') {
+    reinvEl.className = 'gm-toggle off';
+    reinvEl.textContent = 'OFF ⚠ token SHORT';
+    reinvReason.textContent = `GOMINING token in downtrend${priceNote}${chgNote} — wait for signal to turn LONG before buying tokens`;
   } else {
     reinvEl.className = 'gm-toggle off';
     reinvEl.textContent = 'OFF';
-    reinvReason.textContent = 'Accumulate real BTC now — wait for Hash Ribbon + profitability to confirm before reinvesting';
+    reinvReason.textContent = 'Accumulate real BTC now — wait for Hash Ribbon + profitability before buying GOMINING tokens';
   }
 
   // Reasons list

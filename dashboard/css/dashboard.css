@@ -1552,6 +1552,12 @@ a:hover { color: var(--gold2); }
                     background: rgba(245,158,11,.05); border-radius: 7px;
                     border-left: 3px solid rgba(245,158,11,.3); line-height: 1.4; }
 .gm-watch li::before { content: "👁 "; }
+.gm-token-link { margin-top: 16px; padding: 10px 14px; border-radius: 8px;
+                  background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.2);
+                  font-size: .78rem; color: var(--muted); }
+.gm-token-link strong { color: var(--txt); }
+.gm-token-link a { color: var(--accent); text-decoration: none; margin-left: 6px; }
+.gm-token-link a:hover { text-decoration: underline; }
 
 @media (max-width: 600px) {
   .gm-settings { grid-template-columns: 1fr; }
