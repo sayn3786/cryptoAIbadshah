@@ -403,6 +403,46 @@
 
   </section>
 
+  <!-- GoMining Strategy Advisor (BTC only) -->
+  <section id="gominingSection" style="display:none">
+    <div class="card gomining-card">
+      <div class="card-hdr">
+        <span>⛏ GoMining Farm Advisor</span>
+        <span class="card-sub">Auto-strategy from on-chain data · updates every hour</span>
+      </div>
+
+      <!-- Phase Banner -->
+      <div id="gominingPhase" class="gm-phase"></div>
+
+      <!-- Three Setting Toggles -->
+      <div class="gm-settings">
+        <div class="gm-setting">
+          <div class="gm-setting-label">Maintenance in GOMINING</div>
+          <div class="gm-toggle on" id="gmToggleMaintenance">ON</div>
+          <div class="gm-setting-reason" id="gmReasonMaintenance">20–27% discount on daily fees — always worth it</div>
+        </div>
+        <div class="gm-setting">
+          <div class="gm-setting-label">Reward Protection</div>
+          <div class="gm-toggle" id="gmToggleProtection">—</div>
+          <div class="gm-setting-reason" id="gmReasonProtection"></div>
+        </div>
+        <div class="gm-setting">
+          <div class="gm-setting-label">Reinvestment</div>
+          <div class="gm-toggle" id="gmToggleReinvest">—</div>
+          <div class="gm-setting-reason" id="gmReasonReinvest"></div>
+        </div>
+      </div>
+
+      <!-- Why This Phase -->
+      <div class="gm-section-title">Why this strategy?</div>
+      <ul class="gm-reasons" id="gmReasonsList"></ul>
+
+      <!-- Watch For -->
+      <div class="gm-section-title">Watch for these signals to change strategy:</div>
+      <ul class="gm-watch" id="gmWatchList"></ul>
+    </div>
+  </section>
+
   <!-- Row 4b: Whale Activity -->
   <section class="row-analysis">
     <div class="card" id="whaleCard">

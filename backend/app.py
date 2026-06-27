@@ -5,7 +5,7 @@ import json
 import time
 import math
 sys.path.insert(0, os.path.dirname(__file__))
-from btc_onchain import get_btc_mining_signals
+from btc_onchain import get_btc_mining_signals, get_gomining_strategy
 from options import get_options_expiry_data
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -372,6 +372,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
+    gomining_strategy = get_gomining_strategy(btc_mining) if btc_mining else None
 
     # Options expiry: use 28 daily candles for 4-week range context (all symbols)
     _daily_candles = spot[-28:] if len(spot) >= 28 else spot
@@ -427,8 +428,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "vwap":          vwap,
         "stoch_rsi":     stoch_rsi,
         "vol_signal":    vol_signal,
-        "btc_mining":      btc_mining,
-        "options_expiry":  options_expiry,
+        "btc_mining":        btc_mining,
+        "gomining_strategy": gomining_strategy,
+        "options_expiry":    options_expiry,
         "whale_sells":     whale_sells,
     }
     analysis["signal"] = generate_signal(analysis)

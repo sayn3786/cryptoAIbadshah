@@ -184,6 +184,7 @@ function renderAll(a) {
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
   renderBtcMiningCard(a.btc_mining, a.symbol);
+  renderGoMiningAdvisor(a.gomining_strategy, a.symbol);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
   renderArkhamPanel(a.whale_sells);
@@ -975,6 +976,76 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-sub">${diffProgressStr} · ${diffBlocksStr} · rising = more competition · falling = fewer miners</div>
     ${mvrvRow}
   `;
+}
+
+/* ─── GoMining Strategy Advisor ───────────────────────────────────────────── */
+function renderGoMiningAdvisor(strategy, symbol) {
+  const section = document.getElementById('gominingSection');
+  if (!section) return;
+
+  if (symbol !== 'BTC' || !strategy) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  const { phase_label, phase_cls, phase_icon, phase_desc,
+          maintenance_on, reward_protection, reinvestment, reinvest_to,
+          reasons = [], watch_for = [], metrics = {} } = strategy;
+
+  // Phase banner
+  document.getElementById('gominingPhase').className = `gm-phase ${phase_cls}`;
+  document.getElementById('gominingPhase').innerHTML = `
+    <div><span class="gm-phase-icon">${phase_icon}</span><span class="gm-phase-label">${phase_label}</span></div>
+    <div class="gm-phase-desc">${phase_desc}</div>
+  `;
+
+  // Maintenance toggle — always ON
+  document.getElementById('gmToggleMaintenance').className = 'gm-toggle on';
+  document.getElementById('gmToggleMaintenance').textContent = 'ON ✓';
+
+  // Reward Protection toggle
+  const protEl = document.getElementById('gmToggleProtection');
+  const protReason = document.getElementById('gmReasonProtection');
+  if (reward_protection) {
+    protEl.className = 'gm-toggle on';
+    protEl.textContent = 'ON ✓';
+    const prof = metrics.profitability || 1;
+    protReason.textContent = prof < 1.0
+      ? `Mining below break-even ($${(metrics.breakeven || 0).toLocaleString()}) — essential protection`
+      : `Near break-even (${prof.toFixed(2)}×) — keep protection active`;
+  } else {
+    protEl.className = 'gm-toggle off';
+    protEl.textContent = 'OFF';
+    protReason.textContent = `Mining profitable at ${(metrics.profitability || 0).toFixed(2)}× — protection optional`;
+  }
+
+  // Reinvestment toggle
+  const reinvEl = document.getElementById('gmToggleReinvest');
+  const reinvReason = document.getElementById('gmReasonReinvest');
+  if (reinvestment) {
+    reinvEl.className = 'gm-toggle on';
+    reinvEl.textContent = 'ON → TH ✓';
+    reinvReason.textContent = 'Mining profitable + bullish ribbon — compound rewards into more hashpower';
+  } else if (phase_cls === 'gold') {
+    reinvEl.className = 'gm-toggle warn';
+    reinvEl.textContent = 'OFF ⚠';
+    reinvReason.textContent = 'Late cycle — collect BTC rewards, do not add TH at high valuations';
+  } else {
+    reinvEl.className = 'gm-toggle off';
+    reinvEl.textContent = 'OFF';
+    reinvReason.textContent = 'Accumulate real BTC now — wait for Hash Ribbon + profitability to confirm before reinvesting';
+  }
+
+  // Reasons list
+  document.getElementById('gmReasonsList').innerHTML =
+    reasons.map(r => `<li>${r}</li>`).join('') ||
+    '<li>Loading on-chain data…</li>';
+
+  // Watch for list
+  document.getElementById('gmWatchList').innerHTML =
+    watch_for.map(w => `<li>${w}</li>`).join('') ||
+    '<li>No specific triggers — maintain current settings</li>';
 }
 
 function renderWhaleActivity(events) {
