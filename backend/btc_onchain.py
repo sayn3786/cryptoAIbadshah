@@ -8,7 +8,7 @@ Data sources (all free, no API key required):
 import time
 import math
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 _cache: dict = {}
 _CACHE_TTL = 3600  # 1 hour
@@ -148,76 +148,82 @@ def _fetch_mvrv() -> dict:
 
 def _fetch_sopr_realized_puell() -> dict:
     """
-    Fetch SOPR and Puell Multiple from CoinMetrics Community API.
-    Realized Price is derived from MVRV (btc_price / mvrv_score) — no extra call needed.
-    Correct free-tier metric names: Sopr (not SoprNtv), RevUSD for miner revenue.
-    Cached 4 hours. Two separate calls so one bad metric doesn't block the other.
+    SOPR: CoinMetrics community API with explicit date range (avoids null-trailing-rows issue).
+    Puell Multiple: blockchain.info historical miner revenue chart (already integrated source).
+    Realized Price: derived from MVRV in get_btc_mining_signals — no call needed here.
     """
     out = {}
 
-    # ── SOPR — correct metric name is 'Sopr' not 'SoprNtv' ───────────────────
-    sopr_url = (
-        "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
-        "?assets=btc&metrics=Sopr&frequency=1d&page_size=30"
-    )
-    sopr_data = _get(sopr_url, "coinmetrics_sopr", ttl=4 * 3600)
-    sopr_vals = []
-    for row in (sopr_data or {}).get("data") or []:
-        try:
-            s = float(row.get("Sopr") or 0)
-            if s > 0: sopr_vals.append(s)
-        except (TypeError, ValueError):
-            pass
-    if sopr_vals:
-        sopr = sopr_vals[-1]
-        sopr7d = round(sum(sopr_vals[-7:]) / min(len(sopr_vals), 7), 4)
-        if sopr < 0.95:
-            sopr_zone, sopr_cls, sopr_label = "capitulation", "bull", "Panic Selling — BUY"
-        elif sopr < 1.0:
-            sopr_zone, sopr_cls, sopr_label = "loss",         "bull", "Selling at Loss — Accumulate"
-        elif sopr < 1.05:
-            sopr_zone, sopr_cls, sopr_label = "neutral",      "",     "Breakeven — Neutral"
-        elif sopr < 1.15:
-            sopr_zone, sopr_cls, sopr_label = "profit",       "",     "Taking Profits — Watch"
-        else:
-            sopr_zone, sopr_cls, sopr_label = "euphoria",     "bear", "Euphoric Selling — CAUTION"
-        out["sopr"] = {
-            "value": round(sopr, 4), "sma7": sopr7d,
-            "zone": sopr_zone, "cls": sopr_cls, "label": sopr_label,
-        }
-
-    # ── Puell Multiple — fetch 400 days of RevUSD for 365d MA ─────────────────
-    puell_url = (
-        "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
-        "?assets=btc&metrics=RevUSD&frequency=1d&page_size=400"
-    )
-    puell_data = _get(puell_url, "coinmetrics_puell", ttl=4 * 3600)
-    rev_vals = []
-    for row in (puell_data or {}).get("data") or []:
-        try:
-            v = float(row.get("RevUSD") or 0)
-            if v > 0: rev_vals.append(v)
-        except (TypeError, ValueError):
-            pass
-    if len(rev_vals) >= 30:
-        today_rev = rev_vals[-1]
-        ma365 = sum(rev_vals[-365:]) / min(len(rev_vals), 365)
-        puell = round(today_rev / ma365, 3) if ma365 else None
-        if puell is not None:
-            if puell < 0.5:
-                pm_zone, pm_cls, pm_label = "deep_undervalued", "bull", "Miners Capitulating — STRONG BUY"
-            elif puell < 0.8:
-                pm_zone, pm_cls, pm_label = "undervalued",      "bull", "Low Miner Revenue — Accumulate"
-            elif puell < 1.5:
-                pm_zone, pm_cls, pm_label = "fair",             "",     "Fair Miner Revenue — Neutral"
-            elif puell < 2.5:
-                pm_zone, pm_cls, pm_label = "elevated",         "",     "High Miner Revenue — Caution"
+    # ── SOPR — use explicit date range so we get actual recent values ──────────
+    try:
+        end_dt   = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(days=14)
+        end_s    = end_dt.strftime("%Y-%m-%dT00:00:00Z")
+        start_s  = start_dt.strftime("%Y-%m-%dT00:00:00Z")
+        sopr_url = (
+            "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+            f"?assets=btc&metrics=Sopr&frequency=1d&start_time={start_s}&end_time={end_s}"
+        )
+        sopr_data = _get(sopr_url, "coinmetrics_sopr", ttl=4 * 3600)
+        sopr_vals = []
+        for row in (sopr_data or {}).get("data") or []:
+            try:
+                s = float(row.get("Sopr") or 0)
+                if s > 0: sopr_vals.append(s)
+            except (TypeError, ValueError):
+                pass
+        if sopr_vals:
+            sopr  = sopr_vals[-1]
+            sma7  = round(sum(sopr_vals[-7:]) / min(len(sopr_vals), 7), 4)
+            if sopr < 0.95:
+                zone, cls, label = "capitulation", "bull", "Panic Selling — BUY"
+            elif sopr < 1.0:
+                zone, cls, label = "loss",         "bull", "Selling at Loss — Accumulate"
+            elif sopr < 1.05:
+                zone, cls, label = "neutral",      "",     "Breakeven — Neutral"
+            elif sopr < 1.15:
+                zone, cls, label = "profit",       "",     "Taking Profits — Watch"
             else:
-                pm_zone, pm_cls, pm_label = "extreme",          "bear", "Peak Miner Revenue — SELL"
-            out["puell_multiple"] = {
-                "value": puell, "zone": pm_zone, "cls": pm_cls, "label": pm_label,
-                "daily_rev_usd": round(today_rev, 0), "ma365_rev_usd": round(ma365, 0),
-            }
+                zone, cls, label = "euphoria",     "bear", "Euphoric Selling — CAUTION"
+            out["sopr"] = {"value": round(sopr, 4), "sma7": sma7,
+                           "zone": zone, "cls": cls, "label": label}
+    except Exception:
+        pass
+
+    # ── Puell Multiple — blockchain.info 2yr revenue chart ────────────────────
+    try:
+        rev_url  = "https://blockchain.info/charts/miners-revenue?timespan=2years&format=json&sampled=false"
+        rev_data = _get(rev_url, "blockchain_miners_revenue", ttl=4 * 3600)
+        rev_vals = []
+        for pt in (rev_data or {}).get("values") or []:
+            try:
+                v = float(pt.get("y") or 0)
+                if v > 0: rev_vals.append(v)
+            except (TypeError, ValueError):
+                pass
+        if len(rev_vals) >= 30:
+            today_rev = rev_vals[-1]
+            ma365     = sum(rev_vals[-365:]) / min(len(rev_vals), 365)
+            puell     = round(today_rev / ma365, 3) if ma365 else None
+            if puell:
+                if puell < 0.5:
+                    pz, pc, pl = "deep_undervalued", "bull", "Miners Capitulating — STRONG BUY"
+                elif puell < 0.8:
+                    pz, pc, pl = "undervalued",      "bull", "Low Miner Revenue — Accumulate"
+                elif puell < 1.5:
+                    pz, pc, pl = "fair",             "",     "Fair Miner Revenue — Neutral"
+                elif puell < 2.5:
+                    pz, pc, pl = "elevated",         "",     "High Miner Revenue — Caution"
+                else:
+                    pz, pc, pl = "extreme",          "bear", "Peak Miner Revenue — SELL"
+                out["puell_multiple"] = {
+                    "value": puell, "zone": pz, "cls": pc, "label": pl,
+                    "daily_rev_usd": round(today_rev, 0),
+                    "ma365_rev_usd": round(ma365, 0),
+                }
+    except Exception:
+        pass
+
     return out
 
 
