@@ -375,22 +375,28 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
 
-    # GoMining advisor: fetch GOMINING 1D signal for reinvestment timing (BTC view only)
+    # GoMining advisor: lightweight GOMINING price direction (BTC view only).
+    # Uses a simple EMA20 slope on 1D candles — avoids full build_analysis overhead.
     gomining_token_signal = None
     if symbol == "BTC" and "GOMINING" in SYMBOLS:
         try:
-            _gm = get_analysis("GOMINING", "1D")
-            _gm_sig = _gm.get("signal", {})
-            _gm_candles = _gm.get("candles") or []
-            _gm_price_now = _gm_candles[-1]["close"] if _gm_candles else None
-            _gm_price_30d = _gm_candles[0]["close"] if _gm_candles else None
-            gomining_token_signal = {
-                "direction": _gm_sig.get("direction", "NEUTRAL"),
-                "strength":  _gm_sig.get("strength", 0),
-                "price":     _gm_price_now,
-                "change_30d_pct": round((_gm_price_now - _gm_price_30d) / _gm_price_30d * 100, 1)
-                    if _gm_price_now and _gm_price_30d and _gm_price_30d > 0 else None,
-            }
+            _gm_candles = client.get_spot_klines("GOMININGUSDT", "1d", 35) or []
+            if _gm_candles and len(_gm_candles) >= 5:
+                _closes = [c["close"] for c in _gm_candles]
+                _price_now = _closes[-1]
+                _price_30d = _closes[0] if len(_closes) >= 30 else _closes[0]
+                # EMA20 direction
+                _ema_dir = _quick_tf_dir("GOMINING", "1D")
+                # RSI-like strength proxy: % above/below 20-candle mean
+                _mean = sum(_closes[-20:]) / min(20, len(_closes))
+                _strength = round(abs(_price_now - _mean) / _mean * 100, 1) if _mean else 0
+                gomining_token_signal = {
+                    "direction":      _ema_dir,
+                    "strength":       _strength,
+                    "price":          _price_now,
+                    "change_30d_pct": round((_price_now - _price_30d) / _price_30d * 100, 1)
+                        if _price_30d and _price_30d > 0 else None,
+                }
         except Exception:
             pass
     gomining_strategy = get_gomining_strategy(btc_mining, gomining_token_signal) if btc_mining else None
