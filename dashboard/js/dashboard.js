@@ -184,6 +184,7 @@ function renderAll(a) {
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
   renderBtcMiningCard(a.btc_mining, a.symbol);
+  renderOnchainMetrics(a.btc_mining, a.symbol);
   renderGoMiningAdvisor(a.gomining_strategy, a.symbol, a.gomining_token_signal);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
@@ -1009,6 +1010,101 @@ function renderBtcMiningCard(mining, symbol) {
     ${soprRow}
     ${puellRow}
   `;
+}
+
+/* ─── On-Chain Metrics Grid (BTC only) ────────────────────────────────────── */
+function renderOnchainMetrics(mining, symbol) {
+  const section = document.getElementById('onchainMetricsSection');
+  const grid    = document.getElementById('ocmGrid');
+  if (!section || !grid) return;
+  if (symbol !== 'BTC' || !mining) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  const fmtK = v => v >= 1_000_000 ? '$' + (v/1_000_000).toFixed(2)+'M'
+                  : v >= 1_000     ? '$' + (v/1_000).toFixed(1)+'K'
+                  : '$' + Number(v).toFixed(2);
+
+  const tiles = [];
+
+  // ── MVRV ──────────────────────────────────────────────────────────────────
+  const mvrv = mining.mvrv;
+  if (mvrv) {
+    const score = mvrv.score?.toFixed(2) ?? '—';
+    const sma   = mvrv.sma90?.toFixed(2)  ?? '—';
+    const rp    = mvrv.realized_price ? fmtK(mvrv.realized_price) : null;
+    tiles.push(`
+      <div class="ocm-tile ${mvrv.cls || ''}">
+        <div class="ocm-name">MVRV Ratio</div>
+        <div class="ocm-value">${score}</div>
+        <div class="ocm-zone ${mvrv.cls || ''}">${(mvrv.zone||'').replace(/_/g,' ')}</div>
+        <div class="ocm-desc">${mvrv.label || ''}</div>
+        <div class="ocm-sub">90d avg ${sma}${rp ? ' · Realized '+rp : ''}</div>
+      </div>`);
+  }
+
+  // ── SOPR ──────────────────────────────────────────────────────────────────
+  const sopr = mining.sopr;
+  if (sopr) {
+    const SOPR_DESC = {
+      capitulation: 'Panic selling at loss — strongest buy signal',
+      loss:         'Selling below cost basis — accumulation zone',
+      neutral:      'Holders at breakeven — no strong signal',
+      profit:       'Taking profits — watch for distribution',
+      euphoria:     'Euphoric profit taking — cycle top signal',
+    };
+    tiles.push(`
+      <div class="ocm-tile ${sopr.cls || ''}">
+        <div class="ocm-name">SOPR</div>
+        <div class="ocm-value">${sopr.value?.toFixed(4) ?? '—'}</div>
+        <div class="ocm-zone ${sopr.cls || ''}">${(sopr.zone||'').replace(/_/g,' ')}</div>
+        <div class="ocm-desc">${sopr.label || ''}</div>
+        <div class="ocm-sub">7d avg ${sopr.sma7?.toFixed(4) ?? '—'} · ${SOPR_DESC[sopr.zone] || ''}</div>
+      </div>`);
+  }
+
+  // ── Puell Multiple ────────────────────────────────────────────────────────
+  const puell = mining.puell_multiple;
+  if (puell) {
+    const PUELL_DESC = {
+      deep_undervalued: 'Miner capitulation — historical buy zone',
+      undervalued:      'Revenue below avg — good accumulation',
+      fair:             'Revenue near average — neutral',
+      elevated:         'Miners incentivised to sell BTC',
+      extreme:          'Peak revenue — historical cycle top',
+    };
+    const rev = puell.daily_rev_usd ? '$' + (puell.daily_rev_usd/1e6).toFixed(1) + 'M/day' : '';
+    tiles.push(`
+      <div class="ocm-tile ${puell.cls || ''}">
+        <div class="ocm-name">Puell Multiple</div>
+        <div class="ocm-value">${puell.value?.toFixed(2) ?? '—'}</div>
+        <div class="ocm-zone ${puell.cls || ''}">${(puell.zone||'').replace(/_/g,' ')}</div>
+        <div class="ocm-desc">${puell.label || ''}</div>
+        <div class="ocm-sub">${rev ? 'Miner rev '+rev+' · ' : ''}${PUELL_DESC[puell.zone] || ''}</div>
+      </div>`);
+  }
+
+  // ── Realized Price ────────────────────────────────────────────────────────
+  const rp  = mining.realized_price;
+  const ptr = mining.price_to_realized;
+  const bp  = mining.btc_price_usd;
+  if (rp) {
+    const rpCls   = ptr < 1.0 ? 'bull' : ptr < 1.3 ? 'bull' : ptr > 3.5 ? 'bear' : '';
+    const rpZone  = ptr < 1.0 ? 'below realized' : ptr < 1.3 ? 'near realized' : ptr > 3.5 ? 'far above' : 'above realized';
+    const rpLabel = ptr < 1.0 ? 'Every holder underwater — deep value'
+                  : ptr < 1.3 ? 'Near cost basis — strong support zone'
+                  : ptr > 3.5 ? 'Stretched valuation — distribution risk'
+                  : 'Normal bull market premium';
+    tiles.push(`
+      <div class="ocm-tile ${rpCls}">
+        <div class="ocm-name">Realized Price</div>
+        <div class="ocm-value">${fmtK(rp)}</div>
+        <div class="ocm-zone ${rpCls}">${rpZone} · ${ptr?.toFixed(2) ?? '—'}×</div>
+        <div class="ocm-desc">${rpLabel}</div>
+        <div class="ocm-sub">${bp ? 'BTC '+fmtK(bp)+' vs avg cost basis '+fmtK(rp) : 'Average cost basis of all BTC ever moved'}</div>
+      </div>`);
+  }
+
+  grid.innerHTML = tiles.join('') || '<p style="color:var(--muted);padding:16px">Loading on-chain data…</p>';
 }
 
 /* ─── GoMining Strategy Advisor ───────────────────────────────────────────── */

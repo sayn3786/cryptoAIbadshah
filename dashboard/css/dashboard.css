@@ -1572,6 +1572,27 @@ a:hover { color: var(--gold2); }
             background: rgba(255,255,255,.06); border: 1px solid var(--border);
             color: var(--muted); white-space: nowrap; }
 .gm-chip-zone { color: var(--txt); font-weight: 600; }
+/* ── On-Chain Metrics Grid ─────────────────────────────────────────────────── */
+.onchain-metrics-card { padding: 18px; }
+.ocm-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 14px; }
+.ocm-tile { padding: 16px; border-radius: 12px; border: 1px solid var(--border);
+             background: var(--card2); display: flex; flex-direction: column; gap: 4px; }
+.ocm-tile.bull { border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.07); }
+.ocm-tile.bear { border-color: rgba(239,68,68,.35);  background: rgba(239,68,68,.07); }
+.ocm-name  { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--muted); font-weight: 600; }
+.ocm-value { font-size: 1.6rem; font-weight: 800; color: var(--txt); line-height: 1.1; margin: 4px 0; }
+.ocm-tile.bull .ocm-value { color: var(--bull); }
+.ocm-tile.bear .ocm-value { color: var(--bear); }
+.ocm-zone  { font-size: .72rem; font-weight: 700; text-transform: capitalize;
+              padding: 2px 8px; border-radius: 20px; display: inline-block; width: fit-content;
+              background: rgba(255,255,255,.06); color: var(--muted); }
+.ocm-tile.bull .ocm-zone { background: rgba(16,185,129,.15); color: var(--bull); }
+.ocm-tile.bear .ocm-zone { background: rgba(239,68,68,.15);  color: var(--bear); }
+.ocm-desc  { font-size: .78rem; font-weight: 600; color: var(--txt); margin-top: 6px; }
+.ocm-sub   { font-size: .7rem; color: var(--muted); line-height: 1.4; }
+@media (max-width: 480px) { .ocm-grid { grid-template-columns: 1fr; } }
+
 .gm-token-link { margin-top: 16px; padding: 10px 14px; border-radius: 8px;
                   background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.2);
                   font-size: .78rem; color: var(--muted); }
