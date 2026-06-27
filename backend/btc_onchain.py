@@ -148,32 +148,26 @@ def _fetch_mvrv() -> dict:
 
 def _fetch_sopr_realized_puell() -> dict:
     """
-    Fetch SOPR, Realized Price, and Puell Multiple from CoinMetrics Community API.
-    Single call — free, no key. Cached 4 hours alongside MVRV.
-    Returns dict with sopr, realized_price, puell_multiple (and their signals).
+    Fetch SOPR and Puell Multiple from CoinMetrics Community API.
+    Realized Price is derived from MVRV (btc_price / mvrv_score) — no extra call needed.
+    Correct free-tier metric names: Sopr (not SoprNtv), RevUSD for miner revenue.
+    Cached 4 hours. Two separate calls so one bad metric doesn't block the other.
     """
-    url = (
-        "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
-        "?assets=btc&metrics=SoprNtv,PriceRealUSD,RevUSD&frequency=1d&page_size=400"
-    )
-    data = _get(url, "coinmetrics_sopr_realized_puell", ttl=4 * 3600)
-    if not data:
-        return {}
-    rows = data.get("data") or []
-    sopr_vals, real_vals, rev_vals = [], [], []
-    for row in rows:
-        try:
-            s = float(row.get("SoprNtv") or 0)
-            r = float(row.get("PriceRealUSD") or 0)
-            v = float(row.get("RevUSD") or 0)
-            if s > 0: sopr_vals.append(s)
-            if r > 0: real_vals.append(r)
-            if v > 0: rev_vals.append(v)
-        except (TypeError, ValueError):
-            pass
     out = {}
 
-    # ── SOPR ──────────────────────────────────────────────────────────────────
+    # ── SOPR — correct metric name is 'Sopr' not 'SoprNtv' ───────────────────
+    sopr_url = (
+        "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+        "?assets=btc&metrics=Sopr&frequency=1d&page_size=30"
+    )
+    sopr_data = _get(sopr_url, "coinmetrics_sopr", ttl=4 * 3600)
+    sopr_vals = []
+    for row in (sopr_data or {}).get("data") or []:
+        try:
+            s = float(row.get("Sopr") or 0)
+            if s > 0: sopr_vals.append(s)
+        except (TypeError, ValueError):
+            pass
     if sopr_vals:
         sopr = sopr_vals[-1]
         sopr7d = round(sum(sopr_vals[-7:]) / min(len(sopr_vals), 7), 4)
@@ -192,12 +186,19 @@ def _fetch_sopr_realized_puell() -> dict:
             "zone": sopr_zone, "cls": sopr_cls, "label": sopr_label,
         }
 
-    # ── Realized Price ─────────────────────────────────────────────────────────
-    if real_vals:
-        rp = real_vals[-1]
-        out["realized_price"] = round(rp, 2)
-
-    # ── Puell Multiple ─────────────────────────────────────────────────────────
+    # ── Puell Multiple — fetch 400 days of RevUSD for 365d MA ─────────────────
+    puell_url = (
+        "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+        "?assets=btc&metrics=RevUSD&frequency=1d&page_size=400"
+    )
+    puell_data = _get(puell_url, "coinmetrics_puell", ttl=4 * 3600)
+    rev_vals = []
+    for row in (puell_data or {}).get("data") or []:
+        try:
+            v = float(row.get("RevUSD") or 0)
+            if v > 0: rev_vals.append(v)
+        except (TypeError, ValueError):
+            pass
     if len(rev_vals) >= 30:
         today_rev = rev_vals[-1]
         ma365 = sum(rev_vals[-365:]) / min(len(rev_vals), 365)
@@ -396,17 +397,19 @@ def get_btc_mining_signals() -> dict:
             mvrv["realized_price"] = round(btc_price / mvrv["score"], 0)
         result["mvrv"] = mvrv
 
-    # ── SOPR + Realized Price + Puell Multiple — CoinMetrics Community API ────
+    # ── SOPR + Puell Multiple — CoinMetrics Community API ────────────────────
     srp = _fetch_sopr_realized_puell()
     if srp.get("sopr"):
         result["sopr"] = srp["sopr"]
-    if srp.get("realized_price"):
-        rp = srp["realized_price"]
-        result["realized_price"] = rp
-        if btc_price and rp:
-            result["price_to_realized"] = round(btc_price / rp, 3)
     if srp.get("puell_multiple"):
         result["puell_multiple"] = srp["puell_multiple"]
+
+    # ── Realized Price — derived from MVRV (btc_price / mvrv_score) ──────────
+    # MVRV = market cap / realized cap, so realized price = btc_price / mvrv
+    rp = (result.get("mvrv") or {}).get("realized_price")
+    if rp and btc_price:
+        result["realized_price"]    = rp
+        result["price_to_realized"] = round(btc_price / rp, 3)
 
     # ── On-Chain Composite Score ──────────────────────────────────────────────
     result["onchain_score"] = _onchain_score(

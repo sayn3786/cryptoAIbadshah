@@ -1084,8 +1084,8 @@ function renderOnchainMetrics(mining, symbol) {
   }
 
   // ── Realized Price ────────────────────────────────────────────────────────
-  const rp  = mining.realized_price;
-  const ptr = mining.price_to_realized;
+  const rp  = mining.realized_price || mining.mvrv?.realized_price;
+  const ptr = mining.price_to_realized || (rp && btcPriceUsd ? btcPriceUsd / rp : null);
   const bp  = mining.btc_price_usd;
   if (rp) {
     const rpCls   = ptr < 1.0 ? 'bull' : ptr < 1.3 ? 'bull' : ptr > 3.5 ? 'bear' : '';
