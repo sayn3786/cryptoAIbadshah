@@ -1048,6 +1048,24 @@ function renderGoMiningAdvisor(strategy, symbol, gmTokenSignal) {
     reinvReason.textContent = 'Accumulate real BTC now — wait for Hash Ribbon + profitability before buying GOMINING tokens';
   }
 
+  // BTC Harvest Timer
+  const harvestEl = document.getElementById('gmHarvestBanner');
+  if (harvestEl && strategy.harvest) {
+    const h = strategy.harvest;
+    const pctLine = h.sell_pct > 0
+      ? `<div class="gm-harvest-pct">Suggested: sell ~${h.sell_pct}% of your BTC rewards</div>`
+      : `<div class="gm-harvest-pct">Keep 100% of BTC rewards — do not sell yet</div>`;
+    const mvrvNote = h.mvrv ? ` · MVRV ${Number(h.mvrv).toFixed(2)} (${h.mvrv_zone?.replace('_', ' ')})` : '';
+    harvestEl.className = `gm-harvest ${h.cls}`;
+    harvestEl.innerHTML = `
+      <div class="gm-harvest-icon">${h.icon}</div>
+      <div class="gm-harvest-body">
+        <div class="gm-harvest-label">${h.label}</div>
+        ${pctLine}
+        <div class="gm-harvest-reason">${h.reasoning}${mvrvNote}</div>
+      </div>`;
+  }
+
   // Reasons list
   document.getElementById('gmReasonsList').innerHTML =
     reasons.map(r => `<li>${r}</li>`).join('') ||

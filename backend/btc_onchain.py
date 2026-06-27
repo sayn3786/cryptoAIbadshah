@@ -481,6 +481,58 @@ def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
         else:
             reasons.append(f"GOMINING token NEUTRAL ({gm_str}%){price_note}{chg_note} — no strong directional signal yet")
 
+    # ── BTC Harvest Signal — when to sell mined BTC rewards ───────────────────
+    # sell_signal: 'sell_now' | 'sell_partial' | 'hold' | 'accumulate'
+    if mvrv_zone == "extreme_top" or (halv_phase == "late" and mvrv > 3.0):
+        sell_signal    = "sell_now"
+        sell_cls       = "sell-now"
+        sell_label     = "SELL — Top Signal"
+        sell_icon      = "🔴"
+        sell_pct       = 80          # suggested % of rewards to sell
+        sell_reasoning = (
+            f"MVRV {mvrv:.2f} in extreme top zone"
+            if mvrv_zone == "extreme_top"
+            else f"Late cycle + MVRV {mvrv:.2f} above 3.0 — historical distribution peak"
+        )
+    elif mvrv_zone == "overbought" or (halv_phase == "late" and mvrv > 2.0):
+        sell_signal    = "sell_partial"
+        sell_cls       = "sell-partial"
+        sell_label     = "TRIM — Sell Partial"
+        sell_icon      = "🟠"
+        sell_pct       = 50
+        sell_reasoning = (
+            f"MVRV {mvrv:.2f} overbought — late bull phase, reduce exposure gradually"
+        )
+    elif ribbon in ("capitulation", "bear") or mvrv_zone == "oversold" or prof < 0.8:
+        sell_signal    = "accumulate"
+        sell_cls       = "accumulate"
+        sell_label     = "HOLD — Stack BTC"
+        sell_icon      = "🟢"
+        sell_pct       = 0
+        sell_reasoning = (
+            "Miner capitulation / oversold — BTC is cheapest here, do NOT sell rewards"
+            if ribbon == "capitulation"
+            else f"MVRV {mvrv:.2f} in accumulation zone — BTC undervalued, keep all rewards"
+        )
+    else:
+        sell_signal    = "hold"
+        sell_cls       = "hold"
+        sell_label     = "HOLD — Wait for Top"
+        sell_icon      = "🟡"
+        sell_pct       = 0
+        sell_reasoning = f"MVRV {mvrv:.2f} in fair value range — no reason to sell yet, let rewards accumulate"
+
+    harvest = {
+        "signal":    sell_signal,
+        "cls":       sell_cls,
+        "label":     sell_label,
+        "icon":      sell_icon,
+        "sell_pct":  sell_pct,
+        "reasoning": sell_reasoning,
+        "mvrv":      mvrv,
+        "mvrv_zone": mvrv_zone,
+    }
+
     # ── Watch For ──────────────────────────────────────────────────────────────
     watch = []
     if phase == "accumulate":
@@ -508,6 +560,7 @@ def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
         "reward_protection": reward_protection,
         "reinvestment":      reinvestment,
         "reinvest_to":       reinvest_to,
+        "harvest":           harvest,
         "reasons":           reasons,
         "watch_for":         watch,
         "metrics": {

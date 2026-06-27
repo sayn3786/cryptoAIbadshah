@@ -1552,6 +1552,21 @@ a:hover { color: var(--gold2); }
                     background: rgba(245,158,11,.05); border-radius: 7px;
                     border-left: 3px solid rgba(245,158,11,.3); line-height: 1.4; }
 .gm-watch li::before { content: "👁 "; }
+.gm-harvest { padding: 14px 16px; border-radius: 10px; margin-bottom: 8px;
+              display: flex; align-items: flex-start; gap: 12px; }
+.gm-harvest-icon { font-size: 1.5rem; flex-shrink: 0; margin-top: 1px; }
+.gm-harvest-body { flex: 1; }
+.gm-harvest-label { font-size: .95rem; font-weight: 700; margin-bottom: 4px; }
+.gm-harvest-pct { font-size: .82rem; font-weight: 600; margin-bottom: 4px; }
+.gm-harvest-reason { font-size: .78rem; color: var(--muted); line-height: 1.5; }
+.gm-harvest.sell-now   { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35); }
+.gm-harvest.sell-now   .gm-harvest-label { color: var(--bear); }
+.gm-harvest.sell-partial { background: rgba(245,158,11,.10); border: 1px solid rgba(245,158,11,.3); }
+.gm-harvest.sell-partial .gm-harvest-label { color: #f59e0b; }
+.gm-harvest.hold       { background: rgba(234,179,8,.08); border: 1px solid rgba(234,179,8,.25); }
+.gm-harvest.hold       .gm-harvest-label { color: #eab308; }
+.gm-harvest.accumulate { background: rgba(16,185,129,.10); border: 1px solid rgba(16,185,129,.3); }
+.gm-harvest.accumulate .gm-harvest-label { color: var(--bull); }
 .gm-token-link { margin-top: 16px; padding: 10px 14px; border-radius: 8px;
                   background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.2);
                   font-size: .78rem; color: var(--muted); }
