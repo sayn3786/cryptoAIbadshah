@@ -5,7 +5,8 @@ import json
 import time
 import math
 sys.path.insert(0, os.path.dirname(__file__))
-from btc_onchain import get_btc_mining_signals
+from btc_onchain import get_btc_mining_signals, get_gomining_strategy
+from options import get_options_expiry_data
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -27,7 +28,7 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     calculate_vwap, calculate_stoch_rsi, calculate_volume_signal)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
-from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab
+from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup
 from signals import generate_signal
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs
@@ -326,14 +327,12 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
     fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None
 
-    # CoinGlass aggregated CVD: covers tokens absent from Binance futures (BLUR, XMR, KAS…)
-    # by aggregating taker volume across Binance + Bybit + OKX + others.
-    # Takes priority over Binance-only futures CVD when CoinGlass key is configured.
+    # CoinGlass aggregated CVD: real taker buy/sell volume across Binance+Bybit+OKX+others.
+    # Always preferred over candle-estimated fut_cvd when CoinGlass key is configured.
     agg_cvd = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
-    # When Binance futures aren't real and CoinGlass has data, promote agg_cvd to fut_cvd
-    if agg_cvd and not futures_real:
-        fut_cvd = agg_cvd
-        agg_cvd = None   # avoid double-counting in the CVD divergence calc
+    if agg_cvd:
+        fut_cvd = agg_cvd  # real taker data beats candle close/open estimation
+        agg_cvd = None      # avoid double-counting in CVD divergence calc
     volume_spikes = find_volume_spikes(spot)
     whale_activity = detect_whale_activity(spot)
     market_cap    = client.get_market_cap(bs)
@@ -344,8 +343,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Elliott Wave pivots + SMC structure
     ph, pl  = find_pivots(spot, window=2)
     elliott = analyze_elliott_wave(spot, ph, pl)
-    choch   = detect_choch(spot, window=3)
+    choch    = detect_choch(spot, window=3)
     liq_grab = detect_liquidity_grab(spot, window=3, lookback=5)
+    acc_setup = detect_acc_eql_fvg_setup(spot, fvgs, window=20)
 
     # Flag patterns — detect on the same candles already fetched for this TF.
     # One flag set per timeframe, no cross-TF duplication.
@@ -366,8 +366,23 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     stoch_rsi     = calculate_stoch_rsi([c["close"] for c in spot])
     vol_signal    = calculate_volume_signal(spot)
 
+    # Exchange netflow: coins flowing into exchanges (sell pressure) vs out (HODLing).
+    # Only available for BTC/ETH via CoinGlass. Panel stays hidden for other tokens.
+    whale_sells = cg_client.get_exchange_netflow(bs) if cg_client.enabled else None
+
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
+    gomining_strategy = get_gomining_strategy(btc_mining) if btc_mining else None
+
+    # Options expiry: use 28 daily candles for 4-week range context (all symbols)
+    _daily_candles = spot[-28:] if len(spot) >= 28 else spot
+    _btc_price_for_opts = (spot[-1]["close"] if spot else 0) if symbol == "BTC" else 0
+    # Only compute full bias for BTC; for ALTs we reuse BTC options data from the
+    # recommendations engine so we don't refetch here
+    options_expiry = get_options_expiry_data(
+        current_price=_btc_price_for_opts,
+        candles_4w=_daily_candles,
+    ) if symbol == "BTC" else get_options_expiry_data()  # calendar-only for ALTs
 
     analysis = {
         "symbol":       symbol,
@@ -387,6 +402,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "fvgs":         fvgs[:15],
         "choch":        choch,
         "liq_grab":     liq_grab,
+        "acc_setup":    acc_setup,
         "engulfing":    engulfing,
         "flags":        flags,
         "elliott_wave": elliott,
@@ -412,7 +428,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "vwap":          vwap,
         "stoch_rsi":     stoch_rsi,
         "vol_signal":    vol_signal,
-        "btc_mining":    btc_mining,
+        "btc_mining":        btc_mining,
+        "gomining_strategy": gomining_strategy,
+        "options_expiry":    options_expiry,
+        "whale_sells":     whale_sells,
     }
     analysis["signal"] = generate_signal(analysis)
 
@@ -462,9 +481,109 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
+@app.get("/api/connectivity")
+def api_connectivity():
+    """
+    Test all external APIs from inside Vercel.
+    Open https://your-app.vercel.app/api/connectivity to see what's live vs blocked.
+    """
+    import urllib.request as _ur
+    import concurrent.futures
+
+    TESTS = [
+        # Exact URLs used in production code (not generic pings)
+        ("Binance",        "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1",    "prices/candles (geo-blocked → falls back to OKX)"),
+        ("OKX ✦primary",  "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1D&limit=1",    "prices/candles — PRIMARY when Binance blocked"),
+        ("Bybit",          "https://api.bybit.com/v5/market/kline?symbol=BTCUSDT&interval=D&limit=1",     "prices/candles fallback"),
+        ("KuCoin",         "https://api.kucoin.com/api/v1/market/candles?type=1day&symbol=BTC-USDT&startAt=1&endAt=9999999999", "prices/candles fallback"),
+        ("Gate.io",        "https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=BTC_USDT&interval=1d&limit=1", "prices/candles fallback"),
+        ("MEXC",           "https://api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1",       "prices/candles fallback"),
+        ("Kraken",         "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1440",              "prices fallback"),
+        ("LBank",          "https://api.lbkex.com/v2/kline.do?symbol=btc_usdt&size=1&type=day1",          "prices fallback"),
+        ("CoinGecko",      "https://api.coingecko.com/api/v3/ping",                                       "market caps / fallback prices"),
+        ("Deribit",        "https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd",    "options expiry / max pain ✅"),
+        ("mempool.space",  "https://mempool.space/api/v1/difficulty-adjustment",                           "BTC mining / difficulty"),
+        ("blockchain.info","https://blockchain.info/stats?format=json",                                    "BTC miner revenue"),
+        ("CoinMetrics",    "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=1", "MVRV score"),
+        ("Fear & Greed",   "https://api.alternative.me/fng/?limit=1",                                     "market sentiment"),
+        # LunarCrush omitted — free tier rate-limits aggressively; key status shown in notes below
+        ("CoinGlass",      "https://open-api.coinglass.com/public/v2/funding_usd_history?symbol=BTC&time_type=h8&limit=1", "funding / OI / liquidations"),
+    ]
+
+    def _test(name, url, purpose):
+        hdrs = {"User-Agent": "CryptoSTARS/1.0"}
+        lc_key = os.getenv("LUNARCRUSH_API_KEY", "")
+        if name == "LunarCrush" and lc_key:
+            hdrs["Authorization"] = f"Bearer {lc_key}"
+        try:
+            req = _ur.Request(url, headers=hdrs)
+            with _ur.urlopen(req, timeout=5) as r:
+                status = r.status
+            return {"name": name, "ok": True,  "purpose": purpose, "status": status}
+        except Exception as e:
+            msg = str(e)
+            rate_limited = "429" in msg
+            blocked = "allowlist" in msg or ("403" in msg and "allowlist" in msg)
+            needs_key = "401" in msg or ("403" in msg and "allowlist" not in msg)
+            if rate_limited:
+                return {"name": name, "ok": True, "purpose": purpose,
+                        "status": 429, "note": "Rate limited — key is valid, reduce call frequency"}
+            return {"name": name, "ok": False, "purpose": purpose,
+                    "blocked": blocked, "needs_key": needs_key, "error": msg[:120]}
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_test, n, u, p): n for n, u, p in TESTS}
+        for fut in concurrent.futures.as_completed(futs):
+            results.append(fut.result())
+
+    results.sort(key=lambda r: (not r["ok"], r["name"]))
+    live    = [r for r in results if r["ok"]]
+    blocked = [r for r in results if not r["ok"] and r.get("blocked")]
+    key_req = [r for r in results if not r["ok"] and r.get("needs_key")]
+    other   = [r for r in results if not r["ok"] and not r.get("blocked") and not r.get("needs_key")]
+
+    cg_key  = bool(os.getenv("COINGLASS_API_KEY", ""))
+    return jsonify({
+        "summary": {
+            "live":          len(live),
+            "blocked":       len(blocked),
+            "needs_api_key": len(key_req),
+            "other_error":   len(other),
+        },
+        "notes": {
+            "Binance":    "HTTP 451 = geo-blocked (Singapore/US). App auto-falls-back to OKX. Not a problem.",
+            "CoinGlass":  f"API key configured: {cg_key}. Without key, funding/OI/liquidations use Binance only.",
+            "Bybit":      "403 on time endpoint is normal — candle endpoint works without key.",
+            "LunarCrush":  f"Key configured: {bool(os.getenv('LUNARCRUSH_API_KEY'))}. Not tested here (rate-limited). Check /api/news?symbol=BTCUSDT for 'lc_error' field.",
+        },
+        "live":      live,
+        "blocked":   blocked,
+        "needs_key": key_req,
+        "errors":    other,
+    })
+
+
 @app.get("/api/symbols")
 def api_symbols():
     return jsonify(list(SYMBOLS.keys()))
+
+
+@app.get("/api/news")
+def api_news():
+    symbol = request.args.get("symbol", "BTCUSDT").upper()
+    return jsonify(fetch_news_sentiment(symbol))
+
+
+@app.get("/api/exchange-netflow")
+def api_exchange_netflow():
+    symbol = request.args.get("symbol", "BTCUSDT").upper()
+    if not cg_client.enabled:
+        return jsonify({"error": "CoinGlass key not configured"}), 503
+    data = cg_client.get_exchange_netflow(symbol)
+    if data is None:
+        return jsonify({"error": f"No netflow data for {symbol}"}), 404
+    return jsonify(data)
 
 
 @app.get("/api/scores")
@@ -728,12 +847,23 @@ def _compute_recommendations() -> dict:
     BTC_PENALTY = 18   # pts when token opposes BTC 2H
 
     # On-chain score: shifts BTC_BONUS/PENALTY by up to ±20%
-    # score 75+ → amplify BTC effect; score <30 → dampen it
     _oc = get_btc_mining_signals()
     _oc_score = (_oc.get("onchain_score") or {}).get("score", 50)
-    _oc_mult  = 0.8 + 0.4 * (_oc_score / 100.0)   # 0.80 at score=0, 1.20 at score=100
+    _oc_mult  = 0.8 + 0.4 * (_oc_score / 100.0)
     BTC_BONUS   = round(BTC_BONUS   * _oc_mult, 1)
     BTC_PENALTY = round(BTC_PENALTY * _oc_mult, 1)
+
+    # Options expiry: BTC options pinning pressure cascades to all ALTs
+    # — in the expiry window, bearish pin on BTC → increase ALT bearish bias
+    #                         bullish pin on BTC → increase ALT bullish bias
+    _opts = get_options_expiry_data(
+        current_price=raw.get("BTC", {}).get("2H", {}).get("current_price", 0) or 0,
+        candles_4w=[],   # conservative — use calendar-only when no candle context
+    )
+    _opts_bias   = (_opts.get("bias") or {}).get("bias", "neutral")
+    _opts_pts    = (_opts.get("signal_pts") or 0)       # -20 to +20
+    _opts_in_win = (_opts.get("bias") or {}).get("in_window", False)
+    _opts_summary = _opts.get("summary", "")
 
     candidates = []
     for sym, tfs in raw.items():
@@ -766,6 +896,18 @@ def _compute_recommendations() -> dict:
         elif btc_conflict:
             btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
             strength = max(0, round(strength + btc_adj, 1))
+
+        # Options expiry pin pressure: scale by BTC correlation so high-corr ALTs
+        # are more affected by BTC pinning than low-corr assets (e.g. XAUT)
+        opts_adj = 0
+        if _opts_in_win and _opts_pts != 0:
+            opts_adj  = round(_opts_pts * corr_factor, 1)
+            # Only apply if it amplifies the current signal direction
+            # (don't let options bias flip a strong opposite signal)
+            if (opts_adj > 0 and direction == "LONG") or (opts_adj < 0 and direction == "SHORT"):
+                strength = min(100, max(0, round(strength + abs(opts_adj), 1)))
+            else:
+                strength = min(100, max(0, round(strength - abs(opts_adj) * 0.5, 1)))
 
         # Metadata only — exhaustion and reversal are shown in the per-TF analysis
         # view, not used to adjust rec ranking (recs are ranked purely on 1H+2H strength)
@@ -803,6 +945,10 @@ def _compute_recommendations() -> dict:
             "btc_consensus":    btc_dir,
             "btc_adj":          btc_adj,
             "btc_corr":         corr_factor,
+            "opts_adj":         opts_adj,
+            "opts_in_window":   _opts_in_win,
+            "opts_bias":        _opts_bias,
+            "opts_summary":     _opts_summary,
             "h1_exhausted":      h1_exh,
             "h2_exhausted":      h2_exh,
             "h1_reversal_count": h1_rev,
@@ -875,6 +1021,7 @@ def _compute_recommendations() -> dict:
         "btc_4h_str":       btc_str,
         "btc_1d_dir":       "NEUTRAL",
         "btc_1d_str":       0,
+        "options_expiry":   _opts,
         "recommendations":  intraday_recs,
     }
 

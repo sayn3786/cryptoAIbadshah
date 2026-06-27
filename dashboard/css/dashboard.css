@@ -329,6 +329,8 @@ a:hover { color: var(--gold2); }
 .tag.bull  { background: rgba(16,185,129,.15); color: var(--bull); }
 .tag.bear  { background: rgba(239,68,68,.15);  color: var(--bear); }
 .tag.filled { background: rgba(100,116,139,.15); color: var(--muted2); }
+.tag-bag { outline: 1px solid currentColor; outline-offset: 1px; font-weight: 800; letter-spacing: .04em; }
+.fvg-bag-row td { background: rgba(255,255,255,.025); }
 .empty { color: var(--muted); font-style: italic; font-family: var(--font); padding: 12px 10px !important; }
 
 .badge {
@@ -685,6 +687,34 @@ a:hover { color: var(--gold2); }
 .holiday-banner .hol-pill.impact-high   { border: 1px solid #f59e0b; }
 .holiday-banner .hol-pill.impact-medium { border: 1px solid #d97706; opacity: .85; }
 .holiday-banner .hol-pill.impact-low    { border: 1px solid #92400e; opacity: .7; }
+
+/* ─── Options Expiry Banner ──────────────────────────────────────────────────── */
+.options-banner {
+  font-size: .80rem; padding: 8px 16px 6px;
+  border-bottom: 1px solid #374151;
+  background: #0d1b2e;
+}
+.options-banner.opts-quarterly { background: linear-gradient(90deg,#1a0a2e,#1e1035); border-bottom-color: #7c3aed; }
+.options-banner.opts-quarterly.opts-active { background: linear-gradient(90deg,#200a35,#2d1060); }
+.options-banner.opts-monthly   { background: linear-gradient(90deg,#0a1a2e,#0f2040); border-bottom-color: #2563eb; }
+.options-banner.opts-weekly    { background: linear-gradient(90deg,#0a1a1a,#0f2820); border-bottom-color: #059669; }
+.opts-main { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.opts-main strong { color:#e2e8f0; }
+.opts-date { color:#94a3b8; font-size:.75rem; }
+.opts-countdown { background:rgba(255,255,255,.08); border-radius:4px; padding:1px 7px; font-size:.72rem; font-weight:700; color:#e2e8f0; }
+.opts-bias-badge { font-size:.68rem; font-weight:800; border-radius:4px; padding:2px 8px; letter-spacing:.04em; }
+.opts-bear { background:rgba(239,68,68,.18); color:#f87171; border:1px solid #ef444455; }
+.opts-bull { background:rgba(16,185,129,.18); color:#34d399; border:1px solid #10b98155; }
+.opts-desc { font-size:.66rem; color:#94a3b8; margin-top:4px; line-height:1.4; }
+.opts-cal { display:flex; gap:6px; flex-wrap:wrap; margin-top:5px; }
+.opts-cal-pill { font-size:.60rem; font-weight:600; border-radius:3px; padding:1px 7px; border:1px solid; }
+.opts-cal-pill.opts-q { color:#a78bfa; border-color:#7c3aed44; background:rgba(124,58,237,.1); }
+.opts-cal-pill.opts-m { color:#60a5fa; border-color:#2563eb44; background:rgba(37,99,235,.1); }
+.opts-cal-pill.opts-w { color:#6ee7b7; border-color:#05996944; background:rgba(5,150,105,.1); }
+.opts-cal-pill small  { opacity:.7; }
+.opts-live-stats { display:flex; gap:10px; align-items:center; margin-top:4px; flex-wrap:wrap; }
+.opts-stat  { font-size:.70rem; font-weight:700; color:#e2e8f0; background:rgba(255,255,255,.07); border-radius:4px; padding:1px 8px; }
+.opts-src   { font-size:.58rem; color:#4ade80; font-weight:600; opacity:.8; margin-left:2px; }
 
 /* ─── Order Book Walls ───────────────────────────────────────────────────────── */
 .card-sub { font-size: .7rem; font-weight: 400; color: var(--muted); margin-left: 6px; }
@@ -1135,9 +1165,17 @@ a:hover { color: var(--gold2); }
   background: rgba(251,191,36,.12); border-left: 3px solid #f59e0b;
 }
 .sig-rev-badge {
-  display: block; padding: 5px 9px; border-radius: 6px;
+  display: block; padding: 5px 9px; border-radius: 6px 6px 0 0;
   font-size: .68rem; font-weight: 700; color: #a78bfa;
   background: rgba(167,139,250,.12); border-left: 3px solid #a78bfa;
+}
+.sig-flip-list {
+  display: flex; flex-direction: column; gap: 2px;
+  background: rgba(167,139,250,.07); border-left: 3px solid #a78bfa;
+  border-radius: 0 0 6px 6px; padding: 4px 9px 5px;
+}
+.sig-flip-item {
+  font-size: .64rem; font-weight: 600; color: #c4b5fd;
 }
 /* SMC structure block */
 #signalSMC      { margin: 8px 0 4px; background: rgba(99,102,241,.07); border: 1px solid rgba(99,102,241,.2); border-radius: 8px; padding: 8px 10px; }
@@ -1147,6 +1185,7 @@ a:hover { color: var(--gold2); }
 .smc-label      { font-size: .68rem; font-weight: 700; color: var(--muted2); }
 .smc-val        { font-size: .72rem; font-weight: 800; }
 .smc-sub        { font-size: .60rem; color: var(--muted); }
+.smc-acc-setup  { background: rgba(99,102,241,.13); border-radius: 5px; padding: 3px 4px; margin-bottom: 6px; }
 
 /* BTC consensus banner */
 .btc-banner        { padding: 7px 12px; border-radius: 6px; font-size: .72rem; font-weight: 600; margin-bottom: 10px; }
@@ -1447,3 +1486,73 @@ a:hover { color: var(--gold2); }
 .whale-stat       { font-size: .68rem; color: var(--muted2); }
 .whale-stat strong{ color: var(--text); }
 .whale-desc       { font-size: .65rem; color: var(--muted); font-style: italic; }
+
+/* ── Arkham Whale Sells ──────────────────────────────────────────────────── */
+.arkham-summary   { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.arkham-pressure  { font-size: .75rem; font-weight: 700; padding: 3px 10px; border-radius: 6px; }
+.arkham-pressure.high   { background: rgba(239,68,68,.2);  color: var(--bear); }
+.arkham-pressure.medium { background: rgba(239,68,68,.12); color: #f87171; }
+.arkham-pressure.low    { background: rgba(239,68,68,.07); color: #fca5a5; }
+.arkham-pressure.none   { background: rgba(100,116,139,.12); color: var(--muted2); }
+.arkham-total     { font-size: .8rem; color: var(--muted2); }
+.arkham-total strong { color: var(--text); }
+.arkham-pts       { font-size: .7rem; color: var(--bear); }
+.arkham-table     { width: 100%; border-collapse: collapse; font-size: .72rem; }
+.arkham-table th  { color: var(--muted); font-weight: 600; text-transform: uppercase;
+                    font-size: .63rem; letter-spacing: .05em; padding: 4px 6px;
+                    border-bottom: 1px solid var(--border); text-align: left; }
+.arkham-table td  { padding: 6px 6px; border-bottom: 1px solid rgba(30,45,68,.5);
+                    font-family: var(--mono); color: var(--text); vertical-align: middle; }
+.arkham-table tr:last-child td { border-bottom: none; }
+.arkham-from      { color: var(--muted2); max-width: 140px; white-space: nowrap;
+                    overflow: hidden; text-overflow: ellipsis; }
+.arkham-to        { color: #f87171; }
+.arkham-usd       { color: var(--bear); font-weight: 600; }
+.arkham-ago       { color: var(--muted); }
+.arkham-empty     { color: var(--muted); font-style: italic; text-align: center;
+                    padding: 14px 0; font-family: var(--font); font-size: .75rem; }
+
+/* ── GoMining Strategy Advisor ───────────────────────────────────────────── */
+.gomining-card    { padding: 18px 20px; }
+
+/* Phase banner */
+.gm-phase         { border-radius: 10px; padding: 14px 18px; margin-bottom: 18px; }
+.gm-phase-icon    { font-size: 1.4rem; margin-right: 8px; }
+.gm-phase-label   { font-size: 1rem; font-weight: 800; letter-spacing: .06em; }
+.gm-phase-desc    { font-size: .78rem; color: var(--muted2); margin-top: 6px; line-height: 1.5; }
+.gm-phase.bull    { background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3); }
+.gm-phase.bull .gm-phase-label { color: var(--bull); }
+.gm-phase.bear    { background: rgba(239,68,68,.10);  border: 1px solid rgba(239,68,68,.25); }
+.gm-phase.bear .gm-phase-label { color: var(--bear); }
+.gm-phase.gold    { background: rgba(245,158,11,.10); border: 1px solid rgba(245,158,11,.25); }
+.gm-phase.gold .gm-phase-label { color: var(--gold); }
+.gm-phase.neutral { background: rgba(99,102,241,.10); border: 1px solid rgba(99,102,241,.25); }
+.gm-phase.neutral .gm-phase-label { color: var(--neutral); }
+
+/* Three setting toggles */
+.gm-settings      { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+.gm-setting       { background: var(--card2); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+.gm-setting-label { font-size: .68rem; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: .06em; color: var(--muted2); }
+.gm-toggle        { font-size: .95rem; font-weight: 800; font-family: var(--mono);
+                    padding: 5px 12px; border-radius: 6px; display: inline-block; width: fit-content; }
+.gm-toggle.on     { background: rgba(16,185,129,.2); color: var(--bull); }
+.gm-toggle.off    { background: rgba(239,68,68,.15);  color: var(--bear); }
+.gm-toggle.warn   { background: rgba(245,158,11,.15); color: var(--gold); }
+.gm-setting-reason{ font-size: .68rem; color: var(--muted); line-height: 1.4; }
+
+/* Reasons + Watch sections */
+.gm-section-title { font-size: .72rem; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: .06em; color: var(--muted2); margin: 14px 0 8px; }
+.gm-reasons, .gm-watch { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.gm-reasons li    { font-size: .76rem; color: var(--muted2); padding: 8px 12px;
+                    background: var(--card2); border-radius: 7px; border-left: 3px solid var(--border);
+                    line-height: 1.5; }
+.gm-watch li      { font-size: .74rem; color: var(--muted); padding: 7px 12px;
+                    background: rgba(245,158,11,.05); border-radius: 7px;
+                    border-left: 3px solid rgba(245,158,11,.3); line-height: 1.4; }
+.gm-watch li::before { content: "👁 "; }
+
+@media (max-width: 600px) {
+  .gm-settings { grid-template-columns: 1fr; }
+}

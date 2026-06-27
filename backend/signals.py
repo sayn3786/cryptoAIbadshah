@@ -48,6 +48,7 @@ def generate_signal(analysis: Dict) -> Dict:
     fvgs        = analysis.get("fvgs") or []
     choch       = analysis.get("choch") or {}
     liq_grab    = analysis.get("liq_grab") or {}
+    acc_setup   = analysis.get("acc_setup") or {}
     flags       = analysis.get("flags") or []
     elliott     = analysis.get("elliott_wave") or {}
     candles     = analysis.get("candles") or []
@@ -291,16 +292,19 @@ def generate_signal(analysis: Dict) -> Dict:
     above = [f for f in unfilled if f["type"] == "bearish" and f["midpoint"] > current_price]
 
     if below:
-        _fvg_bull_pts = min(len(below) * 8, 20)
+        # BAGs score higher (strong support, less likely to fill) than plain FVGs
+        _fvg_bull_pts = min(sum(14 if f.get("gap_type") == "bag" else 8 for f in below), 24)
         score += _fvg_bull_pts; g['pattern'] += _fvg_bull_pts
+        _near_label = f"{'BAG' if below[0].get('gap_type')=='bag' else 'FVG'} ${below[0]['midpoint']:,.4f}"
         bull_reasons.append(
-            f"{len(below)} bullish FVG(s) acting as support below (nearest: ${below[0]['midpoint']:,.4f})"
+            f"{len(below)} bullish gap(s) acting as support below (nearest: {_near_label})"
         )
     if above:
-        _fvg_bear_pts = min(len(above) * 8, 20)
+        _fvg_bear_pts = min(sum(14 if f.get("gap_type") == "bag" else 8 for f in above), 24)
         score -= _fvg_bear_pts; g['pattern'] -= _fvg_bear_pts
+        _near_label = f"{'BAG' if above[0].get('gap_type')=='bag' else 'FVG'} ${above[0]['midpoint']:,.4f}"
         bear_reasons.append(
-            f"{len(above)} bearish FVG(s) as resistance above (nearest: ${above[0]['midpoint']:,.4f})"
+            f"{len(above)} bearish gap(s) as resistance above (nearest: {_near_label})"
         )
 
     # ── CHoCH — Change of Character (structure shift) ────────────────────────
@@ -326,6 +330,20 @@ def generate_signal(analysis: Dict) -> Dict:
         elif liq_sig == "bearish":
             score -= _liq_pts; g['pattern'] -= _liq_pts
             bear_reasons.append(f"Bearish liq. grab — {liq_grab.get('label', '')}")
+
+    # ── Accumulation + Equal H/L + FVG setup (ICT/SMC triple combo) ─────────
+    _acc_sig = acc_setup.get("signal", "none")
+    if _acc_sig != "none":
+        # Setup strength is 55-100 from the detector; scale to max ±25 pts here
+        _acc_str = acc_setup.get("strength", 55)
+        _acc_pts = round(25 * (_acc_str - 55) / 45) if _acc_str > 55 else 0
+        _acc_pts = max(8, _acc_pts)   # minimum 8 pts when setup is confirmed
+        if _acc_sig == "bullish":
+            score += _acc_pts; g['pattern'] += _acc_pts
+            bull_reasons.append(f"ICT Setup: {acc_setup.get('label', 'Acc+EQL+FVG pump setup')}")
+        elif _acc_sig == "bearish":
+            score -= _acc_pts; g['pattern'] -= _acc_pts
+            bear_reasons.append(f"ICT Setup: {acc_setup.get('label', 'Acc+EQH+FVG dump setup')}")
 
     # ── Pre-compute trend context for counter-trend discounts ─────────────────
     # t_bull / t_bear are the raw trend bucket values (before capping).
@@ -493,6 +511,81 @@ def generate_signal(analysis: Dict) -> Dict:
     elif short_trend == "bearish":
         score -= 6; g['momentum'] -= 6
         bear_reasons.append("EMA7 below EMA21 — short-term trend bearish; near-term sellers in control")
+
+    # ── Order Book Imbalance ──────────────────────────────────────────────────
+    # Live bid/ask walls aggregated across exchanges. Timeframe-independent —
+    # it's a market snapshot, not candle-derived. Not scaled by tf_macro_w.
+    ob = analysis.get("order_book") or {}
+    ob_imbalance = ob.get("imbalance")
+    ob_ratio     = ob.get("bid_ask_ratio", 1.0) or 1.0
+    ob_big_bid   = ob.get("biggest_bid") or {}
+    ob_big_ask   = ob.get("biggest_ask") or {}
+
+    if ob_imbalance == "strong_bid":
+        score += 18; g['flow'] += 18
+        bull_reasons.append(
+            f"Order book: strong bid pressure ({ob_ratio:.2f}× more bids than asks near price)"
+        )
+    elif ob_imbalance == "bid_heavy":
+        score += 10; g['flow'] += 10
+        bull_reasons.append(
+            f"Order book: bid-heavy ({ob_ratio:.2f}×) — buyers dominating near price"
+        )
+    elif ob_imbalance == "strong_ask":
+        score -= 18; g['flow'] -= 18
+        bear_reasons.append(
+            f"Order book: strong ask pressure ({ob_ratio:.2f}× more asks than bids near price)"
+        )
+    elif ob_imbalance == "ask_heavy":
+        score -= 10; g['flow'] -= 10
+        bear_reasons.append(
+            f"Order book: ask-heavy ({ob_ratio:.2f}×) — sellers dominating near price"
+        )
+
+    # High-significance wall on bid = strong support; on ask = strong resistance
+    if ob_big_bid.get("significance") == "high" and ob_big_bid.get("distance_pct", -99) > -2:
+        score += 8; g['flow'] += 8
+        bull_reasons.append(
+            f"Large bid wall ${ob_big_bid.get('usd_value',0):,.0f} at ${ob_big_bid.get('price',0):,.2f} ({ob_big_bid.get('dist_label','Near')})"
+        )
+    if ob_big_ask.get("significance") == "high" and ob_big_ask.get("distance_pct", 99) < 2:
+        score -= 8; g['flow'] -= 8
+        bear_reasons.append(
+            f"Large ask wall ${ob_big_ask.get('usd_value',0):,.0f} at ${ob_big_ask.get('price',0):,.2f} ({ob_big_ask.get('dist_label','Near')})"
+        )
+
+    # ── Exchange Netflow (CoinGlass) ──────────────────────────────────────────
+    # BTC/ETH on-chain flow to/from exchanges. Positive = exchange inflow (sell
+    # pressure). Negative = withdrawal (accumulation, bullish). 8h rolling window.
+    ws = analysis.get("whale_sells") or {}
+    ws_pressure = ws.get("pressure", "none")
+    ws_netflow  = ws.get("netflow", 0) or 0
+    ws_sym      = ws.get("symbol", "")
+    if ws_pressure == "high":
+        score -= 15; g['flow'] -= 15
+        bear_reasons.append(
+            f"Exchange netflow: +{ws_netflow:,.0f} {ws_sym} deposited to exchanges (8h) — heavy sell pressure"
+        )
+    elif ws_pressure == "medium":
+        score -= 8; g['flow'] -= 8
+        bear_reasons.append(
+            f"Exchange netflow: +{ws_netflow:,.0f} {ws_sym} to exchanges (8h) — moderate sell pressure"
+        )
+    elif ws_pressure == "low":
+        score -= 3; g['flow'] -= 3
+        bear_reasons.append(
+            f"Exchange netflow: +{ws_netflow:,.0f} {ws_sym} to exchanges (8h) — light sell flow"
+        )
+    elif ws_pressure == "accumulation":
+        score += 10; g['flow'] += 10
+        bull_reasons.append(
+            f"Exchange netflow: {ws_netflow:,.0f} {ws_sym} withdrawn from exchanges (8h) — strong accumulation"
+        )
+    elif ws_pressure == "withdrawal":
+        score += 5; g['flow'] += 5
+        bull_reasons.append(
+            f"Exchange netflow: {ws_netflow:,.0f} {ws_sym} leaving exchanges (8h) — accumulation signal"
+        )
 
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
@@ -1015,6 +1108,24 @@ def generate_signal(analysis: Dict) -> Dict:
     else:
         direction = "NEUTRAL"
 
+    # ── Options expiry pin pressure ───────────────────────────────────────────
+    # Only applied when inside the pinning window and direction is not NEUTRAL.
+    # Amplifies strength when options align with signal; reduces when they oppose.
+    _opts        = analysis.get("options_expiry") or {}
+    _opts_bias   = (_opts.get("bias") or {})
+    _opts_pts    = int(_opts_bias.get("signal_pts") or 0)   # -20 to +20
+    _opts_in_win = _opts_bias.get("in_window", False)
+    opts_adj     = 0
+    if _opts_in_win and _opts_pts != 0 and direction != "NEUTRAL":
+        opts_adj = abs(_opts_pts)
+        if (_opts_pts > 0 and direction == "LONG") or (_opts_pts < 0 and direction == "SHORT"):
+            strength = min(100, strength + opts_adj)
+            bull_reasons.append(f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{opts_adj} pts)")
+        else:
+            strength = max(0, strength - round(opts_adj * 0.5))
+            bear_reasons.append(f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, -{round(opts_adj*0.5)} pts)")
+        g['sentiment'] += opts_adj if direction == "LONG" else -opts_adj
+
     # Strength tiers (strength = score / 220 * 100):
     # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size
     # Moderate (33–50): score  73–110 — several aligned, 50% size
@@ -1084,10 +1195,33 @@ def generate_signal(analysis: Dict) -> Dict:
             ))
         atr = sum(_tr_vals) / len(_tr_vals)
 
+        # Hard SL cap per timeframe — base values for mega cap (BTC/ETH).
+        # Scaled by atr_mult so smaller caps get proportionally wider room.
+        # atr_mult: mega=1.0, large=1.5, mid=2.0, small=3.0, micro=4.0
+        # Cap the multiplier at 2.5 so micro caps don't go completely unconstrained.
+        _cap_mult = min(atr_mult, 2.5)
+        _TF_MAX_SL = {
+            "1H":  0.025, "2H":  0.035,
+            "4H":  0.050, "8H":  0.065, "12H": 0.080,
+            "1D":  0.100, "1W":  0.140,
+            "2W":  0.160, "3W":  0.160, "1M":  0.180,
+        }
+        # TP3 cap also scales — smaller caps have bigger swing targets
+        _TF_MAX_TP3 = {
+            "1H":  0.045, "2H":  0.065,
+            "4H":  0.090, "8H":  0.120, "12H": 0.150,
+            "1D":  0.200, "1W":  0.280,
+            "2W":  0.320, "3W":  0.320, "1M":  0.350,
+        }
+        _max_sl_abs  = current_price * _TF_MAX_SL.get(timeframe, 0.10)  * _cap_mult
+        _max_tp3_abs = current_price * _TF_MAX_TP3.get(timeframe, 0.20) * _cap_mult
+
+        # Clamp effective ATR so SL can't exceed the hard cap
+        eff_atr = min(atr, max_atr_abs, _max_sl_abs / max(sl_m, 1.5))
+
         # Technical levels for entry and SL anchoring
-        # Entry: enter at/near current price (market or ≤1% limit for tight levels)
-        # SL: placed just beyond the nearest technical invalidation level (up to 7% away)
-        ENTRY_LIMIT   = 0.010   # max 1% pullback for limit entry
+        # Widen entry search to 2% so nearby levels are actually found
+        ENTRY_LIMIT   = 0.020   # max 2% from current price for limit entry
         SL_ANCHOR_MAX = 0.07    # search for SL anchor up to 7% from entry
 
         _ema_t     = analysis.get("ema_trend") or {}
@@ -1104,8 +1238,6 @@ def generate_signal(analysis: Dict) -> Dict:
         st_price = _st.get("value")
         st_dir   = _st.get("direction")
 
-        eff_atr = min(atr, max_atr_abs)
-
         def _gap(level, above: bool) -> float:
             if level is None or current_price <= 0:
                 return float("inf")
@@ -1113,11 +1245,16 @@ def generate_signal(analysis: Dict) -> Dict:
 
         if direction == "LONG":
             # Entry: market price or limit within 1% at a nearby support
-            _close_sup = [lv for lv in [ema21_val, bb_lower]
+            _vwap_val  = (analysis.get("vwap") or {}).get("vwap")
+            _close_sup = [lv for lv in [ema21_val, bb_lower, _vwap_val]
                           if lv and 0 <= _gap(lv, above=False) <= ENTRY_LIMIT]
-            if swing_low and 0 <= _gap(swing_low, above=False) <= ENTRY_LIMIT * 0.7:
+            if swing_low and 0 <= _gap(swing_low, above=False) <= ENTRY_LIMIT:
                 _close_sup.append(swing_low)
-            entry = round(max(_close_sup) if _close_sup else current_price, 8)
+            # If no support level found nearby, set limit slightly below current price
+            if _close_sup:
+                entry = round(max(_close_sup), 8)
+            else:
+                entry = round(current_price * 0.998, 8)  # 0.2% pullback limit
 
             # SL: just below nearest technical invalidation level
             _sl_anchors = []
@@ -1128,21 +1265,26 @@ def generate_signal(analysis: Dict) -> Dict:
                 _sl_anchors.append(st_price)
 
             if _sl_anchors:
-                _anchor  = max(_sl_anchors)   # closest (highest) support below entry
-                _buf     = min(eff_atr * 0.4, entry * 0.004)   # small buffer below anchor
+                _anchor  = max(_sl_anchors)
+                _buf     = min(eff_atr * 0.4, entry * 0.004)
                 sl_dist  = (entry - _anchor) + _buf
             else:
-                sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)   # min 1.5%
+                sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
 
+            sl_dist = min(sl_dist, _max_sl_abs)   # hard cap
             sl = round(max(entry * 0.001, entry - sl_dist), 8)
 
         elif direction == "SHORT":
-            # Entry: market price or limit within 1% at a nearby resistance
-            _close_res = [lv for lv in [ema21_val, bb_upper]
+            _vwap_val  = (analysis.get("vwap") or {}).get("vwap")
+            _close_res = [lv for lv in [ema21_val, bb_upper, _vwap_val]
                           if lv and 0 <= _gap(lv, above=True) <= ENTRY_LIMIT]
-            if swing_high and 0 <= _gap(swing_high, above=True) <= ENTRY_LIMIT * 0.7:
+            if swing_high and 0 <= _gap(swing_high, above=True) <= ENTRY_LIMIT:
                 _close_res.append(swing_high)
-            entry = round(min(_close_res) if _close_res else current_price, 8)
+            # If no resistance found nearby, set limit slightly above current price
+            if _close_res:
+                entry = round(min(_close_res), 8)
+            else:
+                entry = round(current_price * 1.002, 8)  # 0.2% bounce limit
 
             _sl_anchors = []
             for _lv in [ema21_val, bb_upper, swing_high]:
@@ -1158,6 +1300,7 @@ def generate_signal(analysis: Dict) -> Dict:
             else:
                 sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
 
+            sl_dist = min(sl_dist, _max_sl_abs)   # hard cap
             sl = round(entry + sl_dist, 8)
 
         else:
@@ -1195,11 +1338,18 @@ def generate_signal(analysis: Dict) -> Dict:
 
         tp_factor = max(0.5, min(2.0, rsi_room + tp_bonus))
 
-        # Higher R:R minimums — TP1 at least 2:1, TP2 at least 3:1, TP3 at least 5:1
         TP1_RR, TP2_RR, TP3_RR = 2.0, 3.5, 5.5
         tp1_dist = sl_dist * max(2.0, TP1_RR * tp_factor)
         tp2_dist = sl_dist * max(3.0, TP2_RR * tp_factor)
         tp3_dist = sl_dist * max(5.0, TP3_RR * tp_factor)
+
+        # Hard cap TP distances — proportional to TF max, keeps targets realistic
+        tp3_dist = min(tp3_dist, _max_tp3_abs)
+        tp2_dist = min(tp2_dist, _max_tp3_abs * 0.60)
+        tp1_dist = min(tp1_dist, _max_tp3_abs * 0.35)
+        # Preserve ordering if caps collapsed the distances
+        tp1_dist = min(tp1_dist, tp2_dist * 0.60)
+        tp2_dist = min(tp2_dist, tp3_dist * 0.65)
 
         def _tp_short(dist):
             target = entry - dist
@@ -1227,7 +1377,7 @@ def generate_signal(analysis: Dict) -> Dict:
             tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
 
-            # ── Leverage: market cap tier, capped by SL size for risk management ─
+            # ── Leverage: market cap tier × timeframe × SL size ──────────────────
             _SLAB_BASE  = {"mega": 7, "large": 5, "mid": 4, "small": 3, "micro": 2}
             _SLAB_FLOOR = {"mega": 3, "large": 3, "mid": 2, "small": 2, "micro": 1}
             _SLAB_CEIL  = {"mega": 10, "large": 8, "mid": 6, "small": 4, "micro": 3}
@@ -1235,16 +1385,31 @@ def generate_signal(analysis: Dict) -> Dict:
             _slab_floor = _SLAB_FLOOR.get(vol_tier_id, 2)
             _slab_ceil  = _SLAB_CEIL.get(vol_tier_id, 6)
 
+            # Longer timeframes = lower ceiling (more overnight risk, larger swings)
+            _TF_LEV_MULT = {
+                "1H": 1.0, "2H": 0.9,
+                "4H": 0.8, "8H": 0.7,  "12H": 0.6,
+                "1D": 0.5, "1W": 0.3,
+                "2W": 0.25, "3W": 0.25, "1M": 0.2,
+            }
+            _tf_mult    = _TF_LEV_MULT.get(timeframe, 0.5)
+            _slab_ceil  = max(_slab_floor, round(_slab_ceil * _tf_mult))
+
             if strength >= 80:     _str_adj = 2
             elif strength >= 65:   _str_adj = 1
             elif strength >= 50:   _str_adj = 0
             else:                  _str_adj = -1
 
-            # Hard cap based on SL size — wider SL = lower leverage
-            _sl_size_cap = (3 if sl_pct > 5.0 else
-                            5 if sl_pct > 3.0 else
-                            7 if sl_pct > 2.0 else
-                            10 if sl_pct > 1.0 else _slab_ceil)
+            # SL size cap — thresholds scale with market cap tier so small caps
+            # aren't unfairly capped (their wider SL is expected, not a risk warning)
+            _sl_t1 = 5.0 * _cap_mult   # above this → max 3x
+            _sl_t2 = 3.0 * _cap_mult   # above this → max 5x
+            _sl_t3 = 2.0 * _cap_mult   # above this → max 7x
+            _sl_t4 = 1.0 * _cap_mult   # above this → max 10x
+            _sl_size_cap = (3  if sl_pct > _sl_t1 else
+                            5  if sl_pct > _sl_t2 else
+                            7  if sl_pct > _sl_t3 else
+                            10 if sl_pct > _sl_t4 else _slab_ceil)
             suggested_lev = int(min(_sl_size_cap, _slab_ceil,
                                     max(_slab_floor, _slab_base + _str_adj)))
 
@@ -1268,25 +1433,42 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Reversal count: fresh directional flip indicators at this TF ──
     # Counts how many independent indicators just changed direction in the trade direction.
     # A flip means a momentum event (not just sustained state) — earliest entry signal.
-    _bull_flips = sum([
-        1 if (m_cross == "bullish"  or m_zero == "bullish")  else 0,  # MACD cross
-        1 if ema7_cross == "bullish"                          else 0,  # EMA7/21 cross
-        1 if (st_dir == "bullish"   and st_flipped)          else 0,  # SuperTrend flip
-        1 if vwap_cross == "bullish"                         else 0,  # VWAP cross
-        1 if srsi_signal == "bull_cross_oversold"            else 0,  # Stoch RSI reversal
-        1 if tk_cross == "bullish"                           else 0,  # Ichimoku TK cross
-    ])
-    _bear_flips = sum([
-        1 if (m_cross == "bearish"  or m_zero == "bearish")  else 0,
-        1 if ema7_cross == "bearish"                          else 0,
-        1 if (st_dir == "bearish"   and st_flipped)          else 0,
-        1 if vwap_cross == "bearish"                         else 0,
-        1 if srsi_signal == "bear_cross_overbought"          else 0,
-        1 if tk_cross == "bearish"                           else 0,
-    ])
+    _bull_flip_names = []
+    _bear_flip_names = []
+    if m_cross == "bullish" or m_zero == "bullish":
+        _bull_flip_names.append("MACD " + ("line cross" if m_cross == "bullish" else "zero cross"))
+    if m_cross == "bearish" or m_zero == "bearish":
+        _bear_flip_names.append("MACD " + ("line cross" if m_cross == "bearish" else "zero cross"))
+    if ema7_cross == "bullish":
+        _bull_flip_names.append("EMA 7/21 cross ↑")
+    if ema7_cross == "bearish":
+        _bear_flip_names.append("EMA 7/21 cross ↓")
+    if st_dir == "bullish" and st_flipped:
+        _bull_flip_names.append(f"SuperTrend flipped bullish (${st_val:,.2f})" if st_val else "SuperTrend flipped bullish")
+    if st_dir == "bearish" and st_flipped:
+        _bear_flip_names.append(f"SuperTrend flipped bearish (${st_val:,.2f})" if st_val else "SuperTrend flipped bearish")
+    if vwap_cross == "bullish":
+        _bull_flip_names.append("VWAP cross ↑")
+    if vwap_cross == "bearish":
+        _bear_flip_names.append("VWAP cross ↓")
+    if srsi_signal == "bull_cross_oversold":
+        _bull_flip_names.append("Stoch RSI bull cross (oversold)")
+    if srsi_signal == "bear_cross_overbought":
+        _bear_flip_names.append("Stoch RSI bear cross (overbought)")
+    if tk_cross == "bullish":
+        _bull_flip_names.append("Ichimoku TK cross ↑")
+    if tk_cross == "bearish":
+        _bear_flip_names.append("Ichimoku TK cross ↓")
+
+    _bull_flips = len(_bull_flip_names)
+    _bear_flips = len(_bear_flip_names)
     reversal_count = (
         _bull_flips if direction == "LONG"  else
         _bear_flips if direction == "SHORT" else 0
+    )
+    flipped_indicators = (
+        _bull_flip_names if direction == "LONG"  else
+        _bear_flip_names if direction == "SHORT" else []
     )
 
     return {
@@ -1307,8 +1489,10 @@ def generate_signal(analysis: Dict) -> Dict:
         "rr_ratio": rr_ratio,
         "leverage": suggested_lev,
         "current_price": round(current_price, 8) if current_price else None,
-        "exhaustion_flag": exhaustion_flag,
-        "reversal_count":  reversal_count,
-        "choch":           choch   if choch.get("signal")    != "none" else None,
-        "liq_grab":        liq_grab if liq_grab.get("signal") != "none" else None,
+        "exhaustion_flag":    exhaustion_flag,
+        "reversal_count":     reversal_count,
+        "flipped_indicators": flipped_indicators,
+        "choch":           choch     if choch.get("signal")     != "none" else None,
+        "liq_grab":        liq_grab  if liq_grab.get("signal")  != "none" else None,
+        "acc_setup":       acc_setup if acc_setup.get("signal") != "none" else None,
     }

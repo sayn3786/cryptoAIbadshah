@@ -426,17 +426,24 @@ def detect_liquidity_grab(candles: List[Dict], window: int = 3, lookback: int = 
     if not ph and not pl:
         return {"signal": "none"}
 
-    recent = candles[-lookback:]
-    best: Dict = {"signal": "none"}
-    best_wick = 0.0
+    recent       = candles[-lookback:]
+    current_price = candles[-1]["close"]
+    best: Dict   = {"signal": "none"}
+    best_wick    = 0.0
+    # If price has moved >1.5% past the swept level AFTER the grab, the setup
+    # is invalidated — bulls/bears won and the grab was a fakeout continuation.
+    INVALIDATION_PCT = 1.5
 
     for i, c in enumerate(recent):
         candles_ago = lookback - 1 - i
 
         # Bearish grab: wick above swing high, closes below it
-        for pivot in ph[-3:]:  # check last 3 swing highs
+        for pivot in ph[-3:]:
             lvl = pivot["price"]
             if c["high"] > lvl and c["close"] < lvl:
+                # Invalidated if current price is now clearly above the swept level
+                if (current_price - lvl) / lvl * 100 > INVALIDATION_PCT:
+                    continue
                 wick_pct = (c["high"] - lvl) / lvl * 100
                 if wick_pct > best_wick:
                     best_wick = wick_pct
@@ -449,9 +456,12 @@ def detect_liquidity_grab(candles: List[Dict], window: int = 3, lookback: int = 
                     }
 
         # Bullish grab: wick below swing low, closes above it
-        for pivot in pl[-3:]:  # check last 3 swing lows
+        for pivot in pl[-3:]:
             lvl = pivot["price"]
             if c["low"] < lvl and c["close"] > lvl:
+                # Invalidated if current price has since fallen clearly below the level
+                if (lvl - current_price) / lvl * 100 > INVALIDATION_PCT:
+                    continue
                 wick_pct = (lvl - c["low"]) / lvl * 100
                 if wick_pct > best_wick:
                     best_wick = wick_pct
@@ -464,3 +474,218 @@ def detect_liquidity_grab(candles: List[Dict], window: int = 3, lookback: int = 
                     }
 
     return best
+
+
+# ── Equal Highs / Equal Lows detection ────────────────────────────────────────
+
+def detect_equal_levels(candles: List[Dict], window: int = 25,
+                        tolerance: float = 0.003) -> Dict:
+    """
+    Detect Equal Highs (EQH) and Equal Lows (EQL) — liquidity pools where
+    market makers accumulate stops before a sweep.
+
+    tolerance: max relative distance between highs/lows to be considered "equal"
+                (default 0.3%)
+
+    Returns:
+        {
+          "eqh": {"price": float, "touches": int, "candles_ago": int} | None,
+          "eql": {"price": float, "touches": int, "candles_ago": int} | None,
+        }
+    """
+    closed = candles[:-1]
+    if len(closed) < 5:
+        return {"eqh": None, "eql": None}
+
+    recent = closed[-window:]
+    n = len(recent)
+
+    def _cluster(prices: list, is_high: bool) -> Optional[Dict]:
+        best = None
+        best_count = 1
+        for i, p in enumerate(prices):
+            if p is None:
+                continue
+            cluster = [j for j, q in enumerate(prices) if q is not None
+                       and abs(q - p) / p <= tolerance]
+            if len(cluster) >= 2 and len(cluster) > best_count:
+                best_count = len(cluster)
+                cluster_prices = [prices[j] for j in cluster]
+                ref_price = max(cluster_prices) if is_high else min(cluster_prices)
+                # candles_ago = distance from the MOST RECENT touch to live candle
+                last_touch_idx = max(cluster)      # index in `recent` list
+                candles_ago = (n - 1) - last_touch_idx
+                best = {
+                    "price":       round(ref_price, 8),
+                    "touches":     best_count,
+                    "candles_ago": candles_ago,
+                }
+        return best
+
+    highs = [c.get("high") for c in recent]
+    lows  = [c.get("low")  for c in recent]
+
+    return {
+        "eqh": _cluster(highs, is_high=True),
+        "eql": _cluster(lows,  is_high=False),
+    }
+
+
+# ── Accumulation/Distribution range detection ─────────────────────────────────
+
+def detect_accumulation_range(candles: List[Dict], window: int = 20,
+                               max_range_pct: float = 8.0) -> Dict:
+    """
+    Detect a tight sideways range (accumulation/distribution zone).
+
+    A range qualifies when:
+      - Price has stayed within `max_range_pct` of its midpoint for `window` bars
+      - The ATR over the window is small relative to the total range (choppiness)
+      - At least 60% of closes are within the inner 50% of the range
+
+    Returns:
+        {
+          "detected": bool,
+          "high":     float,
+          "low":      float,
+          "mid":      float,
+          "range_pct": float,    # (high-low)/mid * 100
+          "choppiness": float,   # ATR / range, lower = choppier
+        }
+    """
+    closed = candles[:-1]
+    if len(closed) < window:
+        return {"detected": False}
+
+    recent = closed[-window:]
+    high   = max(c["high"]  for c in recent)
+    low    = min(c["low"]   for c in recent)
+    mid    = (high + low) / 2
+    if mid <= 0:
+        return {"detected": False}
+
+    range_pct = (high - low) / mid * 100
+    if range_pct > max_range_pct:
+        return {"detected": False}
+
+    # ATR (average true range) over the window
+    trs = []
+    for i in range(1, len(recent)):
+        prev_c = recent[i - 1]["close"]
+        c = recent[i]
+        trs.append(max(c["high"] - c["low"],
+                       abs(c["high"] - prev_c),
+                       abs(c["low"]  - prev_c)))
+    atr = sum(trs) / len(trs) if trs else 0
+
+    # Choppiness: how much of the range is consumed per candle (lower = choppier)
+    range_abs   = high - low
+    choppiness  = round(atr / range_abs, 3) if range_abs > 0 else 1.0
+
+    # At least 60% of closes must sit in the inner 50% of the range
+    inner_low  = low  + range_abs * 0.25
+    inner_high = high - range_abs * 0.25
+    inner_pct  = sum(1 for c in recent if inner_low <= c["close"] <= inner_high) / len(recent)
+
+    detected = inner_pct >= 0.50 and choppiness < 0.55
+
+    return {
+        "detected":   detected,
+        "high":       round(high,       8),
+        "low":        round(low,        8),
+        "mid":        round(mid,        8),
+        "range_pct":  round(range_pct,  2),
+        "choppiness": choppiness,
+    }
+
+
+# ── Combined Accumulation + EQ H/L + FVG setup ────────────────────────────────
+
+def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
+                               window: int = 20) -> Dict:
+    """
+    ICT / SMC high-probability setup: Accumulation range + Equal H/L + FVG.
+
+    Pump setup (bullish):
+      - Accumulation range detected
+      - Equal Lows (EQL) at the bottom → sellside liquidity pool
+      - Bearish FVG below range (gap to be filled on sweep)
+
+    Dump setup (bearish):
+      - Accumulation/distribution range detected
+      - Equal Highs (EQH) at the top → buyside liquidity pool
+      - Bullish FVG above range (gap to be filled on sweep)
+
+    Returns:
+        {
+          "signal":    "bullish" | "bearish" | "none",
+          "label":     str,
+          "strength":  int (0-100),
+          "range":     dict,
+          "eq_level":  dict,   # the EQH or EQL that triggered
+          "fvg":       dict,   # the relevant FVG
+        }
+    """
+    acc = detect_accumulation_range(candles, window=window)
+    eq  = detect_equal_levels(candles, window=window)
+
+    current_price = candles[-1]["close"] if candles else 0
+    result_base   = {"signal": "none", "label": "No setup", "strength": 0,
+                     "range": acc, "eq_level": None, "fvg": None}
+
+    if not acc["detected"]:
+        return result_base
+
+    # Find the most relevant FVG for each direction
+    # Bearish FVG = gap below current price (bullish pump target)
+    # Bullish FVG = gap above current price (bearish dump target)
+    bear_fvgs = sorted(
+        [f for f in fvgs if f.get("type") == "bearish" and f.get("low", 0) < current_price],
+        key=lambda f: abs(f.get("low", 0) - acc["low"])
+    )
+    bull_fvgs = sorted(
+        [f for f in fvgs if f.get("type") == "bullish" and f.get("high", 0) > current_price],
+        key=lambda f: abs(f.get("high", 0) - acc["high"])
+    )
+
+    eql = eq.get("eql")
+    eqh = eq.get("eqh")
+
+    # ── Bullish pump setup ─────────────────────────────────────────────────────
+    if eql and bear_fvgs:
+        # EQL should be at or near the bottom of the range
+        eql_near_low = abs(eql["price"] - acc["low"]) / acc["mid"] < 0.02
+        fvg = bear_fvgs[0]
+        if eql_near_low or eql["touches"] >= 3:
+            strength = min(100, 55
+                           + (eql["touches"] - 2) * 10    # more touches = more liquidity
+                           + (3 - min(3, eql["candles_ago"])) * 5
+                           + (15 if eql_near_low else 0))
+            return {
+                "signal":   "bullish",
+                "label":    f"Acc + EQL ({eql['touches']} touches @ ${eql['price']:,.4f}) + FVG → PUMP setup",
+                "strength": strength,
+                "range":    acc,
+                "eq_level": eql,
+                "fvg":      fvg,
+            }
+
+    # ── Bearish dump setup ─────────────────────────────────────────────────────
+    if eqh and bull_fvgs:
+        eqh_near_high = abs(eqh["price"] - acc["high"]) / acc["mid"] < 0.02
+        fvg = bull_fvgs[0]
+        if eqh_near_high or eqh["touches"] >= 3:
+            strength = min(100, 55
+                           + (eqh["touches"] - 2) * 10
+                           + (3 - min(3, eqh["candles_ago"])) * 5
+                           + (15 if eqh_near_high else 0))
+            return {
+                "signal":   "bearish",
+                "label":    f"Acc + EQH ({eqh['touches']} touches @ ${eqh['price']:,.4f}) + FVG → DUMP setup",
+                "strength": strength,
+                "range":    acc,
+                "eq_level": eqh,
+                "fvg":      fvg,
+            }
+
+    return result_base

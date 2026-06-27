@@ -1,9 +1,9 @@
 """
-Crypto news sentiment — LunarCrush (primary) → RSS fallback.
-Cached per coin for 30 minutes.
+Crypto news sentiment — LunarCrush + RSS combined.
+Cached per coin for 60 minutes.
 
-Set LUNARCRUSH_API_KEY env var (free at lunarcrush.com) for rich social sentiment.
-Without a key, news falls back to RSS feeds (CoinDesk + Cointelegraph).
+Set LUNARCRUSH_API_KEY env var (free at lunarcrush.com) for social sentiment.
+RSS feeds (CoinDesk + Cointelegraph) are always fetched alongside LunarCrush.
 """
 import os
 import time
@@ -51,7 +51,7 @@ _BEAR_KW = [
 
 _cache: Dict[str, Dict] = {}
 _cache_lock = threading.Lock()
-CACHE_TTL = 1800  # 30 min
+CACHE_TTL = 3600  # 60 min — LunarCrush has strict rate limits
 
 
 # ── Sentiment helpers ─────────────────────────────────────────────────────────
@@ -88,17 +88,18 @@ LC_SYMBOLS = {
 }
 
 
-def _fetch_lunarcrush(symbol: str) -> List[Dict]:
+def _fetch_lunarcrush(symbol: str) -> tuple:
+    """Returns (articles, error_str).
+    Only fetches coin-level sentiment pulse (bullish% + galaxy score).
+    Articles/news come from RSS; LunarCrush adds the social sentiment card.
+    """
     api_key = os.getenv("LUNARCRUSH_API_KEY", "").strip()
     if not api_key:
-        return []
+        return [], "LUNARCRUSH_API_KEY not set"
     lc_sym = LC_SYMBOLS.get(symbol)
     if not lc_sym:
-        return []
+        return [], f"no LC symbol mapping for {symbol}"
 
-    articles = []
-
-    # Coin-level aggregate sentiment (galaxy score + bullish %)
     try:
         url = f"https://lunarcrush.com/api4/public/coins/{lc_sym}/v1"
         req = urllib.request.Request(url, headers={
@@ -118,7 +119,7 @@ def _fetch_lunarcrush(symbol: str) -> List[Dict]:
         else:
             agg_sent = "neutral"
 
-        articles.append({
+        return [{
             "title":        f"{lc_sym.upper()} social sentiment: {bull_pct:.0f}% bullish · Galaxy score {galaxy:.0f}/100",
             "url":          f"https://lunarcrush.com/coins/{lc_sym}",
             "published_at": datetime.now(timezone.utc).isoformat(),
@@ -126,59 +127,10 @@ def _fetch_lunarcrush(symbol: str) -> List[Dict]:
             "bullish_votes": int(bull_pct),
             "bearish_votes": int(100 - bull_pct),
             "sentiment":    agg_sent,
-        })
-    except Exception:
-        pass
+        }], None
 
-    # Per-article news feed
-    try:
-        url = f"https://lunarcrush.com/api4/public/coins/{lc_sym}/news/v1"
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": "CryptoBadshah/2.0",
-        })
-        with urllib.request.urlopen(req, timeout=7) as r:
-            news_data = json.loads(r.read())
-
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
-        for item in (news_data.get("data") or [])[:20]:
-            try:
-                created = item.get("post_created") or item.get("time")
-                if created:
-                    pub = datetime.fromtimestamp(int(created), tz=timezone.utc)
-                    if pub < cutoff:
-                        continue
-                    pub_iso = pub.isoformat()
-                else:
-                    pub_iso = datetime.now(timezone.utc).isoformat()
-
-                title = item.get("post_title") or item.get("title") or ""
-                if not title:
-                    continue
-
-                post_sent = float(item.get("post_sentiment", 50) or 50)
-                if post_sent >= 60:
-                    sentiment = "bullish"
-                elif post_sent <= 40:
-                    sentiment = "bearish"
-                else:
-                    sentiment = _keyword_sentiment(title)
-
-                articles.append({
-                    "title":        title,
-                    "url":          item.get("post_link") or item.get("url", ""),
-                    "published_at": pub_iso,
-                    "source":       item.get("post_url_domain", "lunarcrush.com"),
-                    "bullish_votes": int(post_sent),
-                    "bearish_votes": int(100 - post_sent),
-                    "sentiment":    sentiment,
-                })
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    return articles
+    except Exception as e:
+        return [], str(e)[:120]
 
 
 # ── RSS fallback ──────────────────────────────────────────────────────────────
@@ -272,20 +224,32 @@ def _aggregate(articles: List[Dict]) -> Dict:
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def fetch_news_sentiment(symbol: str) -> Dict:
-    """Return cached news sentiment. LunarCrush → RSS fallback."""
+    """Return cached news sentiment. Merges LunarCrush + RSS."""
     with _cache_lock:
         cached = _cache.get(symbol)
         if cached and time.time() - cached["ts"] < CACHE_TTL:
             return cached["data"]
 
-    articles = _fetch_lunarcrush(symbol)
-    src = "lunarcrush"
-    if not articles:
-        articles = _fetch_rss(symbol)
+    lc_articles, lc_error = _fetch_lunarcrush(symbol)
+    rss_articles = _fetch_rss(symbol)
+
+    # Deduplicate RSS vs LunarCrush by title similarity
+    lc_titles = {a["title"].lower()[:60] for a in lc_articles}
+    rss_unique = [a for a in rss_articles if a["title"].lower()[:60] not in lc_titles]
+
+    articles = lc_articles + rss_unique
+
+    if lc_articles and rss_unique:
+        src = "lunarcrush+rss"
+    elif lc_articles:
+        src = "lunarcrush"
+    else:
         src = "rss"
 
     result = _aggregate(articles)
     result["source"] = src
+    if lc_error:
+        result["lc_error"] = lc_error
 
     with _cache_lock:
         _cache[symbol] = {"data": result, "ts": time.time()}

@@ -327,3 +327,174 @@ def get_btc_mining_signals() -> dict:
     )
 
     return result
+
+
+# ── GoMining Strategy Advisor ──────────────────────────────────────────────────
+
+def get_gomining_strategy(m: dict) -> dict:
+    """
+    Derive optimal GoMining farm settings from current on-chain signals.
+
+    Reads the output of get_btc_mining_signals() and returns:
+      phase              — 'accumulate' | 'hold' | 'compound' | 'harvest'
+      phase_label        — human-readable phase name
+      phase_cls          — css class ('bull' | 'bear' | 'neutral' | 'gold')
+      maintenance_on     — always True (20%+ discount always worth it)
+      reward_protection  — True when near/below break-even
+      reinvestment       — True only in compound phase
+      reinvest_to        — 'th' | 'tokens' | None
+      reasons            — list of bullet points explaining why
+      watch_for          — what signal would change the phase
+      metrics            — key numbers for display
+    """
+    prof       = m.get("profitability_ratio") or 1.0
+    ribbon     = m.get("hash_ribbon", "neutral")
+    mvrv       = (m.get("mvrv") or {}).get("score") or 1.5
+    mvrv_zone  = (m.get("mvrv") or {}).get("zone") or "fair_value"
+    oc_score   = (m.get("onchain_score") or {}).get("score") or 50
+    halv_phase = m.get("halving_phase") or "mid"
+    diff_last  = m.get("difficulty_last_change") or 0
+    diff_next  = m.get("difficulty_change") or 0
+    breakeven  = m.get("break_even_usd") or 65_000
+    btc_price  = m.get("btc_price_usd") or 60_000
+    rw_btc     = m.get("reward_per_th_btc") or 0
+    reward_sats = round(rw_btc * 1e8, 2) if rw_btc else None
+
+    # ── Phase Logic ────────────────────────────────────────────────────────────
+    # ACCUMULATE: miners stressed / below break-even / hash ribbon bearish
+    if prof < 1.0 or ribbon in ("bear", "capitulation"):
+        phase = "accumulate"
+
+    # HARVEST: late bull cycle — MVRV high, consider taking profits not reinvesting
+    elif mvrv_zone in ("overbought", "extreme_top") or (halv_phase == "late" and mvrv > 2.5):
+        phase = "harvest"
+
+    # COMPOUND: miners profitable + hash ribbon healthy + not late-cycle bubble
+    elif prof >= 1.2 and ribbon in ("buy", "bull") and mvrv < 2.5:
+        phase = "compound"
+
+    # HOLD: profitable but mixed signals — maintain current, watch for change
+    else:
+        phase = "hold"
+
+    # ── Setting Recommendations ────────────────────────────────────────────────
+    maintenance_on    = True                          # ALWAYS on — free discount
+    reward_protection = prof < 1.15                  # ON when near/below break-even
+    reinvestment      = phase == "compound"
+    reinvest_to       = "th" if reinvestment else None
+
+    # ── Phase Metadata ─────────────────────────────────────────────────────────
+    PHASE_META = {
+        "accumulate": {
+            "label": "ACCUMULATE BTC",
+            "cls":   "bear",
+            "icon":  "🔴",
+            "desc":  "Collect BTC rewards directly. Mining is near break-even — this is the cheapest BTC you will ever get from your farm.",
+        },
+        "hold": {
+            "label": "HOLD & MONITOR",
+            "cls":   "neutral",
+            "icon":  "🟡",
+            "desc":  "Conditions mixed. Keep collecting BTC, watch for hash ribbon to turn bullish before reinvesting.",
+        },
+        "compound": {
+            "label": "COMPOUND — ADD TH",
+            "cls":   "bull",
+            "icon":  "🟢",
+            "desc":  "Mining is profitable and trend is up. Turn on reinvestment to convert rewards into more hashpower — compound while conditions are good.",
+        },
+        "harvest": {
+            "label": "HARVEST PROFITS",
+            "cls":   "gold",
+            "icon":  "🟠",
+            "desc":  "Late cycle / high MVRV — do NOT add TH now. Collect BTC rewards and consider selling some mining output at these elevated prices.",
+        },
+    }
+    meta = PHASE_META.get(phase, PHASE_META["hold"])
+
+    # ── Reasons ────────────────────────────────────────────────────────────────
+    reasons = []
+
+    # Profitability
+    if prof < 1.0:
+        gap = round(breakeven - btc_price, 0)
+        reasons.append(f"Miners are BELOW break-even — BTC needs to rise ${gap:,.0f} to ${breakeven:,.0f} before mining is profitable again")
+    elif prof < 1.15:
+        reasons.append(f"Miners near break-even ({prof:.2f}×) — reward protection is essential, avoid adding TH")
+    elif prof >= 1.2:
+        reasons.append(f"Mining profitable at {prof:.2f}× break-even — revenue comfortably covers maintenance")
+
+    # Hash Ribbon
+    HR_LABELS = {
+        "buy":         "Hash Ribbon just turned BULLISH (30d MA crossed above 60d MA) — historically one of the strongest BTC buy signals",
+        "bull":        "Hash Ribbon is bullish — hashrate rising, miner confidence growing",
+        "neutral":     "Hash Ribbon neutral — hashrate stable, no strong signal",
+        "bear":        "Hash Ribbon bearish — 30d hashrate below 60d, miner stress increasing",
+        "capitulation": "Hash Ribbon showing miner CAPITULATION — weakest miners turning off, historically precedes strong recovery",
+    }
+    reasons.append(HR_LABELS.get(ribbon, f"Hash Ribbon: {ribbon}"))
+
+    # MVRV
+    if mvrv:
+        if mvrv_zone == "extreme_top":
+            reasons.append(f"MVRV {mvrv:.2f} — extreme top zone, most BTC holders in heavy profit (distribution risk)")
+        elif mvrv_zone == "overbought":
+            reasons.append(f"MVRV {mvrv:.2f} — overbought, late bull phase (not the time to add TH)")
+        elif mvrv_zone in ("fair_value", "oversold"):
+            reasons.append(f"MVRV {mvrv:.2f} — fair value / accumulation zone, good time to collect BTC")
+        else:
+            reasons.append(f"MVRV {mvrv:.2f} — healthy bull range")
+
+    # Difficulty
+    if diff_next and diff_next > 3:
+        reasons.append(f"Difficulty rising +{diff_next:.1f}% next epoch — rewards per TH will fall further, avoid adding TH now")
+    elif diff_next and diff_next < -3:
+        reasons.append(f"Difficulty dropping {diff_next:.1f}% next epoch — fewer miners competing, your rewards per TH will INCREASE")
+
+    # Halving phase
+    if halv_phase == "late":
+        reasons.append("Late halving cycle (18–36 months post-halving) — historically distribution phase, prioritise taking BTC not compounding")
+    elif halv_phase == "mid":
+        reasons.append("Mid halving cycle (6–18 months post-halving) — historically the strongest bull window")
+
+    # ── Watch For ──────────────────────────────────────────────────────────────
+    watch = []
+    if phase == "accumulate":
+        watch.append(f"BTC price breaking above ${breakeven:,.0f} (miner break-even) — signals profitability returning")
+        watch.append("Hash Ribbon turning bullish (30d MA crossing above 60d MA) — best compound entry signal")
+    elif phase == "hold":
+        watch.append("Hash Ribbon turning to 'buy' signal — switch to compound phase")
+        watch.append(f"BTC price dropping below ${breakeven:,.0f} — switch back to accumulate phase")
+    elif phase == "compound":
+        watch.append(f"MVRV rising above 2.5–3.0 — switch to harvest phase (stop adding TH)")
+        watch.append("Hash Ribbon turning bearish — reduce reinvestment, protect capital")
+    elif phase == "harvest":
+        watch.append("MVRV dropping below 2.0 — safe to resume compounding")
+        watch.append("Hash Ribbon capitulation followed by recovery — new cycle starting")
+
+    return {
+        "phase":             phase,
+        "phase_label":       meta["label"],
+        "phase_cls":         meta["cls"],
+        "phase_icon":        meta["icon"],
+        "phase_desc":        meta["desc"],
+        "maintenance_on":    maintenance_on,
+        "reward_protection": reward_protection,
+        "reinvestment":      reinvestment,
+        "reinvest_to":       reinvest_to,
+        "reasons":           reasons,
+        "watch_for":         watch,
+        "metrics": {
+            "profitability":  prof,
+            "breakeven":      breakeven,
+            "btc_price":      btc_price,
+            "ribbon":         ribbon,
+            "mvrv":           mvrv,
+            "mvrv_zone":      mvrv_zone,
+            "diff_next_pct":  diff_next,
+            "diff_last_pct":  diff_last,
+            "reward_sats_th": reward_sats,
+            "onchain_score":  oc_score,
+            "halving_phase":  halv_phase,
+        },
+    }

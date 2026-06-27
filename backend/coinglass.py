@@ -231,3 +231,73 @@ class CoinGlassClient:
             }
         except Exception:
             return None
+
+    # ── Exchange Netflow ──────────────────────────────────────────────────────
+
+    def get_exchange_netflow(self, symbol: str) -> Optional[Dict]:
+        """
+        Exchange net position change — BTC/ETH flowing into vs out of exchanges.
+        Positive netflow = coins deposited to exchanges = potential sell pressure.
+        Negative netflow = coins withdrawn (self-custody/HODLing) = bullish.
+        """
+        sym = CG_SYMBOLS.get(symbol)
+        if not sym or not self.enabled:
+            return None
+        # Only BTC and ETH have reliable exchange netflow data
+        if sym not in ("BTC", "ETH"):
+            return None
+
+        data = self._get("/indicator/exchange_netflow",
+                         {"symbol": sym, "time_type": "h8", "limit": 10})
+        if not data:
+            return None
+
+        try:
+            date_list    = data.get("dateList", [])
+            inflow_list  = data.get("inflowList", data.get("inList", []))
+            outflow_list = data.get("outflowList", data.get("outList", []))
+            netflow_list = data.get("netflowList", data.get("netList", []))
+
+            if not date_list:
+                return None
+
+            idx     = len(date_list) - 1
+            inflow  = float(inflow_list[idx])  if idx < len(inflow_list)  else 0.0
+            outflow = float(outflow_list[idx]) if idx < len(outflow_list) else 0.0
+            netflow = float(netflow_list[idx]) if idx < len(netflow_list) else (inflow - outflow)
+
+            history = []
+            for i in range(max(0, len(date_list) - 5), len(date_list)):
+                nf = float(netflow_list[i]) if i < len(netflow_list) else 0.0
+                history.append({"timestamp": int(date_list[i]), "netflow": round(nf, 4)})
+
+            # Thresholds: BTC 1k/300 coins | ETH 10k/3k coins
+            large_t  = 1_000 if sym == "BTC" else 10_000
+            medium_t =   300 if sym == "BTC" else  3_000
+
+            if netflow > large_t:
+                pressure, pts = "high",         -15
+            elif netflow > medium_t:
+                pressure, pts = "medium",        -8
+            elif netflow > 0:
+                pressure, pts = "low",           -3
+            elif netflow < -large_t:
+                pressure, pts = "accumulation", +10
+            elif netflow < -medium_t:
+                pressure, pts = "withdrawal",    +5
+            else:
+                pressure, pts = "neutral",        0
+
+            return {
+                "symbol":     sym,
+                "inflow":     round(inflow,  4),
+                "outflow":    round(outflow, 4),
+                "netflow":    round(netflow, 4),
+                "pressure":   pressure,
+                "signal_pts": pts,
+                "history":    history,
+                "window":     "8h",
+                "source":     "coinglass",
+            }
+        except Exception:
+            return None

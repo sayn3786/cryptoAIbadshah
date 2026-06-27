@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=31" />
+  <link rel="stylesheet" href="css/dashboard.css?v=35" />
 </head>
 <body>
 
@@ -79,6 +79,9 @@
 
 <!-- ── HOLIDAY NOTIFICATION ────────────────────────────────────────────────── -->
 <div id="holidayBanner" class="holiday-banner hidden"></div>
+
+<!-- ── OPTIONS EXPIRY BANNER ───────────────────────────────────────────────── -->
+<div id="optionsBanner" class="options-banner hidden"></div>
 
 <!-- ── RECOMMENDED TRADES ──────────────────────────────────────────────────── -->
 <section id="recSection" class="rec-section hidden">
@@ -311,6 +314,7 @@
         <div class="chart-legend">
           <span class="legend-dot bull"></span><span>Bullish FVG</span>
           <span class="legend-dot bear"></span><span>Bearish FVG</span>
+          <span class="legend-dot bull" style="outline:2px solid rgba(16,185,129,0.8);outline-offset:1px"></span><span>BAG (strong)</span>
         </div>
       </div>
       <div id="mainChart" class="main-chart"></div>
@@ -399,6 +403,46 @@
 
   </section>
 
+  <!-- GoMining Strategy Advisor (BTC only) -->
+  <section id="gominingSection" style="display:none">
+    <div class="card gomining-card">
+      <div class="card-hdr">
+        <span>⛏ GoMining Farm Advisor</span>
+        <span class="card-sub">Auto-strategy from on-chain data · updates every hour</span>
+      </div>
+
+      <!-- Phase Banner -->
+      <div id="gominingPhase" class="gm-phase"></div>
+
+      <!-- Three Setting Toggles -->
+      <div class="gm-settings">
+        <div class="gm-setting">
+          <div class="gm-setting-label">Maintenance in GOMINING</div>
+          <div class="gm-toggle on" id="gmToggleMaintenance">ON</div>
+          <div class="gm-setting-reason" id="gmReasonMaintenance">20–27% discount on daily fees — always worth it</div>
+        </div>
+        <div class="gm-setting">
+          <div class="gm-setting-label">Reward Protection</div>
+          <div class="gm-toggle" id="gmToggleProtection">—</div>
+          <div class="gm-setting-reason" id="gmReasonProtection"></div>
+        </div>
+        <div class="gm-setting">
+          <div class="gm-setting-label">Reinvestment</div>
+          <div class="gm-toggle" id="gmToggleReinvest">—</div>
+          <div class="gm-setting-reason" id="gmReasonReinvest"></div>
+        </div>
+      </div>
+
+      <!-- Why This Phase -->
+      <div class="gm-section-title">Why this strategy?</div>
+      <ul class="gm-reasons" id="gmReasonsList"></ul>
+
+      <!-- Watch For -->
+      <div class="gm-section-title">Watch for these signals to change strategy:</div>
+      <ul class="gm-watch" id="gmWatchList"></ul>
+    </div>
+  </section>
+
   <!-- Row 4b: Whale Activity -->
   <section class="row-analysis">
     <div class="card" id="whaleCard">
@@ -446,6 +490,27 @@
     <div class="card volume-spike-card" id="bigSellCard">
       <h3 class="card-title">Largest Ask Wall <span class="card-sub" id="obSellSource">Live Order Book</span></h3>
       <div class="spike-body" id="bigSellBody">—</div>
+    </div>
+  </section>
+
+  <!-- Row 4d: Exchange Netflow (CoinGlass) -->
+  <section class="row-analysis" id="arkhamSection" style="display:none">
+    <div class="card" id="arkhamCard">
+      <div class="card-hdr">
+        <span>📊 Exchange Netflow — BTC / ETH On-Chain Flow</span>
+        <span class="card-sub" id="arkhamSub">CoinGlass · last 8h</span>
+      </div>
+      <div id="arkhamSummary" class="arkham-summary"></div>
+      <table class="arkham-table">
+        <thead>
+          <tr>
+            <th>Period</th>
+            <th style="text-align:right">Netflow</th>
+            <th style="text-align:right">Signal</th>
+          </tr>
+        </thead>
+        <tbody id="arkhamBody"></tbody>
+      </table>
     </div>
   </section>
 
@@ -533,7 +598,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=31"></script>
+<script src="js/dashboard.js?v=35"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.

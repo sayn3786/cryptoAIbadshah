@@ -184,8 +184,10 @@ function renderAll(a) {
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
   renderBtcMiningCard(a.btc_mining, a.symbol);
+  renderGoMiningAdvisor(a.gomining_strategy, a.symbol);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
+  renderArkhamPanel(a.whale_sells);
   renderFNGCard(a.fear_greed);
   renderRSICard(a.rsi);
   renderFunding(a.funding_rate);
@@ -206,6 +208,7 @@ function renderAll(a) {
   renderBtcContext(a);
   renderOrderBook(a.order_book);
   renderHolidayBanner(a.upcoming_holidays);
+  renderOptionsBanner(a.options_expiry);
   document.getElementById('chartTitle').textContent = `${a.symbol}/USDT · ${a.timeframe}`;
 }
 
@@ -270,12 +273,12 @@ function renderSignal(s) {
       parts.push(`<span class="sig-exh-warn">⚠ ${zone} at this TF — entry is overextended</span>`);
     }
     if (revCount > 0) {
-      const flipLabels = {
-        1: '1 indicator just flipped',
-        2: '2 indicators just flipped',
-        3: '3 indicators just flipped',
-      };
-      parts.push(`<span class="sig-rev-badge">⚡ ${flipLabels[revCount] || revCount + ' indicators just flipped'} direction</span>`);
+      const names  = s.flipped_indicators || [];
+      const label  = revCount === 1 ? '1 indicator just flipped' : `${revCount} indicators just flipped`;
+      const detail = names.length
+        ? `<div class="sig-flip-list">${names.map(n => `<span class="sig-flip-item">⚡ ${n}</span>`).join('')}</div>`
+        : '';
+      parts.push(`<span class="sig-rev-badge">⚡ ${label} direction</span>${detail}`);
     }
     if (parts.length) {
       exhEl.innerHTML = parts.join('');
@@ -286,12 +289,28 @@ function renderSignal(s) {
     }
   }
 
-  // SMC structure: CHoCH + Liquidity Grab + FVG summary
+  // SMC structure: Acc+EQL/EQH+FVG setup + CHoCH + Liquidity Grab
   const smcEl = document.getElementById('signalSMC');
   if (smcEl) {
-    const choch   = s.choch;
-    const liq     = s.liq_grab;
-    const rows = [];
+    const acc   = s.acc_setup;
+    const choch = s.choch;
+    const liq   = s.liq_grab;
+    const rows  = [];
+
+    // ICT Triple-combo setup — shown first as highest-confidence signal
+    if (acc) {
+      const isBull = acc.signal === 'bullish';
+      const cls    = isBull ? 'bull' : 'bear';
+      const icon   = isBull ? '🚀 PUMP' : '💣 DUMP';
+      const eq     = acc.eq_level;
+      const eqTxt  = eq ? `${eq.touches}× @ ${fmtPrice(eq.price)}` : '';
+      const rngTxt = acc.range ? `range ${acc.range.range_pct}%` : '';
+      rows.push(`<div class="smc-row smc-acc-setup">
+        <span class="smc-label">ICT Setup</span>
+        <span class="smc-val ${cls}">${icon}</span>
+        <span class="smc-sub">${isBull ? 'EQL' : 'EQH'} ${eqTxt} · ${rngTxt} · strength ${acc.strength}</span>
+      </div>`);
+    }
 
     if (choch) {
       const cls  = choch.signal === 'bullish' ? 'bull' : 'bear';
@@ -482,15 +501,14 @@ function renderMainChart(candles, fvgs) {
     const unfilled = fvgs.filter(f => !f.filled).slice(0, 6);
     unfilled.forEach(f => {
       const isBull = f.type === 'bullish';
+      const isBag  = f.gap_type === 'bag';
       const color  = isBull ? 'rgba(16,185,129,0.6)' : 'rgba(239,68,68,0.6)';
       const dimCol = isBull ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)';
       const arrow  = isBull ? '↑' : '↓';
-      // Top boundary
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,      color: dimCol, lineWidth: 1, lineStyle: 2, title: '' }));
-      // Midpoint — labelled
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color,         lineWidth: 1, lineStyle: 3, title: `${arrow} FVG ${f.size_pct.toFixed(1)}%` }));
-      // Bottom boundary
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: 1, lineStyle: 2, title: '' }));
+      const label  = isBag ? 'BAG' : 'FVG';
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,      color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '' }));
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color,         lineWidth: isBag ? 2 : 1, lineStyle: 3, title: `${arrow} ${label} ${f.size_pct.toFixed(1)}%` }));
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '' }));
     });
   }
 
@@ -960,6 +978,76 @@ function renderBtcMiningCard(mining, symbol) {
   `;
 }
 
+/* ─── GoMining Strategy Advisor ───────────────────────────────────────────── */
+function renderGoMiningAdvisor(strategy, symbol) {
+  const section = document.getElementById('gominingSection');
+  if (!section) return;
+
+  if (symbol !== 'BTC' || !strategy) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  const { phase_label, phase_cls, phase_icon, phase_desc,
+          maintenance_on, reward_protection, reinvestment, reinvest_to,
+          reasons = [], watch_for = [], metrics = {} } = strategy;
+
+  // Phase banner
+  document.getElementById('gominingPhase').className = `gm-phase ${phase_cls}`;
+  document.getElementById('gominingPhase').innerHTML = `
+    <div><span class="gm-phase-icon">${phase_icon}</span><span class="gm-phase-label">${phase_label}</span></div>
+    <div class="gm-phase-desc">${phase_desc}</div>
+  `;
+
+  // Maintenance toggle — always ON
+  document.getElementById('gmToggleMaintenance').className = 'gm-toggle on';
+  document.getElementById('gmToggleMaintenance').textContent = 'ON ✓';
+
+  // Reward Protection toggle
+  const protEl = document.getElementById('gmToggleProtection');
+  const protReason = document.getElementById('gmReasonProtection');
+  if (reward_protection) {
+    protEl.className = 'gm-toggle on';
+    protEl.textContent = 'ON ✓';
+    const prof = metrics.profitability || 1;
+    protReason.textContent = prof < 1.0
+      ? `Mining below break-even ($${(metrics.breakeven || 0).toLocaleString()}) — essential protection`
+      : `Near break-even (${prof.toFixed(2)}×) — keep protection active`;
+  } else {
+    protEl.className = 'gm-toggle off';
+    protEl.textContent = 'OFF';
+    protReason.textContent = `Mining profitable at ${(metrics.profitability || 0).toFixed(2)}× — protection optional`;
+  }
+
+  // Reinvestment toggle
+  const reinvEl = document.getElementById('gmToggleReinvest');
+  const reinvReason = document.getElementById('gmReasonReinvest');
+  if (reinvestment) {
+    reinvEl.className = 'gm-toggle on';
+    reinvEl.textContent = 'ON → TH ✓';
+    reinvReason.textContent = 'Mining profitable + bullish ribbon — compound rewards into more hashpower';
+  } else if (phase_cls === 'gold') {
+    reinvEl.className = 'gm-toggle warn';
+    reinvEl.textContent = 'OFF ⚠';
+    reinvReason.textContent = 'Late cycle — collect BTC rewards, do not add TH at high valuations';
+  } else {
+    reinvEl.className = 'gm-toggle off';
+    reinvEl.textContent = 'OFF';
+    reinvReason.textContent = 'Accumulate real BTC now — wait for Hash Ribbon + profitability to confirm before reinvesting';
+  }
+
+  // Reasons list
+  document.getElementById('gmReasonsList').innerHTML =
+    reasons.map(r => `<li>${r}</li>`).join('') ||
+    '<li>Loading on-chain data…</li>';
+
+  // Watch for list
+  document.getElementById('gmWatchList').innerHTML =
+    watch_for.map(w => `<li>${w}</li>`).join('') ||
+    '<li>No specific triggers — maintain current settings</li>';
+}
+
 function renderWhaleActivity(events) {
   const el = document.getElementById('whaleActivity');
   if (!el) return;
@@ -993,6 +1081,82 @@ function renderWhaleActivity(events) {
       </div>
       <div class="whale-desc">${m.desc}</div>
     </div>`;
+  }).join('');
+}
+
+function renderArkhamPanel(ws) {
+  const section = document.getElementById('arkhamSection');
+  const tbody   = document.getElementById('arkhamBody');
+  const summary = document.getElementById('arkhamSummary');
+  const sub     = document.getElementById('arkhamSub');
+  if (!section || !tbody) return;
+
+  // Hide when CoinGlass not configured or no data (only BTC/ETH)
+  if (!ws || !ws.source) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = '';
+
+  const pressure = ws.pressure || 'neutral';
+  const netflow  = ws.netflow  || 0;
+  const inflow   = ws.inflow   || 0;
+  const outflow  = ws.outflow  || 0;
+  const pts      = ws.signal_pts || 0;
+  const sym      = ws.symbol || '';
+
+  const PRESSURE_META = {
+    high:         { cls: 'high',   icon: '🔴', label: 'HIGH SELL PRESSURE'  },
+    medium:       { cls: 'medium', icon: '🟠', label: 'MEDIUM SELL PRESSURE' },
+    low:          { cls: 'low',    icon: '🟡', label: 'LIGHT SELL FLOW'      },
+    neutral:      { cls: 'none',   icon: '⚪', label: 'BALANCED FLOW'        },
+    withdrawal:   { cls: 'none',   icon: '🟢', label: 'EXCHANGE WITHDRAWAL'  },
+    accumulation: { cls: 'none',   icon: '💚', label: 'STRONG ACCUMULATION'  },
+  };
+  const meta = PRESSURE_META[pressure] || PRESSURE_META.neutral;
+
+  const sign = netflow >= 0 ? '+' : '';
+  const ptsLabel = pts > 0
+    ? `<span class="arkham-pts" style="color:var(--bull)">+${pts} signal pts</span>`
+    : pts < 0 ? `<span class="arkham-pts">${pts} signal pts</span>` : '';
+
+  summary.innerHTML = `
+    <span class="arkham-pressure ${meta.cls}">${meta.icon} ${meta.label}</span>
+    <span class="arkham-total">Netflow: <strong>${sign}${Number(netflow).toLocaleString('en-US', {maximumFractionDigits: 1})} ${sym}</strong></span>
+    <span class="arkham-total" style="font-size:.68rem">↑ ${Number(inflow).toLocaleString('en-US', {maximumFractionDigits:1})} in · ↓ ${Number(outflow).toLocaleString('en-US', {maximumFractionDigits:1})} out</span>
+    ${ptsLabel}
+  `;
+
+  if (sub) sub.textContent = `CoinGlass exchange netflow · last ${ws.window || '8h'}`;
+
+  // History table — one row per 8h period
+  const history = ws.history || [];
+  if (!history.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="arkham-empty">No netflow data available</td></tr>`;
+    return;
+  }
+
+  // Replace table headers for netflow view
+  const thead = tbody.closest('table')?.querySelector('thead tr');
+  if (thead) {
+    thead.innerHTML = `
+      <th>Period</th>
+      <th style="text-align:right">Netflow (${sym})</th>
+      <th style="text-align:right">Signal</th>
+    `;
+  }
+
+  tbody.innerHTML = [...history].reverse().map(h => {
+    const nf  = h.netflow || 0;
+    const cls = nf > 0 ? 'arkham-usd' : nf < 0 ? 'arkham-to' : '';
+    const lbl = nf > 500 ? '🔴 sell' : nf > 0 ? '⚠ mild sell' : nf < -500 ? '💚 accumulate' : nf < 0 ? '🟢 withdraw' : '⚪ neutral';
+    const dt  = h.timestamp ? new Date(h.timestamp * 1000).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+    return `<tr>
+      <td class="arkham-ago">${dt}</td>
+      <td class="${cls}" style="text-align:right;font-weight:600">${nf >= 0 ? '+' : ''}${Number(nf).toLocaleString('en-US', {maximumFractionDigits:1})}</td>
+      <td style="text-align:right;font-size:.68rem">${lbl}</td>
+    </tr>`;
   }).join('');
 }
 
@@ -1135,25 +1299,28 @@ function renderCVDPanel(id, cvd, series, valId, trendId) {
 /* ─── FVG Table ───────────────────────────────────────────────────────────── */
 function renderFVGTable(fvgs) {
   const tbody = document.getElementById('fvgBody');
-  document.getElementById('fvgCount').textContent = (fvgs || []).filter(f => !f.filled).length;
+  const unfilled = (fvgs || []).filter(f => !f.filled);
+  document.getElementById('fvgCount').textContent = unfilled.length;
 
-  if (!fvgs?.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">No FVGs detected</td></tr>';
+  if (!unfilled.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No unfilled FVGs detected</td></tr>';
     return;
   }
 
-  tbody.innerHTML = fvgs.slice(0, 12).map(f => {
-    const cls = f.type === 'bullish' ? 'bull' : 'bear';
-    const status = f.filled
-      ? '<span class="tag filled">Filled</span>'
-      : `<span class="tag ${cls}">${f.type}</span>`;
-    return `<tr>
-      <td><span class="tag ${cls}">${f.type}</span></td>
+  tbody.innerHTML = unfilled.slice(0, 12).map(f => {
+    const cls    = f.type === 'bullish' ? 'bull' : 'bear';
+    const isBag  = f.gap_type === 'bag';
+    const typeLabel = isBag
+      ? `<span class="tag ${cls} tag-bag">BAG</span>`
+      : `<span class="tag ${cls}">FVG</span>`;
+    const dirLabel = `<span class="tag ${cls}">${f.type}</span>`;
+    return `<tr${isBag ? ' class="fvg-bag-row"' : ''}>
+      <td>${typeLabel}</td>
       <td>$${Number(f.top).toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>
       <td>$${Number(f.bottom).toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>
       <td>${f.size_pct.toFixed(3)}%</td>
       <td class="${Number(f.distance_pct) >= 0 ? 'bull' : 'bear'}">${pct(f.distance_pct)}</td>
-      <td>${status}</td>
+      <td>${dirLabel}</td>
     </tr>`;
   }).join('');
 }
@@ -2574,6 +2741,9 @@ async function loadRecommendations() {
       genEl.title = 'Rating & strength are a snapshot from this exact moment. Only changes at 8AM / 4PM / 8PM SGT.';
     }
 
+    // Options expiry banner — update with full BTC-priced data from recs endpoint
+    if (data.options_expiry) renderOptionsBanner(data.options_expiry);
+
     // BTC consensus banner (replace if already rendered)
     const btcBanner = (() => {
       const bc = data.btc_consensus;
@@ -2765,6 +2935,75 @@ function renderOrderBook(ob) {
     + airHTML(ob.air_pocket_below, 'below');
   sellEl.innerHTML = wallsHTML(ob.top_asks, 'sell')
     + airHTML(ob.air_pocket_above, 'above');
+}
+
+/* ─── Options Expiry Banner ───────────────────────────────────────────────── */
+function renderOptionsBanner(opts) {
+  const el = document.getElementById('optionsBanner');
+  if (!el) return;
+  if (!opts || !opts.next_expiry) { el.classList.add('hidden'); return; }
+
+  const ne      = opts.next_expiry;
+  const bias    = opts.bias || {};
+  const days    = ne.days_to_expiry;
+  const hours   = ne.hours_to_expiry;
+  const etype   = ne.type || 'weekly';
+  const inWin   = bias.in_window;
+
+  // Only show if quarterly/monthly or within 7 days of weekly
+  if (etype === 'weekly' && days > 3) { el.classList.add('hidden'); return; }
+
+  const typeEmoji = { quarterly: '🔴', monthly: '🟡', weekly: '🟢' }[etype] || '📅';
+  const typeLabel = { quarterly: 'QUARTERLY', monthly: 'Monthly', weekly: 'Weekly' }[etype] || '';
+  const countdown = days === 0 ? `${hours}h left` : `${days}d ${hours}h`;
+  const isLive    = opts.data_source === 'deribit';
+
+  // Bias badge
+  let biasHtml = '';
+  if (bias.bias && bias.bias !== 'neutral') {
+    const biasCls  = bias.bias === 'bearish' ? 'opts-bear' : 'opts-bull';
+    const biasIcon = bias.bias === 'bearish' ? '▼ Price pinning DOWN' : '▲ Price pinning UP';
+    const strLabel = inWin ? ` · signal strength ${bias.strength}/100` : ' (outside pinning window)';
+    biasHtml = `<span class="opts-bias-badge ${biasCls}" title="Max pain is ${bias.bias === 'bullish' ? 'above' : 'below'} current price — market makers benefit from price moving ${bias.bias === 'bullish' ? 'up' : 'down'} toward max pain before expiry">${biasIcon}${strLabel}</span>`;
+  }
+
+  // Live data row: max pain + put/call + notional
+  const fmtN = (v) => {
+    if (!v) return null;
+    return v >= 1e9 ? `$${(v/1e9).toFixed(1)}B` : `$${(v/1e6).toFixed(0)}M`;
+  };
+  const maxPain   = bias.max_pain   ? `Max Pain $${Number(bias.max_pain).toLocaleString()}` : null;
+  const pc        = bias.put_call_ratio != null ? bias.put_call_ratio : null;
+  const pcLabel   = pc != null ? (pc > 1.2 ? 'put-heavy (bearish bets)' : pc < 0.8 ? 'call-heavy (bullish bets)' : 'balanced') : null;
+  const pcRatio   = pc != null ? `Put/Call ${pc.toFixed(2)} — ${pcLabel}` : null;
+  const notional  = fmtN(ne.notional_usd || opts.total_notional);
+  const liveStats = [maxPain, pcRatio, notional].filter(Boolean);
+  const liveHtml  = liveStats.length
+    ? `<div class="opts-live-stats">${liveStats.map(s => `<span class="opts-stat">${s}</span>`).join('')}${isLive ? '<span class="opts-src">live · Deribit</span>' : ''}</div>`
+    : (isLive ? '<div class="opts-live-stats"><span class="opts-src">live · Deribit</span></div>' : '');
+
+  // Upcoming expiries mini-row (show notional if available)
+  const upcoming = (opts.upcoming || []).slice(0, 4);
+  const upcomingHtml = upcoming.map(u => {
+    const cls  = { quarterly: 'opts-q', monthly: 'opts-m', weekly: 'opts-w' }[u.type] || '';
+    const pain = u.max_pain ? ` pain $${Number(u.max_pain).toLocaleString()}` : '';
+    const not  = u.notional_usd ? ` ${fmtN(u.notional_usd)}` : '';
+    return `<span class="opts-cal-pill ${cls}" title="${u.type}${pain}${not}">${u.label} <small>${u.days_to_expiry}d${not}</small></span>`;
+  }).join('');
+
+  el.className = `options-banner opts-${etype}${inWin ? ' opts-active' : ''}`;
+  el.innerHTML = `
+    <div class="opts-main">
+      ${typeEmoji} <strong>${typeLabel} Options Expiry</strong>
+      <span class="opts-date">${ne.label}</span>
+      <span class="opts-countdown">${countdown}</span>
+      ${biasHtml}
+    </div>
+    ${liveHtml}
+    ${bias.description ? `<div class="opts-desc">${bias.description}</div>` : ''}
+    <div class="opts-cal">${upcomingHtml}</div>
+  `;
+  el.classList.remove('hidden');
 }
 
 /* ─── Holiday Banner ──────────────────────────────────────────────────────── */
