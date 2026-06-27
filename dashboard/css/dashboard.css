@@ -1567,6 +1567,11 @@ a:hover { color: var(--gold2); }
 .gm-harvest.hold       .gm-harvest-label { color: #eab308; }
 .gm-harvest.accumulate { background: rgba(16,185,129,.10); border: 1px solid rgba(16,185,129,.3); }
 .gm-harvest.accumulate .gm-harvest-label { color: var(--bull); }
+.gm-harvest-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.gm-chip { font-size: .7rem; padding: 3px 8px; border-radius: 20px;
+            background: rgba(255,255,255,.06); border: 1px solid var(--border);
+            color: var(--muted); white-space: nowrap; }
+.gm-chip-zone { color: var(--txt); font-weight: 600; }
 .gm-token-link { margin-top: 16px; padding: 10px 14px; border-radius: 8px;
                   background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.2);
                   font-size: .78rem; color: var(--muted); }

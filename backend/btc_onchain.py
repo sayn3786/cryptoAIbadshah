@@ -146,37 +146,116 @@ def _fetch_mvrv() -> dict:
     }
 
 
-def _onchain_score(ribbon: str, phase: str, prof_ratio, mvrv_zone: str, diff_last) -> dict:
+def _fetch_sopr_realized_puell() -> dict:
+    """
+    Fetch SOPR, Realized Price, and Puell Multiple from CoinMetrics Community API.
+    Single call — free, no key. Cached 4 hours alongside MVRV.
+    Returns dict with sopr, realized_price, puell_multiple (and their signals).
+    """
+    url = (
+        "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+        "?assets=btc&metrics=SoprNtv,PriceRealUSD,RevUSD&frequency=1d&page_size=400"
+    )
+    data = _get(url, "coinmetrics_sopr_realized_puell", ttl=4 * 3600)
+    if not data:
+        return {}
+    rows = data.get("data") or []
+    sopr_vals, real_vals, rev_vals = [], [], []
+    for row in rows:
+        try:
+            s = float(row.get("SoprNtv") or 0)
+            r = float(row.get("PriceRealUSD") or 0)
+            v = float(row.get("RevUSD") or 0)
+            if s > 0: sopr_vals.append(s)
+            if r > 0: real_vals.append(r)
+            if v > 0: rev_vals.append(v)
+        except (TypeError, ValueError):
+            pass
+    out = {}
+
+    # ── SOPR ──────────────────────────────────────────────────────────────────
+    if sopr_vals:
+        sopr = sopr_vals[-1]
+        sopr7d = round(sum(sopr_vals[-7:]) / min(len(sopr_vals), 7), 4)
+        if sopr < 0.95:
+            sopr_zone, sopr_cls, sopr_label = "capitulation", "bull", "Panic Selling — BUY"
+        elif sopr < 1.0:
+            sopr_zone, sopr_cls, sopr_label = "loss",         "bull", "Selling at Loss — Accumulate"
+        elif sopr < 1.05:
+            sopr_zone, sopr_cls, sopr_label = "neutral",      "",     "Breakeven — Neutral"
+        elif sopr < 1.15:
+            sopr_zone, sopr_cls, sopr_label = "profit",       "",     "Taking Profits — Watch"
+        else:
+            sopr_zone, sopr_cls, sopr_label = "euphoria",     "bear", "Euphoric Selling — CAUTION"
+        out["sopr"] = {
+            "value": round(sopr, 4), "sma7": sopr7d,
+            "zone": sopr_zone, "cls": sopr_cls, "label": sopr_label,
+        }
+
+    # ── Realized Price ─────────────────────────────────────────────────────────
+    if real_vals:
+        rp = real_vals[-1]
+        out["realized_price"] = round(rp, 2)
+
+    # ── Puell Multiple ─────────────────────────────────────────────────────────
+    if len(rev_vals) >= 30:
+        today_rev = rev_vals[-1]
+        ma365 = sum(rev_vals[-365:]) / min(len(rev_vals), 365)
+        puell = round(today_rev / ma365, 3) if ma365 else None
+        if puell is not None:
+            if puell < 0.5:
+                pm_zone, pm_cls, pm_label = "deep_undervalued", "bull", "Miners Capitulating — STRONG BUY"
+            elif puell < 0.8:
+                pm_zone, pm_cls, pm_label = "undervalued",      "bull", "Low Miner Revenue — Accumulate"
+            elif puell < 1.5:
+                pm_zone, pm_cls, pm_label = "fair",             "",     "Fair Miner Revenue — Neutral"
+            elif puell < 2.5:
+                pm_zone, pm_cls, pm_label = "elevated",         "",     "High Miner Revenue — Caution"
+            else:
+                pm_zone, pm_cls, pm_label = "extreme",          "bear", "Peak Miner Revenue — SELL"
+            out["puell_multiple"] = {
+                "value": puell, "zone": pm_zone, "cls": pm_cls, "label": pm_label,
+                "daily_rev_usd": round(today_rev, 0), "ma365_rev_usd": round(ma365, 0),
+            }
+    return out
+
+
+def _onchain_score(ribbon: str, phase: str, prof_ratio, mvrv_zone: str, diff_last,
+                   sopr_zone: str = None, puell_zone: str = None) -> dict:
     """
     Combine on-chain/mining signals into a single 0-100 score.
     Higher = more bullish on-chain context for BTC price.
+    Now includes SOPR and Puell Multiple for a more complete picture.
     """
     pts = 0
 
-    # Hash Ribbon (0-25)
-    pts += {"buy": 25, "bull": 20, "neutral": 12, "bear": 5, "capitulation": 0}.get(ribbon, 12)
+    # Hash Ribbon (0-20)
+    pts += {"buy": 20, "bull": 16, "neutral": 10, "bear": 4, "capitulation": 0}.get(ribbon, 10)
 
-    # Halving phase (0-20)
-    pts += {"mid": 20, "early": 15, "pre": 12, "late": 5}.get(phase, 10)
+    # Halving phase (0-15)
+    pts += {"mid": 15, "early": 12, "pre": 10, "late": 4}.get(phase, 8)
 
-    # Miner profitability (0-25)
+    # Miner profitability (0-20)
     if prof_ratio is not None:
-        if   prof_ratio >= 2.0: pts += 25
-        elif prof_ratio >= 1.5: pts += 20
-        elif prof_ratio >= 1.2: pts += 15
-        elif prof_ratio >= 1.0: pts += 10
-        else:                   pts += 3
+        if   prof_ratio >= 2.0: pts += 20
+        elif prof_ratio >= 1.5: pts += 16
+        elif prof_ratio >= 1.2: pts += 12
+        elif prof_ratio >= 1.0: pts += 8
+        else:                   pts += 2
 
-    # MVRV zone (0-25)
-    pts += {"oversold": 25, "fair_value": 20, "fair_elevated": 12,
-            "overbought": 5, "extreme_top": 0}.get(mvrv_zone or "", 12)
+    # MVRV zone (0-20)
+    pts += {"oversold": 20, "fair_value": 16, "fair_elevated": 10,
+            "overbought": 4, "extreme_top": 0}.get(mvrv_zone or "", 10)
 
-    # Last difficulty change (0-5) — rising = miners joining = long-term bullish
-    if diff_last is not None:
-        if   diff_last >= 5:  pts += 5
-        elif diff_last >= 0:  pts += 4
-        elif diff_last >= -5: pts += 2
-        else:                 pts += 0
+    # SOPR (0-15) — are holders selling at profit or loss?
+    if sopr_zone:
+        pts += {"capitulation": 15, "loss": 12, "neutral": 8,
+                "profit": 4,        "euphoria": 0}.get(sopr_zone, 8)
+
+    # Puell Multiple (0-10) — miner revenue stress
+    if puell_zone:
+        pts += {"deep_undervalued": 10, "undervalued": 8, "fair": 6,
+                "elevated": 3,          "extreme": 0}.get(puell_zone, 5)
 
     score = min(100, max(0, pts))
 
@@ -317,13 +396,27 @@ def get_btc_mining_signals() -> dict:
             mvrv["realized_price"] = round(btc_price / mvrv["score"], 0)
         result["mvrv"] = mvrv
 
+    # ── SOPR + Realized Price + Puell Multiple — CoinMetrics Community API ────
+    srp = _fetch_sopr_realized_puell()
+    if srp.get("sopr"):
+        result["sopr"] = srp["sopr"]
+    if srp.get("realized_price"):
+        rp = srp["realized_price"]
+        result["realized_price"] = rp
+        if btc_price and rp:
+            result["price_to_realized"] = round(btc_price / rp, 3)
+    if srp.get("puell_multiple"):
+        result["puell_multiple"] = srp["puell_multiple"]
+
     # ── On-Chain Composite Score ──────────────────────────────────────────────
     result["onchain_score"] = _onchain_score(
-        ribbon     = result.get("hash_ribbon", "neutral"),
-        phase      = result.get("halving_phase", "pre"),
-        prof_ratio = result.get("profitability_ratio"),
-        mvrv_zone  = (result.get("mvrv") or {}).get("zone"),
-        diff_last  = result.get("difficulty_last_change"),
+        ribbon      = result.get("hash_ribbon", "neutral"),
+        phase       = result.get("halving_phase", "pre"),
+        prof_ratio  = result.get("profitability_ratio"),
+        mvrv_zone   = (result.get("mvrv") or {}).get("zone"),
+        diff_last   = result.get("difficulty_last_change"),
+        sopr_zone   = (result.get("sopr") or {}).get("zone"),
+        puell_zone  = (result.get("puell_multiple") or {}).get("zone"),
     )
 
     return result
@@ -351,26 +444,38 @@ def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
       { direction, strength, price, change_30d_pct }
       Used to refine reinvestment timing — suppressed if token is in downtrend.
     """
-    prof       = m.get("profitability_ratio") or 1.0
-    ribbon     = m.get("hash_ribbon", "neutral")
-    mvrv       = (m.get("mvrv") or {}).get("score") or 1.5
-    mvrv_zone  = (m.get("mvrv") or {}).get("zone") or "fair_value"
-    oc_score   = (m.get("onchain_score") or {}).get("score") or 50
-    halv_phase = m.get("halving_phase") or "mid"
-    diff_last  = m.get("difficulty_last_change") or 0
-    diff_next  = m.get("difficulty_change") or 0
-    breakeven  = m.get("break_even_usd") or 65_000
-    btc_price  = m.get("btc_price_usd") or 60_000
-    rw_btc     = m.get("reward_per_th_btc") or 0
+    prof        = m.get("profitability_ratio") or 1.0
+    ribbon      = m.get("hash_ribbon", "neutral")
+    mvrv        = (m.get("mvrv") or {}).get("score") or 1.5
+    mvrv_zone   = (m.get("mvrv") or {}).get("zone") or "fair_value"
+    oc_score    = (m.get("onchain_score") or {}).get("score") or 50
+    halv_phase  = m.get("halving_phase") or "mid"
+    diff_last   = m.get("difficulty_last_change") or 0
+    diff_next   = m.get("difficulty_change") or 0
+    breakeven   = m.get("break_even_usd") or 65_000
+    btc_price   = m.get("btc_price_usd") or 60_000
+    rw_btc      = m.get("reward_per_th_btc") or 0
     reward_sats = round(rw_btc * 1e8, 2) if rw_btc else None
+    sopr_zone   = (m.get("sopr") or {}).get("zone")
+    sopr_val    = (m.get("sopr") or {}).get("value")
+    puell_zone  = (m.get("puell_multiple") or {}).get("zone")
+    puell_val   = (m.get("puell_multiple") or {}).get("value")
+    realized_p  = m.get("realized_price")
+    price_to_rp = m.get("price_to_realized")
 
     # ── Phase Logic ────────────────────────────────────────────────────────────
-    # ACCUMULATE: miners stressed / below break-even / hash ribbon bearish
-    if prof < 1.0 or ribbon in ("bear", "capitulation"):
+    # ACCUMULATE: miners stressed / below break-even / ribbon bearish /
+    #             OR SOPR in capitulation (strong on-chain buy signal)
+    if (prof < 1.0 or ribbon in ("bear", "capitulation")
+            or sopr_zone == "capitulation"
+            or puell_zone == "deep_undervalued"):
         phase = "accumulate"
 
-    # HARVEST: late bull cycle — MVRV high, consider taking profits not reinvesting
-    elif mvrv_zone in ("overbought", "extreme_top") or (halv_phase == "late" and mvrv > 2.5):
+    # HARVEST: late bull cycle — MVRV high / SOPR euphoria / Puell extreme
+    elif (mvrv_zone in ("overbought", "extreme_top")
+          or sopr_zone == "euphoria"
+          or puell_zone == "extreme"
+          or (halv_phase == "late" and mvrv > 2.5)):
         phase = "harvest"
 
     # COMPOUND: miners profitable + hash ribbon healthy + not late-cycle bubble
@@ -466,6 +571,37 @@ def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
     elif halv_phase == "mid":
         reasons.append("Mid halving cycle (6–18 months post-halving) — historically the strongest bull window")
 
+    # SOPR
+    if sopr_zone and sopr_val:
+        SOPR_MSG = {
+            "capitulation": f"SOPR {sopr_val:.4f} — panic selling at LOSS, classic capitulation bottom. Ideal to collect BTC rewards",
+            "loss":         f"SOPR {sopr_val:.4f} — holders selling below cost basis, market de-risking. Good BTC accumulation window",
+            "neutral":      f"SOPR {sopr_val:.4f} — holders at breakeven, no strong directional signal",
+            "profit":       f"SOPR {sopr_val:.4f} — holders taking profits, distribution in progress. Consider trimming BTC",
+            "euphoria":     f"SOPR {sopr_val:.4f} — euphoric profit taking. Historical cycle top signal — harvest BTC now",
+        }
+        reasons.append(SOPR_MSG.get(sopr_zone, f"SOPR {sopr_val:.4f}"))
+
+    # Puell Multiple
+    if puell_zone and puell_val:
+        PUELL_MSG = {
+            "deep_undervalued": f"Puell Multiple {puell_val:.2f} — miner revenue at extreme lows. Historically the best BTC buy zone",
+            "undervalued":      f"Puell Multiple {puell_val:.2f} — miner revenue below average. Good accumulation zone",
+            "fair":             f"Puell Multiple {puell_val:.2f} — miner revenue near average. Neutral signal",
+            "elevated":         f"Puell Multiple {puell_val:.2f} — miner revenue above average. Miners incentivised to sell BTC",
+            "extreme":          f"Puell Multiple {puell_val:.2f} — peak miner revenue. Historically marks cycle tops — harvest BTC",
+        }
+        reasons.append(PUELL_MSG.get(puell_zone, f"Puell Multiple {puell_val:.2f}"))
+
+    # Realized Price
+    if realized_p and price_to_rp:
+        if price_to_rp < 1.0:
+            reasons.append(f"BTC (${btc_price:,.0f}) is BELOW Realized Price (${realized_p:,.0f}) — average holder is underwater. Historically the strongest accumulation signal in the cycle")
+        elif price_to_rp < 1.3:
+            reasons.append(f"BTC (${btc_price:,.0f}) near Realized Price (${realized_p:,.0f}, {price_to_rp:.2f}×) — historically strong support and great entry zone")
+        elif price_to_rp > 3.5:
+            reasons.append(f"BTC (${btc_price:,.0f}) is {price_to_rp:.1f}× above Realized Price (${realized_p:,.0f}) — stretched, distribution risk")
+
     # GOMINING token signal
     if gm_token:
         gm_dir  = gm_token.get("direction", "NEUTRAL")
@@ -482,45 +618,71 @@ def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
             reasons.append(f"GOMINING token NEUTRAL ({gm_str}%){price_note}{chg_note} — no strong directional signal yet")
 
     # ── BTC Harvest Signal — when to sell mined BTC rewards ───────────────────
-    # sell_signal: 'sell_now' | 'sell_partial' | 'hold' | 'accumulate'
-    if mvrv_zone == "extreme_top" or (halv_phase == "late" and mvrv > 3.0):
-        sell_signal    = "sell_now"
-        sell_cls       = "sell-now"
-        sell_label     = "SELL — Top Signal"
-        sell_icon      = "🔴"
-        sell_pct       = 80          # suggested % of rewards to sell
-        sell_reasoning = (
-            f"MVRV {mvrv:.2f} in extreme top zone"
-            if mvrv_zone == "extreme_top"
-            else f"Late cycle + MVRV {mvrv:.2f} above 3.0 — historical distribution peak"
-        )
-    elif mvrv_zone == "overbought" or (halv_phase == "late" and mvrv > 2.0):
-        sell_signal    = "sell_partial"
-        sell_cls       = "sell-partial"
-        sell_label     = "TRIM — Sell Partial"
-        sell_icon      = "🟠"
-        sell_pct       = 50
-        sell_reasoning = (
-            f"MVRV {mvrv:.2f} overbought — late bull phase, reduce exposure gradually"
-        )
-    elif ribbon in ("capitulation", "bear") or mvrv_zone == "oversold" or prof < 0.8:
-        sell_signal    = "accumulate"
-        sell_cls       = "accumulate"
-        sell_label     = "HOLD — Stack BTC"
-        sell_icon      = "🟢"
-        sell_pct       = 0
-        sell_reasoning = (
-            "Miner capitulation / oversold — BTC is cheapest here, do NOT sell rewards"
-            if ribbon == "capitulation"
-            else f"MVRV {mvrv:.2f} in accumulation zone — BTC undervalued, keep all rewards"
-        )
+    # Confluence of MVRV + SOPR + Puell Multiple — count how many are flashing sell
+    _sell_signals = sum([
+        mvrv_zone in ("extreme_top", "overbought"),
+        sopr_zone == "euphoria",
+        puell_zone == "extreme",
+        halv_phase == "late" and mvrv > 2.5,
+    ])
+    _acc_signals = sum([
+        sopr_zone == "capitulation",
+        puell_zone == "deep_undervalued",
+        mvrv_zone == "oversold",
+        ribbon in ("capitulation", "bear"),
+        prof < 0.8,
+        price_to_rp is not None and price_to_rp < 1.0,
+    ])
+
+    _sell_reasons = []
+    if mvrv_zone in ("extreme_top", "overbought"): _sell_reasons.append(f"MVRV {mvrv:.2f} ({mvrv_zone.replace('_',' ')})")
+    if sopr_zone == "euphoria":   _sell_reasons.append(f"SOPR {sopr_val:.4f} (euphoric selling)")
+    if puell_zone == "extreme":   _sell_reasons.append(f"Puell {puell_val:.2f} (peak miner revenue)")
+    if halv_phase == "late" and mvrv > 2.5: _sell_reasons.append("late halving cycle")
+
+    _acc_reasons = []
+    if sopr_zone == "capitulation":  _acc_reasons.append(f"SOPR {sopr_val:.4f} (panic sell at loss)")
+    if puell_zone == "deep_undervalued": _acc_reasons.append(f"Puell {puell_val:.2f} (miner capitulation)")
+    if mvrv_zone == "oversold":      _acc_reasons.append(f"MVRV {mvrv:.2f} (oversold)")
+    if ribbon == "capitulation":     _acc_reasons.append("Hash Ribbon capitulation")
+    if price_to_rp and price_to_rp < 1.0: _acc_reasons.append(f"BTC below Realized Price (${realized_p:,.0f})")
+
+    if _sell_signals >= 2 or mvrv_zone == "extreme_top" or sopr_zone == "euphoria":
+        sell_signal = "sell_now"
+        sell_cls    = "sell-now"
+        sell_label  = "SELL — Multiple Top Signals"
+        sell_icon   = "🔴"
+        sell_pct    = 80
+        sell_reasoning = "Confluence of sell signals: " + " · ".join(_sell_reasons) if _sell_reasons else f"MVRV {mvrv:.2f} extreme top"
+    elif _sell_signals == 1 or (halv_phase == "late" and mvrv > 2.0):
+        sell_signal = "sell_partial"
+        sell_cls    = "sell-partial"
+        sell_label  = "TRIM — Sell Partial"
+        sell_icon   = "🟠"
+        sell_pct    = 50
+        sell_reasoning = "Early top signals: " + " · ".join(_sell_reasons) if _sell_reasons else f"MVRV {mvrv:.2f} elevated"
+    elif _acc_signals >= 2:
+        sell_signal = "accumulate"
+        sell_cls    = "accumulate"
+        sell_label  = "STACK BTC — Don't Sell"
+        sell_icon   = "🟢"
+        sell_pct    = 0
+        sell_reasoning = "Multiple accumulation signals: " + " · ".join(_acc_reasons) if _acc_reasons else "On-chain deeply oversold"
+    elif _acc_signals == 1:
+        sell_signal = "accumulate"
+        sell_cls    = "accumulate"
+        sell_label  = "HOLD — Accumulation Zone"
+        sell_icon   = "🟢"
+        sell_pct    = 0
+        sell_reasoning = _acc_reasons[0] if _acc_reasons else "On-chain showing accumulation signal"
     else:
-        sell_signal    = "hold"
-        sell_cls       = "hold"
-        sell_label     = "HOLD — Wait for Top"
-        sell_icon      = "🟡"
-        sell_pct       = 0
-        sell_reasoning = f"MVRV {mvrv:.2f} in fair value range — no reason to sell yet, let rewards accumulate"
+        sell_signal = "hold"
+        sell_cls    = "hold"
+        sell_label  = "HOLD — Wait for Top"
+        sell_icon   = "🟡"
+        sell_pct    = 0
+        rp_note = f" · {price_to_rp:.2f}× Realized Price (${realized_p:,.0f})" if realized_p and price_to_rp else ""
+        sell_reasoning = f"MVRV {mvrv:.2f} — fair value range, no sell trigger yet{rp_note}"
 
     harvest = {
         "signal":    sell_signal,
@@ -531,6 +693,12 @@ def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
         "reasoning": sell_reasoning,
         "mvrv":      mvrv,
         "mvrv_zone": mvrv_zone,
+        "sopr":      sopr_val,
+        "sopr_zone": sopr_zone,
+        "puell":     puell_val,
+        "puell_zone": puell_zone,
+        "realized_price": realized_p,
+        "price_to_realized": price_to_rp,
     }
 
     # ── Watch For ──────────────────────────────────────────────────────────────

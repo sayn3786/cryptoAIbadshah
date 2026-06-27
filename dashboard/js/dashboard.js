@@ -926,15 +926,15 @@ function renderBtcMiningCard(mining, symbol) {
   // MVRV Score (90d SMA)
   const mvrv    = mining.mvrv;
   const btcPriceUsd = mining.btc_price_usd || null;
+  const fmtK = v => v >= 1000 ? '$' + (v / 1000).toFixed(1) + 'K' : '$' + Number(v).toFixed(0);
   const mvrvRow = mvrv ? (() => {
     const score = mvrv.score != null ? mvrv.score.toFixed(2) : '—';
     const sma   = mvrv.sma90 != null ? mvrv.sma90.toFixed(2) : '—';
     const cls   = mvrv.cls  || '';
     const lbl   = mvrv.label || '—';
     const desc  = mvrv.desc  || '';
-    const fmtK  = v => v >= 1000 ? '$' + (v / 1000).toFixed(1) + 'K' : '$' + v.toFixed(0);
     const priceStr    = btcPriceUsd ? `BTC ${fmtK(btcPriceUsd)}` : '';
-    const realizedStr = mvrv.realized_price ? `· Realized Price ~${fmtK(mvrv.realized_price)}` : '';
+    const realizedStr = mvrv.realized_price ? `· Realized ~${fmtK(mvrv.realized_price)}` : '';
     const priceLine   = (priceStr || realizedStr)
       ? `<div class="btcm-sub btcm-price-ctx">${priceStr} ${realizedStr}</div>`
       : '';
@@ -942,6 +942,36 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-row"><span class="btcm-label">MVRV Score</span><span class="btcm-val ${cls}">${score} <small>(90d SMA: ${sma})</small></span></div>
     <div class="btcm-sub">${lbl} — ${desc}</div>
     ${priceLine}`;
+  })() : '';
+
+  // SOPR row
+  const soprData = mining.sopr;
+  const soprRow = soprData ? (() => {
+    const cls = soprData.cls || '';
+    return `
+    <div class="btcm-row"><span class="btcm-label">SOPR</span><span class="btcm-val ${cls}">${soprData.value?.toFixed(4) || '—'} <small>(7d avg: ${soprData.sma7?.toFixed(4) || '—'})</small></span></div>
+    <div class="btcm-sub">${soprData.label} — &lt;1 = selling at loss (buy signal) · &gt;1 = taking profits · &gt;1.1 = euphoric top</div>`;
+  })() : '';
+
+  // Puell Multiple row
+  const puellData = mining.puell_multiple;
+  const puellRow = puellData ? (() => {
+    const cls = puellData.cls || '';
+    const rev = puellData.daily_rev_usd ? ` · daily rev $${(puellData.daily_rev_usd/1e6).toFixed(1)}M` : '';
+    return `
+    <div class="btcm-row"><span class="btcm-label">Puell Multiple</span><span class="btcm-val ${cls}">${puellData.value?.toFixed(2) || '—'}</span></div>
+    <div class="btcm-sub">${puellData.label}${rev} — &lt;0.5 miner capitulation (buy) · &gt;2.5 peak revenue (sell)</div>`;
+  })() : '';
+
+  // Realized Price row
+  const realizedPrice = mining.realized_price;
+  const ptr = mining.price_to_realized;
+  const realizedRow = realizedPrice ? (() => {
+    const cls = ptr < 1.0 ? 'bull' : ptr < 1.3 ? 'bull' : ptr > 3.5 ? 'bear' : '';
+    const label = ptr < 1.0 ? 'Below Realized — deep value' : ptr < 1.3 ? 'Near Realized — strong support' : ptr > 3.5 ? 'Far above Realized — stretched' : 'Above Realized — normal bull';
+    return `
+    <div class="btcm-row"><span class="btcm-label">Realized Price</span><span class="btcm-val ${cls}">${fmtK(realizedPrice)} <small>(${ptr?.toFixed(2) || '—'}×)</small></span></div>
+    <div class="btcm-sub">${label} · avg cost basis of all BTC ever moved</div>`;
   })() : '';
 
   // On-chain composite score
@@ -958,7 +988,7 @@ function renderBtcMiningCard(mining, symbol) {
       <span class="btcm-oc-score ${ocCls}">${ocScore}<span style="opacity:.5;font-size:.8em">/100</span></span>
     </div>
     ${ocBar}
-    <div class="btcm-sub" style="margin-bottom:10px">${ocLabel} — combined signal: Hash Ribbon + Halving + Profitability + MVRV + Difficulty</div>
+    <div class="btcm-sub" style="margin-bottom:10px">${ocLabel} — Hash Ribbon + Halving + Profitability + MVRV + SOPR + Puell + Difficulty</div>
     <hr class="btcm-divider">` : '';
 
   rows.innerHTML = `
@@ -975,6 +1005,9 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-row"><span class="btcm-label">Next Difficulty Adj</span><span class="btcm-val ${diffCls}">${diffStr} <small style="opacity:.6">${diffTimeStr}</small></span></div>
     <div class="btcm-sub">${diffProgressStr} · ${diffBlocksStr} · rising = more competition · falling = fewer miners</div>
     ${mvrvRow}
+    ${realizedRow}
+    ${soprRow}
+    ${puellRow}
   `;
 }
 
@@ -1055,14 +1088,20 @@ function renderGoMiningAdvisor(strategy, symbol, gmTokenSignal) {
     const pctLine = h.sell_pct > 0
       ? `<div class="gm-harvest-pct">Suggested: sell ~${h.sell_pct}% of your BTC rewards</div>`
       : `<div class="gm-harvest-pct">Keep 100% of BTC rewards — do not sell yet</div>`;
-    const mvrvNote = h.mvrv ? ` · MVRV ${Number(h.mvrv).toFixed(2)} (${h.mvrv_zone?.replace('_', ' ')})` : '';
+    // Metric chips
+    const chips = [];
+    if (h.mvrv)    chips.push(`MVRV ${Number(h.mvrv).toFixed(2)} <span class="gm-chip-zone">${(h.mvrv_zone||'').replace(/_/g,' ')}</span>`);
+    if (h.sopr)    chips.push(`SOPR ${Number(h.sopr).toFixed(4)} <span class="gm-chip-zone">${(h.sopr_zone||'').replace(/_/g,' ')}</span>`);
+    if (h.puell)   chips.push(`Puell ${Number(h.puell).toFixed(2)} <span class="gm-chip-zone">${(h.puell_zone||'').replace(/_/g,' ')}</span>`);
+    if (h.realized_price) chips.push(`Realized $${Number(h.realized_price).toLocaleString()} · ${h.price_to_realized ? Number(h.price_to_realized).toFixed(2)+'×' : ''}`);
     harvestEl.className = `gm-harvest ${h.cls}`;
     harvestEl.innerHTML = `
       <div class="gm-harvest-icon">${h.icon}</div>
       <div class="gm-harvest-body">
         <div class="gm-harvest-label">${h.label}</div>
         ${pctLine}
-        <div class="gm-harvest-reason">${h.reasoning}${mvrvNote}</div>
+        <div class="gm-harvest-reason">${h.reasoning}</div>
+        ${chips.length ? `<div class="gm-harvest-chips">${chips.map(c=>`<span class="gm-chip">${c}</span>`).join('')}</div>` : ''}
       </div>`;
   }
 

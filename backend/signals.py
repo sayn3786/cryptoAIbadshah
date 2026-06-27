@@ -913,6 +913,56 @@ def generate_signal(analysis: Dict) -> Dict:
                 score -= 4;  g['flow'] -= 4
                 bear_reasons.append(f"▼ Difficulty dropping {diff_chg:.1f}% — miners leaving, reduced network security")
 
+        # SOPR — are on-chain holders selling at profit or loss?
+        sopr_data = mining.get("sopr") or {}
+        sopr_zone = sopr_data.get("zone")
+        sopr_val  = sopr_data.get("value")
+        if sopr_zone:
+            if sopr_zone == "capitulation":   # holders panic-selling at loss — contrarian buy
+                score += 12;  g['flow'] += 12
+                bull_reasons.append(f"▲ SOPR {sopr_val:.4f} — panic selling at loss (capitulation), historically strong buy signal")
+            elif sopr_zone == "loss":
+                score += 7;   g['flow'] += 7
+                bull_reasons.append(f"▲ SOPR {sopr_val:.4f} — holders selling below cost basis, market de-risking")
+            elif sopr_zone == "profit":
+                score -= 5;   g['flow'] -= 5
+                bear_reasons.append(f"▼ SOPR {sopr_val:.4f} — holders actively taking profits, distribution risk")
+            elif sopr_zone == "euphoria":
+                score -= 12;  g['flow'] -= 12
+                bear_reasons.append(f"▼ SOPR {sopr_val:.4f} — euphoric profit taking, cycle top signal")
+
+        # Puell Multiple — miner revenue vs 365d average
+        puell_data = mining.get("puell_multiple") or {}
+        puell_zone = puell_data.get("zone")
+        puell_val  = puell_data.get("value")
+        if puell_zone:
+            if puell_zone == "deep_undervalued":  # miners barely surviving = capitulation = buy
+                score += 10;  g['flow'] += 10
+                bull_reasons.append(f"▲ Puell Multiple {puell_val:.2f} — miner revenue far below average, historical capitulation buy zone")
+            elif puell_zone == "undervalued":
+                score += 5;   g['flow'] += 5
+                bull_reasons.append(f"▲ Puell Multiple {puell_val:.2f} — miner revenue below average, historically good accumulation zone")
+            elif puell_zone == "elevated":
+                score -= 4;   g['flow'] -= 4
+                bear_reasons.append(f"▼ Puell Multiple {puell_val:.2f} — miner revenue well above average, miners incentivised to sell")
+            elif puell_zone == "extreme":
+                score -= 10;  g['flow'] -= 10
+                bear_reasons.append(f"▼ Puell Multiple {puell_val:.2f} — peak miner revenue, historically marks cycle tops")
+
+        # Realized Price — price vs average BTC cost basis
+        rp = mining.get("realized_price")
+        ptr = mining.get("price_to_realized")
+        if rp and ptr:
+            if ptr < 1.0:       # price below realized — every holder underwater, deep value
+                score += 10;  g['flow'] += 10
+                bull_reasons.append(f"▲ BTC below Realized Price (${rp:,.0f}) — average holder underwater, historically strongest accumulation signal")
+            elif ptr < 1.2:     # just above realized — historically great entry
+                score += 5;   g['flow'] += 5
+                bull_reasons.append(f"▲ BTC near Realized Price (${rp:,.0f}, ratio {ptr:.2f}×) — historically strong support and entry zone")
+            elif ptr > 3.5:     # very stretched above realized — euphoria
+                score -= 8;   g['flow'] -= 8
+                bear_reasons.append(f"▼ BTC {ptr:.1f}× above Realized Price (${rp:,.0f}) — stretched valuation, distribution risk")
+
     # ── Confluence Engine ─────────────────────────────────────────────────────────
     # Analyzes cross-group relationships to dynamically adjust the final score.
     # Groups: TREND | MOMENTUM | FLOW | SENTIMENT | PATTERN
