@@ -52,6 +52,7 @@ MCAP_FALLBACK = {
     "FETUSDT":        1_200_000_000,
     "ZECUSDT":          300_000_000,
     "BLURUSDT":         200_000_000,
+    "GOMININGUSDT":  100_000_000,   # ~$100M — platform token, small cap
 }
 
 # CoinGecko IDs
@@ -84,6 +85,7 @@ CG_IDS = {
     "FETUSDT":    "fetch-ai",
     "XAUTUSDT":   "tether-gold",
     "PAXGUSDT":   "pax-gold",
+    "GOMININGUSDT": "gomining-2",   # GoMining platform token — CoinGecko primary price
 }
 
 # Kraken pairs (weekly interval = 10080 min)
@@ -228,7 +230,8 @@ KUCOIN_PAIRS = {
     "BNBUSDT":    "BNB-USDT",
     "BLURUSDT":   "BLUR-USDT",
     "XAUTUSDT":   "XAUT-USDT",
-    "PAXGUSDT":   "PAXG-USDT",
+    "PAXGUSDT":     "PAXG-USDT",
+    "GOMININGUSDT": "GOMINING-USDT",
 }
 
 # MEXC uses Binance-style symbols (XXXUSDT) — same API format as Binance v3
