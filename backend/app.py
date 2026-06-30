@@ -362,6 +362,13 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     supertrend    = calculate_supertrend(spot)
     ichimoku      = calculate_ichimoku(spot)
+    # Trim chart overlay series to the same 60-candle window sent to the chart
+    # so the SuperTrend line / Ichimoku cloud line up with the visible candles.
+    _chart_cutoff_ts = spot[-60]["timestamp"] if len(spot) >= 60 else (spot[0]["timestamp"] if spot else 0)
+    if supertrend.get("series"):
+        supertrend["series"] = [p for p in supertrend["series"] if p["timestamp"] >= _chart_cutoff_ts]
+    if ichimoku.get("series"):
+        ichimoku["series"] = [p for p in ichimoku["series"] if p["timestamp"] >= _chart_cutoff_ts]
     bollinger     = calculate_bollinger_bands(spot)
     rsi_div       = detect_rsi_divergence(spot, rsi_series)
     vwap          = calculate_vwap(spot)

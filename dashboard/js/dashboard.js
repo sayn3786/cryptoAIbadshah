@@ -15,6 +15,11 @@ const S = {
   spotCvdSource: 'auto',
   futCvdSource: 'auto',
   fvgPriceLines: [],   // track FVG overlays so they can be cleared on token/TF switch
+  overlayPriceLines: [], // swing high/low + realized price horizontal lines
+  supertrendUpSeries: null,
+  supertrendDownSeries: null,
+  ichimokuSpanASeries: null,
+  ichimokuSpanBSeries: null,
 };
 
 const API = location.port === '' || location.port === '80' || location.port === '443'
@@ -68,6 +73,15 @@ function initCharts() {
     borderUpColor: '#10b981', borderDownColor: '#ef4444',
     wickUpColor: '#10b981', wickDownColor: '#ef4444',
   });
+
+  // SuperTrend — split into bullish (green) / bearish (red) segments so the
+  // line color flips automatically with the trend, like the real indicator.
+  S.supertrendUpSeries   = S.mainChart.addLineSeries({ color: '#10b981', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  S.supertrendDownSeries = S.mainChart.addLineSeries({ color: '#ef4444', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+
+  // Ichimoku cloud boundaries (Span A / Span B) — drawn as two dashed lines.
+  S.ichimokuSpanASeries = S.mainChart.addLineSeries({ color: '#10b98199', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  S.ichimokuSpanBSeries = S.mainChart.addLineSeries({ color: '#f59e0b99', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
 
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
@@ -195,7 +209,7 @@ function renderAll(a) {
   renderOI(a.open_interest);
   renderLiquidations(a.liquidations);
   renderMarketCap(a.market_cap);
-  renderMainChart(a.candles, a.fvgs);
+  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol);
   renderRSIChart(a.rsi_series);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
@@ -475,12 +489,14 @@ function renderMarketCap(mcap) {
   rankEl.textContent = 'Live · CoinGecko';
 }
 
-function renderMainChart(candles, fvgs) {
+function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol) {
   if (!candles?.length || !S.candleSeries) return;
 
-  // Clear FVG price lines and wave markers from the previous token/TF.
+  // Clear FVG + swing/realized price lines and wave markers from the previous token/TF.
   S.fvgPriceLines.forEach(pl => { try { S.candleSeries.removePriceLine(pl); } catch (_) {} });
   S.fvgPriceLines = [];
+  S.overlayPriceLines.forEach(pl => { try { S.candleSeries.removePriceLine(pl); } catch (_) {} });
+  S.overlayPriceLines = [];
   S.candleSeries.setMarkers([]);   // wave markers — replaced later by renderElliottWave
 
   // Show hours on the time axis for intraday TFs; dates only for daily+
@@ -511,6 +527,46 @@ function renderMainChart(candles, fvgs) {
       S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color,         lineWidth: isBag ? 2 : 1, lineStyle: 3, title: `${arrow} ${label} ${f.size_pct.toFixed(1)}%` }));
       S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '' }));
     });
+  }
+
+  // SuperTrend line — split into bullish/bearish segments so color flips with trend.
+  // Each series gets the full timeline but with nulls where the other trend is
+  // active, so lightweight-charts draws a gap instead of a flat connecting line.
+  const stSeries = supertrend?.series || [];
+  if (stSeries.length) {
+    const allTimes = stSeries.map(p => Math.floor(p.timestamp / 1000));
+    const upData = stSeries.map((p, i) => p.trend === 'bullish' ? { time: allTimes[i], value: p.value } : null).filter(Boolean);
+    const dnData = stSeries.map((p, i) => p.trend === 'bearish' ? { time: allTimes[i], value: p.value } : null).filter(Boolean);
+    S.supertrendUpSeries.setData(upData);
+    S.supertrendDownSeries.setData(dnData);
+  } else {
+    S.supertrendUpSeries.setData([]);
+    S.supertrendDownSeries.setData([]);
+  }
+
+  // Ichimoku cloud — Span A / Span B boundary lines tracking every candle.
+  const ichiSeries = ichimoku?.series || [];
+  if (ichiSeries.length) {
+    S.ichimokuSpanASeries.setData(ichiSeries.map(p => ({ time: Math.floor(p.timestamp / 1000), value: p.span_a })));
+    S.ichimokuSpanBSeries.setData(ichiSeries.map(p => ({ time: Math.floor(p.timestamp / 1000), value: p.span_b })));
+  } else {
+    S.ichimokuSpanASeries.setData([]);
+    S.ichimokuSpanBSeries.setData([]);
+  }
+
+  // Swing high/low — last 5 closed candles (skip the live/forming candle).
+  const closed = unique.length >= 6 ? unique.slice(-6, -1) : unique.slice(0, -1);
+  if (closed.length) {
+    const swingHigh = Math.max(...closed.map(c => c.high));
+    const swingLow  = Math.min(...closed.map(c => c.low));
+    S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: swingHigh, color: '#94a3b899', lineWidth: 1, lineStyle: 3, title: 'Swing High' }));
+    S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: swingLow,  color: '#94a3b899', lineWidth: 1, lineStyle: 3, title: 'Swing Low' }));
+  }
+
+  // Realized Price — BTC only, historically the strongest support/floor level.
+  const rp = btcMining?.realized_price || btcMining?.mvrv?.realized_price;
+  if (symbol === 'BTC' && rp) {
+    S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: rp, color: '#fbbf24', lineWidth: 2, lineStyle: 0, title: `Realized $${(rp/1000).toFixed(1)}K` }));
   }
 
   S.mainChart.timeScale().fitContent();

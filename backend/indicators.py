@@ -609,7 +609,7 @@ def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: floa
     """SuperTrend indicator.  Returns current direction, value and whether a
     flip (new signal) occurred on the most recent closed candle."""
     if len(candles) < period + 1:
-        return {"direction": None, "value": None, "signal": None, "flipped": False}
+        return {"direction": None, "value": None, "signal": None, "flipped": False, "series": []}
 
     highs  = [c["high"]  for c in candles]
     lows   = [c["low"]   for c in candles]
@@ -666,7 +666,22 @@ def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: floa
     flipped   = t_now != t_pre
     signal    = ("BUY" if t_now == 1 else "SELL") if flipped else None
 
-    return {"direction": direction, "value": value, "signal": signal, "flipped": flipped}
+    # Full series for charting — value at each bar is the active band (dn while
+    # bullish, up while bearish), so the line tracks price like the real indicator.
+    series = []
+    for idx in range(period - 1, len(candles)):
+        if trend[idx] is None:
+            continue
+        line_val = dn[idx] if trend[idx] == 1 else up[idx]
+        if line_val is None:
+            continue
+        series.append({
+            "timestamp": candles[idx]["timestamp"],
+            "value":     round(line_val, 8),
+            "trend":     "bullish" if trend[idx] == 1 else "bearish",
+        })
+
+    return {"direction": direction, "value": value, "signal": signal, "flipped": flipped, "series": series}
 
 
 def calculate_ichimoku(candles: List[Dict],
@@ -686,6 +701,7 @@ def calculate_ichimoku(candles: List[Dict],
             "tenkan": None, "kijun": None,
             "span_a": None, "span_b": None,
             "cloud_color": None, "price_vs_cloud": None, "tk_cross": None,
+            "series": [],
         }
 
     def _mid(cs, period, idx):
@@ -740,6 +756,25 @@ def calculate_ichimoku(candles: List[Dict],
     def _r(v):
         return round(v, 8) if v is not None else None
 
+    # Full cloud series for charting — span_a/span_b at each bar, same
+    # backward-displacement logic used for the current value above.
+    series = []
+    for idx in range(senkou_b_period - 1, n):
+        b = idx - displacement
+        if b < 0:
+            continue
+        tb = _mid(candles, tenkan_period, b)
+        kb = _mid(candles, kijun_period, b)
+        sa = (tb + kb) / 2 if (tb is not None and kb is not None) else None
+        sb = _mid(candles, senkou_b_period, b)
+        if sa is None or sb is None:
+            continue
+        series.append({
+            "timestamp": candles[idx]["timestamp"],
+            "span_a":    round(sa, 8),
+            "span_b":    round(sb, 8),
+        })
+
     return {
         "tenkan":        _r(tenkan),
         "kijun":         _r(kijun),
@@ -748,6 +783,7 @@ def calculate_ichimoku(candles: List[Dict],
         "cloud_color":   cloud_color,
         "price_vs_cloud": price_vs_cloud,
         "tk_cross":      tk_cross,
+        "series":        series,
     }
 
 
