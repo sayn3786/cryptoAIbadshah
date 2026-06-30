@@ -255,10 +255,11 @@ a:hover { color: var(--gold2); }
 /* ─── Row 2: Chart ────────────────────────────────────────────────────────────── */
 .row-chart { display: grid; grid-template-columns: 1fr 240px; gap: 12px; }
 .chart-card { padding: 16px; display: flex; flex-direction: column; }
-.chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.chart-header { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 10px; }
 .chart-title { font-size: .85rem; font-weight: 700; color: var(--text); font-family: var(--mono); }
-.chart-legend { display: flex; align-items: center; gap: 10px; font-size: .7rem; color: var(--muted); }
-.legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+.chart-legend-group { display: flex; flex-direction: column; gap: 4px; }
+.chart-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: .7rem; color: var(--muted); }
+.legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 .legend-dot.bull { background: rgba(16,185,129,.4); border: 1px solid var(--bull); }
 .legend-dot.bear { background: rgba(239,68,68,.4);  border: 1px solid var(--bear); }
 .main-chart { flex: 1; height: 380px; border-radius: 8px; overflow: hidden; }

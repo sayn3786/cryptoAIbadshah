@@ -74,14 +74,15 @@ function initCharts() {
     wickUpColor: '#10b981', wickDownColor: '#ef4444',
   });
 
-  // SuperTrend — split into bullish (green) / bearish (red) segments so the
-  // line color flips automatically with the trend, like the real indicator.
-  S.supertrendUpSeries   = S.mainChart.addLineSeries({ color: '#10b981', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  S.supertrendDownSeries = S.mainChart.addLineSeries({ color: '#ef4444', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  // SuperTrend — blue while bullish, orange while bearish. Deliberately NOT
+  // green/red so it never reads as another FVG zone or candle color.
+  S.supertrendUpSeries   = S.mainChart.addLineSeries({ color: '#3b82f6', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  S.supertrendDownSeries = S.mainChart.addLineSeries({ color: '#fb923c', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
 
-  // Ichimoku cloud boundaries (Span A / Span B) — drawn as two dashed lines.
-  S.ichimokuSpanASeries = S.mainChart.addLineSeries({ color: '#10b98199', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  S.ichimokuSpanBSeries = S.mainChart.addLineSeries({ color: '#f59e0b99', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  // Ichimoku cloud boundaries (Span A / Span B) — purple/cyan, distinct from
+  // every other overlay color on the chart.
+  S.ichimokuSpanASeries = S.mainChart.addLineSeries({ color: '#a855f7', lineWidth: 2, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  S.ichimokuSpanBSeries = S.mainChart.addLineSeries({ color: '#22d3ee', lineWidth: 2, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
 
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
@@ -513,9 +514,11 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol)
   S.candleSeries.setData(unique);
 
   // FVG overlays — draw after setData so Y-axis is already anchored to real prices.
-  // Each FVG is shown as three lines: top boundary, midpoint (labelled), bottom boundary.
+  // Only the midpoint carries an axis label; top/bottom boundaries are visual-only
+  // (axisLabelVisible: false) so the price scale doesn't get flooded with numbers.
+  // Capped at 4 nearest zones — more than that was unreadable on mobile.
   if (fvgs?.length) {
-    const unfilled = fvgs.filter(f => !f.filled).slice(0, 6);
+    const unfilled = fvgs.filter(f => !f.filled).slice(0, 4);
     unfilled.forEach(f => {
       const isBull = f.type === 'bullish';
       const isBag  = f.gap_type === 'bag';
@@ -523,9 +526,9 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol)
       const dimCol = isBull ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)';
       const arrow  = isBull ? '↑' : '↓';
       const label  = isBag ? 'BAG' : 'FVG';
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,      color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '' }));
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,      color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
       S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color,         lineWidth: isBag ? 2 : 1, lineStyle: 3, title: `${arrow} ${label} ${f.size_pct.toFixed(1)}%` }));
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '' }));
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
     });
   }
 
