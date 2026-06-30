@@ -301,3 +301,49 @@ class CoinGlassClient:
             }
         except Exception:
             return None
+
+    # ── Long-Term Holder Supply ─────────────────────────────────────────────
+
+    def get_lth_supply(self, symbol: str) -> Optional[Dict]:
+        """
+        Direct BTC long-term holder supply tracking (addresses holding 155+ days).
+        This is an on-chain-indicator endpoint that may not be included in every
+        CoinGlass plan tier. Strictly validated — only returns data if the
+        response shape and value range look like real supply numbers; otherwise
+        returns None so callers can fall back to a free-data proxy signal.
+        """
+        sym = CG_SYMBOLS.get(symbol)
+        if sym != "BTC" or not self.enabled:
+            return None
+
+        data = self._get("/indicator/lth_supply", {"symbol": sym, "time_type": "h8"})
+        if not data or not isinstance(data, dict):
+            return None
+
+        try:
+            date_list   = data.get("dateList") or []
+            supply_list = data.get("supplyList") or data.get("valueList") or []
+            if len(date_list) < 2 or len(supply_list) < 2:
+                return None
+
+            current = float(supply_list[-1])
+            # Sanity check: BTC LTH supply is a large fraction of ~19-21M circulating supply.
+            if not (1_000_000 <= current <= 21_000_000):
+                return None
+
+            prior_idx = max(0, len(supply_list) - 30)
+            prior     = float(supply_list[prior_idx])
+            change_30d_pct = round((current - prior) / prior * 100, 2) if prior else None
+
+            trend = ("increasing" if (change_30d_pct or 0) > 0.5
+                      else "decreasing" if (change_30d_pct or 0) < -0.5
+                      else "stable")
+
+            return {
+                "current_btc":    round(current, 0),
+                "change_30d_pct": change_30d_pct,
+                "trend":          trend,
+                "source":         "coinglass",
+            }
+        except Exception:
+            return None

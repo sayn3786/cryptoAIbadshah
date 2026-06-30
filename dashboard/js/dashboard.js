@@ -199,7 +199,7 @@ function renderAll(a) {
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
   renderBtcMiningCard(a.btc_mining, a.symbol);
-  renderOnchainMetrics(a.btc_mining, a.symbol);
+  renderOnchainMetrics(a.btc_mining, a.symbol, a.lth_supply);
   renderGoMiningAdvisor(a.gomining_strategy, a.symbol, a.gomining_token_signal);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
@@ -1072,7 +1072,7 @@ function renderBtcMiningCard(mining, symbol) {
 }
 
 /* ─── On-Chain Metrics Grid (BTC only) ────────────────────────────────────── */
-function renderOnchainMetrics(mining, symbol) {
+function renderOnchainMetrics(mining, symbol, lth) {
   const section = document.getElementById('onchainMetricsSection');
   const grid    = document.getElementById('ocmGrid');
   if (!section || !grid) return;
@@ -1166,6 +1166,33 @@ function renderOnchainMetrics(mining, symbol) {
         <div class="ocm-desc">${rpLabel}</div>
         <div class="ocm-sub">${bp ? 'BTC '+fmtK(bp)+' vs avg cost basis '+fmtK(rp) : 'Average cost basis of all BTC ever moved'}</div>
       </div>`);
+  }
+
+  // ── Long-Term Holder Supply ──────────────────────────────────────────────
+  if (lth) {
+    if (lth.source === 'coinglass') {
+      const chg   = lth.change_30d_pct;
+      const cls   = chg > 0.5 ? 'bull' : chg < -0.5 ? 'bear' : '';
+      const chgTx = chg != null ? `${chg > 0 ? '+' : ''}${chg}%` : '—';
+      tiles.push(`
+        <div class="ocm-tile ${cls}">
+          <div class="ocm-name">LTH Supply</div>
+          <div class="ocm-value">${lth.current_btc?.toLocaleString() ?? '—'} BTC</div>
+          <div class="ocm-zone ${cls}">${lth.trend || ''}</div>
+          <div class="ocm-desc">Held 155+ days</div>
+          <div class="ocm-sub">30d change ${chgTx}</div>
+        </div>`);
+    } else if (lth.is_proxy) {
+      const cls = lth.cls || '';
+      tiles.push(`
+        <div class="ocm-tile ${cls}">
+          <div class="ocm-name">LTH Supply (est)</div>
+          <div class="ocm-value">${lth.score ?? '—'}</div>
+          <div class="ocm-zone ${cls}">${(lth.zone||'').replace(/_/g,' ')}</div>
+          <div class="ocm-desc">${lth.label || ''}</div>
+          <div class="ocm-sub">${(lth.reasons||[]).join(' · ') || 'Estimated from netflow + SOPR/MVRV'}</div>
+        </div>`);
+    }
   }
 
   grid.innerHTML = tiles.join('') || '<p style="color:var(--muted);padding:16px">Loading on-chain data…</p>';

@@ -5,7 +5,7 @@ import json
 import time
 import math
 sys.path.insert(0, os.path.dirname(__file__))
-from btc_onchain import get_btc_mining_signals, get_gomining_strategy
+from btc_onchain import get_btc_mining_signals, get_gomining_strategy, get_lth_accumulation_proxy
 from options import get_options_expiry_data
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -382,6 +382,20 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
 
+    # Long-Term Holder supply trend (BTC only): try a real CoinGlass figure
+    # first; most plan tiers don't include this on-chain endpoint, so fall
+    # back to a proxy computed from data we already have (netflow + SOPR/MVRV).
+    lth_supply = None
+    if symbol == "BTC":
+        if cg_client.enabled:
+            lth_supply = cg_client.get_lth_supply("BTC")
+        if not lth_supply and btc_mining:
+            lth_supply = get_lth_accumulation_proxy(
+                netflow=whale_sells,
+                sopr_zone=(btc_mining.get("sopr") or {}).get("zone"),
+                mvrv_zone=(btc_mining.get("mvrv") or {}).get("zone"),
+            )
+
     # GoMining advisor: lightweight GOMINING price direction (BTC view only).
     # Uses a simple EMA20 slope on 1D candles — avoids full build_analysis overhead.
     gomining_token_signal = None
@@ -467,6 +481,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "gomining_token_signal":  gomining_token_signal,
         "options_expiry":         options_expiry,
         "whale_sells":            whale_sells,
+        "lth_supply":             lth_supply,
     }
     analysis["signal"] = generate_signal(analysis)
 

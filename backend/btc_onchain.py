@@ -482,6 +482,79 @@ def get_btc_mining_signals() -> dict:
     return result
 
 
+# ── Long-Term Holder Accumulation Proxy ─────────────────────────────────────────
+
+def get_lth_accumulation_proxy(netflow: dict = None, sopr_zone: str = None,
+                               mvrv_zone: str = None) -> dict:
+    """
+    Free-data proxy for long-term-holder accumulation/distribution behavior.
+    True LTH supply (UTXO age cohort analysis) needs a paid data provider; this
+    approximates the same signal from data already fetched elsewhere:
+      - exchange netflow (withdrawals = self-custody = LTH-like accumulation)
+      - SOPR zone (capitulation/loss = weak-hand selling typically absorbed by
+        long-term holders; euphoria = historically when LTH distribute)
+      - MVRV zone (oversold/fair value = holders reluctant to sell;
+        overbought/extreme = holders historically take profit)
+    Used only when a real LTH supply figure isn't available.
+    """
+    pts = 0
+    reasons = []
+
+    pressure = (netflow or {}).get("pressure")
+    if pressure == "accumulation":
+        pts += 40
+        reasons.append("Large BTC withdrawals from exchanges — strong self-custody signal")
+    elif pressure == "withdrawal":
+        pts += 20
+        reasons.append("Net BTC withdrawals from exchanges — mild accumulation signal")
+    elif pressure == "high":
+        pts -= 40
+        reasons.append("Large BTC deposits to exchanges — distribution risk")
+    elif pressure == "medium":
+        pts -= 20
+        reasons.append("Net BTC deposits to exchanges — mild distribution signal")
+
+    if sopr_zone == "capitulation":
+        pts += 30
+        reasons.append("SOPR capitulation — weak-hand selling typically absorbed by long-term holders")
+    elif sopr_zone == "loss":
+        pts += 15
+        reasons.append("SOPR below cost basis — de-risking phase, historically an LTH accumulation window")
+    elif sopr_zone == "euphoria":
+        pts -= 30
+        reasons.append("SOPR euphoria — historically when long-term holders distribute into strength")
+    elif sopr_zone == "profit":
+        pts -= 10
+
+    if mvrv_zone in ("oversold", "fair_value"):
+        pts += 15
+        reasons.append(f"MVRV {mvrv_zone.replace('_',' ')} — holders historically reluctant to sell here")
+    elif mvrv_zone in ("overbought", "extreme_top"):
+        pts -= 15
+        reasons.append(f"MVRV {mvrv_zone.replace('_',' ')} — holders historically take profit here")
+
+    score = max(-100, min(100, pts))
+    if score >= 40:
+        zone, cls, label = "strong_accumulation", "bull", "Strong Accumulation Signal"
+    elif score >= 15:
+        zone, cls, label = "accumulation",        "bull", "Mild Accumulation"
+    elif score <= -40:
+        zone, cls, label = "strong_distribution",  "bear", "Strong Distribution Signal"
+    elif score <= -15:
+        zone, cls, label = "distribution",         "bear", "Mild Distribution"
+    else:
+        zone, cls, label = "neutral",              "",     "Neutral / Mixed Signals"
+
+    return {
+        "score":    score,
+        "zone":     zone,
+        "cls":      cls,
+        "label":    label,
+        "reasons":  reasons,
+        "is_proxy": True,
+    }
+
+
 # ── GoMining Strategy Advisor ──────────────────────────────────────────────────
 
 def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
