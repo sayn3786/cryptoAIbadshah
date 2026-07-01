@@ -76,13 +76,16 @@ function initCharts() {
 
   // SuperTrend — blue while bullish, orange while bearish. Deliberately NOT
   // green/red so it never reads as another FVG zone or candle color.
-  S.supertrendUpSeries   = S.mainChart.addLineSeries({ color: '#3b82f6', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  S.supertrendDownSeries = S.mainChart.addLineSeries({ color: '#fb923c', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  // autoscaleInfoProvider: () => null prevents these overlay series from
+  // stretching the Y-axis — only candles drive the price scale.
+  const _overlayOpts = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+  S.supertrendUpSeries   = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#3b82f6', lineWidth: 2 });
+  S.supertrendDownSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#fb923c', lineWidth: 2 });
 
   // Ichimoku cloud boundaries (Span A / Span B) — purple/cyan, distinct from
   // every other overlay color on the chart.
-  S.ichimokuSpanASeries = S.mainChart.addLineSeries({ color: '#a855f7', lineWidth: 2, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  S.ichimokuSpanBSeries = S.mainChart.addLineSeries({ color: '#22d3ee', lineWidth: 2, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  S.ichimokuSpanASeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#a855f7', lineWidth: 2, lineStyle: 2 });
+  S.ichimokuSpanBSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#22d3ee', lineWidth: 2, lineStyle: 2 });
 
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
