@@ -828,61 +828,69 @@ class BinanceClient:
         # weekly data as if it were 2H/4H/1D data (causes wrong ROC, RSI, etc.)
         use_weekly_fallbacks = is_weekly or is_monthly
 
+        # Reject results with too few candles — some exchanges return only 1-2 rows
+        # for recently-listed tokens or on rate-limit, which breaks every indicator.
+        # Require at least 10 candles (or 3 for weekly/monthly where history is short).
+        _min_candles = 3 if use_weekly_fallbacks else 10
+
+        def _ok(r):
+            return bool(r) and len(r) >= _min_candles
+
         # Always try each source in order — never skip based on shared state
         result = self._binance_klines(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.data_source = "binance"
             return result
 
         result = self._okx_candles(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.data_source = "okx"
             return result
 
         result = self._bybit_candles(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.data_source = "bybit"
             return result
 
         result = self._kucoin_candles(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.data_source = "kucoin"
             return result
 
         result = self._mexc_candles(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.data_source = "mexc"
             return result
 
         result = self._htx_candles(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.data_source = "htx"
             return result
 
         result = self._lbank_candles(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.data_source = "lbank"
             return result
 
         if use_weekly_fallbacks:
             result = self._kucoin_weekly_candles(symbol, limit)
-            if result:
+            if _ok(result):
                 self.data_source = "kucoin"
                 return result
 
             result = self._gate_weekly_candles(symbol, limit)
-            if result:
+            if _ok(result):
                 self.data_source = "gateio"
                 return result
 
             result = self._cg_monthly_candles(symbol, limit) if is_monthly \
                      else self._cg_weekly_candles(symbol, limit)
-            if result:
+            if _ok(result):
                 self.data_source = "coingecko"
                 return result
 
             result = self._kraken_weekly_candles(symbol, limit)
-            if result:
+            if _ok(result):
                 self.data_source = "kraken"
                 return result
         else:
@@ -893,21 +901,21 @@ class BinanceClient:
             next_iv  = _NEXT_IV.get(interval.lower())
             if next_iv:
                 result = self._binance_klines(symbol, next_iv, limit)
-                if result:
+                if _ok(result):
                     self.data_source = "binance"
                     return result
                 result = self._okx_candles(symbol, next_iv, limit)
-                if result:
+                if _ok(result):
                     self.data_source = "okx"
                     return result
                 result = self._bybit_candles(symbol, next_iv, limit)
-                if result:
+                if _ok(result):
                     self.data_source = "bybit"
                     return result
 
             # Last intraday resort: CoinGecko daily aggregated
             result = self._cg_daily_as_candles(symbol, interval, limit)
-            if result:
+            if _ok(result):
                 self.data_source = "coingecko"
                 return result
 
@@ -965,21 +973,27 @@ class BinanceClient:
         return None
 
     def get_futures_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
+        is_weekly  = (interval in ("1w", "1W", "1M"))
+        _min_f = 3 if is_weekly else 10
+
+        def _ok(r):
+            return bool(r) and len(r) >= _min_f
+
         # 1. Binance perpetual futures
         result = self._binance_futures_klines(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.futures_real = True
             return result
 
         # 2. Bybit linear perpetuals (USDT-margined)
         result = self._bybit_candles(symbol, interval, limit, category="linear")
-        if result:
+        if _ok(result):
             self.futures_real = True
             return result
 
         # 3. OKX perpetual swaps (BTC-USDT-SWAP)
         result = self._okx_futures_candles(symbol, interval, limit)
-        if result:
+        if _ok(result):
             self.futures_real = True
             return result
 
