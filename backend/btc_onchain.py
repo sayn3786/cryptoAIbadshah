@@ -323,7 +323,8 @@ def get_btc_mining_signals() -> dict:
     # ── Hash rate history → Hash Ribbon ──────────────────────────────────────
     hr_data = _get(
         "https://mempool.space/api/v1/mining/hashrate/3m",
-        "mempool_hashrate_3m"
+        "mempool_hashrate_3m",
+        ttl=600  # 10 min — keeps sats/TH in sync with live network hashrate
     )
     if hr_data and "hashrates" in hr_data:
         rates = [h.get("avgHashrate", 0) for h in hr_data["hashrates"]]
@@ -346,7 +347,8 @@ def get_btc_mining_signals() -> dict:
     # ── Difficulty adjustment ─────────────────────────────────────────────────
     diff_data = _get(
         "https://mempool.space/api/v1/difficulty-adjustment",
-        "mempool_difficulty_adj"
+        "mempool_difficulty_adj",
+        ttl=600  # 10 min — remaining blocks/time ticks every ~10 min
     )
     if diff_data:
         result["difficulty_change"]      = diff_data.get("difficultyChange")
