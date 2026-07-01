@@ -1,6 +1,7 @@
 """CVD data fetchers for multiple exchange sources."""
 import os
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List
 
@@ -447,7 +448,69 @@ def fetch_coinglass_cvd(symbol: str, cg_client) -> Optional[Dict]:
 #   KuCoin, Gate.io, LBank, CoinGecko, CoinMarketCap
 #   → futures requests from these return None
 
+def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+    """
+    Aggregate spot CVD across Binance, OKX, and MEXC (all provide real taker
+    buy/sell split). Fetches all three in parallel, aligns candles by timestamp,
+    sums their deltas, and recomputes a single cumulative CVD series.
+    Falls back to any single real-taker source if others are geo-blocked.
+    """
+    real_taker_fns = [fetch_binance_spot_cvd, fetch_okx_spot_cvd, fetch_mexc_spot_cvd]
+
+    results = []
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(fn, symbol, interval, limit): fn for fn in real_taker_fns}
+        for fut in as_completed(futures, timeout=14):
+            try:
+                r = fut.result()
+                if r and r.get("series"):
+                    results.append(r)
+            except Exception:
+                pass
+
+    if not results:
+        return None
+
+    if len(results) == 1:
+        r = results[0]
+        r["label"] = "spot_aggregated"
+        return r
+
+    # Sum deltas at each timestamp across all exchange series
+    delta_map: Dict[int, float] = {}
+    for r in results:
+        for pt in r["series"]:
+            ts = int(pt["timestamp"])
+            delta_map[ts] = delta_map.get(ts, 0.0) + float(pt.get("delta") or 0.0)
+
+    cumulative = 0.0
+    agg_series = []
+    for ts in sorted(delta_map.keys()):
+        cumulative += delta_map[ts]
+        agg_series.append({"timestamp": ts, "cvd": round(cumulative, 2),
+                           "delta": round(delta_map[ts], 2)})
+    agg_series = agg_series[-limit:]
+
+    if not agg_series:
+        return None
+
+    current = agg_series[-1]["cvd"]
+    recent  = [p["cvd"] for p in agg_series[-5:]]
+    pct     = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9) if len(recent) >= 2 else 0
+    trend   = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
+
+    return {
+        "current": round(current, 2),
+        "trend":   trend,
+        "series":  agg_series,
+        "label":   "spot_aggregated",
+        "source":  "aggregated",
+        "n_sources": len(results),
+    }
+
+
 _SPOT_DISPATCH = {
+    "aggregated":    fetch_aggregated_spot_cvd,
     "binance":       fetch_binance_spot_cvd,
     "mexc":          fetch_mexc_spot_cvd,
     "okx":           fetch_okx_spot_cvd,

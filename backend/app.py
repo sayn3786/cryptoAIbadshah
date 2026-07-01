@@ -19,7 +19,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from binance import BinanceClient
 from coinglass import CoinGlassClient
-from cvd_sources import fetch_cvd_from_source
+from cvd_sources import fetch_cvd_from_source, fetch_aggregated_spot_cvd
 from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     find_volume_spikes, detect_engulfing, detect_cvd_divergence,
     calculate_macd, calculate_ema_trend, detect_whale_activity,
@@ -324,7 +324,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     _n_dir = _TF_CANDLE_N.get(timeframe, 4)
     candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-(1 + _n_dir):-1]] if len(spot) >= 1 + _n_dir else []
 
-    spot_cvd = calculate_cvd(spot, "spot")
+    # Aggregated spot CVD: sums real taker buy/sell deltas from Binance+OKX+MEXC
+    # in parallel. Falls back to single-exchange estimate only if all three fail.
+    spot_cvd = fetch_aggregated_spot_cvd(bs, interval, limit) or calculate_cvd(spot, "spot")
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
     # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
     fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None

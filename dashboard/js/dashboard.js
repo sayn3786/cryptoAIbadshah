@@ -1534,6 +1534,12 @@ function renderCVDPanel(id, cvd, series, valId, trendId) {
   el.textContent = isFlat ? 'Estimated' : Number(cvd.current).toLocaleString('en-US', { maximumFractionDigits: 2 });
   el.style.color = cvd.trend === 'bullish' ? 'var(--bull)' : cvd.trend === 'bearish' ? 'var(--bear)' : 'var(--neutral)';
 
+  // Show how many exchanges contributed to the aggregated spot CVD
+  if (id === 'spot' && cvd.label === 'spot_aggregated') {
+    const lbl = document.getElementById('spotCvdSourceLabel');
+    if (lbl) lbl.textContent = cvd.n_sources > 1 ? `Agg. (${cvd.n_sources} ex.)` : 'Aggregated';
+  }
+
   const tEl = document.getElementById(trendId);
   tEl.textContent = isFlat ? 'unavailable' : (cvd.trend || 'neutral');
   tEl.className = `cvd-trend ${cvd.trend || 'neutral'}`;
@@ -2520,11 +2526,6 @@ function wireSelectors() {
     btn.classList.add('active');
     S.timeframe = btn.dataset.tf;
     loadAnalysis();
-  });
-
-  document.getElementById('spotCvdSource').addEventListener('change', e => {
-    S.spotCvdSource = e.target.value;
-    loadCvdFromSource('spot');
   });
 
   document.getElementById('futCvdSource').addEventListener('change', e => {
