@@ -828,10 +828,11 @@ class BinanceClient:
         # weekly data as if it were 2H/4H/1D data (causes wrong ROC, RSI, etc.)
         use_weekly_fallbacks = is_weekly or is_monthly
 
-        # Reject results with too few candles — some exchanges return only 1-2 rows
-        # for recently-listed tokens or on rate-limit, which breaks every indicator.
-        # Require at least 10 candles (or 3 for weekly/monthly where history is short).
-        _min_candles = 3 if use_weekly_fallbacks else 10
+        # Reject results with too few candles — some exchanges return only a handful
+        # of rows for recently-listed tokens, which breaks every indicator.
+        # Ichimoku needs 52 candles; require at least 26 for intraday/daily so
+        # SuperTrend/BB/RSI can compute. Use 3 for weekly/monthly (sparse by nature).
+        _min_candles = 3 if use_weekly_fallbacks else 26
 
         def _ok(r):
             return bool(r) and len(r) >= _min_candles
@@ -974,7 +975,7 @@ class BinanceClient:
 
     def get_futures_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
         is_weekly  = (interval in ("1w", "1W", "1M"))
-        _min_f = 3 if is_weekly else 10
+        _min_f = 3 if is_weekly else 26
 
         def _ok(r):
             return bool(r) and len(r) >= _min_f

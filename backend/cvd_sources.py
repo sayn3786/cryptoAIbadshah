@@ -122,12 +122,45 @@ def _parse_binance_kline(k: list) -> Dict:
 
 # ── Binance ───────────────────────────────────────────────────────────────────
 # Real taker_buy_volume available on both spot and futures endpoints.
+# NOTE: taker_buy_volume from klines is in BASE currency (e.g. TAO coins).
+# _cvd_usd() normalises to USD by multiplying each candle delta by close price.
+
+def _cvd_usd_from_klines(candles: list, label: str) -> Optional[Dict]:
+    """Build a USD-denominated CVD series from kline candles with real taker split."""
+    try:
+        cvd, series = 0.0, []
+        for c in candles:
+            buy  = (c.get("taker_buy_volume") or 0) * c["close"]
+            sell = ((c.get("volume") or 0) - (c.get("taker_buy_volume") or 0)) * c["close"]
+            delta = buy - sell
+            cvd += delta
+            series.append({"timestamp": c["timestamp"], "cvd": round(cvd, 2),
+                           "delta": round(delta, 2)})
+        if not series:
+            return None
+        recent = [s["cvd"] for s in series[-5:]]
+        pct    = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9) if len(recent) >= 2 else 0
+        trend  = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
+        return {"current": round(cvd, 2), "trend": trend,
+                "series": series[-30:], "label": label, "usd": True}
+    except Exception:
+        return None
+
 
 def fetch_binance_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     try:
         data = _get("https://api.binance.com/api/v3/klines",
                     {"symbol": symbol, "interval": interval, "limit": limit})
         return calculate_cvd([_parse_binance_kline(k) for k in data], "spot")
+    except Exception:
+        return None
+
+
+def _fetch_binance_spot_cvd_usd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+    try:
+        data = _get("https://api.binance.com/api/v3/klines",
+                    {"symbol": symbol, "interval": interval, "limit": limit})
+        return _cvd_usd_from_klines([_parse_binance_kline(k) for k in data], "binance_spot_usd")
     except Exception:
         return None
 
@@ -150,6 +183,15 @@ def fetch_mexc_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict
         data = _get("https://api.mexc.com/api/v3/klines",
                     {"symbol": symbol, "interval": interval, "limit": limit})
         return calculate_cvd([_parse_binance_kline(k) for k in data], "spot")
+    except Exception:
+        return None
+
+
+def _fetch_mexc_spot_cvd_usd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+    try:
+        data = _get("https://api.mexc.com/api/v3/klines",
+                    {"symbol": symbol, "interval": interval, "limit": limit})
+        return _cvd_usd_from_klines([_parse_binance_kline(k) for k in data], "mexc_spot_usd")
     except Exception:
         return None
 
@@ -450,12 +492,12 @@ def fetch_coinglass_cvd(symbol: str, cg_client) -> Optional[Dict]:
 
 def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
     """
-    Aggregate spot CVD across Binance, OKX, and MEXC (all provide real taker
-    buy/sell split). Fetches all three in parallel, aligns candles by timestamp,
-    sums their deltas, and recomputes a single cumulative CVD series.
-    Falls back to any single real-taker source if others are geo-blocked.
+    Aggregate spot CVD across Binance, OKX, and MEXC in USD terms.
+    Binance/MEXC klines give taker volume in base coins — multiplied by close
+    price to normalise to USD. OKX taker-volume endpoint already returns USD.
+    All three fetched in parallel; deltas aligned by timestamp and summed.
     """
-    real_taker_fns = [fetch_binance_spot_cvd, fetch_okx_spot_cvd, fetch_mexc_spot_cvd]
+    real_taker_fns = [_fetch_binance_spot_cvd_usd, fetch_okx_spot_cvd, _fetch_mexc_spot_cvd_usd]
 
     results = []
     with ThreadPoolExecutor(max_workers=3) as pool:
