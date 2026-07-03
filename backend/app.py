@@ -402,7 +402,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     # ETF flows: daily net inflow/outflow for spot ETFs (BTC/ETH/XRP only).
     etf_flows = None
-    if symbol in ("BTC", "ETH", "XRP") and etf_client.enabled:
+    if symbol in ("BTC", "ETH", "XRP"):
         if symbol == "BTC":
             etf_flows = etf_client.get_btc_etf_flows()
         elif symbol == "ETH":
