@@ -1451,11 +1451,24 @@ function renderEtfFlows(etf, symbol) {
   if (!sec || !grid) return;
 
   const ETF_SYMBOLS = ['BTC', 'ETH', 'XRP'];
-  if (!ETF_SYMBOLS.includes(symbol) || !etf) {
+  if (!ETF_SYMBOLS.includes(symbol)) {
     sec.style.display = 'none';
     return;
   }
   sec.style.display = '';
+
+  if (!etf) {
+    grid.innerHTML = '<div class="etf-unavailable">ETF flow data unavailable — data source unreachable</div>';
+    const sub = document.getElementById('etfFlowsSub');
+    if (sub) sub.textContent = 'Institutional inflow / outflow';
+    return;
+  }
+
+  const sub = document.getElementById('etfFlowsSub');
+  if (sub) {
+    const src = etf.source === 'sosovalue' ? 'SoSoValue' : etf.source === 'coinglass' ? 'CoinGlass' : etf.source || '';
+    sub.textContent = `Institutional inflow / outflow${src ? ' · ' + src : ''}`;
+  }
 
   const fmtM = v => {
     if (v == null) return '—';

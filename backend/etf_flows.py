@@ -9,7 +9,7 @@ import requests
 from typing import Optional, Dict, List
 
 CG_BASE  = "https://open-api.coinglass.com/public/v2"
-SSV_BASE = "https://ssosovalue.com"
+SSV_BASE = "https://sosovalue.com"
 TIMEOUT  = 15
 
 # Cache: {symbol -> (data, fetched_at)}
@@ -19,7 +19,7 @@ _CACHE_TTL = 3600  # ETF flows reported daily — 1h cache is fine
 _ssv_s = requests.Session()
 _ssv_s.headers.update({
     "User-Agent": "Mozilla/5.0 CryptoBadshah/2.0",
-    "Referer":    "https://ssosovalue.com/",
+    "Referer":    "https://sosovalue.com/",
 })
 
 
@@ -109,12 +109,15 @@ def _ssv_etf_flows(symbol: str) -> Optional[Dict]:
     """
     channel = "BTC" if symbol == "BTC" else "ETH"
 
-    # Try several known SoSoValue endpoint patterns
+    # Try several known SoSoValue endpoint patterns (sosovalue.com public API)
     raw = None
+    etf_slug = "us-btc-spot" if symbol == "BTC" else "us-eth-spot"
     endpoints = [
-        ("/v1/fund/spot-etf/flow-list",  {"channel": channel, "lang": "en", "size": 60}),
-        ("/v1/fund/spot-etf/daily-flow", {"channel": channel, "lang": "en", "size": 60}),
-        ("/api/etf/spot/flow",           {"symbol": channel, "limit": 60}),
+        (f"/api/etf/{etf_slug}/flow-list",       {"size": 60}),
+        (f"/api/etf/{etf_slug}/flow-history",    {"size": 60}),
+        ("/v1/fund/spot-etf/flow-list",          {"channel": channel, "lang": "en", "size": 60}),
+        ("/v1/fund/spot-etf/daily-flow",         {"channel": channel, "lang": "en", "size": 60}),
+        ("/api/etf/spot/flow",                   {"symbol": channel, "limit": 60}),
     ]
     if symbol == "BTC":
         endpoints.append(("/v1/etf/bitcoin/flow-history",  {"size": 60}))

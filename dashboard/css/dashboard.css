@@ -1549,6 +1549,8 @@ a:hover { color: var(--gold2); }
 .etf-bar-out     { background: var(--bear); }
 .etf-bar-legend  { display: flex; justify-content: space-between;
                    font-size: .6rem; color: var(--muted); margin-top: 3px; }
+.etf-unavailable { padding: 16px 0; color: var(--muted); font-size: .75rem;
+                   text-align: center; font-style: italic; }
 
 /* ── GoMining Strategy Advisor ───────────────────────────────────────────── */
 .gomining-card    { padding: 18px 20px; }
