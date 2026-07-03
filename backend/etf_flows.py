@@ -11,6 +11,7 @@ from typing import Optional, Dict, List
 CG_BASE  = "https://open-api.coinglass.com/public/v2"
 SSV_BASE = "https://sosovalue.com"
 TIMEOUT  = 15
+SSV_TIMEOUT = 4   # fail fast — 6 endpoint probes must fit inside Vercel's serverless limit
 
 # Cache: {symbol -> (data, fetched_at)}
 _cache: Dict[str, tuple] = {}
@@ -25,7 +26,7 @@ _ssv_s.headers.update({
 
 def _ssv_get(path: str, params: dict = None) -> Optional[dict]:
     try:
-        r = _ssv_s.get(f"{SSV_BASE}{path}", params=params or {}, timeout=TIMEOUT)
+        r = _ssv_s.get(f"{SSV_BASE}{path}", params=params or {}, timeout=SSV_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except Exception:
