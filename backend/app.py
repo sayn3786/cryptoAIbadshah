@@ -19,6 +19,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from binance import BinanceClient
 from coinglass import CoinGlassClient
+from etf_flows import ETFFlowClient
 from cvd_sources import fetch_cvd_from_source, fetch_aggregated_spot_cvd
 from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     find_volume_spikes, detect_engulfing, detect_cvd_divergence,
@@ -37,7 +38,8 @@ from video import create_talk, get_talk
 
 app = Flask(__name__)
 client = BinanceClient()
-cg_client = CoinGlassClient()
+cg_client  = CoinGlassClient()
+etf_client = ETFFlowClient()
 
 SYMBOLS = {
     "BTC":  "BTCUSDT",
@@ -398,6 +400,16 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
                 mvrv_zone=(btc_mining.get("mvrv") or {}).get("zone"),
             )
 
+    # ETF flows: daily net inflow/outflow for spot ETFs (BTC/ETH/XRP only).
+    etf_flows = None
+    if symbol in ("BTC", "ETH", "XRP") and etf_client.enabled:
+        if symbol == "BTC":
+            etf_flows = etf_client.get_btc_etf_flows()
+        elif symbol == "ETH":
+            etf_flows = etf_client.get_eth_etf_flows()
+        elif symbol == "XRP":
+            etf_flows = etf_client.get_xrp_etf_flows()
+
     # GoMining advisor: lightweight GOMINING price direction (BTC view only).
     # Uses a simple EMA20 slope on 1D candles — avoids full build_analysis overhead.
     gomining_token_signal = None
@@ -484,6 +496,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "options_expiry":         options_expiry,
         "whale_sells":            whale_sells,
         "lth_supply":             lth_supply,
+        "etf_flows":              etf_flows,
     }
     analysis["signal"] = generate_signal(analysis)
 

@@ -207,6 +207,7 @@ function renderAll(a) {
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
   renderArkhamPanel(a.whale_sells);
+  renderEtfFlows(a.etf_flows, a.symbol);
   renderFNGCard(a.fear_greed);
   renderRSICard(a.rsi);
   renderFunding(a.funding_rate);
@@ -1441,6 +1442,75 @@ function renderLSCard(ls) {
   if (lpEl)  lpEl.textContent = `Long ${long_pct.toFixed(1)}%`;
   if (spEl)  spEl.textContent = `Short ${short_pct.toFixed(1)}%`;
   if (barEl) barEl.style.width = `${long_pct}%`;
+}
+
+/* ─── ETF Flows ───────────────────────────────────────────────────────────── */
+function renderEtfFlows(etf, symbol) {
+  const sec  = document.getElementById('etfFlowsSection');
+  const grid = document.getElementById('etfFlowGrid');
+  if (!sec || !grid) return;
+
+  const ETF_SYMBOLS = ['BTC', 'ETH', 'XRP'];
+  if (!ETF_SYMBOLS.includes(symbol) || !etf) {
+    sec.style.display = 'none';
+    return;
+  }
+  sec.style.display = '';
+
+  const fmtM = v => {
+    if (v == null) return '—';
+    const s = v >= 0 ? '+' : '';
+    return `${s}$${Math.abs(v).toFixed(0)}M`;
+  };
+
+  const trendCls = etf.trend === 'inflow' ? 'bull' : etf.trend === 'outflow' ? 'bear' : '';
+  const trendLbl = etf.trend === 'inflow' ? '▲ Inflow' : etf.trend === 'outflow' ? '▼ Outflow' : '— Neutral';
+
+  const vsBadge = (vs) => {
+    if (!vs) return '';
+    const map = {
+      highest:   ['🔺 Highest in 7d',  'etf-hi'],
+      lowest:    ['🔻 Lowest in 7d',   'etf-lo'],
+      above_avg: ['↑ Above avg',        'etf-above'],
+      below_avg: ['↓ Below avg',        'etf-below'],
+      normal:    ['— Normal',           'etf-normal'],
+    };
+    const [label, cls] = map[vs] || ['—', ''];
+    return `<span class="etf-badge ${cls}">${label}</span>`;
+  };
+
+  // Mini bar chart from recent_days
+  const days = etf.recent_days || [];
+  const bars = days.map(d => {
+    const v   = d.m || 0;
+    const pct = days.length ? Math.abs(v) / (Math.max(...days.map(x => Math.abs(x.m || 0))) || 1) * 100 : 0;
+    const cls = v >= 0 ? 'etf-bar-in' : 'etf-bar-out';
+    return `<div class="etf-bar-wrap" title="${fmtM(v)}">
+      <div class="etf-bar ${cls}" style="height:${Math.max(4, pct)}%"></div>
+    </div>`;
+  }).join('');
+
+  grid.innerHTML = `
+    <div class="etf-summary">
+      <div class="etf-today">
+        <div class="etf-today-val ${trendCls}">${fmtM(etf.today_m)}</div>
+        <div class="etf-today-lbl">Today</div>
+        <div class="etf-trend-badge ${trendCls}">${trendLbl}</div>
+      </div>
+      <div class="etf-stats">
+        <div class="etf-stat"><span class="etf-stat-lbl">7d total</span><span class="etf-stat-val ${etf.week_total_m >= 0 ? 'bull' : 'bear'}">${fmtM(etf.week_total_m)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">30d total</span><span class="etf-stat-val ${etf.month_total_m >= 0 ? 'bull' : 'bear'}">${fmtM(etf.month_total_m)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">7d avg/day</span><span class="etf-stat-val">${fmtM(etf.week_avg_m)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">30d avg/day</span><span class="etf-stat-val">${fmtM(etf.month_avg_m)}</span></div>
+      </div>
+      <div class="etf-significance">
+        <div class="etf-sig-row">vs 7d: ${vsBadge(etf.vs_week)}</div>
+        <div class="etf-sig-row">vs 30d: ${vsBadge(etf.vs_month)}</div>
+      </div>
+    </div>
+    ${bars.length ? `<div class="etf-barchart">${bars}</div>
+    <div class="etf-bar-legend"><span>← ${days.length}d ago</span><span>Today →</span></div>` : ''}
+  `;
 }
 
 function renderFNGCard(fg) {

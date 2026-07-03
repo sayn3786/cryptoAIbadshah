@@ -587,6 +587,30 @@ def generate_signal(analysis: Dict) -> Dict:
             f"Exchange netflow: {ws_netflow:,.0f} {ws_sym} leaving exchanges (8h) — accumulation signal"
         )
 
+    # ── ETF Flows ─────────────────────────────────────────────────────────────
+    # Institutional buy/sell via spot ETFs — only BTC/ETH/XRP have ETFs.
+    # Weight: inflow = bullish (institutions accumulating), outflow = bearish.
+    # Magnitude compared to 30d average determines pts (15/8/4 tier).
+    etf = analysis.get("etf_flows") or {}
+    etf_pts  = etf.get("signal_pts", 0) or 0
+    etf_today = etf.get("today_m", 0) or 0
+    etf_trend = etf.get("trend", "neutral") or "neutral"
+    etf_vs_w  = etf.get("vs_week", "normal") or "normal"
+    if etf_pts and etf_today:
+        score += etf_pts; g['flow'] += etf_pts
+        sym_tag = etf.get("symbol", "ETF")
+        sign    = "+" if etf_today > 0 else ""
+        hi_tag  = " — HIGHEST in 7d" if etf_vs_w == "highest" else \
+                  " — LOWEST in 7d"  if etf_vs_w == "lowest"  else ""
+        if etf_trend == "inflow":
+            bull_reasons.append(
+                f"{sym_tag} spot ETF: {sign}${abs(etf_today):.0f}M today (institutional buying){hi_tag}"
+            )
+        else:
+            bear_reasons.append(
+                f"{sym_tag} spot ETF: ${etf_today:.0f}M today (institutional selling){hi_tag}"
+            )
+
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,

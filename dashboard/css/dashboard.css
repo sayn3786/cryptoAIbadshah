@@ -1519,6 +1519,37 @@ a:hover { color: var(--gold2); }
 .arkham-empty     { color: var(--muted); font-style: italic; text-align: center;
                     padding: 14px 0; font-family: var(--font); font-size: .75rem; }
 
+/* ── ETF Flows ───────────────────────────────────────────────────────────── */
+.etf-flow-grid   { padding: 4px 0; }
+.etf-summary     { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; padding: 4px 0 10px; }
+.etf-today       { display: flex; flex-direction: column; gap: 4px; min-width: 90px; }
+.etf-today-val   { font-size: 1.4rem; font-weight: 700; font-family: var(--mono); }
+.etf-today-lbl   { font-size: .65rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.etf-trend-badge { font-size: .72rem; font-weight: 600; padding: 2px 8px; border-radius: 100px; width: fit-content; }
+.etf-trend-badge.bull { background: rgba(16,185,129,.15); color: var(--bull); }
+.etf-trend-badge.bear { background: rgba(239,68,68,.15);  color: var(--bear); }
+.etf-stats       { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; }
+.etf-stat        { display: flex; flex-direction: column; gap: 1px; }
+.etf-stat-lbl    { font-size: .62rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.etf-stat-val    { font-size: .82rem; font-weight: 600; font-family: var(--mono); }
+.etf-significance{ display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+.etf-sig-row     { font-size: .68rem; color: var(--muted2); display: flex; align-items: center; gap: 6px; }
+.etf-badge       { font-size: .65rem; font-weight: 700; padding: 2px 7px; border-radius: 6px; }
+.etf-hi          { background: rgba(16,185,129,.2);  color: #10b981; }
+.etf-lo          { background: rgba(239,68,68,.2);   color: #ef4444; }
+.etf-above       { background: rgba(16,185,129,.1);  color: #34d399; }
+.etf-below       { background: rgba(239,68,68,.1);   color: #f87171; }
+.etf-normal      { background: var(--bg2);            color: var(--muted2); }
+.etf-barchart    { display: flex; align-items: flex-end; gap: 3px; height: 52px;
+                   border-top: 1px solid var(--border); padding-top: 6px; margin-top: 4px; }
+.etf-bar-wrap    { flex: 1; display: flex; align-items: flex-end; height: 100%; cursor: default; }
+.etf-bar         { width: 100%; border-radius: 2px 2px 0 0; min-height: 4px; transition: opacity .2s; }
+.etf-bar:hover   { opacity: .75; }
+.etf-bar-in      { background: var(--bull); }
+.etf-bar-out     { background: var(--bear); }
+.etf-bar-legend  { display: flex; justify-content: space-between;
+                   font-size: .6rem; color: var(--muted); margin-top: 3px; }
+
 /* ── GoMining Strategy Advisor ───────────────────────────────────────────── */
 .gomining-card    { padding: 18px 20px; }
 
