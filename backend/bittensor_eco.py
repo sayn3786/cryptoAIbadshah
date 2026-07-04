@@ -97,14 +97,24 @@ def _network_stats() -> Optional[Dict]:
         return None
     supply  = _num(row, "issued", "total_supply", "circulating_supply", div=RAO)
     staked  = _num(row, "staked", "total_stake", "delegated_stake", div=RAO)
+    # Root-vs-Alpha split — the cleanest dTAO adoption metric: TAO staked into
+    # subnet Alpha pools vs parked on the root network.
+    st_alpha = _num(row, "staked_alpha", div=RAO)
+    st_root  = _num(row, "staked_root", div=RAO)
+    free     = _num(row, "free", div=RAO)
     # some deployments return plain TAO not rao — sanity-correct
     if supply and supply < 1000:
         supply = _num(row, "issued", "total_supply", "circulating_supply") or supply
     if staked and supply and staked > supply:
         staked = staked / RAO
-    out = {"supply_tao": supply, "staked_tao": staked}
+    out = {"supply_tao": supply, "staked_tao": staked,
+           "staked_alpha_tao": round(st_alpha) if st_alpha else None,
+           "staked_root_tao":  round(st_root) if st_root else None,
+           "free_tao":         round(free) if free else None}
     if supply and staked:
         out["staked_pct"] = round(staked / supply * 100, 1)
+    if st_alpha and staked:
+        out["alpha_share_pct"] = round(st_alpha / staked * 100, 1)
     return out
 
 
@@ -135,33 +145,85 @@ def _subnets() -> Optional[List[Dict]]:
     return out or None
 
 
-def _tao_flow() -> Optional[Dict]:
-    """Net TAO flow into (+) / out of (-) subnet pools — the leading signal."""
-    j = _get("/api/dtao/tao_flow/v1")
+def _pools() -> Optional[Dict[int, Dict]]:
+    """dTAO pool data per netuid — alpha price (in TAO), mcap, TAO reserve."""
+    j = _get("/api/dtao/pool/latest/v1", {"limit": 200})
     if not j:
         return None
     rows = j.get("data") or []
     if not isinstance(rows, list) or not rows:
         return None
-    tot_24h = tot_7d = 0.0
-    seen = False
+    out = {}
+    for r in rows:
+        if not isinstance(r, dict) or r.get("netuid") in (None, 0):
+            continue
+        price = _num(r, "price", "alpha_price", "alpha_price_tao")
+        # price is a TAO-per-alpha ratio (~0.001-1); rao-scaled values need /1e9
+        if price and price > 1e6:
+            price /= RAO
+        tao_in = _num(r, "total_tao", "tao_in", "tao_reserve", "liquidity", div=RAO)
+        mcap   = _num(r, "market_cap", "alpha_market_cap", "mcap", div=RAO)
+        out[int(r["netuid"])] = {
+            "name":  (r.get("name") or r.get("symbol") or r.get("subnet_name")),
+            "alpha_price_tao": price,
+            "tao_in_pool": tao_in,
+            "mcap": mcap,
+            "chg_1d": _num(r, "price_change_1_day", "price_change_24h", "price_change_1d"),
+            "chg_7d": _num(r, "price_change_7_day", "price_change_1_week", "price_change_7d"),
+        }
+    return out or None
+
+
+def _flow_from_history() -> Optional[Dict]:
+    """
+    Net TAO flow into subnet Alpha pools, derived from the change in
+    staked_alpha across stats-history snapshots — reliable units, unlike the
+    raw tao_flow endpoint whose per-subnet field proved unit-ambiguous.
+    """
+    j = _get("/api/stats/history/v1", {"limit": 200})
+    if not j:
+        return None
+    rows = j.get("data") or []
+    if not isinstance(rows, list) or len(rows) < 2:
+        return None
+    pts = []
     for r in rows:
         if not isinstance(r, dict):
             continue
-        f24 = _num(r, "tao_flow_1_day", "flow_24h", "tao_flow_24h", "one_day")
-        f7  = _num(r, "tao_flow_7_day", "flow_7d", "tao_flow_7d", "seven_day")
-        if f24 is None and f7 is None:
-            f24 = _num(r, "tao_flow", "flow", "amount")
-        if f24 is not None:
-            tot_24h += f24; seen = True
-        if f7 is not None:
-            tot_7d += f7; seen = True
-    if not seen:
+        sa = _num(r, "staked_alpha", div=RAO)
+        ts = r.get("timestamp") or r.get("block_timestamp")
+        if sa is None or ts is None:
+            continue
+        try:
+            if isinstance(ts, str):
+                t = datetime_fromiso(ts)
+            else:
+                t = float(ts) / (1000 if float(ts) > 1e12 else 1)
+            pts.append((t, sa))
+        except Exception:
+            continue
+    if len(pts) < 2:
         return None
-    # rao heuristic: subnet flows in the billions+ are rao-denominated
-    if abs(tot_24h) > 1e8: tot_24h /= RAO
-    if abs(tot_7d)  > 1e8: tot_7d  /= RAO
-    return {"net_24h_tao": round(tot_24h), "net_7d_tao": round(tot_7d)}
+    pts.sort(key=lambda x: x[0])
+    t0, v0 = pts[0]
+    t1, v1 = pts[-1]
+    span_s = max(t1 - t0, 1)
+    rate_per_day = (v1 - v0) / (span_s / 86400)
+    return {
+        "net_24h_tao": round(rate_per_day),
+        "net_7d_tao":  round(rate_per_day * 7),
+        "window_days": round(span_s / 86400, 1),
+        "basis": "staked_alpha change (stats history)",
+    }
+
+
+def datetime_fromiso(ts: str) -> float:
+    from datetime import datetime, timezone
+    s = ts.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 
 def get_tao_ecosystem() -> Optional[Dict]:
@@ -175,11 +237,25 @@ def get_tao_ecosystem() -> Optional[Dict]:
 
     stats   = _network_stats()
     subnets = _subnets()
-    flow    = _tao_flow()
+    pools   = _pools()
+    flow    = _flow_from_history()
 
     if not stats and not subnets and not flow:
         _cache["eco"] = (None, time.time())
         return None
+
+    # Merge pool data (alpha price / mcap / reserves / price changes) into the
+    # subnet rows — the metagraph endpoint carries emission but not prices.
+    if subnets and pools:
+        for s in subnets:
+            p = pools.get(s["netuid"])
+            if not p:
+                continue
+            for k in ("alpha_price_tao", "tao_in_pool", "mcap", "chg_1d", "chg_7d"):
+                if s.get(k) is None and p.get(k) is not None:
+                    s[k] = p[k]
+            if p.get("name") and s["name"].startswith("SN"):
+                s["name"] = str(p["name"])[:24]
 
     result: Dict = {"stats": stats, "flow": flow}
 

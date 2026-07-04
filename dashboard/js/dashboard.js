@@ -3609,6 +3609,9 @@ function renderTaoEco(eco, symbol) {
   if (st.staked_pct != null)
     tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Supply staked</span>
       <span class="etf-stat-val">${st.staked_pct}%</span></div>`);
+  if (st.alpha_share_pct != null)
+    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Stake in Alphas vs Root</span>
+      <span class="etf-stat-val">${st.alpha_share_pct}%</span></div>`);
   if (fl.net_24h_tao != null)
     tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Subnet pool flow 24h</span>
       <span class="etf-stat-val ${flCls(fl.net_24h_tao)}">${fmtTao(fl.net_24h_tao)}</span></div>`);
