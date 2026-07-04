@@ -422,7 +422,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     # Macro backdrop: high-impact US releases (CPI, Fed, jobs…). Global to all
     # crypto — cached 6h in macro.py so this call is essentially free per token.
-    macro = get_macro_events()
+    # Never let a macro fetch failure break the whole analysis response.
+    try:
+        macro = get_macro_events()
+    except Exception:
+        macro = None
 
     # GoMining advisor: lightweight GOMINING price direction (BTC view only).
     # Uses a simple EMA20 slope on 1D candles — avoids full build_analysis overhead.

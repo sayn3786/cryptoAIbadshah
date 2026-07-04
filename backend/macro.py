@@ -217,19 +217,38 @@ def get_macro_events() -> Optional[Dict]:
     if cached and time.time() - cached[1] < _CACHE_TTL:
         return cached[0]
 
+    # Fully defensive: this runs inside build_analysis, so it must NEVER raise —
+    # a TimeoutError from as_completed would otherwise crash the whole analyze
+    # response and blank the dashboard.
     events: List[Dict] = []
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        fut_map = {pool.submit(_fetch_series, ind["series"]): ind for ind in INDICATORS}
-        for fut in as_completed(fut_map, timeout=TIMEOUT * 2 + 4):
-            ind = fut_map[fut]
+    try:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            fut_map = {pool.submit(_fetch_series, ind["series"]): ind for ind in INDICATORS}
             try:
-                series = fut.result()
-                if series:
-                    ev = _compute(ind, series)
-                    if ev:
-                        events.append(ev)
+                for fut in as_completed(fut_map, timeout=TIMEOUT * 2 + 4):
+                    ind = fut_map[fut]
+                    try:
+                        series = fut.result()
+                        if series:
+                            ev = _compute(ind, series)
+                            if ev:
+                                events.append(ev)
+                    except Exception:
+                        continue
             except Exception:
-                continue
+                # as_completed timed out — keep whatever completed so far
+                for fut, ind in fut_map.items():
+                    if fut.done() and not fut.cancelled():
+                        try:
+                            series = fut.result()
+                            if series:
+                                ev = _compute(ind, series)
+                                if ev and not any(e["key"] == ev["key"] for e in events):
+                                    events.append(ev)
+                        except Exception:
+                            continue
+    except Exception:
+        events = []
 
     if not events:
         _cache["macro"] = (None, time.time())
