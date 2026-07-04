@@ -293,38 +293,52 @@ def _fetch_fear_greed() -> Dict:
 #   - Mayer Multiple: price / 200DMA, >2.4 = historically overheated
 _top_cache: dict = {}
 
-def _btc_top_signals(realized_price):
+def _btc_top_signals(realized_price, spot_price=None):
     cached = _top_cache.get("top")
-    if cached and time.time() - cached[1] < 3600:
+    # Successful results cache 1h; failures retry after 10 min
+    if cached and time.time() - cached[1] < (3600 if cached[0] else 600):
         out = cached[0]
     else:
         out = None
         try:
             daily = client.get_spot_klines("BTCUSDT", "1d", 1000) or []
             closes = [c["close"] for c in daily]
-            if len(closes) >= 360:
-                price   = closes[-1]
-                dma111  = sum(closes[-111:]) / 111
-                dma350  = sum(closes[-350:]) / 350
-                dma200  = sum(closes[-200:]) / 200
-                pi_ratio = dma111 / (2 * dma350) if dma350 else None
+            n = len(closes)
+            # Degrade gracefully: Binance (1000 daily) may be geo-blocked on the
+            # host and fallback exchanges return ~300 candles — compute whatever
+            # the available history allows. Mayer needs 200d; Pi Cycle needs 350d.
+            if n >= 30:
+                price  = closes[-1]
+                dma200 = sum(closes[-200:]) / 200 if n >= 200 else None
+                dma111 = sum(closes[-111:]) / 111 if n >= 111 else None
+                dma350 = sum(closes[-350:]) / 350 if n >= 350 else None
+                pi_ratio = dma111 / (2 * dma350) if (dma111 and dma350) else None
                 mayer    = price / dma200 if dma200 else None
                 out = {
                     "price":        round(price, 0),
+                    "n_days":       n,
                     "pi_ratio":     round(pi_ratio, 3) if pi_ratio else None,
                     "pi_crossed":   bool(pi_ratio and pi_ratio >= 1.0),
-                    "pi_dma111":    round(dma111, 0),
-                    "pi_target":    round(2 * dma350, 0),   # price zone where Pi Cycle fires
+                    "pi_dma111":    round(dma111, 0) if dma111 else None,
+                    "pi_target":    round(2 * dma350, 0) if dma350 else None,
                     "mayer":        round(mayer, 2) if mayer else None,
-                    "mayer_band":   round(dma200 * 2.4, 0),
+                    "mayer_band":   round(dma200 * 2.4, 0) if dma200 else None,
                 }
         except Exception:
             out = None
         _top_cache["top"] = (out, time.time())
 
+    # Even with zero candle history, the MVRV top band needs only the realized
+    # price — never show nothing when we can show the ceiling.
     if out is None:
-        return None
+        if not realized_price:
+            return None
+        out = {"price": round(spot_price, 0) if spot_price else None, "n_days": 0,
+               "pi_ratio": None, "pi_crossed": False, "pi_dma111": None,
+               "pi_target": None, "mayer": None, "mayer_band": None}
     out = dict(out)
+    if not out.get("price") and spot_price:
+        out["price"] = round(spot_price, 0)
     if realized_price:
         out["top_band"] = round(realized_price * 3.5, 0)   # MVRV 3.5 ceiling
         if out.get("price"):
@@ -491,7 +505,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
     if btc_mining:
         try:
-            btc_mining["top_signals"] = _btc_top_signals(btc_mining.get("realized_price"))
+            _spot_px = spot[-1]["close"] if spot else None
+            btc_mining["top_signals"] = _btc_top_signals(
+                btc_mining.get("realized_price"), _spot_px)
         except Exception:
             btc_mining["top_signals"] = None
 
@@ -808,6 +824,30 @@ def api_etf():
         return jsonify({"data": data, "debug": get_etf_debug()})
     if not data:
         return jsonify({"error": f"No ETF flow data for {symbol}"}), 503
+    return jsonify(data)
+
+
+@app.get("/api/btc-top")
+def api_btc_top():
+    """BTC cycle-top signals; ?debug=1 shows candle-history availability."""
+    mining = get_btc_mining_signals()
+    rp = (mining or {}).get("realized_price")
+    _px = None
+    try:
+        _d = client.get_spot_klines("BTCUSDT", "1d", 2) or []
+        _px = _d[-1]["close"] if _d else None
+    except Exception:
+        pass
+    data = _btc_top_signals(rp, _px)
+    if request.args.get("debug"):
+        return jsonify({"data": data, "debug": {
+            "realized_price": rp,
+            "spot_price": _px,
+            "n_days_history": (data or {}).get("n_days"),
+            "cache_age_s": round(time.time() - _top_cache["top"][1]) if _top_cache.get("top") else None,
+        }})
+    if not data:
+        return jsonify({"error": "top signals unavailable"}), 503
     return jsonify(data)
 
 
