@@ -205,14 +205,24 @@ def _flow_from_history() -> Optional[Dict]:
     if len(pts) < 2:
         return None
     pts.sort(key=lambda x: x[0])
-    t0, v0 = pts[0]
     t1, v1 = pts[-1]
-    span_s = max(t1 - t0, 1)
-    rate_per_day = (v1 - v0) / (span_s / 86400)
+
+    def _delta(days_ago: float):
+        """Change vs the snapshot closest to `days_ago` (±60% tolerance)."""
+        target = t1 - days_ago * 86400
+        best = min(pts[:-1], key=lambda p: abs(p[0] - target), default=None)
+        if best is None or abs(best[0] - target) > days_ago * 86400 * 0.6:
+            return None, None
+        return v1 - best[1], (t1 - best[0]) / 86400
+
+    d24, w24 = _delta(1)
+    d7,  w7  = _delta(7)
+    if d24 is None and d7 is None:
+        return None
     return {
-        "net_24h_tao": round(rate_per_day),
-        "net_7d_tao":  round(rate_per_day * 7),
-        "window_days": round(span_s / 86400, 1),
+        "net_24h_tao": round(d24) if d24 is not None else None,
+        "net_7d_tao":  round(d7)  if d7  is not None else None,
+        "window_days": round(w7 if w7 is not None else w24, 1),
         "basis": "staked_alpha change (stats history)",
     }
 
