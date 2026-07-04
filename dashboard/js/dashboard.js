@@ -1485,21 +1485,21 @@ function renderEtfFlows(etf, symbol) {
 
   const fmtM = v => {
     if (v == null) return '—';
-    const s = v >= 0 ? '+' : '';
+    const s = v > 0 ? '+' : v < 0 ? '−' : '';
     return `${s}$${Math.abs(v).toFixed(0)}M`;
   };
 
   const trendCls = etf.trend === 'inflow' ? 'bull' : etf.trend === 'outflow' ? 'bear' : '';
   const trendLbl = etf.trend === 'inflow' ? '▲ Inflow' : etf.trend === 'outflow' ? '▼ Outflow' : '— Neutral';
 
-  const vsBadge = (vs) => {
+  const vsBadge = (vs, win) => {
     if (!vs) return '';
     const map = {
-      highest:   ['🔺 Highest in 7d',  'etf-hi'],
-      lowest:    ['🔻 Lowest in 7d',   'etf-lo'],
-      above_avg: ['↑ Above avg',        'etf-above'],
-      below_avg: ['↓ Below avg',        'etf-below'],
-      normal:    ['— Normal',           'etf-normal'],
+      highest:   [`🔺 Highest in ${win}`, 'etf-hi'],
+      lowest:    [`🔻 Lowest in ${win}`,  'etf-lo'],
+      above_avg: ['↑ Above avg',           'etf-above'],
+      below_avg: ['↓ Below avg',           'etf-below'],
+      normal:    ['— Normal',              'etf-normal'],
     };
     const [label, cls] = map[vs] || ['—', ''];
     return `<span class="etf-badge ${cls}">${label}</span>`;
@@ -1526,12 +1526,12 @@ function renderEtfFlows(etf, symbol) {
       <div class="etf-stats">
         <div class="etf-stat"><span class="etf-stat-lbl">7d total</span><span class="etf-stat-val ${etf.week_total_m >= 0 ? 'bull' : 'bear'}">${fmtM(etf.week_total_m)}</span></div>
         <div class="etf-stat"><span class="etf-stat-lbl">30d total</span><span class="etf-stat-val ${etf.month_total_m >= 0 ? 'bull' : 'bear'}">${fmtM(etf.month_total_m)}</span></div>
-        <div class="etf-stat"><span class="etf-stat-lbl">7d avg/day</span><span class="etf-stat-val">${fmtM(etf.week_avg_m)}</span></div>
-        <div class="etf-stat"><span class="etf-stat-lbl">30d avg/day</span><span class="etf-stat-val">${fmtM(etf.month_avg_m)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">7d avg/day</span><span class="etf-stat-val ${etf.week_avg_m >= 0 ? 'bull' : 'bear'}">${fmtM(etf.week_avg_m)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">30d avg/day</span><span class="etf-stat-val ${etf.month_avg_m >= 0 ? 'bull' : 'bear'}">${fmtM(etf.month_avg_m)}</span></div>
       </div>
       <div class="etf-significance">
-        <div class="etf-sig-row">vs 7d: ${vsBadge(etf.vs_week)}</div>
-        <div class="etf-sig-row">vs 30d: ${vsBadge(etf.vs_month)}</div>
+        <div class="etf-sig-row">vs 7d: ${vsBadge(etf.vs_week, '7d')}</div>
+        <div class="etf-sig-row">vs 30d: ${vsBadge(etf.vs_month, '30d')}</div>
       </div>
     </div>
     ${bars.length ? `<div class="etf-barchart">${bars}</div>
