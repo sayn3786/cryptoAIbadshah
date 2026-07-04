@@ -1578,6 +1578,28 @@ a:hover { color: var(--gold2); }
 .macro-flip   { font-size: .56rem; font-weight: 700; color: #fbbf24;
                 background: rgba(251,191,36,.14); padding: 1px 6px;
                 border-radius: 20px; letter-spacing: .03em; vertical-align: middle; }
+
+/* ── Context strips (calendar / traditional markets / regime) ────────────── */
+.ctx-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.ctx-pill  { font-size: .64rem; font-weight: 600; padding: 3px 9px; border-radius: 20px;
+             background: rgba(255,255,255,.04); border: 1px solid var(--border, #1e2d44);
+             color: var(--muted, #94a3b8); white-space: nowrap; }
+.ctx-pill.bull { color: var(--bull, #10b981); border-color: rgba(16,185,129,.35); }
+.ctx-pill.bear { color: var(--bear, #ef4444); border-color: rgba(239,68,68,.35); }
+.ctx-pill.cal-soon { color: #fbbf24; border-color: rgba(251,191,36,.45);
+                     background: rgba(251,191,36,.08); font-weight: 700; }
+
+/* ── Signal accuracy panel ────────────────────────────────────────────────── */
+.sigacc-grid  { display: flex; flex-direction: column; gap: 6px; }
+.sigacc-row   { display: grid; grid-template-columns: 1fr 1fr 1.2fr 1fr; gap: 8px;
+                padding: 8px 10px; border: 1px solid var(--border, #1e2d44);
+                border-radius: 8px; background: rgba(255,255,255,.02);
+                font-size: .72rem; align-items: center; }
+.sigacc-total { border-top: 2px solid var(--border, #1e2d44); font-weight: 700; }
+.sigacc-tier  { font-weight: 700; color: var(--text, #e2e8f0); }
+.sigacc-rate  { font-weight: 700; }
+.sigacc-n     { color: var(--muted, #94a3b8); }
+.sigacc-avg   { text-align: right; }
 .macro-bull   { color: var(--bull, #10b981); }
 .macro-bear   { color: var(--bear, #ef4444); }
 

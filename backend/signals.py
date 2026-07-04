@@ -641,6 +641,42 @@ def generate_signal(analysis: Dict) -> Dict:
                     f"Macro headwind ({bias.upper()}): {names} — drops strength until next release"
                 )
 
+    # ── Traditional markets backdrop (DXY / SPX / 10Y) ────────────────────────
+    # Crypto is a risk asset: dollar and yields lead it, equities correlate.
+    # Small weight — context, not a trigger. Capped at ±8.
+    mkts = analysis.get("markets") or {}
+    mkt_net = mkts.get("net_pts", 0) or 0
+    if mkt_net:
+        mkt_pts = max(-8, min(8, mkt_net))
+        score += mkt_pts; g['sentiment'] += mkt_pts
+        drivers = [m for m in (mkts.get("markets") or []) if m.get("impact") in ("bullish", "bearish")]
+        names = ", ".join(f"{m['label']} {'↑' if m['trend']=='up' else '↓'}" for m in drivers[:3])
+        if mkt_pts > 0:
+            bull_reasons.append(f"Traditional markets supportive: {names}")
+        else:
+            bear_reasons.append(f"Traditional markets headwind: {names}")
+
+    # ── Market regime (BTC dominance / stablecoin liquidity / alt rotation) ──
+    reg = analysis.get("regime") or {}
+    sym_l = analysis.get("symbol", "")
+    if reg:
+        # Alt tilt: only for non-BTC symbols — alt longs fight a BTC-led tape
+        alt_tilt = reg.get("alt_tilt_pts", 0) or 0
+        if alt_tilt and sym_l != "BTC":
+            score += alt_tilt; g['sentiment'] += alt_tilt
+            note = reg.get("regime_note", "")
+            spread = reg.get("alt_spread_7d")
+            spread_s = f" (alts {spread:+.1f}pp vs BTC 7d)" if spread is not None else ""
+            if alt_tilt > 0:
+                bull_reasons.append(f"Altseason regime — {note}{spread_s}")
+            else:
+                bear_reasons.append(f"BTC-led regime — {note}{spread_s}")
+        # Liquidity tilt: stablecoin supply expanding/contracting affects everything
+        liq_tilt = reg.get("liq_tilt_pts", 0) or 0
+        if liq_tilt:
+            score += liq_tilt; g['sentiment'] += liq_tilt
+            (bull_reasons if liq_tilt > 0 else bear_reasons).append(reg.get("liq_note") or "")
+
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,
@@ -1311,6 +1347,28 @@ def generate_signal(analysis: Dict) -> Dict:
     else:
         tier = "Confirmed"
         size_guide = "Full position — maximum confluence, can consider scaling"
+
+    # ── Event-risk window (FOMC / CPI / NFP within 48h) ───────────────────────
+    # Pros de-risk into scheduled releases: volatility spikes and stops get
+    # hunted regardless of setup quality. Discount strength, adjust sizing.
+    ev = analysis.get("event_risk")
+    if ev and direction != "NEUTRAL":
+        strength = max(0, round(strength * 0.90))
+        size_guide += f" · ⏳ {ev['name']} {ev['label']} — reduce size into the release"
+        warn = f"⏳ Event risk: {ev['name']} {ev['label']} ({ev['date']}) — expect volatility, −10% strength"
+        (bear_reasons if direction == "LONG" else bull_reasons).append(warn)
+
+    # ── Volatility regime sizing ──────────────────────────────────────────────
+    # "Full position" in a dead-calm tape and during a volatility explosion are
+    # very different risks — scale the size guide by the token's own ATR percentile.
+    vr = analysis.get("vol_regime")
+    if vr and direction != "NEUTRAL":
+        if vr["zone"] == "extreme":
+            size_guide += f" · 🌡 Volatility {vr['percentile']}th pct (extreme) — halve stated size"
+            (bear_reasons if direction == "LONG" else bull_reasons).append(
+                f"🌡 Volatility regime extreme ({vr['percentile']}th percentile of own history) — violent tape, halve size")
+        elif vr["zone"] == "calm":
+            size_guide += f" · 🌡 Volatility {vr['percentile']}th pct (calm) — compressed tape, breakout risk both ways"
 
     # ── Market-cap volatility tier — dynamic ATR cap ──────────────────────────
     market_cap = analysis.get("market_cap")

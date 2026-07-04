@@ -399,6 +399,80 @@ def get_macro_events() -> Optional[Dict]:
     return result
 
 
+# ── Traditional-market backdrop (DXY / S&P 500 / US 10Y) ─────────────────────
+# Crypto trades as a risk asset: a rising dollar or spiking yields front-runs
+# most crypto dumps; a rising S&P supports risk appetite. Daily series on FRED.
+_MARKETS = [
+    {"key": "dollar", "label": "US Dollar Index", "series": "DTWEXBGS",
+     "rising_impact": "bearish",
+     "why_up":   "Dollar strengthening → global liquidity tightens → bearish crypto",
+     "why_down": "Dollar weakening → liquidity easing → bullish crypto"},
+    {"key": "us10y", "label": "US 10Y Yield", "series": "DGS10",
+     "rising_impact": "bearish",
+     "why_up":   "Yields rising → risk-free return competes with risk assets → bearish",
+     "why_down": "Yields falling → easier financial conditions → bullish"},
+    {"key": "spx", "label": "S&P 500", "series": "SP500",
+     "rising_impact": "bullish",
+     "why_up":   "Equities rising → broad risk-on → bullish crypto",
+     "why_down": "Equities falling → risk-off contagion → bearish crypto"},
+]
+
+
+def get_market_backdrop() -> Optional[Dict]:
+    """5d-vs-20d trend for DXY / 10Y / SPX with crypto impact. Cached 6h."""
+    cached = _cache.get("markets")
+    if cached:
+        ttl = _CACHE_TTL if cached[0] is not None else _FAIL_CACHE_TTL
+        if time.time() - cached[1] < ttl:
+            return cached[0]
+
+    rows: List[Dict] = []
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            fut_map = {pool.submit(_fetch_series, m["series"]): m for m in _MARKETS}
+            for fut in as_completed(fut_map, timeout=TIMEOUT * 2 + 4):
+                m = fut_map[fut]
+                try:
+                    series = fut.result()
+                except Exception:
+                    continue
+                if not series or len(series) < 21:
+                    continue
+                vals   = [v for _, v in series]
+                cur    = vals[-1]
+                avg5   = sum(vals[-5:]) / 5
+                avg20  = sum(vals[-20:]) / 20
+                chg5   = (cur / avg5 - 1) * 100 if avg5 else 0
+                trend  = "up" if avg5 > avg20 * 1.0005 else \
+                         "down" if avg5 < avg20 * 0.9995 else "flat"
+                rising = m["rising_impact"]
+                falling = "bullish" if rising == "bearish" else "bearish"
+                impact = rising if trend == "up" else falling if trend == "down" else "neutral"
+                reason = m["why_up"] if trend == "up" else \
+                         m["why_down"] if trend == "down" else "Trend flat — limited impact"
+                pts = 4 if impact == "bullish" else -4 if impact == "bearish" else 0
+                rows.append({
+                    "key": m["key"], "label": m["label"],
+                    "value": round(cur, 2), "chg5d_pct": round(chg5, 2),
+                    "trend": trend, "impact": impact, "reason": reason,
+                    "signal_pts": pts, "as_of": series[-1][0],
+                })
+    except Exception:
+        rows = []
+
+    if not rows:
+        _cache["markets"] = (None, time.time())
+        return None
+
+    order = {m["key"]: i for i, m in enumerate(_MARKETS)}
+    rows.sort(key=lambda r: order.get(r["key"], 9))
+    net = sum(r["signal_pts"] for r in rows)
+    result = {"markets": rows, "net_pts": net,
+              "bias": "risk-on" if net > 0 else "risk-off" if net < 0 else "mixed"}
+    _cache["markets"] = (result, time.time())
+    return result
+
+
 def get_macro_debug() -> Dict:
     """Diagnostics for /api/macro?debug=1 — last per-series fetch errors."""
     cached = _cache.get("macro")

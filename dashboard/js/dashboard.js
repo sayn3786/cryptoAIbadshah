@@ -208,6 +208,9 @@ function renderAll(a) {
   renderWhaleActivity(a.whale_activity || []);
   renderArkhamPanel(a.whale_sells);
   renderEtfFlows(a.etf_flows, a.symbol);
+  renderMarketContext(a.markets, a.regime);
+  trackSignal(a);
+  evaluateSignals(a);
   renderFNGCard(a.fear_greed);
   renderRSICard(a.rsi);
   renderFunding(a.funding_rate);
@@ -3449,6 +3452,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   checkStrengthChanges();
   loadWhaleAlerts();
   loadMacro();
+  loadCalendar();
   setInterval(loadWhaleAlerts, 5 * 60 * 1000);
   setInterval(loadMacro, 6 * 60 * 60 * 1000);   // macro updates a few times/day at most
 
@@ -3470,6 +3474,128 @@ async function loadMacro() {
     console.warn('Macro load failed:', e.message);
     sec.style.display = 'none';
   }
+}
+
+/* ─── Traditional markets + regime strip ──────────────────────────────────── */
+function renderMarketContext(markets, regime) {
+  const el = document.getElementById('marketsStrip');
+  if (!el) return;
+  const pills = [];
+  (markets?.markets || []).forEach(m => {
+    const cls = m.impact === 'bullish' ? 'bull' : m.impact === 'bearish' ? 'bear' : '';
+    const arr = m.trend === 'up' ? '↑' : m.trend === 'down' ? '↓' : '→';
+    pills.push(`<span class="ctx-pill ${cls}" title="${m.reason}">${m.label} ${m.value} ${arr}</span>`);
+  });
+  if (regime) {
+    if (regime.btc_dominance != null)
+      pills.push(`<span class="ctx-pill" title="Bitcoin market-cap dominance">BTC.D ${regime.btc_dominance}%</span>`);
+    const rCls = regime.regime === 'altseason' ? 'bull' : regime.regime === 'btc-led' ? 'bear' : '';
+    pills.push(`<span class="ctx-pill ${rCls}" title="${regime.regime_note || ''}">Regime: ${regime.regime}${regime.alt_spread_7d != null ? ` (${regime.alt_spread_7d > 0 ? '+' : ''}${regime.alt_spread_7d}pp)` : ''}</span>`);
+    if (regime.stable_30d_pct != null) {
+      const sCls = regime.stable_30d_pct >= 2 ? 'bull' : regime.stable_30d_pct <= -1 ? 'bear' : '';
+      pills.push(`<span class="ctx-pill ${sCls}" title="USDT market-cap change over 30d — crypto liquidity proxy">Stables ${regime.stable_30d_pct > 0 ? '+' : ''}${regime.stable_30d_pct}%/30d</span>`);
+    }
+  }
+  el.innerHTML = pills.join('');
+  el.style.display = pills.length ? '' : 'none';
+}
+
+/* ─── Upcoming economic events ────────────────────────────────────────────── */
+async function loadCalendar() {
+  const el = document.getElementById('calendarStrip');
+  if (!el) return;
+  try {
+    const res = await fetch(`${API}/calendar`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const evs = data.events || [];
+    if (!evs.length) { el.style.display = 'none'; return; }
+    el.innerHTML = evs.slice(0, 4).map(e => {
+      const soon = e.days_away <= 2;
+      const when = e.days_away === 0 ? 'TODAY' : e.days_away === 1 ? 'tomorrow' : `in ${e.days_away}d`;
+      return `<span class="ctx-pill cal ${soon ? 'cal-soon' : ''}" title="${e.date}">⏳ ${e.name} — ${when}</span>`;
+    }).join('');
+    el.style.display = '';
+  } catch (_) { el.style.display = 'none'; }
+}
+
+/* ─── Signal outcome tracker (this device) ────────────────────────────────── */
+const SIGLOG_KEY = 'signal_log_v1';
+const _sigLog = {
+  read()  { try { return JSON.parse(localStorage.getItem(SIGLOG_KEY) || '[]'); } catch (_) { return []; } },
+  write(l){ try { localStorage.setItem(SIGLOG_KEY, JSON.stringify(l)); } catch (_) {} },
+};
+
+function trackSignal(a) {
+  const sig = a?.signal;
+  if (!sig || sig.direction === 'NEUTRAL' || !a.candles?.length) return;
+  const last = a.candles[a.candles.length - 1];
+  const id = `${a.symbol}|${a.timeframe}|${last.timestamp}`;
+  const log = _sigLog.read();
+  if (log.some(e => e.id === id)) return;
+  log.push({ id, sym: a.symbol, tf: a.timeframe, dir: sig.direction,
+             tier: sig.tier, strength: sig.strength, price: last.close,
+             ts: last.timestamp });
+  while (log.length > 400) log.shift();
+  _sigLog.write(log);
+}
+
+function evaluateSignals(a) {
+  const log = _sigLog.read();
+  const candles = a?.candles || [];
+  let changed = false;
+  log.forEach(e => {
+    if (e.done || e.sym !== a.symbol || e.tf !== a.timeframe) return;
+    const idx = candles.findIndex(c => c.timestamp === e.ts);
+    if (idx >= 0) {
+      const fwd = candles.slice(idx + 1);
+      if (fwd.length >= 4) {   // outcome = 4 closed candles later
+        e.ret  = (fwd[3].close / e.price - 1) * 100;
+        e.win  = (e.dir === 'LONG') === (e.ret > 0);
+        e.done = true; changed = true;
+      }
+    } else if (candles.length && candles[0].timestamp > e.ts) {
+      // signal candle scrolled out of the window — settle against latest close
+      e.ret  = (candles[candles.length - 1].close / e.price - 1) * 100;
+      e.win  = (e.dir === 'LONG') === (e.ret > 0);
+      e.done = true; changed = true;
+    }
+  });
+  if (changed) _sigLog.write(log);
+  renderSignalAccuracy(log);
+}
+
+function renderSignalAccuracy(log) {
+  const sec  = document.getElementById('sigAccSection');
+  const grid = document.getElementById('sigAccGrid');
+  if (!sec || !grid) return;
+  const done = (log || _sigLog.read()).filter(e => e.done);
+  if (done.length < 3) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+
+  const tiers = ['Confirmed', 'Strong', 'Moderate', 'Weak'];
+  const rows = tiers.map(t => {
+    const sub = done.filter(e => e.tier === t);
+    if (!sub.length) return '';
+    const wins = sub.filter(e => e.win).length;
+    const rate = Math.round(wins / sub.length * 100);
+    const avg  = sub.reduce((s, e) => s + (e.dir === 'LONG' ? e.ret : -e.ret), 0) / sub.length;
+    const cls  = rate >= 55 ? 'bull' : rate <= 45 ? 'bear' : '';
+    return `<div class="sigacc-row">
+      <span class="sigacc-tier">${t}</span>
+      <span class="sigacc-rate ${cls}">${rate}% win</span>
+      <span class="sigacc-n">${wins}/${sub.length} signals</span>
+      <span class="sigacc-avg ${avg >= 0 ? 'bull' : 'bear'}">${avg >= 0 ? '+' : ''}${avg.toFixed(2)}% avg</span>
+    </div>`;
+  }).join('');
+  const total = done.length, totWins = done.filter(e => e.win).length;
+  grid.innerHTML = `${rows}
+    <div class="sigacc-row sigacc-total">
+      <span class="sigacc-tier">All</span>
+      <span class="sigacc-rate">${Math.round(totWins / total * 100)}% win</span>
+      <span class="sigacc-n">${totWins}/${total} signals</span>
+      <span class="sigacc-avg"></span>
+    </div>`;
 }
 
 function renderMacro(data) {

@@ -20,7 +20,9 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from etf_flows import ETFFlowClient
-from macro import get_macro_events
+from macro import get_macro_events, get_market_backdrop
+from market_regime import get_market_regime
+from calendar_events import get_upcoming_events, get_event_risk
 from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
                          fetch_aggregated_futures_cvd)
 from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
@@ -283,6 +285,41 @@ def _fetch_fear_greed() -> Dict:
             return {"value": _fng_cache.get("value"), "label": _fng_cache.get("label")}
 
 
+# ── Volatility regime ─────────────────────────────────────────────────────────
+def _vol_regime(candles: list):
+    """
+    Percentile of the current normalised ATR(14) vs this candle history.
+    >85th pct = explosive tape (halve size); <20th = dead calm.
+    """
+    try:
+        if not candles or len(candles) < 45:
+            return None
+        trs = []
+        for i in range(1, len(candles)):
+            c, p = candles[i], candles[i - 1]
+            tr = max(c["high"] - c["low"],
+                     abs(c["high"] - p["close"]),
+                     abs(c["low"] - p["close"]))
+            trs.append(tr / c["close"] if c["close"] else 0)
+        # ATR(14) series (simple mean), normalised by price
+        natr = [sum(trs[i - 14:i]) / 14 for i in range(14, len(trs) + 1)]
+        if len(natr) < 20:
+            return None
+        cur = natr[-1]
+        # Midrank percentile — ties count half, so a flat tape reads 50th, not 100th
+        less  = sum(1 for v in natr if v < cur - 1e-12)
+        equal = sum(1 for v in natr if abs(v - cur) <= 1e-12)
+        pct = (less + 0.5 * equal) / len(natr) * 100
+        if   pct >= 85: zone, note = "extreme", "Volatility in top 15% of this token's history — expect violent moves, halve position size"
+        elif pct >= 60: zone, note = "elevated", "Volatility above normal — size with care"
+        elif pct <= 20: zone, note = "calm", "Volatility in bottom 20% — compressed tape, breakouts often follow"
+        else:           zone, note = "normal", "Volatility in its normal range"
+        return {"atr_pct": round(cur * 100, 2), "percentile": round(pct),
+                "zone": zone, "note": note}
+    except Exception:
+        return None
+
+
 # ── Core analysis ─────────────────────────────────────────────────────────────
 def build_analysis(symbol: str, timeframe: str) -> dict:
     bs       = SYMBOLS[symbol]
@@ -428,6 +465,27 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     except Exception:
         macro = None
 
+    # Traditional-market backdrop (DXY / SPX / 10Y), market regime (BTC
+    # dominance / stablecoin liquidity / alt rotation) and event-risk window.
+    # All cached in their modules; all guarded — never break the analysis.
+    try:
+        markets = get_market_backdrop()
+    except Exception:
+        markets = None
+    try:
+        regime = get_market_regime()
+    except Exception:
+        regime = None
+    try:
+        event_risk = get_event_risk()
+    except Exception:
+        event_risk = None
+
+    # Volatility regime: current ATR(14)/price percentile vs this token's own
+    # history — tells the signal whether "full size" is being suggested into a
+    # dead-calm or an explosive tape.
+    vol_regime = _vol_regime(spot)
+
     # GoMining advisor: lightweight GOMINING price direction (BTC view only).
     # Uses a simple EMA20 slope on 1D candles — avoids full build_analysis overhead.
     gomining_token_signal = None
@@ -516,6 +574,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "lth_supply":             lth_supply,
         "etf_flows":              etf_flows,
         "macro":                  macro,
+        "markets":                markets,
+        "regime":                 regime,
+        "event_risk":             event_risk,
+        "vol_regime":             vol_regime,
     }
     analysis["signal"] = generate_signal(analysis)
 
@@ -673,6 +735,12 @@ def api_etf():
     if not data:
         return jsonify({"error": f"No ETF flow data for {symbol}"}), 503
     return jsonify(data)
+
+
+@app.get("/api/calendar")
+def api_calendar():
+    """Upcoming high-impact economic events (FOMC / CPI / NFP)."""
+    return jsonify({"events": get_upcoming_events(21), "risk": get_event_risk()})
 
 
 @app.get("/api/macro")
