@@ -16,6 +16,7 @@ and rate cuts are bullish; hot inflation and hawkish data are bearish.
 import csv
 import io
 import time
+from datetime import datetime, timedelta, timezone
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, List
@@ -124,8 +125,13 @@ INDICATORS = [
 
 def _fetch_series(series: str) -> List[tuple]:
     """Return [(date_str, float_value), ...] oldest→newest for a FRED series."""
+    # cosd bounds the response to recent history. Without it FRED streams the
+    # ENTIRE series (CPI back to 1947, weekly claims to 1967) — megabyte CSVs
+    # that read-timeout on serverless. 3 years covers YoY (13 months) and
+    # quarterly GDP comparisons with plenty of margin.
+    start = (datetime.now(timezone.utc) - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
     try:
-        r = _s.get(FRED_CSV, params={"id": series}, timeout=TIMEOUT)
+        r = _s.get(FRED_CSV, params={"id": series, "cosd": start}, timeout=TIMEOUT)
         r.raise_for_status()
     except Exception as e:
         _last_errors[series] = f"{type(e).__name__}: {e}"[:200]
