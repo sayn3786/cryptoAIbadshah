@@ -659,6 +659,22 @@ def api_news():
     return jsonify(fetch_news_sentiment(symbol))
 
 
+@app.get("/api/etf")
+def api_etf():
+    """ETF flows for one symbol; ?debug=1 shows every source attempt."""
+    symbol = request.args.get("symbol", "BTC").upper()
+    fn = {"BTC": etf_client.get_btc_etf_flows,
+          "ETH": etf_client.get_eth_etf_flows,
+          "XRP": etf_client.get_xrp_etf_flows}.get(symbol)
+    data = fn() if fn else None
+    if request.args.get("debug"):
+        from etf_flows import get_etf_debug
+        return jsonify({"data": data, "debug": get_etf_debug()})
+    if not data:
+        return jsonify({"error": f"No ETF flow data for {symbol}"}), 503
+    return jsonify(data)
+
+
 @app.get("/api/macro")
 def api_macro():
     """High-impact US macro releases with MoM/WoW comparison and crypto impact."""
