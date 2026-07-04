@@ -20,7 +20,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from etf_flows import ETFFlowClient
-from cvd_sources import fetch_cvd_from_source, fetch_aggregated_spot_cvd
+from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
+                         fetch_aggregated_futures_cvd)
 from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     find_volume_spikes, detect_engulfing, detect_cvd_divergence,
     calculate_macd, calculate_ema_trend, detect_whale_activity,
@@ -332,6 +333,14 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
     # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
     fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None
+    # Fallback: aggregate real taker CVD from Binance+OKX perps directly. Covers
+    # alts like TAO whose perp isn't the primary futures source (so futures_real
+    # is False) but which do trade perpetuals on major venues.
+    if not fut_cvd:
+        agg_fut = fetch_aggregated_futures_cvd(bs, interval, limit)
+        if agg_fut:
+            fut_cvd = agg_fut
+            futures_real = True   # we now have genuine perp taker data
 
     # CoinGlass aggregated CVD: real taker buy/sell volume across Binance+Bybit+OKX+others.
     # Always preferred over candle-estimated fut_cvd when CoinGlass key is configured.

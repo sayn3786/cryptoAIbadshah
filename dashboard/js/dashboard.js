@@ -2567,7 +2567,13 @@ async function loadCvdFromSource(cvdType) {
     // Use data already loaded from the main analysis
     if (S.analysis) {
       const cvd = isSpot ? S.analysis.spot_cvd : (S.analysis.agg_cvd || S.analysis.futures_cvd);
-      renderCVDPanel(isSpot ? 'spot' : 'fut', cvd, series, valId, trendId);
+      if (!cvd && !isSpot) {
+        // No perp market for this token/timeframe — show a clear N/A instead of
+        // leaving a stale "error" badge from a previously-failed source fetch.
+        setFutCvdNA();
+      } else {
+        renderCVDPanel(isSpot ? 'spot' : 'fut', cvd, series, valId, trendId);
+      }
     }
     return;
   }
@@ -2584,14 +2590,26 @@ async function loadCvdFromSource(cvdType) {
     const cvd = await res.json();
     renderCVDPanel(isSpot ? 'spot' : 'fut', cvd, series, valId, trendId);
   } catch (e) {
+    // A specific exchange source has no perp market for this token (common for
+    // alts like TAO on some venues) — show "N/A · not on <source>" not "error".
     const tEl = document.getElementById(trendId);
-    if (tEl) { tEl.textContent = 'error'; tEl.className = 'cvd-trend neutral'; }
+    if (tEl) { tEl.textContent = `not on ${source}`; tEl.className = 'cvd-trend neutral'; }
     const vEl = document.getElementById(valId);
-    if (vEl) vEl.textContent = '—';
+    if (vEl) { vEl.textContent = 'N/A'; vEl.style.color = 'var(--muted)'; }
+    if (series) series.setData([]);
     console.warn(`CVD source '${source}' failed:`, e.message);
   } finally {
     sel.classList.remove('cvd-source-loading');
   }
+}
+
+// Show a clear "no perpetual market" state on the futures CVD panel.
+function setFutCvdNA() {
+  const v = document.getElementById('futCvdVal');
+  const t = document.getElementById('futCvdTrend');
+  if (v) { v.textContent = 'N/A'; v.style.color = 'var(--muted)'; }
+  if (t) { t.textContent = 'No perp market'; t.className = 'cvd-trend neutral'; }
+  if (S.futCvdSeries) S.futCvdSeries.setData([]);
 }
 
 /* ─── Selector wiring ─────────────────────────────────────────────────────── */

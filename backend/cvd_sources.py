@@ -174,6 +174,15 @@ def fetch_binance_futures_cvd(symbol: str, interval: str, limit: int) -> Optiona
         return None
 
 
+def _fetch_binance_futures_cvd_usd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+    try:
+        data = _get("https://fapi.binance.com/fapi/v1/klines",
+                    {"symbol": symbol, "interval": interval, "limit": limit})
+        return _cvd_usd_from_klines([_parse_binance_kline(k) for k in data], "binance_fut_usd")
+    except Exception:
+        return None
+
+
 # ── MEXC ──────────────────────────────────────────────────────────────────────
 # Spot: Binance-compatible, index 9 = real taker_buy_base_asset_volume.
 # Futures: dedicated contract endpoint with buyVol field.
@@ -551,6 +560,71 @@ def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int) -> Optiona
     }
 
 
+def fetch_aggregated_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+    """
+    Aggregate perpetual/futures CVD across Binance and OKX in USD terms.
+    Binance futures klines give taker volume in base coins — normalised to USD
+    via close price. OKX CONTRACTS taker-volume already returns USD.
+    MEXC futures is excluded here: its vol is in contracts, not coins, which
+    would mix units (the same bug fixed for spot CVD). Both fetched in parallel;
+    deltas aligned by timestamp and summed. Lets alts like TAO show real
+    futures CVD without a paid CoinGlass key.
+    """
+    real_taker_fns = [_fetch_binance_futures_cvd_usd, fetch_okx_futures_cvd]
+
+    results = []
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {pool.submit(fn, symbol, interval, limit): fn for fn in real_taker_fns}
+        for fut in as_completed(futures, timeout=14):
+            try:
+                r = fut.result()
+                if r and r.get("series"):
+                    results.append(r)
+            except Exception:
+                pass
+
+    if not results:
+        return None
+
+    if len(results) == 1:
+        r = results[0]
+        r["label"] = "futures_aggregated"
+        r["source"] = "aggregated"
+        r["n_sources"] = 1
+        return r
+
+    delta_map: Dict[int, float] = {}
+    for r in results:
+        for pt in r["series"]:
+            ts = int(pt["timestamp"])
+            delta_map[ts] = delta_map.get(ts, 0.0) + float(pt.get("delta") or 0.0)
+
+    cumulative = 0.0
+    agg_series = []
+    for ts in sorted(delta_map.keys()):
+        cumulative += delta_map[ts]
+        agg_series.append({"timestamp": ts, "cvd": round(cumulative, 2),
+                           "delta": round(delta_map[ts], 2)})
+    agg_series = agg_series[-limit:]
+
+    if not agg_series:
+        return None
+
+    current = agg_series[-1]["cvd"]
+    recent  = [p["cvd"] for p in agg_series[-5:]]
+    pct     = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9) if len(recent) >= 2 else 0
+    trend   = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
+
+    return {
+        "current":   round(current, 2),
+        "trend":     trend,
+        "series":    agg_series,
+        "label":     "futures_aggregated",
+        "source":    "aggregated",
+        "n_sources": len(results),
+    }
+
+
 _SPOT_DISPATCH = {
     "aggregated":    fetch_aggregated_spot_cvd,
     "binance":       fetch_binance_spot_cvd,
@@ -564,6 +638,7 @@ _SPOT_DISPATCH = {
 }
 
 _FUTURES_DISPATCH = {
+    "aggregated": fetch_aggregated_futures_cvd,
     "binance":   fetch_binance_futures_cvd,
     "mexc":      fetch_mexc_futures_cvd,
     "okx":       fetch_okx_futures_cvd,
