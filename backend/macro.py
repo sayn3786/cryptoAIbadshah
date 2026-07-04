@@ -99,11 +99,14 @@ INDICATORS = [
         "why_down": "Fewer claims → strong labour → hawkish → bearish",
     },
     {
-        "key": "fed_funds", "label": "Fed Funds Rate", "series": "FEDFUNDS",
-        "cadence": "Monthly", "transform": "level", "unit": "%",
+        # DFF = daily effective rate — shows a cut/hike within a day, unlike
+        # the monthly-average FEDFUNDS series which lags by up to a month.
+        # Compared vs 30 days ago with a 5bp dead-band (daily noise is 1-3bp).
+        "key": "fed_funds", "label": "Fed Funds Rate (Effective)", "series": "DFF",
+        "cadence": "Daily", "transform": "level_vs_30d", "unit": "%", "flat_band": 0.05,
         "rising_impact": "bearish",
-        "why_up": "Higher policy rate → tighter liquidity → bearish crypto",
-        "why_down": "Rate cuts → liquidity easing → strongly bullish crypto",
+        "why_up": "Fed hiked within the last month → tighter liquidity → bearish crypto",
+        "why_down": "Fed cut within the last month → liquidity easing → strongly bullish crypto",
     },
     {
         "key": "gdp", "label": "Real GDP Growth (QoQ ann.)", "series": "A191RL1Q225SBEA",
@@ -238,6 +241,15 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
             prev2 = ((series[-3][1] / series[-4][1] - 1.0) * 100.0
                      if len(series) >= 4 and series[-4][1] else None)
             as_of = series[-1][0]
+        elif t == "level_vs_30d":
+            # Daily series (DFF): compare vs ~30 days ago so an actual policy
+            # move shows immediately without daily-noise flip-flopping.
+            if len(series) < 32:
+                return None
+            cur   = series[-1][1]
+            prev  = series[-31][1]
+            prev2 = series[-61][1] if len(series) >= 61 else None
+            as_of = series[-1][0]
         elif t == "level_vs_4wk":
             # Weekly series are noisy (±5-10K swings) — compare the latest print
             # against the prior 4-week average, the trader-standard smoothing.
@@ -294,7 +306,7 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
     try:
         rel = datetime.strptime(str(as_of)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
         days_old = (datetime.now(timezone.utc) - rel).days
-        fresh_window = {"Weekly": 7, "Monthly": 40, "Quarterly": 100}.get(ind["cadence"], 40)
+        fresh_window = {"Daily": 7, "Weekly": 7, "Monthly": 40, "Quarterly": 100}.get(ind["cadence"], 40)
         fresh = days_old <= fresh_window
     except Exception:
         pass
@@ -517,7 +529,7 @@ def get_event_expectation(event_name: str) -> Optional[Dict]:
 
         elif "FOMC" in event_name:
             # 2Y yield vs policy rate — the market's rate path in one number
-            ff  = _fetch_series("FEDFUNDS")
+            ff  = _fetch_series("DFF")   # daily effective rate — current, not month-lagged
             y2  = _fetch_series("DGS2")
             if ff and y2:
                 ff_v, y2_v = ff[-1][1], y2[-1][1]
