@@ -208,6 +208,7 @@ function renderAll(a) {
   renderWhaleActivity(a.whale_activity || []);
   renderArkhamPanel(a.whale_sells);
   renderEtfFlows(a.etf_flows, a.symbol);
+  renderGtk(a.gomining_tokenomics, a.symbol);
   renderMarketContext(a.markets, a.regime);
   trackSignal(a);
   evaluateSignals(a);
@@ -3509,6 +3510,42 @@ async function loadMacro() {
     console.warn('Macro load failed:', e.message);
     sec.style.display = 'none';
   }
+}
+
+/* ─── GOMINING tokenomics ─────────────────────────────────────────────────── */
+function renderGtk(gtk, symbol) {
+  const sec  = document.getElementById('gtkSection');
+  const grid = document.getElementById('gtkGrid');
+  if (!sec || !grid) return;
+  if (symbol !== 'GOMINING' || !gtk) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+
+  const s = gtk.supply || {};
+  const b = gtk.burns;
+  const supCls = v => v == null ? '' : v <= -0.1 ? 'bull' : v >= 0.1 ? 'bear' : '';
+  const fmtPct = v => v == null ? '—' : `${v > 0 ? '+' : ''}${v}%`;
+
+  const tiles = [];
+  tiles.push(`
+    <div class="etf-stat"><span class="etf-stat-lbl">Circulating supply</span>
+      <span class="etf-stat-val">${s.supply_now_m != null ? s.supply_now_m + 'M' : '—'}</span></div>
+    <div class="etf-stat"><span class="etf-stat-lbl">Supply 7d</span>
+      <span class="etf-stat-val ${supCls(s.supply_7d_pct)}">${fmtPct(s.supply_7d_pct)}</span></div>
+    <div class="etf-stat"><span class="etf-stat-lbl">Supply 30d</span>
+      <span class="etf-stat-val ${supCls(s.supply_30d_pct)}">${fmtPct(s.supply_30d_pct)}</span></div>
+    <div class="etf-stat"><span class="etf-stat-lbl">Next Burn &amp; Mint</span>
+      <span class="etf-stat-val">${gtk.next_epoch || '—'} (${gtk.days_to_epoch}d)</span></div>`);
+  if (b) {
+    tiles.push(`
+      <div class="etf-stat"><span class="etf-stat-lbl">Burned 7d (on-chain)</span>
+        <span class="etf-stat-val bull">${(b.burn_7d || 0).toLocaleString()} GOMINING</span></div>
+      <div class="etf-stat"><span class="etf-stat-lbl">Burned 35d</span>
+        <span class="etf-stat-val bull">${(b.burn_35d || 0).toLocaleString()}</span></div>`);
+  }
+  grid.innerHTML = `
+    <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">${tiles.join('')}</div>
+    <div class="macro-reason" style="margin-top:8px">${gtk.note || ''} · ${gtk.epoch_note || ''}${
+      gtk.onchain_ready ? '' : ' · <em>Add ETHERSCAN_API_KEY to unlock on-chain burn tracking</em>'}</div>`;
 }
 
 /* ─── Traditional markets + regime strip ──────────────────────────────────── */

@@ -23,6 +23,7 @@ from etf_flows import ETFFlowClient
 from macro import get_macro_events, get_market_backdrop, get_event_expectation
 from market_regime import get_market_regime
 from calendar_events import get_upcoming_events, get_event_risk
+from gomining_token import get_gomining_tokenomics
 from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
                          fetch_aggregated_futures_cvd)
 from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
@@ -544,6 +545,15 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     except Exception:
         event_risk = None
 
+    # GOMINING tokenomics: supply trend (burn vs mint), epoch calendar, and
+    # on-chain burns once ETHERSCAN_API_KEY is configured.
+    gomining_tokenomics = None
+    if symbol == "GOMINING":
+        try:
+            gomining_tokenomics = get_gomining_tokenomics()
+        except Exception:
+            gomining_tokenomics = None
+
     # Volatility regime: current ATR(14)/price percentile vs this token's own
     # history — tells the signal whether "full size" is being suggested into a
     # dead-calm or an explosive tape.
@@ -641,6 +651,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "regime":                 regime,
         "event_risk":             event_risk,
         "vol_regime":             vol_regime,
+        "gomining_tokenomics":    gomining_tokenomics,
     }
     analysis["signal"] = generate_signal(analysis)
 

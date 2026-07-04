@@ -677,6 +677,20 @@ def generate_signal(analysis: Dict) -> Dict:
             score += liq_tilt; g['sentiment'] += liq_tilt
             (bull_reasons if liq_tilt > 0 else bear_reasons).append(reg.get("liq_note") or "")
 
+    # ── GOMINING tokenomics (burn vs mint supply dynamics) ────────────────────
+    # GOMINING burns all tokens spent on miner maintenance weekly; supply
+    # contraction = real utility demand. Only fires on the GOMINING view.
+    gtk = analysis.get("gomining_tokenomics") or {}
+    gtk_pts = gtk.get("signal_pts", 0) or 0
+    if gtk_pts and gtk.get("note"):
+        score += gtk_pts; g['flow'] += gtk_pts
+        (bull_reasons if gtk_pts > 0 else bear_reasons).append(f"🔥 GOMINING tokenomics: {gtk['note']}")
+    burns_g = gtk.get("burns") or {}
+    if burns_g.get("burn_7d"):
+        bull_reasons.append(
+            f"🔥 On-chain burns: {burns_g['burn_7d']:,} GOMINING destroyed in 7d "
+            f"({burns_g.get('n_burn_tx', 0)} txs, 35d total {burns_g.get('burn_35d', 0):,})")
+
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,

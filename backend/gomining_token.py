@@ -1,0 +1,171 @@
+"""
+GOMINING tokenomics — supply dynamics, burn/mint epochs and (with an
+Etherscan key) on-chain burns.
+
+Phase 1 (no keys):
+  - Circulating-supply trend derived from CoinGecko market_chart: supply ≈
+    market_cap / price per day. Shrinking supply = burn > mint = structural
+    demand (maintenance actually being paid in GOMINING).
+  - Burn & Mint epoch calendar: cycles run Tuesday→Tuesday; rewards to
+    veGOMINING lockers distribute every Tuesday.
+
+Phase 2 (ETHERSCAN_API_KEY set):
+  - On-chain burn transfers to the dead address, summed per epoch, across
+    Ethereum (chainid 1) and BNB Chain (chainid 56) via the Etherscan V2 API.
+
+Token contract (same address on both chains):
+  0x7Ddc52c4De30e94Be3A6A0A2b259b2850f421989
+"""
+import os
+import time
+from datetime import datetime, timedelta, timezone
+import requests
+from typing import Optional, Dict, List
+
+GOMINING_CONTRACT = "0x7Ddc52c4De30e94Be3A6A0A2b259b2850f421989"
+DEAD_ADDRESSES = [
+    "0x000000000000000000000000000000000000dEaD",
+    "0x0000000000000000000000000000000000000000",
+]
+ETHERSCAN_V2 = "https://api.etherscan.io/v2/api"
+ETHERSCAN_KEY = os.getenv("ETHERSCAN_API_KEY", "")
+TIMEOUT = 8
+
+_cache: Dict[str, tuple] = {}
+_TTL      = 3600
+_FAIL_TTL = 600
+
+_s = requests.Session()
+_s.headers.update({"User-Agent": "CryptoBadshah/2.0"})
+
+
+def _next_epoch(now: datetime) -> datetime:
+    """Burn & Mint epochs close every Tuesday (00:00 UTC used as reference)."""
+    days_ahead = (1 - now.weekday()) % 7   # Tuesday = weekday 1
+    if days_ahead == 0 and now.hour >= 12:
+        days_ahead = 7
+    return (now + timedelta(days=days_ahead)).replace(hour=0, minute=0,
+                                                      second=0, microsecond=0)
+
+
+def _supply_trend() -> Optional[Dict]:
+    """Daily circulating-supply series ≈ market_cap / price from CoinGecko."""
+    try:
+        r = _s.get("https://api.coingecko.com/api/v3/coins/gomining-token/market_chart",
+                   params={"vs_currency": "usd", "days": 30, "interval": "daily"},
+                   timeout=TIMEOUT)
+        r.raise_for_status()
+        j = r.json() or {}
+        caps, prices = j.get("market_caps") or [], j.get("prices") or []
+        if len(caps) < 8 or len(prices) < 8:
+            return None
+        supply = []
+        for (ts, cap), (_, px) in zip(caps, prices):
+            if px and cap:
+                supply.append((int(ts), cap / px))
+        if len(supply) < 8:
+            return None
+        cur    = supply[-1][1]
+        wk_ago = supply[-8][1]
+        mo_ago = supply[0][1]
+        return {
+            "supply_now_m":   round(cur / 1e6, 2),
+            "supply_7d_pct":  round((cur / wk_ago - 1) * 100, 3),
+            "supply_30d_pct": round((cur / mo_ago - 1) * 100, 3),
+        }
+    except Exception:
+        return None
+
+
+def _onchain_burns() -> Optional[Dict]:
+    """Sum GOMINING transfers into dead addresses, last ~35 days, ETH+BSC."""
+    if not ETHERSCAN_KEY:
+        return None
+    total_burn, recent = 0.0, []
+    cutoff_ms = (time.time() - 35 * 86400) * 1000
+    try:
+        for chainid in (1, 56):
+            for dead in DEAD_ADDRESSES:
+                r = _s.get(ETHERSCAN_V2, params={
+                    "chainid": chainid, "module": "account", "action": "tokentx",
+                    "contractaddress": GOMINING_CONTRACT, "address": dead,
+                    "page": 1, "offset": 200, "sort": "desc",
+                    "apikey": ETHERSCAN_KEY,
+                }, timeout=TIMEOUT)
+                rows = (r.json() or {}).get("result") or []
+                if not isinstance(rows, list):
+                    continue
+                for tx in rows:
+                    try:
+                        if tx.get("to", "").lower() != dead.lower():
+                            continue
+                        ts_ms = int(tx["timeStamp"]) * 1000
+                        if ts_ms < cutoff_ms:
+                            continue
+                        amt = int(tx["value"]) / 10 ** int(tx.get("tokenDecimal", 18))
+                        total_burn += amt
+                        recent.append({"ts": ts_ms, "amount": amt, "chain": chainid})
+                    except (KeyError, ValueError, TypeError):
+                        continue
+        if not recent:
+            return None
+        recent.sort(key=lambda x: x["ts"])
+        wk_cut = (time.time() - 7 * 86400) * 1000
+        week_burn = sum(x["amount"] for x in recent if x["ts"] >= wk_cut)
+        return {
+            "burn_35d":  round(total_burn),
+            "burn_7d":   round(week_burn),
+            "n_burn_tx": len(recent),
+        }
+    except Exception:
+        return None
+
+
+def get_gomining_tokenomics() -> Optional[Dict]:
+    cached = _cache.get("tk")
+    if cached:
+        ttl = _TTL if cached[0] is not None else _FAIL_TTL
+        if time.time() - cached[1] < ttl:
+            return cached[0]
+
+    now = datetime.now(timezone.utc)
+    trend = _supply_trend()
+    burns = _onchain_burns()
+
+    if not trend and not burns:
+        _cache["tk"] = (None, time.time())
+        return None
+
+    nxt = _next_epoch(now)
+    days_to_epoch = max(0, (nxt - now).days)
+
+    # Signal points: supply contraction = burn > mint = real utility demand.
+    # 30d window is the reliable read; 7d confirms/denies freshness.
+    pts, note = 0, None
+    if trend:
+        s30, s7 = trend["supply_30d_pct"], trend["supply_7d_pct"]
+        if s30 <= -0.5:
+            pts = 8 if s7 <= 0 else 4
+            note = (f"Supply {s30:+.2f}% in 30d — net-deflationary; maintenance burns "
+                    f"outpacing mint (structural demand)")
+        elif s30 >= 0.5:
+            pts = -6
+            note = (f"Supply {s30:+.2f}% in 30d — net inflation; mint outpacing burns, "
+                    f"utility demand soft")
+        else:
+            note = f"Supply roughly flat ({s30:+.2f}% 30d) — burn ≈ mint"
+
+    result = {
+        "contract":       GOMINING_CONTRACT,
+        "supply":         trend,
+        "burns":          burns,                       # None until ETHERSCAN_API_KEY set
+        "onchain_ready":  bool(ETHERSCAN_KEY),
+        "next_epoch":     nxt.strftime("%Y-%m-%d"),
+        "days_to_epoch":  days_to_epoch,
+        "epoch_note":     "Burn & Mint closes every Tuesday — burns executed, "
+                          "veGOMINING rewards distributed",
+        "signal_pts":     pts,
+        "note":           note,
+    }
+    _cache["tk"] = (result, time.time())
+    return result
