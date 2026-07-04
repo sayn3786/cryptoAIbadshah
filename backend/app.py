@@ -811,6 +811,37 @@ def api_etf():
     return jsonify(data)
 
 
+@app.get("/api/gomining-tokenomics")
+def api_gomining_tokenomics():
+    """GOMINING supply/burn data; ?debug=1 shows key status and a live probe."""
+    data = get_gomining_tokenomics()
+    if request.args.get("debug"):
+        import gomining_token as _gtk
+        probe = None
+        if _gtk.ETHERSCAN_KEY:
+            try:
+                r = _gtk._s.get(_gtk.ETHERSCAN_V2, params={
+                    "chainid": 56, "module": "account", "action": "tokentx",
+                    "contractaddress": _gtk.GOMINING_CONTRACT,
+                    "address": _gtk.DEAD_ADDRESSES[0],
+                    "page": 1, "offset": 3, "sort": "desc",
+                    "apikey": _gtk.ETHERSCAN_KEY,
+                }, timeout=8)
+                j = r.json()
+                res = j.get("result")
+                probe = {"http": r.status_code, "status": j.get("status"),
+                         "message": j.get("message"),
+                         "n_rows": len(res) if isinstance(res, list) else str(res)[:120]}
+            except Exception as e:
+                probe = {"error": f"{type(e).__name__}: {e}"[:150]}
+        return jsonify({"data": data,
+                        "debug": {"etherscan_key": bool(_gtk.ETHERSCAN_KEY),
+                                  "burn_probe_bsc": probe}})
+    if not data:
+        return jsonify({"error": "GOMINING tokenomics unavailable"}), 503
+    return jsonify(data)
+
+
 @app.get("/api/calendar")
 def api_calendar():
     """Upcoming high-impact economic events (FOMC / CPI / NFP)."""
