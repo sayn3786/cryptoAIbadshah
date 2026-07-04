@@ -24,10 +24,21 @@ FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 TIMEOUT  = 8
 
 _cache: Dict[str, tuple] = {}
-_CACHE_TTL = 6 * 3600   # macro data updates monthly/weekly — 6h cache is plenty
+_CACHE_TTL      = 6 * 3600  # macro data updates monthly/weekly — 6h cache is plenty
+_FAIL_CACHE_TTL = 300       # but retry failures after 5 min, not 6 hours
 
+# Last per-series fetch errors — surfaced via /api/macro?debug=1 for diagnosis
+_last_errors: Dict[str, str] = {}
+
+# FRED serves fredgraph.csv to browsers; bare bot UAs can get 403'd by its CDN.
 _s = requests.Session()
-_s.headers.update({"User-Agent": "CryptoBadshah/2.0"})
+_s.headers.update({
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": "text/csv,text/plain,*/*",
+    "Referer": "https://fred.stlouisfed.org/",
+})
 
 
 # ── Indicator definitions ────────────────────────────────────────────────────
@@ -113,11 +124,17 @@ INDICATORS = [
 
 def _fetch_series(series: str) -> List[tuple]:
     """Return [(date_str, float_value), ...] oldest→newest for a FRED series."""
-    r = _s.get(FRED_CSV, params={"id": series}, timeout=TIMEOUT)
-    r.raise_for_status()
+    try:
+        r = _s.get(FRED_CSV, params={"id": series}, timeout=TIMEOUT)
+        r.raise_for_status()
+    except Exception as e:
+        _last_errors[series] = f"{type(e).__name__}: {e}"[:200]
+        raise
     rows = list(csv.reader(io.StringIO(r.text)))
     if not rows or len(rows) < 2:
+        _last_errors[series] = f"empty/short response ({len(r.text)} bytes): {r.text[:120]!r}"
         return []
+    _last_errors.pop(series, None)
     out = []
     for row in rows[1:]:
         if len(row) < 2:
@@ -214,8 +231,11 @@ def get_macro_events() -> Optional[Dict]:
     Returns {"events": [...], "summary": {...}} or None if everything failed.
     """
     cached = _cache.get("macro")
-    if cached and time.time() - cached[1] < _CACHE_TTL:
-        return cached[0]
+    if cached:
+        age = time.time() - cached[1]
+        ttl = _CACHE_TTL if cached[0] is not None else _FAIL_CACHE_TTL
+        if age < ttl:
+            return cached[0]
 
     # Fully defensive: this runs inside build_analysis, so it must NEVER raise —
     # a TimeoutError from as_completed would otherwise crash the whole analyze
@@ -277,3 +297,14 @@ def get_macro_events() -> Optional[Dict]:
     }
     _cache["macro"] = (result, time.time())
     return result
+
+
+def get_macro_debug() -> Dict:
+    """Diagnostics for /api/macro?debug=1 — last per-series fetch errors."""
+    cached = _cache.get("macro")
+    return {
+        "last_errors":  dict(_last_errors),
+        "cached":       cached[0] is not None if cached else False,
+        "cache_age_s":  round(time.time() - cached[1]) if cached else None,
+        "indicators":   [i["series"] for i in INDICATORS],
+    }

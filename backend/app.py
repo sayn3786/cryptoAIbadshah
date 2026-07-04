@@ -663,6 +663,9 @@ def api_news():
 def api_macro():
     """High-impact US macro releases with MoM/WoW comparison and crypto impact."""
     data = get_macro_events()
+    if request.args.get("debug"):
+        from macro import get_macro_debug
+        return jsonify({"data": data, "debug": get_macro_debug()})
     if not data:
         return jsonify({"error": "Macro data unavailable"}), 503
     return jsonify(data)
