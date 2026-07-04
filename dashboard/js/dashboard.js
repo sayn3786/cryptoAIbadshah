@@ -598,6 +598,17 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol)
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: rp, color: '#fbbf24', lineWidth: 2, lineStyle: 0, title: `Realized $${(rp/1000).toFixed(1)}K` }));
   }
 
+  // Cycle-top band (MVRV 3.5× realized) — the ceiling mirror of the realized
+  // floor. Only drawn when within 40% above price so it can't stretch the axis.
+  const topSig  = btcMining?.top_signals;
+  const lastPx  = unique.length ? unique[unique.length - 1].close : 0;
+  if (symbol === 'BTC' && topSig?.top_band && lastPx && topSig.top_band / lastPx < 1.4) {
+    S.overlayPriceLines.push(S.candleSeries.createPriceLine({
+      price: topSig.top_band, color: '#f87171', lineWidth: 2, lineStyle: 0,
+      title: `Top band $${(topSig.top_band/1000).toFixed(1)}K`,
+    }));
+  }
+
   S.mainChart.timeScale().fitContent();
 }
 
@@ -1191,6 +1202,24 @@ function renderOnchainMetrics(mining, symbol, lth) {
         <div class="ocm-zone ${rpCls}">${rpZone} · ${ptr?.toFixed(2) ?? '—'}×</div>
         <div class="ocm-desc">${rpLabel}</div>
         <div class="ocm-sub">${bp ? 'BTC '+fmtK(bp)+' vs avg cost basis '+fmtK(rp) : 'Average cost basis of all BTC ever moved'}</div>
+      </div>`);
+  }
+
+  // ── Cycle-Top Signals — the ceiling mirror of the realized-price floor ────
+  const top = mining.top_signals;
+  if (top) {
+    const zCls  = top.zone === 'top-zone' ? 'bear' : top.zone === 'warming' ? '' : 'bull';
+    const piTxt = top.pi_crossed ? 'Pi Cycle FIRED'
+                : top.pi_ratio != null ? `Pi Cycle ${(top.pi_ratio * 100).toFixed(0)}%` : 'Pi Cycle —';
+    const distTxt = top.top_band_dist_pct != null
+      ? (top.top_band_dist_pct <= 0 ? 'ABOVE top band' : `${top.top_band_dist_pct}% below top band`) : '';
+    tiles.push(`
+      <div class="ocm-tile ${zCls}">
+        <div class="ocm-name">Cycle Top Watch</div>
+        <div class="ocm-value">${top.top_band ? fmtK(top.top_band) : '—'}</div>
+        <div class="ocm-zone ${zCls}">${top.zone.replace('-', ' ')} · heat ${top.heat}/6</div>
+        <div class="ocm-desc">${piTxt} · Mayer ${top.mayer ?? '—'}${top.mayer >= 2.4 ? ' ⚠' : ''}</div>
+        <div class="ocm-sub">MVRV 3.5× band${distTxt ? ' · ' + distTxt : ''} · Pi fires ~${top.pi_target ? fmtK(top.pi_target) : '—'}</div>
       </div>`);
   }
 

@@ -1194,6 +1194,29 @@ def generate_signal(analysis: Dict) -> Dict:
             combo_pts -= pts
             bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk")
 
+    # ── BTC cycle-top zone (mirror of the realized-price floor) ──────────────────
+    # Pi Cycle Top (111DMA vs 2×350DMA), Mayer Multiple (price/200DMA) and the
+    # MVRV 3.5× top band. Heat 0-6; scored as structural bearish weight the same
+    # way realized-price/hash-ribbon score structural bullish support.
+    top_sig = (mining or {}).get("top_signals") if mining else None
+    if top_sig:
+        heat = top_sig.get("heat", 0) or 0
+        if top_sig.get("pi_crossed"):
+            score -= 20; g['sentiment'] -= 20
+            bear_reasons.append(
+                f"🔝 Pi Cycle Top FIRED (111DMA ≥ 2×350DMA) — this cross marked the 2013/2017/2021 "
+                f"cycle tops within days; strong structural distribution signal")
+        elif heat >= 4:
+            score -= 12; g['sentiment'] -= 12
+            bear_reasons.append(
+                f"🔝 Cycle-top zone — Mayer {top_sig.get('mayer')}, Pi Cycle ratio {top_sig.get('pi_ratio')}, "
+                f"MVRV top band ${top_sig.get('top_band'):,.0f} within {top_sig.get('top_band_dist_pct')}%; trim into strength")
+        elif heat >= 2:
+            score -= 5; g['sentiment'] -= 5
+            bear_reasons.append(
+                f"🔝 Top indicators warming (heat {heat}/6) — Mayer {top_sig.get('mayer')}, "
+                f"Pi Cycle ratio {top_sig.get('pi_ratio')}; not a top yet, but upside is maturing")
+
     # ── Combo 11: Fresh macro inflection + technical alignment (regime change) ───
     # A just-released data point that FLIPPED direction (e.g. CPI reaccelerating
     # after months of cooling, claims spiking after a calm stretch) is how macro

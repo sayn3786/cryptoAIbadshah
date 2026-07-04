@@ -285,6 +285,62 @@ def _fetch_fear_greed() -> Dict:
             return {"value": _fng_cache.get("value"), "label": _fng_cache.get("label")}
 
 
+# ── BTC cycle-top signals ─────────────────────────────────────────────────────
+# The mirror of the realized-price floor: where is the probable cycle CEILING?
+#   - MVRV top band: realized price × 3.5 (every cycle top hit MVRV 3.5-4)
+#   - Pi Cycle Top: 111DMA crossing above 2×350DMA (nailed 2013/2017/2021 tops)
+#   - Mayer Multiple: price / 200DMA, >2.4 = historically overheated
+_top_cache: dict = {}
+
+def _btc_top_signals(realized_price):
+    cached = _top_cache.get("top")
+    if cached and time.time() - cached[1] < 3600:
+        out = cached[0]
+    else:
+        out = None
+        try:
+            daily = client.get_spot_klines("BTCUSDT", "1d", 1000) or []
+            closes = [c["close"] for c in daily]
+            if len(closes) >= 360:
+                price   = closes[-1]
+                dma111  = sum(closes[-111:]) / 111
+                dma350  = sum(closes[-350:]) / 350
+                dma200  = sum(closes[-200:]) / 200
+                pi_ratio = dma111 / (2 * dma350) if dma350 else None
+                mayer    = price / dma200 if dma200 else None
+                out = {
+                    "price":        round(price, 0),
+                    "pi_ratio":     round(pi_ratio, 3) if pi_ratio else None,
+                    "pi_crossed":   bool(pi_ratio and pi_ratio >= 1.0),
+                    "pi_dma111":    round(dma111, 0),
+                    "pi_target":    round(2 * dma350, 0),   # price zone where Pi Cycle fires
+                    "mayer":        round(mayer, 2) if mayer else None,
+                    "mayer_band":   round(dma200 * 2.4, 0),
+                }
+        except Exception:
+            out = None
+        _top_cache["top"] = (out, time.time())
+
+    if out is None:
+        return None
+    out = dict(out)
+    if realized_price:
+        out["top_band"] = round(realized_price * 3.5, 0)   # MVRV 3.5 ceiling
+        if out.get("price"):
+            out["top_band_dist_pct"] = round((out["top_band"] / out["price"] - 1) * 100, 1)
+    # Zone summary for scoring/UI
+    heat = 0
+    if out.get("pi_crossed"):                                heat += 2
+    elif out.get("pi_ratio") and out["pi_ratio"] >= 0.92:    heat += 1
+    if out.get("mayer") and out["mayer"] >= 2.4:             heat += 2
+    elif out.get("mayer") and out["mayer"] >= 2.0:           heat += 1
+    if out.get("top_band_dist_pct") is not None and out["top_band_dist_pct"] <= 10:
+        heat += 2
+    out["heat"] = heat   # 0-6: 0-1 cool, 2-3 warming, 4+ top-zone
+    out["zone"] = "top-zone" if heat >= 4 else "warming" if heat >= 2 else "cool"
+    return out
+
+
 # ── Volatility regime ─────────────────────────────────────────────────────────
 def _vol_regime(candles: list):
     """
@@ -432,6 +488,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
     btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
+    if btc_mining:
+        try:
+            btc_mining["top_signals"] = _btc_top_signals(btc_mining.get("realized_price"))
+        except Exception:
+            btc_mining["top_signals"] = None
 
     # Long-Term Holder supply trend (BTC only): try a real CoinGlass figure
     # first; most plan tiers don't include this on-chain endpoint, so fall
