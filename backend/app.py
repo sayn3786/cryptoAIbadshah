@@ -420,6 +420,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         elif symbol == "XRP":
             etf_flows = etf_client.get_xrp_etf_flows()
 
+    # Macro backdrop: high-impact US releases (CPI, Fed, jobs…). Global to all
+    # crypto — cached 6h in macro.py so this call is essentially free per token.
+    macro = get_macro_events()
+
     # GoMining advisor: lightweight GOMINING price direction (BTC view only).
     # Uses a simple EMA20 slope on 1D candles — avoids full build_analysis overhead.
     gomining_token_signal = None
@@ -507,6 +511,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "whale_sells":            whale_sells,
         "lth_supply":             lth_supply,
         "etf_flows":              etf_flows,
+        "macro":                  macro,
     }
     analysis["signal"] = generate_signal(analysis)
 

@@ -611,6 +611,36 @@ def generate_signal(analysis: Dict) -> Dict:
                 f"{sym_tag} spot ETF: ${etf_today:.0f}M today (institutional selling){hi_tag}"
             )
 
+    # ── Macro backdrop (Fed / inflation / jobs) ───────────────────────────────
+    # Global risk-asset context from the latest US data releases. Crypto rides
+    # liquidity: cooling inflation & rate cuts add strength, hot inflation &
+    # hawkish data drop strength. This impact holds until the next release.
+    # Capped at ±18 so a macro tailwind/headwind tilts — but never dominates —
+    # the per-token technical confluence.
+    macro = analysis.get("macro") or {}
+    macro_summary = macro.get("summary") or {}
+    macro_events  = macro.get("events") or []
+    macro_net = macro_summary.get("net_pts", 0) or 0
+    if macro_events and macro_net:
+        macro_pts = max(-18, min(18, int(round(macro_net * 0.4))))
+        if macro_pts:
+            score += macro_pts; g['sentiment'] += macro_pts
+            # Name the biggest drivers (up to 3 by absolute impact points)
+            drivers = sorted(
+                [e for e in macro_events if e.get("impact") in ("bullish", "bearish")],
+                key=lambda e: abs(e.get("signal_pts", 0) or 0), reverse=True
+            )[:3]
+            names = ", ".join(f"{d['label'].split(' (')[0]} {d['impact']}" for d in drivers)
+            bias  = macro_summary.get("bias", "mixed")
+            if macro_pts > 0:
+                bull_reasons.append(
+                    f"Macro tailwind ({bias.upper()}): {names} — adds strength until next release"
+                )
+            else:
+                bear_reasons.append(
+                    f"Macro headwind ({bias.upper()}): {names} — drops strength until next release"
+                )
+
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,
