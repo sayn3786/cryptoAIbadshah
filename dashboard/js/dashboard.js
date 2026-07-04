@@ -3448,9 +3448,73 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadEngulfAlerts();
   checkStrengthChanges();
   loadWhaleAlerts();
+  loadMacro();
   setInterval(loadWhaleAlerts, 5 * 60 * 1000);
+  setInterval(loadMacro, 6 * 60 * 60 * 1000);   // macro updates a few times/day at most
 
   // Auto-refresh every 5 minutes (ticker); strength check every 60 minutes
   setInterval(loadTicker, 5 * 60 * 1000);
   setInterval(checkStrengthChanges, 60 * 60 * 1000);
 });
+
+/* ─── Macro economic events ───────────────────────────────────────────────── */
+async function loadMacro() {
+  const sec = document.getElementById('macroSection');
+  if (!sec) return;
+  try {
+    const res = await fetch(`${API}/macro`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderMacro(data);
+  } catch (e) {
+    console.warn('Macro load failed:', e.message);
+    sec.style.display = 'none';
+  }
+}
+
+function renderMacro(data) {
+  const sec  = document.getElementById('macroSection');
+  const grid = document.getElementById('macroGrid');
+  const subEl = document.getElementById('macroSub');
+  if (!sec || !grid) return;
+  if (!data || !data.events || !data.events.length) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+
+  const s = data.summary || {};
+  if (subEl) {
+    const biasCls = s.bias === 'risk-on' ? 'bull' : s.bias === 'risk-off' ? 'bear' : '';
+    subEl.innerHTML = `Net macro bias: <span class="${biasCls}">${(s.bias || 'mixed').toUpperCase()}</span> ` +
+      `· ${s.bullish_count || 0} bullish / ${s.bearish_count || 0} bearish · ${data.source || 'FRED'}`;
+  }
+
+  const impactCls = i => i === 'bullish' ? 'macro-bull' : i === 'bearish' ? 'macro-bear' : 'macro-neu';
+  const impactIcon = i => i === 'bullish' ? '▲' : i === 'bearish' ? '▼' : '—';
+  const arrow = d => d === 'up' ? '↑' : d === 'down' ? '↓' : '→';
+
+  const fmtVal = (v, unit) => {
+    if (v == null) return '—';
+    const sign = (unit === 'K jobs' || unit === '%') && v > 0 ? '+' : '';
+    if (unit === 'K jobs') return `${sign}${Math.round(v)}K`;
+    if (unit === 'K')      return `${Math.round(v)}K`;
+    if (unit === 'idx')    return v.toFixed(1);
+    return `${sign}${v.toFixed(2)}%`;
+  };
+
+  grid.innerHTML = data.events.map(e => `
+    <div class="macro-item ${impactCls(e.impact)}">
+      <div class="macro-top">
+        <span class="macro-label">${e.label}</span>
+        <span class="macro-cadence">${e.cadence}</span>
+      </div>
+      <div class="macro-vals">
+        <span class="macro-cur">${fmtVal(e.current, e.unit)}</span>
+        <span class="macro-chg">${arrow(e.direction)} prev ${fmtVal(e.previous, e.unit)}</span>
+      </div>
+      <div class="macro-impact">
+        <span class="macro-badge ${impactCls(e.impact)}">${impactIcon(e.impact)} ${e.impact}</span>
+        <span class="macro-asof">${e.as_of || ''}</span>
+      </div>
+      <div class="macro-reason">${e.reason || ''}</div>
+    </div>
+  `).join('');
+}

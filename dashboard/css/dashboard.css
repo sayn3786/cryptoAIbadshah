@@ -1552,6 +1552,32 @@ a:hover { color: var(--gold2); }
 .etf-unavailable { padding: 16px 0; color: var(--muted); font-size: .75rem;
                    text-align: center; font-style: italic; }
 
+/* ── Macro Events & Impact ───────────────────────────────────────────────── */
+.macro-grid   { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+                gap: 10px; }
+.macro-item   { border: 1px solid var(--border, #1e2d44); border-left-width: 3px;
+                border-radius: 8px; padding: 10px 12px; background: rgba(255,255,255,.02); }
+.macro-item.macro-bull { border-left-color: var(--bull, #10b981); }
+.macro-item.macro-bear { border-left-color: var(--bear, #ef4444); }
+.macro-item.macro-neu  { border-left-color: var(--muted, #64748b); }
+.macro-top    { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.macro-label  { font-size: .74rem; font-weight: 600; color: var(--text, #e2e8f0); }
+.macro-cadence{ font-size: .58rem; color: var(--muted); text-transform: uppercase;
+                letter-spacing: .04em; white-space: nowrap; }
+.macro-vals   { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 4px; }
+.macro-cur    { font-size: 1.05rem; font-weight: 700; color: var(--text, #e2e8f0); }
+.macro-chg    { font-size: .62rem; color: var(--muted); }
+.macro-impact { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
+.macro-badge  { font-size: .6rem; font-weight: 700; padding: 2px 7px; border-radius: 20px;
+                text-transform: uppercase; letter-spacing: .03em; }
+.macro-badge.macro-bull { color: var(--bull, #10b981); background: rgba(16,185,129,.12); }
+.macro-badge.macro-bear { color: var(--bear, #ef4444); background: rgba(239,68,68,.12); }
+.macro-badge.macro-neu  { color: var(--muted, #94a3b8); background: rgba(148,163,184,.12); }
+.macro-asof   { font-size: .56rem; color: var(--muted); }
+.macro-reason { font-size: .62rem; color: var(--muted); margin-top: 6px; line-height: 1.35; }
+.macro-bull   { color: var(--bull, #10b981); }
+.macro-bear   { color: var(--bear, #ef4444); }
+
 /* ── GoMining Strategy Advisor ───────────────────────────────────────────── */
 .gomining-card    { padding: 18px 20px; }
 

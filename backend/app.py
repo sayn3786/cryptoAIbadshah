@@ -20,6 +20,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from etf_flows import ETFFlowClient
+from macro import get_macro_events
 from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
                          fetch_aggregated_futures_cvd)
 from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
@@ -647,6 +648,15 @@ def api_symbols():
 def api_news():
     symbol = request.args.get("symbol", "BTCUSDT").upper()
     return jsonify(fetch_news_sentiment(symbol))
+
+
+@app.get("/api/macro")
+def api_macro():
+    """High-impact US macro releases with MoM/WoW comparison and crypto impact."""
+    data = get_macro_events()
+    if not data:
+        return jsonify({"error": "Macro data unavailable"}), 503
+    return jsonify(data)
 
 
 @app.get("/api/exchange-netflow")
