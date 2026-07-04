@@ -559,7 +559,7 @@ def get_lth_accumulation_proxy(netflow: dict = None, sopr_zone: str = None,
 
 # ── GoMining Strategy Advisor ──────────────────────────────────────────────────
 
-def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
+def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = None) -> dict:
     """
     Derive optimal GoMining farm settings from current on-chain signals.
 
@@ -626,11 +626,85 @@ def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
     reward_protection = prof < 1.15                  # ON when near/below break-even
 
     # Reinvest into GOMINING tokens (Greedy Machine auto-converts to TH).
-    # Suppressed if GOMINING token signal is bearish (SHORT direction).
-    _gm_dir = (gm_token or {}).get("direction", "NEUTRAL")
+    # Refined with tokenomics: strong on-chain burns / supply contraction can
+    # green-light a NEUTRAL token; a SHORT token always suppresses.
+    _gm_dir  = (gm_token or {}).get("direction", "NEUTRAL")
+    _tk      = gm_tokenomics or {}
+    _tk_pts  = _tk.get("signal_pts", 0) or 0
+    _tk_bull = _tk_pts > 0        # supply contracting / burns strong
     _gm_override_off = _gm_dir == "SHORT" and phase == "compound"
-    reinvestment = phase == "compound" and not _gm_override_off
+    reinvestment = (phase == "compound" and not _gm_override_off
+                    and (_gm_dir == "LONG" or (_gm_dir == "NEUTRAL" and _tk_bull)))
+    # Compound phase with SHORT/weak token: still compound, but via BTC → TH
+    # directly rather than buying the token.
     reinvest_to  = "tokens" if reinvestment else None
+
+    # ── Reward payout currency — take mining rewards in BTC or GOMINING? ──────
+    # Default is BTC (the asset the farm produces; accumulation thesis).
+    # Take GOMINING only when the token trend is UP, tokenomics are burning
+    # supply (structural bid), and we're not in the late-cycle danger zone.
+    _late_danger = (halv_phase == "late" and mvrv > 2.5) or mvrv_zone in ("overbought", "extreme_top")
+    if _gm_dir == "LONG" and _tk_bull and not _late_danger:
+        reward_currency = {
+            "take": "GOMINING",
+            "reasoning": (f"Token in uptrend + {_tk.get('note') or 'supply contracting from burns'} — "
+                          f"GOMINING rewards compound the tokenomics tailwind; switch payout back to BTC "
+                          f"if the token turns SHORT"),
+        }
+    elif _gm_dir == "LONG" and not _late_danger:
+        reward_currency = {
+            "take": "SPLIT",
+            "reasoning": ("Token trending up but tokenomics neutral — take part rewards in GOMINING, "
+                          "keep the rest in BTC until burns/supply confirm"),
+        }
+    else:
+        why = ("token in downtrend" if _gm_dir == "SHORT" else
+               "late-cycle risk — BTC is the harvest asset" if _late_danger else
+               "no token edge — BTC is the default accumulation asset")
+        reward_currency = {"take": "BTC", "reasoning": f"Take rewards in BTC: {why}"}
+
+    # ── TH purchase advisor — is hashpower cheap or expensive right now? ──────
+    # A TH's value = the sats it will produce. TH is effectively CHEAP when:
+    #   miners below break-even (sellers discount, weak hands exit),
+    #   BTC near/below realized price (cheap production of a cheap asset),
+    #   difficulty flat/falling (your sats/TH won't be diluted immediately),
+    #   early/mid halving cycle (runway ahead).
+    # TH is EXPENSIVE near cycle tops regardless of sticker price — payback
+    # happens in devaluing sats.
+    _top   = m.get("top_signals") or {}
+    _heat  = _top.get("heat", 0) or 0
+    th_score = 0
+    th_reasons = []
+    if prof < 1.0:
+        th_score += 2; th_reasons.append(f"miners below break-even ({prof:.2f}×) — capitulation-priced hashpower")
+    elif prof < 1.15:
+        th_score += 1; th_reasons.append(f"miners near break-even ({prof:.2f}×)")
+    if price_to_rp is not None and price_to_rp < 1.3:
+        th_score += 2; th_reasons.append(f"BTC at {price_to_rp:.2f}× realized price — accumulation zone")
+    elif mvrv_zone in ("overbought", "extreme_top") or _heat >= 4:
+        th_score -= 3; th_reasons.append("cycle-top zone — TH payback would come in devaluing conditions")
+    if diff_next is not None and diff_next < 0:
+        th_score += 1; th_reasons.append(f"difficulty falling {diff_next:.1f}% next epoch — sats/TH improving")
+    elif diff_next is not None and diff_next > 4:
+        th_score -= 1; th_reasons.append(f"difficulty surging +{diff_next:.1f}% — rewards/TH diluting fast")
+    if halv_phase in ("early", "mid"):
+        th_score += 1; th_reasons.append(f"{halv_phase} halving cycle — long reward runway ahead")
+    elif halv_phase == "late":
+        th_score -= 1; th_reasons.append("late halving cycle — less runway before next squeeze")
+
+    if th_score >= 4:
+        th_purchase = {"signal": "buy_now", "cls": "bull", "icon": "🟢",
+                       "label": "BUY TH — Prime Window",
+                       "reasoning": "Hashpower is historically cheap: " + " · ".join(th_reasons)}
+    elif th_score >= 2:
+        th_purchase = {"signal": "ok", "cls": "neutral", "icon": "🟡",
+                       "label": "OK TO BUY TH — Decent Value",
+                       "reasoning": " · ".join(th_reasons)}
+    else:
+        th_purchase = {"signal": "wait", "cls": "bear", "icon": "🔴",
+                       "label": "WAIT — TH Value Poor",
+                       "reasoning": " · ".join(th_reasons) or "conditions unfavourable for adding hashpower"}
+    th_purchase["score"] = th_score
 
     # ── Phase Metadata ─────────────────────────────────────────────────────────
     PHASE_META = {
@@ -863,6 +937,8 @@ def get_gomining_strategy(m: dict, gm_token: dict = None) -> dict:
         "reward_protection": reward_protection,
         "reinvestment":      reinvestment,
         "reinvest_to":       reinvest_to,
+        "reward_currency":   reward_currency,
+        "th_purchase":       th_purchase,
         "harvest":           harvest,
         "reasons":           reasons,
         "watch_for":         watch,

@@ -1324,6 +1324,27 @@ function renderGoMiningAdvisor(strategy, symbol, gmTokenSignal) {
     reinvReason.textContent = 'Accumulate real BTC now — wait for Hash Ribbon + profitability before buying GOMINING tokens';
   }
 
+  // Reward payout currency — take mining rewards in BTC or GOMINING
+  const ccyEl = document.getElementById('gmToggleRewardCcy');
+  const ccyReason = document.getElementById('gmReasonRewardCcy');
+  const rc = strategy.reward_currency;
+  if (ccyEl && rc) {
+    const take = rc.take || 'BTC';
+    ccyEl.className = 'gm-toggle ' + (take === 'GOMINING' ? 'on' : take === 'SPLIT' ? 'warn' : 'off');
+    ccyEl.textContent = take === 'GOMINING' ? 'GOMINING ✓' : take === 'SPLIT' ? 'SPLIT ⚖' : 'BTC ✓';
+    if (ccyReason) ccyReason.textContent = rc.reasoning || '';
+  }
+
+  // TH purchase advisor — is hashpower cheap or expensive right now?
+  const thEl = document.getElementById('gmToggleTh');
+  const thReason = document.getElementById('gmReasonTh');
+  const th = strategy.th_purchase;
+  if (thEl && th) {
+    thEl.className = 'gm-toggle ' + (th.signal === 'buy_now' ? 'on' : th.signal === 'ok' ? 'warn' : 'off');
+    thEl.textContent = th.icon + ' ' + (th.signal === 'buy_now' ? 'BUY NOW' : th.signal === 'ok' ? 'OK TO BUY' : 'WAIT');
+    if (thReason) thReason.textContent = th.reasoning || '';
+  }
+
   // BTC Harvest Timer
   const harvestEl = document.getElementById('gmHarvestBanner');
   if (harvestEl && strategy.harvest) {

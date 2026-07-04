@@ -616,7 +616,13 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
                 }
         except Exception:
             pass
-    gomining_strategy = get_gomining_strategy(btc_mining, gomining_token_signal) if btc_mining else None
+    _gm_tk = None
+    if btc_mining:
+        try:
+            _gm_tk = get_gomining_tokenomics()   # cached 1h — cheap here
+        except Exception:
+            _gm_tk = None
+    gomining_strategy = get_gomining_strategy(btc_mining, gomining_token_signal, _gm_tk) if btc_mining else None
 
     # Options expiry: use 28 daily candles for 4-week range context (all symbols)
     _daily_candles = spot[-28:] if len(spot) >= 28 else spot
