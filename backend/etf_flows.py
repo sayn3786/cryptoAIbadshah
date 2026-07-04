@@ -13,6 +13,10 @@ from typing import Optional, Dict, List
 CG_V4_BASE = "https://open-api-v4.coinglass.com/api"
 CG_BASE    = "https://open-api.coinglass.com/public/v2"
 SSV_BASE   = "https://sosovalue.com"
+# SoSoValue official Open API — dedicated ETF flow data, free API key:
+# sign in at sosovalue.com → API management → create key → set SOSOVALUE_API_KEY
+SSV_API      = "https://api.sosovalue.xyz"
+SSV_API_KEY  = os.getenv("SOSOVALUE_API_KEY", "")
 TIMEOUT     = 10
 SSV_TIMEOUT = 4   # fail fast — probes must fit inside Vercel's serverless limit
 
@@ -130,6 +134,64 @@ def _build_result(daily: List[Dict], symbol: str, source: str) -> Optional[Dict]
             "source":        source,
         }
     except Exception:
+        return None
+
+
+def _ssv_api_flows(symbol: str) -> Optional[Dict]:
+    """
+    SoSoValue official Open API (free key): POST /openapi/v2/etf/historicalInflowChart
+    with {"type": "us-btc-spot" | "us-eth-spot"}. Returns daily totalNetInflow in USD.
+    """
+    if not SSV_API_KEY:
+        return None
+    etf_type = "us-btc-spot" if symbol == "BTC" else "us-eth-spot"
+    path = "/openapi/v2/etf/historicalInflowChart"
+    try:
+        r = requests.post(
+            f"{SSV_API}{path}",
+            json={"type": etf_type},
+            headers={"x-soso-api-key": SSV_API_KEY,
+                     "Content-Type": "application/json",
+                     "User-Agent": "CryptoBadshah/2.0"},
+            timeout=TIMEOUT,
+        )
+        if r.status_code != 200:
+            _log(symbol, "sosovalue-api", path, f"HTTP {r.status_code}: {r.text[:80]}")
+            return None
+        payload = r.json()
+        if str(payload.get("code")) not in ("0", "200"):
+            _log(symbol, "sosovalue-api", path,
+                 f"code={payload.get('code')} msg={payload.get('msg')}")
+            return None
+        rows = payload.get("data") or []
+        if isinstance(rows, dict):
+            rows = rows.get("list") or rows.get("data") or []
+        daily = []
+        from datetime import datetime, timezone
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            net = (row.get("totalNetInflow") or row.get("netInflow") or
+                   row.get("dailyNetInflow") or row.get("totalNetFlow"))
+            ds  = row.get("date") or row.get("day") or row.get("time") or 0
+            if net is None:
+                continue
+            try:
+                if isinstance(ds, str) and "-" in ds:
+                    ts = int(datetime.strptime(ds[:10], "%Y-%m-%d")
+                             .replace(tzinfo=timezone.utc).timestamp() * 1000)
+                else:
+                    ts = int(ds)
+                daily.append({"ts": ts, "net_usd": float(net)})
+            except (TypeError, ValueError):
+                continue
+        if not daily:
+            _log(symbol, "sosovalue-api", path, "200 but no parsable rows")
+            return None
+        _log(symbol, "sosovalue-api", path, f"200 ok ({len(daily)} days)")
+        return _build_result(daily, symbol, source="sosovalue")
+    except Exception as e:
+        _log(symbol, "sosovalue-api", path, f"{type(e).__name__}: {e}")
         return None
 
 
@@ -266,7 +328,11 @@ class ETFFlowClient:
                         if result:
                             break
 
-        # 3. Keyless best-effort fallback
+        # 3. SoSoValue official Open API (free key, dedicated ETF data)
+        if not result and ssv:
+            result = _ssv_api_flows(symbol)
+
+        # 4. Keyless best-effort fallback (unofficial endpoints)
         if not result and ssv:
             result = _ssv_etf_flows(symbol)
 
