@@ -1345,6 +1345,19 @@ function renderGoMiningAdvisor(strategy, symbol, gmTokenSignal) {
     if (thReason) thReason.textContent = th.reasoning || '';
   }
 
+  // Sell radars — graduated pre-indicators for TH and GOMINING peaks
+  const radar = (t, sig, elId, reasonId) => {
+    const el = document.getElementById(elId);
+    const re = document.getElementById(reasonId);
+    if (!el || !t) return;
+    const cls = t.signal === 'sell_now' ? 'off' : t.signal === 'approaching' ? 'warn' : 'on';
+    el.className = 'gm-toggle ' + cls;
+    el.textContent = `${t.icon} ${t.label.split(' — ')[0]}`;
+    if (re) re.textContent = t.reasoning || '';
+  };
+  radar(strategy.th_sell, 'th', 'gmToggleThSell', 'gmReasonThSell');
+  radar(strategy.gm_sell, 'gm', 'gmToggleGmSell', 'gmReasonGmSell');
+
   // BTC Harvest Timer
   const harvestEl = document.getElementById('gmHarvestBanner');
   if (harvestEl && strategy.harvest) {

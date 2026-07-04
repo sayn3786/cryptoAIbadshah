@@ -706,6 +706,108 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
                        "reasoning": " · ".join(th_reasons) or "conditions unfavourable for adding hashpower"}
     th_purchase["score"] = th_score
 
+    # ── TH SELL radar — graduated PRE-indicator for hashpower peaks ───────────
+    # TH prices track miner revenue (hashprice) and peak WITH the BTC cycle.
+    # Score the build-up, not the confirmation, so the user can list TH on the
+    # marketplace before everyone else sees the top.
+    _pi     = _top.get("pi_ratio")
+    _mayer  = _top.get("mayer")
+    _band_d = _top.get("top_band_dist_pct")
+    ts_score, ts_reasons = 0, []
+    if _heat >= 4:
+        ts_score += 3; ts_reasons.append(f"cycle-top zone (heat {_heat}/6)")
+    elif _heat >= 2:
+        ts_score += 2; ts_reasons.append(f"top indicators warming (heat {_heat}/6)")
+    if _pi is not None and _pi >= 0.85:
+        ts_score += 2; ts_reasons.append(f"Pi Cycle at {_pi*100:.0f}% of trigger — cross historically = the top")
+    elif _pi is not None and _pi >= 0.70:
+        ts_score += 1; ts_reasons.append(f"Pi Cycle building ({_pi*100:.0f}% of trigger)")
+    if _mayer is not None and _mayer >= 2.0:
+        ts_score += 1; ts_reasons.append(f"Mayer {_mayer} — overheating begins at 2.4")
+    if _band_d is not None and _band_d <= 25:
+        ts_score += 2; ts_reasons.append(f"price within {_band_d:.0f}% of MVRV top band")
+    if puell_zone == "extreme":
+        ts_score += 2; ts_reasons.append(f"Puell {puell_val:.2f} — peak miner revenue = peak TH prices")
+    elif puell_zone == "elevated":
+        ts_score += 1; ts_reasons.append(f"Puell {puell_val:.2f} elevated — miner revenue (and TH demand) heating")
+    if sopr_zone == "euphoria":
+        ts_score += 2; ts_reasons.append("SOPR euphoria — distribution in progress")
+    elif sopr_zone == "profit":
+        ts_score += 1; ts_reasons.append("SOPR in profit zone — holders starting to distribute")
+    if halv_phase == "late" and mvrv > 2.0:
+        ts_score += 1; ts_reasons.append("late halving cycle with elevated MVRV")
+    if diff_next is not None and diff_next > 4:
+        ts_score += 1; ts_reasons.append(f"difficulty +{diff_next:.1f}% — everyone adding hashpower (crowd peak behaviour)")
+
+    if ts_score >= 6:
+        th_sell = {"signal": "sell_now", "cls": "bear", "icon": "🔴",
+                   "label": "SELL TH — Peak Window",
+                   "reasoning": "Multiple peak signals: " + " · ".join(ts_reasons)}
+    elif ts_score >= 3:
+        th_sell = {"signal": "approaching", "cls": "warn", "icon": "🟠",
+                   "label": "PEAK APPROACHING — Prepare to List TH",
+                   "reasoning": "Pre-indicators building: " + " · ".join(ts_reasons)}
+    elif ts_score >= 1:
+        th_sell = {"signal": "early_watch", "cls": "neutral", "icon": "🟡",
+                   "label": "EARLY WATCH",
+                   "reasoning": " · ".join(ts_reasons)}
+    else:
+        th_sell = {"signal": "hold", "cls": "bull", "icon": "🟢",
+                   "label": "HOLD TH — Far From Peak",
+                   "reasoning": "No peak pre-indicators — keep mining"}
+    th_sell["score"] = ts_score
+
+    # ── GOMINING SELL radar — burn momentum is the leading edge ───────────────
+    # Maintenance burns are computed daily: demand cools in the burn data BEFORE
+    # it shows in price. Burn deceleration + price-up divergence = pre-indicator.
+    _burns   = (_tk.get("burns") or {})
+    _b7      = _burns.get("burn_7d") or 0
+    _b35     = _burns.get("burn_35d") or 0
+    _prior_wk_avg = (_b35 - _b7) / 4 if _b35 > _b7 else None
+    _gm_30   = (gm_token or {}).get("change_30d_pct")
+    _sup     = _tk.get("supply") if isinstance(_tk.get("supply"), dict) else None
+    gs_score, gs_reasons = 0, []
+    burn_momentum = None
+    if _prior_wk_avg and _prior_wk_avg > 0 and _b7:
+        _ratio = _b7 / _prior_wk_avg
+        burn_momentum = round(_ratio, 2)
+        if _ratio < 0.7:
+            gs_score += 2
+            gs_reasons.append(f"burns decelerating — this week {_b7:,.0f} vs prior-4wk avg {_prior_wk_avg:,.0f} "
+                              f"({(_ratio-1)*100:+.0f}%) — maintenance demand cooling (leading signal)")
+        elif _ratio > 1.3:
+            gs_score -= 1
+            gs_reasons.append(f"burns accelerating ({(_ratio-1)*100:+.0f}% vs prior 4wk avg) — demand still growing")
+    if _sup and _sup.get("supply_7d_pct") is not None and _sup.get("supply_30d_pct") is not None:
+        if _sup["supply_7d_pct"] > 0 and _sup["supply_30d_pct"] < 0:
+            gs_score += 1
+            gs_reasons.append("supply flipped to expansion this week after a deflationary month — mint outpacing burns again")
+    if _gm_30 is not None and _gm_30 > 20 and burn_momentum is not None and burn_momentum < 1.0:
+        gs_score += 2
+        gs_reasons.append(f"price +{_gm_30:.0f}% (30d) while burns slow — rally not backed by utility demand (divergence)")
+    if _heat >= 4:
+        gs_score += 2; gs_reasons.append("BTC cycle-top zone — GOMINING follows miner economics down")
+    elif _heat >= 2:
+        gs_score += 1; gs_reasons.append("BTC top indicators warming")
+    if mvrv_zone in ("overbought", "extreme_top"):
+        gs_score += 1; gs_reasons.append(f"MVRV {mvrv:.2f} {mvrv_zone.replace('_',' ')}")
+
+    if gs_score >= 4:
+        gm_sell = {"signal": "sell_now", "cls": "bear", "icon": "🔴",
+                   "label": "TRIM / SELL GOMINING",
+                   "reasoning": "Peak pre-indicators aligned: " + " · ".join(gs_reasons)}
+    elif gs_score >= 2:
+        gm_sell = {"signal": "approaching", "cls": "warn", "icon": "🟠",
+                   "label": "WATCH — Demand Cooling",
+                   "reasoning": " · ".join(gs_reasons)}
+    else:
+        gm_sell = {"signal": "hold", "cls": "bull", "icon": "🟢",
+                   "label": "HOLD GOMINING",
+                   "reasoning": " · ".join(gs_reasons) or
+                                "Burns steady, no divergence, BTC cycle cool — no sell pre-indicators"}
+    gm_sell["score"] = gs_score
+    gm_sell["burn_momentum"] = burn_momentum
+
     # ── Phase Metadata ─────────────────────────────────────────────────────────
     PHASE_META = {
         "accumulate": {
@@ -939,6 +1041,8 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
         "reinvest_to":       reinvest_to,
         "reward_currency":   reward_currency,
         "th_purchase":       th_purchase,
+        "th_sell":           th_sell,
+        "gm_sell":           gm_sell,
         "harvest":           harvest,
         "reasons":           reasons,
         "watch_for":         watch,

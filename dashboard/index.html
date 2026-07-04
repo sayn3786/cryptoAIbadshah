@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=44" />
+  <link rel="stylesheet" href="css/dashboard.css?v=45" />
 </head>
 <body>
 
@@ -452,6 +452,16 @@
           <div class="gm-toggle" id="gmToggleTh">—</div>
           <div class="gm-setting-reason" id="gmReasonTh"></div>
         </div>
+        <div class="gm-setting">
+          <div class="gm-setting-label">Sell TH? (peak radar)</div>
+          <div class="gm-toggle" id="gmToggleThSell">—</div>
+          <div class="gm-setting-reason" id="gmReasonThSell"></div>
+        </div>
+        <div class="gm-setting">
+          <div class="gm-setting-label">Sell GOMINING? (demand radar)</div>
+          <div class="gm-toggle" id="gmToggleGmSell">—</div>
+          <div class="gm-setting-reason" id="gmReasonGmSell"></div>
+        </div>
       </div>
 
       <!-- BTC Harvest Timer -->
@@ -675,7 +685,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=44"></script>
+<script src="js/dashboard.js?v=45"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
