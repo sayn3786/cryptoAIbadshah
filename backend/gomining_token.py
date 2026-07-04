@@ -51,11 +51,19 @@ def _next_epoch(now: datetime) -> datetime:
 def _supply_trend() -> Optional[Dict]:
     """Daily circulating-supply series ≈ market_cap / price from CoinGecko."""
     try:
-        r = _s.get("https://api.coingecko.com/api/v3/coins/gomining-token/market_chart",
-                   params={"vs_currency": "usd", "days": 30, "interval": "daily"},
-                   timeout=TIMEOUT)
-        r.raise_for_status()
-        j = r.json() or {}
+        j = None
+        for attempt in range(2):   # one retry — CoinGecko free tier 429s often
+            r = _s.get("https://api.coingecko.com/api/v3/coins/gomining-token/market_chart",
+                       params={"vs_currency": "usd", "days": 30, "interval": "daily"},
+                       timeout=TIMEOUT)
+            if r.status_code == 429 and attempt == 0:
+                time.sleep(1.5)
+                continue
+            r.raise_for_status()
+            j = r.json() or {}
+            break
+        if not j:
+            return None
         caps, prices = j.get("market_caps") or [], j.get("prices") or []
         if len(caps) < 8 or len(prices) < 8:
             return None
@@ -84,7 +92,10 @@ def _onchain_burns() -> Optional[Dict]:
     total_burn, recent = 0.0, []
     cutoff_ms = (time.time() - 35 * 86400) * 1000
     try:
-        for chainid in (1, 56):
+        # Ethereum only — Etherscan free tier doesn't cover BNB Chain (chainid
+        # 56 returns "Free API access is not supported for this chain"), and
+        # GoMining's burns execute on Ethereum.
+        for chainid in (1,):
             for dead in DEAD_ADDRESSES:
                 r = _s.get(ETHERSCAN_V2, params={
                     "chainid": chainid, "module": "account", "action": "tokentx",
@@ -154,6 +165,18 @@ def get_gomining_tokenomics() -> Optional[Dict]:
                     f"utility demand soft")
         else:
             note = f"Supply roughly flat ({s30:+.2f}% 30d) — burn ≈ mint"
+    elif burns and burns.get("burn_7d"):
+        # Supply trend unavailable (CoinGecko rate limit) — score the on-chain
+        # burns directly. ~400M circulating: 1M+/week burned is significant
+        # utility demand even before the mint offset.
+        b7 = burns["burn_7d"]
+        pct_of_supply = b7 / 4_000_000  # ≈ % of 400M supply
+        if b7 >= 2_000_000:
+            pts = 6
+        elif b7 >= 500_000:
+            pts = 3
+        note = (f"{b7:,} GOMINING burned on-chain in 7d (~{pct_of_supply:.2f}% of supply) — "
+                f"maintenance demand visible; net-of-mint effect pending supply data")
 
     result = {
         "contract":       GOMINING_CONTRACT,
