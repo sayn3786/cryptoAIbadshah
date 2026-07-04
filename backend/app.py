@@ -20,7 +20,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from binance import BinanceClient
 from coinglass import CoinGlassClient
 from etf_flows import ETFFlowClient
-from macro import get_macro_events, get_market_backdrop
+from macro import get_macro_events, get_market_backdrop, get_event_expectation
 from market_regime import get_market_regime
 from calendar_events import get_upcoming_events, get_event_risk
 from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
@@ -478,6 +478,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         regime = None
     try:
         event_risk = get_event_risk()
+        if event_risk:
+            event_risk["expectation"] = get_event_expectation(event_risk["name"])
     except Exception:
         event_risk = None
 
@@ -740,7 +742,13 @@ def api_etf():
 @app.get("/api/calendar")
 def api_calendar():
     """Upcoming high-impact economic events (FOMC / CPI / NFP)."""
-    return jsonify({"events": get_upcoming_events(21), "risk": get_event_risk()})
+    risk = get_event_risk()
+    if risk:
+        try:
+            risk["expectation"] = get_event_expectation(risk["name"])
+        except Exception:
+            pass
+    return jsonify({"events": get_upcoming_events(21), "risk": risk})
 
 
 @app.get("/api/macro")

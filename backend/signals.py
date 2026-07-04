@@ -1349,14 +1349,36 @@ def generate_signal(analysis: Dict) -> Dict:
         size_guide = "Full position — maximum confluence, can consider scaling"
 
     # ── Event-risk window (FOMC / CPI / NFP within 48h) ───────────────────────
-    # Pros de-risk into scheduled releases: volatility spikes and stops get
-    # hunted regardless of setup quality. Discount strength, adjust sizing.
+    # Not every release is a coin-flip: derive the likely outcome from data
+    # (CPI momentum + breakevens, 2Y-vs-Fed-Funds, jobless-claims trend) and
+    # compare it with the signal's structure.
+    #   expectation ALIGNED  → likely catalyst, +5% strength (keep stops — a
+    #                          surprise still hurts)
+    #   expectation OPPOSED  → structure fights the probable print, −15%
+    #   expectation MIXED    → genuine uncertainty, −10% and reduce size
     ev = analysis.get("event_risk")
     if ev and direction != "NEUTRAL":
-        strength = max(0, round(strength * 0.90))
-        size_guide += f" · ⏳ {ev['name']} {ev['label']} — reduce size into the release"
-        warn = f"⏳ Event risk: {ev['name']} {ev['label']} ({ev['date']}) — expect volatility, −10% strength"
-        (bear_reasons if direction == "LONG" else bull_reasons).append(warn)
+        exp     = ev.get("expectation") or {}
+        exp_dir = exp.get("expected")
+        detail  = exp.get("detail", "")
+        sig_bull = (direction == "LONG")
+        if exp_dir in ("bullish", "bearish"):
+            aligned = (exp_dir == "bullish") == sig_bull
+            if aligned:
+                strength = min(100, round(strength * 1.05))
+                size_guide += f" · ⏳ {ev['name']} {ev['label']} — expectation aligns, but keep stop discipline"
+                (bull_reasons if sig_bull else bear_reasons).append(
+                    f"⏳ {ev['name']} {ev['label']}: {detail} — aligns with structure, potential catalyst (+5%)")
+            else:
+                strength = max(0, round(strength * 0.85))
+                size_guide += f" · ⏳ {ev['name']} {ev['label']} — expected print opposes this setup, reduce size"
+                (bear_reasons if sig_bull else bull_reasons).append(
+                    f"⏳ {ev['name']} {ev['label']}: {detail} — against structure, −15% strength")
+        else:
+            strength = max(0, round(strength * 0.90))
+            size_guide += f" · ⏳ {ev['name']} {ev['label']} — outcome uncertain, reduce size into the release"
+            (bear_reasons if sig_bull else bull_reasons).append(
+                f"⏳ Event risk: {ev['name']} {ev['label']} ({ev['date']}) — {detail or 'no clear expectation'}, −10% strength")
 
     # ── Volatility regime sizing ──────────────────────────────────────────────
     # "Full position" in a dead-calm tape and during a volatility explosion are

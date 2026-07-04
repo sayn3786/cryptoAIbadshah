@@ -473,6 +473,87 @@ def get_market_backdrop() -> Optional[Dict]:
     return result
 
 
+# ── Event expectations ────────────────────────────────────────────────────────
+# Data-driven "what is the market likely expecting" per release, in crypto
+# terms (bullish = dovish/cooling expected). No consensus API exists free, so
+# derive from market-priced and momentum data on FRED.
+
+def get_event_expectation(event_name: str) -> Optional[Dict]:
+    key = f"exp_{event_name}"
+    cached = _cache.get(key)
+    if cached:
+        ttl = _CACHE_TTL if cached[0] is not None else _FAIL_CACHE_TTL
+        if time.time() - cached[1] < ttl:
+            return cached[0]
+
+    result = None
+    try:
+        if "CPI" in event_name:
+            # Momentum: 3m annualised CPI vs YoY — is inflation running cooler
+            # or hotter than the headline? Cross-check with 10Y breakevens
+            # (market-priced inflation expectations).
+            cpi = _fetch_series("CPIAUCSL")
+            momentum = None
+            if len(cpi) >= 13:
+                mom3 = ((cpi[-1][1] / cpi[-4][1]) ** 4 - 1) * 100
+                yoy  = (cpi[-1][1] / cpi[-13][1] - 1) * 100
+                momentum = "cooler" if mom3 < yoy - 0.15 else \
+                           "hotter" if mom3 > yoy + 0.15 else "inline"
+            be = _fetch_series("T10YIE")
+            be_trend = None
+            if len(be) >= 20:
+                a5, a20 = sum(v for _, v in be[-5:]) / 5, sum(v for _, v in be[-20:]) / 20
+                be_trend = "cooler" if a5 < a20 - 0.01 else \
+                           "hotter" if a5 > a20 + 0.01 else "inline"
+            if momentum == "cooler" and be_trend != "hotter":
+                result = {"expected": "bullish",
+                          "detail": "3m CPI momentum running below YoY and breakevens easing — cooler print likely"}
+            elif momentum == "hotter" and be_trend != "cooler":
+                result = {"expected": "bearish",
+                          "detail": "3m CPI momentum running above YoY — hotter print likely"}
+            else:
+                result = {"expected": "mixed",
+                          "detail": "CPI momentum and market breakevens disagree — outcome genuinely uncertain"}
+
+        elif "FOMC" in event_name:
+            # 2Y yield vs policy rate — the market's rate path in one number
+            ff  = _fetch_series("FEDFUNDS")
+            y2  = _fetch_series("DGS2")
+            if ff and y2:
+                ff_v, y2_v = ff[-1][1], y2[-1][1]
+                if y2_v < ff_v - 0.15:
+                    result = {"expected": "bullish",
+                              "detail": f"2Y ({y2_v:.2f}%) below Fed Funds ({ff_v:.2f}%) — market pricing cuts (dovish)"}
+                elif y2_v > ff_v + 0.15:
+                    result = {"expected": "bearish",
+                              "detail": f"2Y ({y2_v:.2f}%) above Fed Funds ({ff_v:.2f}%) — market pricing hikes (hawkish)"}
+                else:
+                    result = {"expected": "mixed",
+                              "detail": "2Y trading at the policy rate — hold expected, guidance is the wildcard"}
+
+        elif "Payrolls" in event_name or "NFP" in event_name:
+            # Jobless-claims 4wk trend leads NFP: rising claims → weak jobs print
+            icsa = _fetch_series("ICSA")
+            if len(icsa) >= 9:
+                cur4  = sum(v for _, v in icsa[-4:]) / 4
+                prev4 = sum(v for _, v in icsa[-8:-4]) / 4
+                chg = (cur4 / prev4 - 1) * 100 if prev4 else 0
+                if chg > 3:
+                    result = {"expected": "bullish",
+                              "detail": f"Jobless claims 4wk avg +{chg:.1f}% — weak jobs print likely (dovish)"}
+                elif chg < -3:
+                    result = {"expected": "bearish",
+                              "detail": f"Jobless claims 4wk avg {chg:.1f}% — strong jobs print likely (hawkish)"}
+                else:
+                    result = {"expected": "mixed",
+                              "detail": "Claims trend flat — no clear lean into the jobs print"}
+    except Exception:
+        result = None
+
+    _cache[key] = (result, time.time())
+    return result
+
+
 def get_macro_debug() -> Dict:
     """Diagnostics for /api/macro?debug=1 — last per-series fetch errors."""
     cached = _cache.get("macro")
