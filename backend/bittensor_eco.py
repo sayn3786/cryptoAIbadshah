@@ -291,33 +291,43 @@ def get_tao_ecosystem() -> Optional[Dict]:
             "tao_in_pools":     round(pool_total) if pool_total else None,
             "median_alpha_7d":  round(med7, 1) if med7 is not None else None,
             "breadth_pct":      round(gainers / len(chg7s) * 100) if chg7s else None,
+            # Full emission-sorted list — the frontend shows 10 and offers
+            # "show all" so nothing is hidden when the user wants the details.
             "top": [{k: s[k] for k in ("netuid", "name", "alpha_price_tao",
                                        "emission_share_pct", "chg_1d", "chg_7d")}
-                    for s in by_emis[:10]],
+                    for s in by_emis],
         }
 
     # ── Signal points for TAO confluence (flow group) ─────────────────────────
-    pts, notes = 0, []
+    # Notes are structured {text, impact} so signals.py routes each parameter
+    # to the right side of the confluence list without string-sniffing.
+    pts = 0
+    notes: List[Dict] = []
     if flow:
         f7 = flow.get("net_7d_tao") or 0
         if f7 > 0:
             p = 8 if f7 > 50_000 else 4
             pts += p
-            notes.append(f"{f7:,.0f} TAO net INTO subnet pools (7d) — staking demand locking supply")
+            notes.append({"impact": "bullish", "pts": p, "text":
+                f"Subnet pool flow: {f7:,.0f} TAO net INTO Alpha pools (7d) — staking demand locking supply off exchanges"})
         elif f7 < 0:
             p = -8 if f7 < -50_000 else -4
             pts += p
-            notes.append(f"{abs(f7):,.0f} TAO net OUT of subnet pools (7d) — unstaking, potential sell pressure")
+            notes.append({"impact": "bearish", "pts": p, "text":
+                f"Subnet pool flow: {abs(f7):,.0f} TAO net OUT of Alpha pools (7d) — unstaking, potential sell pressure"})
     sn = result.get("subnets") or {}
     if sn.get("breadth_pct") is not None:
         if sn["breadth_pct"] >= 60:
             pts += 4
-            notes.append(f"Alpha breadth {sn['breadth_pct']}% of subnets up 7d — broad ecosystem demand")
+            notes.append({"impact": "bullish", "pts": 4, "text":
+                f"Alpha breadth: {sn['breadth_pct']}% of subnets up 7d — broad ecosystem demand, not a one-subnet rally"})
         elif sn["breadth_pct"] <= 30:
             pts -= 4
-            notes.append(f"Alpha breadth only {sn['breadth_pct']}% of subnets up 7d — ecosystem demand weak")
+            notes.append({"impact": "bearish", "pts": -4, "text":
+                f"Alpha breadth: only {sn['breadth_pct']}% of subnets up 7d — narrow market, capital rotating out of most Alphas"})
     if stats and stats.get("staked_pct") is not None and stats["staked_pct"] >= 70:
-        notes.append(f"{stats['staked_pct']}% of supply staked — thin liquid float amplifies moves both ways")
+        notes.append({"impact": "info", "pts": 0, "text":
+            f"{stats['staked_pct']}% of supply staked — thin liquid float amplifies moves both ways"})
 
     result["signal_pts"] = max(-12, min(12, pts))
     result["notes"] = notes

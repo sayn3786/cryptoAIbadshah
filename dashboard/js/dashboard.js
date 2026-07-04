@@ -3559,8 +3559,14 @@ function renderGtk(gtk, symbol) {
   const sec  = document.getElementById('gtkSection');
   const grid = document.getElementById('gtkGrid');
   if (!sec || !grid) return;
-  if (symbol !== 'GOMINING' || !gtk) { sec.style.display = 'none'; return; }
+  if (symbol !== 'GOMINING') { sec.style.display = 'none'; return; }
   sec.style.display = '';
+  if (!gtk) {
+    // Never hide silently — a transient CoinGecko/Etherscan failure looks
+    // identical to "feature missing" otherwise. Data retries within 10 min.
+    grid.innerHTML = '<div class="etf-unavailable">Tokenomics data temporarily unavailable — retrying automatically (supply via CoinGecko, burns via Etherscan)</div>';
+    return;
+  }
 
   const s = gtk.supply || {};
   const b = gtk.burns;
@@ -3605,55 +3611,81 @@ function renderTaoEco(eco, symbol) {
     `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v) >= 1e6 ? (Math.abs(v)/1e6).toFixed(2)+'M' : Math.abs(v).toLocaleString()} τ`;
   const flCls = v => v == null ? '' : v > 0 ? 'bull' : v < 0 ? 'bear' : '';
 
+  // Each tile carries a one-line explanation so the parameters are
+  // self-documenting (mobile has no hover tooltips).
+  const tile = (label, val, cls, why) => `
+    <div class="etf-stat tao-stat">
+      <span class="etf-stat-lbl">${label}</span>
+      <span class="etf-stat-val ${cls || ''}">${val}</span>
+      <span class="tao-stat-why">${why}</span>
+    </div>`;
+
   const tiles = [];
   if (st.staked_pct != null)
-    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Supply staked</span>
-      <span class="etf-stat-val">${st.staked_pct}%</span></div>`);
+    tiles.push(tile('Supply staked', `${st.staked_pct}%`, '',
+      'Share of all TAO locked in staking — high % = thin liquid float, moves amplify both ways'));
   if (st.alpha_share_pct != null)
-    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Stake in Alphas vs Root</span>
-      <span class="etf-stat-val">${st.alpha_share_pct}%</span></div>`);
+    tiles.push(tile('Stake in Alphas vs Root', `${st.alpha_share_pct}%`, '',
+      'Of staked TAO, how much is in subnet Alpha pools vs parked on root — rising = dTAO adoption, real subnet conviction'));
   if (fl.net_24h_tao != null)
-    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Subnet pool flow 24h</span>
-      <span class="etf-stat-val ${flCls(fl.net_24h_tao)}">${fmtTao(fl.net_24h_tao)}</span></div>`);
+    tiles.push(tile('Subnet pool flow 24h', fmtTao(fl.net_24h_tao), flCls(fl.net_24h_tao),
+      'Net TAO entering (+) or leaving (−) Alpha pools today — the ETF-flow equivalent for TAO'));
   if (fl.net_7d_tao != null)
-    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Subnet pool flow 7d</span>
-      <span class="etf-stat-val ${flCls(fl.net_7d_tao)}">${fmtTao(fl.net_7d_tao)}</span></div>`);
+    tiles.push(tile('Subnet pool flow 7d', fmtTao(fl.net_7d_tao), flCls(fl.net_7d_tao),
+      'Weekly net: inflow locks supply (bullish), outflow = unstaking headed for exchanges (bearish)'));
   if (sn.count != null)
-    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Active subnets</span>
-      <span class="etf-stat-val">${sn.count}</span></div>`);
+    tiles.push(tile('Active subnets', sn.count, '',
+      'Subnets competing for emissions — ecosystem size'));
   if (sn.breadth_pct != null)
-    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Alpha breadth (7d up)</span>
-      <span class="etf-stat-val ${sn.breadth_pct >= 60 ? 'bull' : sn.breadth_pct <= 30 ? 'bear' : ''}">${sn.breadth_pct}%</span></div>`);
+    tiles.push(tile('Alpha breadth (7d up)', `${sn.breadth_pct}%`,
+      sn.breadth_pct >= 60 ? 'bull' : sn.breadth_pct <= 30 ? 'bear' : '',
+      '% of subnet tokens up this week — ≥60% = broad demand, ≤30% = narrow market, few winners'));
   if (sn.top5_emission_pct != null)
-    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Top-5 emission share</span>
-      <span class="etf-stat-val">${sn.top5_emission_pct}%</span></div>`);
+    tiles.push(tile('Top-5 emission share', `${sn.top5_emission_pct}%`, '',
+      'How concentrated rewards are — high = winner-take-most, watch the leaders'));
 
-  // Top-10 subnet table — the answer to "the subnet list is long"
+  // Subnet table — full emission-sorted list; top 10 shown, rest expandable
   let table = '';
   if (sn.top && sn.top.length) {
-    const rows = sn.top.map(s => {
-      const c7 = s.chg_7d;
-      const cCls = c7 == null ? '' : c7 > 0 ? 'bull' : 'bear';
+    const row = s => {
+      const c7 = s.chg_7d, c1 = s.chg_1d;
+      const cCls  = c7 == null ? '' : c7 > 0 ? 'bull' : 'bear';
+      const c1Cls = c1 == null ? '' : c1 > 0 ? 'bull' : 'bear';
       return `<tr>
         <td>SN${s.netuid}</td>
         <td>${s.name || '—'}</td>
         <td>${s.alpha_price_tao != null ? s.alpha_price_tao.toFixed(4) + ' τ' : '—'}</td>
         <td>${s.emission_share_pct != null ? s.emission_share_pct + '%' : '—'}</td>
+        <td class="${c1Cls}">${c1 != null ? (c1 > 0 ? '+' : '') + c1.toFixed(1) + '%' : '—'}</td>
         <td class="${cCls}">${c7 != null ? (c7 > 0 ? '+' : '') + c7.toFixed(1) + '%' : '—'}</td>
       </tr>`;
-    }).join('');
+    };
+    const head = sn.top.slice(0, 10).map(row).join('');
+    const rest = sn.top.slice(10).map(row).join('');
     table = `<div style="overflow-x:auto;margin-top:10px">
       <table class="sn-table">
-        <thead><tr><th>ID</th><th>Subnet</th><th>Alpha price</th><th>Emission</th><th>7d</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>`;
+        <thead><tr><th>ID</th><th>Subnet</th><th>Alpha price</th><th>Emission</th><th>1d</th><th>7d</th></tr></thead>
+        <tbody>${head}</tbody>
+        ${rest ? `<tbody id="snTableRest" style="display:none">${rest}</tbody>` : ''}
+      </table></div>
+      ${rest ? `<button class="sn-showall" id="snShowAllBtn"
+        onclick="const r=document.getElementById('snTableRest');const open=r.style.display==='none';
+                 r.style.display=open?'':'none';
+                 this.textContent=open?'Hide — show top 10 only':'Show all ${sn.top.length} subnets by emission ▾';">
+        Show all ${sn.top.length} subnets by emission ▾</button>` : ''}`;
   }
 
-  const notes = (eco.notes || []).join(' · ');
+  const notes = (eco.notes || [])
+    .map(n => (n && typeof n === 'object') ? n.text : n)
+    .filter(Boolean).join(' · ');
   grid.innerHTML = `
-    <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${tiles.join('')}</div>
+    <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">${tiles.join('')}</div>
     ${table}
-    ${notes ? `<div class="macro-reason" style="margin-top:8px">${notes}</div>` : ''}`;
+    ${notes ? `<div class="macro-reason" style="margin-top:8px">${notes}</div>` : ''}
+    <div class="tao-explainer">The dTAO loop: buying a subnet's Alpha deposits TAO into its pool
+    (locked supply); emissions follow Alpha prices, so the table shows where the market is voting.
+    Pool inflow + broad breadth + rising Alpha share = ecosystem demand pulling TAO off exchanges —
+    the bullish setup. Outflow + narrow breadth = rotation/de-risking.</div>`;
 }
 
 /* ─── Traditional markets + regime strip ──────────────────────────────────── */

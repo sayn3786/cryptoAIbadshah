@@ -1613,6 +1613,18 @@ a:hover { color: var(--gold2); }
 .sn-table tr:last-child td { border-bottom: none; }
 .sn-table td.bull { color: var(--bull); }
 .sn-table td.bear { color: var(--bear); }
+.sn-showall     { margin-top: 8px; font-size: .66rem; font-weight: 600;
+                  background: rgba(255,255,255,.04); color: var(--muted2);
+                  border: 1px solid var(--border); border-radius: 6px;
+                  padding: 5px 12px; cursor: pointer; width: 100%; }
+.sn-showall:hover { color: var(--text); border-color: var(--neutral); }
+.tao-stat       { display: flex; flex-direction: column; gap: 2px; }
+.tao-stat-why   { font-size: .58rem; color: var(--muted); line-height: 1.35;
+                  margin-top: 2px; }
+.tao-explainer  { margin-top: 10px; padding: 8px 10px; font-size: .64rem;
+                  color: var(--muted); line-height: 1.45;
+                  border-left: 3px solid var(--border); background: rgba(255,255,255,.02);
+                  border-radius: 0 8px 8px 0; }
 
 /* ── GoMining Strategy Advisor ───────────────────────────────────────────── */
 .gomining-card    { padding: 18px 20px; }

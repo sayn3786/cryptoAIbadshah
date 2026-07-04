@@ -694,12 +694,23 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── TAO / Bittensor ecosystem (subnet pool flows + alpha breadth) ─────────
     # Net TAO flowing into subnet Alpha pools is staked/illiquid supply — the
     # dTAO equivalent of ETF inflows. Alpha breadth = ecosystem-wide demand.
+    # Each note lands as its own confluence line so the user sees exactly
+    # which ecosystem parameter is adding or dropping strength.
     tao_eco = analysis.get("tao_ecosystem") or {}
     tao_pts = tao_eco.get("signal_pts", 0) or 0
-    if tao_pts and tao_eco.get("notes"):
+    tao_notes = tao_eco.get("notes") or []
+    if tao_pts and tao_notes:
         score += tao_pts; g['flow'] += tao_pts
-        (bull_reasons if tao_pts > 0 else bear_reasons).append(
-            f"🧠 Bittensor ecosystem: {'; '.join(tao_eco['notes'][:2])}")
+        for _n in tao_notes[:3]:
+            if not isinstance(_n, dict):
+                continue
+            _imp = _n.get("impact")
+            _pts_tag = f" ({_n['pts']:+d})" if _n.get("pts") else ""
+            if _imp == "bullish":
+                bull_reasons.append(f"🧠 {_n['text']}{_pts_tag}")
+            elif _imp == "bearish":
+                bear_reasons.append(f"🧠 {_n['text']}{_pts_tag}")
+            # info notes stay on the ecosystem card only
 
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
