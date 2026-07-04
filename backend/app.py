@@ -344,7 +344,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     # CoinGlass aggregated CVD: real taker buy/sell volume across Binance+Bybit+OKX+others.
     # Always preferred over candle-estimated fut_cvd when CoinGlass key is configured.
-    agg_cvd = cg_client.get_aggregated_cvd(bs) if cg_client.enabled else None
+    agg_cvd = cg_client.get_aggregated_cvd(bs, interval) if cg_client.enabled else None
     if agg_cvd:
         fut_cvd = agg_cvd  # real taker data beats candle close/open estimation
         agg_cvd = None      # avoid double-counting in CVD divergence calc

@@ -34,6 +34,17 @@ CG_SYMBOLS = {
     "RENDERUSDT": "RENDER",
     "BNBUSDT":    "BNB",
     "BLURUSDT":   "BLUR",
+    # Majors CoinGlass also aggregates — unlisted symbols return None and the
+    # caller falls back to the free aggregated CVD, so adding these is safe.
+    "ZECUSDT":    "ZEC",
+    "TRXUSDT":    "TRX",
+    "ADAUSDT":    "ADA",
+    "XLMUSDT":    "XLM",
+    "AVAXUSDT":   "AVAX",
+    "HBARUSDT":   "HBAR",
+    "INJUSDT":    "INJ",
+    "FETUSDT":    "FET",
+    "QNTUSDT":    "QNT",
 }
 
 
@@ -190,14 +201,21 @@ class CoinGlassClient:
 
     # ── Aggregated CVD ────────────────────────────────────────────────────────
 
-    def get_aggregated_cvd(self, symbol: str) -> Optional[Dict]:
-        """Aggregated futures CVD across all exchanges."""
+    # Map chart interval → CoinGlass time_type (free-tier supported granularities)
+    _CVD_TIME_TYPE = {
+        "15m": "h1", "30m": "h1", "1h": "h1", "2h": "h4", "4h": "h4",
+        "8h": "h8", "12h": "h12", "1d": "h24", "1w": "h24", "1W": "h24", "1M": "h24",
+    }
+
+    def get_aggregated_cvd(self, symbol: str, interval: str = "4h") -> Optional[Dict]:
+        """Aggregated futures CVD across all exchanges, matched to the chart interval."""
         sym = CG_SYMBOLS.get(symbol)
         if not sym or not self.enabled:
             return None
 
+        time_type = self._CVD_TIME_TYPE.get(interval, "h4")
         data = self._get("/taker_buy_sell_volume",
-                         {"symbol": sym, "time_type": "h4", "currency": "USD"})
+                         {"symbol": sym, "time_type": time_type, "currency": "USD"})
         if not data:
             return None
 

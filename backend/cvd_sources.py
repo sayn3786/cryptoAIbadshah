@@ -27,6 +27,12 @@ _OKX_CCY = {
     "TONUSDT":    "TON",    "SOLUSDT":    "SOL",    "ONDOUSDT":   "ONDO",
     "AAVEUSDT":   "AAVE",   "RENDERUSDT": "RENDER", "BNBUSDT":    "BNB",
     "BLURUSDT":   "BLUR",
+    # OKX also lists these — a missing/unlisted ccy returns no data and falls
+    # back gracefully, so it's safe to include every token OKX plausibly carries.
+    "XMRUSDT":    "XMR",    "ZECUSDT":    "ZEC",    "TRXUSDT":    "TRX",
+    "ADAUSDT":    "ADA",    "XLMUSDT":    "XLM",    "AVAXUSDT":   "AVAX",
+    "HBARUSDT":   "HBAR",   "INJUSDT":    "INJ",    "FETUSDT":    "FET",
+    "QNTUSDT":    "QNT",
 }
 _KUCOIN = {
     "BTCUSDT":    "BTC-USDT",    "ETHUSDT":    "ETH-USDT",    "LINKUSDT":   "LINK-USDT",
@@ -482,10 +488,10 @@ def fetch_coinmarketcap_cvd(symbol: str, interval: str, limit: int) -> Optional[
 
 # ── CoinGlass ─────────────────────────────────────────────────────────────────
 
-def fetch_coinglass_cvd(symbol: str, cg_client) -> Optional[Dict]:
+def fetch_coinglass_cvd(symbol: str, cg_client, interval: str = "4h") -> Optional[Dict]:
     if not cg_client or not cg_client.enabled:
         return None
-    return cg_client.get_aggregated_cvd(symbol)
+    return cg_client.get_aggregated_cvd(symbol, interval)
 
 
 # ── Dispatcher ────────────────────────────────────────────────────────────────
@@ -659,7 +665,7 @@ def fetch_cvd_from_source(
 ) -> Optional[Dict]:
 
     if source == "coinglass":
-        result = fetch_coinglass_cvd(symbol, cg_client)
+        result = fetch_coinglass_cvd(symbol, cg_client, interval)
         if result:
             result["source"] = "coinglass"
         return result
