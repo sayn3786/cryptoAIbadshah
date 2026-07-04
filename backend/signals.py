@@ -1182,6 +1182,16 @@ def generate_signal(analysis: Dict) -> Dict:
         conf_str = " + ".join(c.capitalize() for c in conflicting[:3])
         msg = f"⚠️ Conflicting groups ({conf_str}) — −18% confidence penalty; signals mixed"
         (bear_reasons if score > 0 else bull_reasons).append(msg)
+    elif n_agree <= 1:
+        # Single-group (or no-group) signal — one indicator category firing alone
+        # is unconfirmed by definition. Damp it and say so, so a lone momentum
+        # spike can't print a full-strength LONG without trend/flow backing.
+        mult = 0.85
+        if abs(score) >= 30:
+            lone = agreeing[0].capitalize() if agreeing else "No group"
+            msg = (f"⚠️ Unconfirmed signal — only {lone} aligned (−15% damping); "
+                   f"wait for trend/flow confirmation before full size")
+            (bear_reasons if score > 0 else bull_reasons).append(msg)
     else:
         mult = 1.00
 
