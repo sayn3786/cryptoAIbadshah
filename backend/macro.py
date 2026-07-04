@@ -15,6 +15,7 @@ and rate cuts are bullish; hot inflation and hawkish data are bearish.
 """
 import csv
 import io
+import os
 import time
 from datetime import datetime, timedelta, timezone
 import requests
@@ -22,6 +23,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, List
 
 FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+# Official FRED API — designed for programmatic access, works from cloud IPs
+# where the fredgraph.csv CDN tarpits datacenter traffic. Free key, instant:
+# https://fred.stlouisfed.org/docs/api/api_key.html → set FRED_API_KEY env var.
+FRED_API = "https://api.stlouisfed.org/fred/series/observations"
+FRED_KEY = os.getenv("FRED_API_KEY", "")
 TIMEOUT  = 8
 
 _cache: Dict[str, tuple] = {}
@@ -123,24 +129,36 @@ INDICATORS = [
 ]
 
 
-def _fetch_series(series: str) -> List[tuple]:
-    """Return [(date_str, float_value), ...] oldest→newest for a FRED series."""
-    # cosd bounds the response to recent history. Without it FRED streams the
-    # ENTIRE series (CPI back to 1947, weekly claims to 1967) — megabyte CSVs
-    # that read-timeout on serverless. 3 years covers YoY (13 months) and
-    # quarterly GDP comparisons with plenty of margin.
-    start = (datetime.now(timezone.utc) - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
-    try:
-        r = _s.get(FRED_CSV, params={"id": series, "cosd": start}, timeout=TIMEOUT)
-        r.raise_for_status()
-    except Exception as e:
-        _last_errors[series] = f"{type(e).__name__}: {e}"[:200]
-        raise
+def _fetch_series_api(series: str, start: str) -> List[tuple]:
+    """Fetch via the official FRED API (requires FRED_API_KEY)."""
+    r = _s.get(FRED_API, params={
+        "series_id":         series,
+        "api_key":           FRED_KEY,
+        "file_type":         "json",
+        "observation_start": start,
+        "sort_order":        "asc",
+    }, timeout=TIMEOUT)
+    r.raise_for_status()
+    obs = (r.json() or {}).get("observations") or []
+    out = []
+    for o in obs:
+        val = (o.get("value") or "").strip()
+        if val in ("", ".", "NA"):
+            continue
+        try:
+            out.append((o.get("date", ""), float(val)))
+        except ValueError:
+            continue
+    return out
+
+
+def _fetch_series_csv(series: str, start: str) -> List[tuple]:
+    """Fetch via fredgraph.csv (keyless; blocked from some datacenter IPs)."""
+    r = _s.get(FRED_CSV, params={"id": series, "cosd": start}, timeout=TIMEOUT)
+    r.raise_for_status()
     rows = list(csv.reader(io.StringIO(r.text)))
     if not rows or len(rows) < 2:
-        _last_errors[series] = f"empty/short response ({len(r.text)} bytes): {r.text[:120]!r}"
         return []
-    _last_errors.pop(series, None)
     out = []
     for row in rows[1:]:
         if len(row) < 2:
@@ -153,6 +171,34 @@ def _fetch_series(series: str) -> List[tuple]:
         except ValueError:
             continue
     return out
+
+
+def _fetch_series(series: str) -> List[tuple]:
+    """Return [(date_str, float_value), ...] oldest→newest for a FRED series."""
+    # Bound to recent history: 3 years covers YoY (13 months) and quarterly GDP
+    # comparisons; unbounded requests stream the entire series since 1947.
+    start = (datetime.now(timezone.utc) - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
+    err = None
+    if FRED_KEY:
+        try:
+            out = _fetch_series_api(series, start)
+            if out:
+                _last_errors.pop(series, None)
+                return out
+            err = "api: empty response"
+        except Exception as e:
+            err = f"api {type(e).__name__}: {e}"[:160]
+    try:
+        out = _fetch_series_csv(series, start)
+        if out:
+            _last_errors.pop(series, None)
+            return out
+        _last_errors[series] = ((err + " | ") if err else "") + "csv: empty response"
+        return []
+    except Exception as e:
+        _last_errors[series] = (((err + " | ") if err else "") +
+                                f"csv {type(e).__name__}: {e}")[:220]
+        raise
 
 
 def _yoy(series: List[tuple], back: int) -> Optional[float]:
@@ -312,5 +358,6 @@ def get_macro_debug() -> Dict:
         "last_errors":  dict(_last_errors),
         "cached":       cached[0] is not None if cached else False,
         "cache_age_s":  round(time.time() - cached[1]) if cached else None,
+        "fred_api_key": bool(FRED_KEY),
         "indicators":   [i["series"] for i in INDICATORS],
     }
