@@ -93,7 +93,7 @@ INDICATORS = [
     },
     {
         "key": "jobless_claims", "label": "Initial Jobless Claims (Weekly)", "series": "ICSA",
-        "cadence": "Weekly", "transform": "level", "unit": "K",
+        "cadence": "Weekly", "transform": "level_vs_4wk", "unit": "K", "flat_band": 5.0,
         "rising_impact": "bullish",
         "why_up": "More claims → labour softening → dovish Fed → bullish crypto",
         "why_down": "Fewer claims → strong labour → hawkish → bearish",
@@ -233,6 +233,16 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
             cur   = (series[-1][1] / series[-2][1] - 1.0) * 100.0 if series[-2][1] else None
             prev  = (series[-2][1] / series[-3][1] - 1.0) * 100.0 if series[-3][1] else None
             as_of = series[-1][0]
+        elif t == "level_vs_4wk":
+            # Weekly series are noisy (±5-10K swings) — compare the latest print
+            # against the prior 4-week average, the trader-standard smoothing.
+            if len(series) < 5:
+                return None
+            cur   = series[-1][1]
+            prev  = sum(v for _, v in series[-5:-1]) / 4.0
+            as_of = series[-1][0]
+            if ind["series"] == "ICSA":  # raw counts → thousands
+                cur, prev = cur / 1000.0, prev / 1000.0
         else:  # level
             if len(series) < 2:
                 return None
@@ -246,7 +256,9 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
         return None
 
     change = cur - prev
-    eps = 1e-6
+    # Dead-band: moves smaller than this (same units as the value) are noise,
+    # not signal — e.g. jobless claims wiggling ±1-4K week to week.
+    eps = ind.get("flat_band", 1e-6)
     if   change > eps: direction = "up"
     elif change < -eps: direction = "down"
     else:               direction = "flat"

@@ -114,6 +114,15 @@ def _build_result(daily: List[Dict], symbol: str, source: str) -> Optional[Dict]
         else:
             pts = 0
 
+        # Counter-trend damping: one day against a sustained opposing streak is
+        # not a confirmed turn (e.g. +$220M today after a -$6B month). Halve the
+        # points per conflicting horizon; aligned streaks keep full weight.
+        if pts:
+            if week_total and (pts > 0) != (week_total > 0):
+                pts = int(pts / 2) or (2 if pts > 0 else -2)
+            if month_total and (pts > 0) != (month_total > 0):
+                pts = int(pts / 2) or (2 if pts > 0 else -2)
+
         trend = "inflow" if today_usd > 0 else "outflow" if today_usd < 0 else "neutral"
 
         def _m(v): return round(v / 1_000_000, 1)
