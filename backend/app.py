@@ -25,6 +25,7 @@ from macro import get_macro_events, get_market_backdrop, get_event_expectation
 from market_regime import get_market_regime
 from calendar_events import get_upcoming_events, get_event_risk
 from gomining_token import get_gomining_tokenomics
+from bittensor_eco import get_tao_ecosystem
 from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
                          fetch_aggregated_futures_cvd)
 from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
@@ -587,6 +588,15 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         except Exception:
             gomining_tokenomics = None
 
+    # TAO / Bittensor ecosystem: staking, subnet Alpha prices, net TAO flow
+    # into subnet pools (Taostats API, cached 30 min; needs TAOSTATS_API_KEY).
+    tao_ecosystem = None
+    if symbol == "TAO":
+        try:
+            tao_ecosystem = get_tao_ecosystem()
+        except Exception:
+            tao_ecosystem = None
+
     # Volatility regime: current ATR(14)/price percentile vs this token's own
     # history — tells the signal whether "full size" is being suggested into a
     # dead-calm or an explosive tape.
@@ -691,6 +701,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "event_risk":             event_risk,
         "vol_regime":             vol_regime,
         "gomining_tokenomics":    gomining_tokenomics,
+        "tao_ecosystem":          tao_ecosystem,
     }
     analysis["signal"] = generate_signal(analysis)
 
@@ -871,6 +882,18 @@ def api_btc_top():
         }})
     if not data:
         return jsonify({"error": "top signals unavailable"}), 503
+    return jsonify(data)
+
+
+@app.get("/api/tao-ecosystem")
+def api_tao_ecosystem():
+    """Bittensor ecosystem aggregates; ?debug=1 shows per-endpoint attempts."""
+    data = get_tao_ecosystem()
+    if request.args.get("debug"):
+        from bittensor_eco import get_tao_debug
+        return jsonify({"data": data, "debug": get_tao_debug()})
+    if not data:
+        return jsonify({"error": "TAO ecosystem data unavailable — set TAOSTATS_API_KEY"}), 503
     return jsonify(data)
 
 

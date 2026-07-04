@@ -209,6 +209,7 @@ function renderAll(a) {
   renderArkhamPanel(a.whale_sells);
   renderEtfFlows(a.etf_flows, a.symbol);
   renderGtk(a.gomining_tokenomics, a.symbol);
+  renderTaoEco(a.tao_ecosystem, a.symbol);
   renderMarketContext(a.markets, a.regime);
   trackSignal(a);
   evaluateSignals(a);
@@ -3589,6 +3590,67 @@ function renderGtk(gtk, symbol) {
       [gtk.note, gtk.epoch_note,
        gtk.onchain_ready ? '' : '<em>Add ETHERSCAN_API_KEY to unlock on-chain burn tracking</em>']
         .filter(Boolean).join(' · ')}</div>`;
+}
+
+/* ─── Bittensor / TAO ecosystem ───────────────────────────────────────────── */
+function renderTaoEco(eco, symbol) {
+  const sec  = document.getElementById('taoEcoSection');
+  const grid = document.getElementById('taoEcoGrid');
+  if (!sec || !grid) return;
+  if (symbol !== 'TAO' || !eco) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+
+  const st = eco.stats || {}, fl = eco.flow || {}, sn = eco.subnets || {};
+  const fmtTao = v => v == null ? '—' :
+    `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v) >= 1e6 ? (Math.abs(v)/1e6).toFixed(2)+'M' : Math.abs(v).toLocaleString()} τ`;
+  const flCls = v => v == null ? '' : v > 0 ? 'bull' : v < 0 ? 'bear' : '';
+
+  const tiles = [];
+  if (st.staked_pct != null)
+    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Supply staked</span>
+      <span class="etf-stat-val">${st.staked_pct}%</span></div>`);
+  if (fl.net_24h_tao != null)
+    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Subnet pool flow 24h</span>
+      <span class="etf-stat-val ${flCls(fl.net_24h_tao)}">${fmtTao(fl.net_24h_tao)}</span></div>`);
+  if (fl.net_7d_tao != null)
+    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Subnet pool flow 7d</span>
+      <span class="etf-stat-val ${flCls(fl.net_7d_tao)}">${fmtTao(fl.net_7d_tao)}</span></div>`);
+  if (sn.count != null)
+    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Active subnets</span>
+      <span class="etf-stat-val">${sn.count}</span></div>`);
+  if (sn.breadth_pct != null)
+    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Alpha breadth (7d up)</span>
+      <span class="etf-stat-val ${sn.breadth_pct >= 60 ? 'bull' : sn.breadth_pct <= 30 ? 'bear' : ''}">${sn.breadth_pct}%</span></div>`);
+  if (sn.top5_emission_pct != null)
+    tiles.push(`<div class="etf-stat"><span class="etf-stat-lbl">Top-5 emission share</span>
+      <span class="etf-stat-val">${sn.top5_emission_pct}%</span></div>`);
+
+  // Top-10 subnet table — the answer to "the subnet list is long"
+  let table = '';
+  if (sn.top && sn.top.length) {
+    const rows = sn.top.map(s => {
+      const c7 = s.chg_7d;
+      const cCls = c7 == null ? '' : c7 > 0 ? 'bull' : 'bear';
+      return `<tr>
+        <td>SN${s.netuid}</td>
+        <td>${s.name || '—'}</td>
+        <td>${s.alpha_price_tao != null ? s.alpha_price_tao.toFixed(4) + ' τ' : '—'}</td>
+        <td>${s.emission_share_pct != null ? s.emission_share_pct + '%' : '—'}</td>
+        <td class="${cCls}">${c7 != null ? (c7 > 0 ? '+' : '') + c7.toFixed(1) + '%' : '—'}</td>
+      </tr>`;
+    }).join('');
+    table = `<div style="overflow-x:auto;margin-top:10px">
+      <table class="sn-table">
+        <thead><tr><th>ID</th><th>Subnet</th><th>Alpha price</th><th>Emission</th><th>7d</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  }
+
+  const notes = (eco.notes || []).join(' · ');
+  grid.innerHTML = `
+    <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${tiles.join('')}</div>
+    ${table}
+    ${notes ? `<div class="macro-reason" style="margin-top:8px">${notes}</div>` : ''}`;
 }
 
 /* ─── Traditional markets + regime strip ──────────────────────────────────── */

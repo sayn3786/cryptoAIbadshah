@@ -691,6 +691,16 @@ def generate_signal(analysis: Dict) -> Dict:
             f"🔥 On-chain burns: {burns_g['burn_7d']:,} GOMINING destroyed in 7d "
             f"({burns_g.get('n_burn_tx', 0)} txs, 35d total {burns_g.get('burn_35d', 0):,})")
 
+    # ── TAO / Bittensor ecosystem (subnet pool flows + alpha breadth) ─────────
+    # Net TAO flowing into subnet Alpha pools is staked/illiquid supply — the
+    # dTAO equivalent of ETF inflows. Alpha breadth = ecosystem-wide demand.
+    tao_eco = analysis.get("tao_ecosystem") or {}
+    tao_pts = tao_eco.get("signal_pts", 0) or 0
+    if tao_pts and tao_eco.get("notes"):
+        score += tao_pts; g['flow'] += tao_pts
+        (bull_reasons if tao_pts > 0 else bear_reasons).append(
+            f"🧠 Bittensor ecosystem: {'; '.join(tao_eco['notes'][:2])}")
+
     # ── Long / Short Ratio ────────────────────────────────────────────────────
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,
