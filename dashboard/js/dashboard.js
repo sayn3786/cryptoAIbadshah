@@ -1210,17 +1210,24 @@ function renderOnchainMetrics(mining, symbol, lth) {
   const top = mining.top_signals;
   if (top) {
     const zCls  = top.zone === 'top-zone' ? 'bear' : top.zone === 'warming' ? '' : 'bull';
-    const piTxt = top.pi_crossed ? 'Pi Cycle FIRED'
-                : top.pi_ratio != null ? `Pi Cycle ${(top.pi_ratio * 100).toFixed(0)}%` : 'Pi Cycle —';
-    const distTxt = top.top_band_dist_pct != null
-      ? (top.top_band_dist_pct <= 0 ? 'ABOVE top band' : `${top.top_band_dist_pct}% below top band`) : '';
+    // Only mention indicators that have real values — no dangling dashes
+    const descParts = [];
+    if (top.pi_crossed) descParts.push('Pi Cycle FIRED ⚠');
+    else if (top.pi_ratio != null) descParts.push(`Pi Cycle ${(top.pi_ratio * 100).toFixed(0)}% of trigger`);
+    if (top.mayer != null) descParts.push(`Mayer ${top.mayer}${top.mayer >= 2.4 ? ' ⚠' : ''}`);
+    const subParts = ['MVRV 3.5× band'];
+    if (top.top_band_dist_pct != null) {
+      subParts.push(top.top_band_dist_pct <= 0 ? 'price ABOVE top band'
+                                               : `${top.top_band_dist_pct}% below top band`);
+    }
+    if (top.pi_target) subParts.push(`Pi fires near ${fmtK(top.pi_target)}`);
     tiles.push(`
       <div class="ocm-tile ${zCls}">
         <div class="ocm-name">Cycle Top Watch</div>
         <div class="ocm-value">${top.top_band ? fmtK(top.top_band) : '—'}</div>
         <div class="ocm-zone ${zCls}">${top.zone.replace('-', ' ')} · heat ${top.heat}/6</div>
-        <div class="ocm-desc">${piTxt} · Mayer ${top.mayer ?? '—'}${top.mayer >= 2.4 ? ' ⚠' : ''}</div>
-        <div class="ocm-sub">MVRV 3.5× band${distTxt ? ' · ' + distTxt : ''} · Pi fires ~${top.pi_target ? fmtK(top.pi_target) : '—'}</div>
+        <div class="ocm-desc">${descParts.join(' · ') || 'Building indicator history…'}</div>
+        <div class="ocm-sub">${subParts.join(' · ')}</div>
       </div>`);
   }
 
@@ -1720,7 +1727,7 @@ function renderCVDPanel(id, cvd, series, valId, trendId) {
     const auto = sel && sel.querySelector('option[value="auto"]');
     if (auto) {
       const srcLabel = cvd.source === 'coinglass' ? 'Auto · CoinGlass'
-                     : cvd.source === 'aggregated' ? `Auto · Agg${cvd.n_sources ? ` (${cvd.n_sources} ex.)` : ''}`
+                     : cvd.source === 'aggregated' ? `Auto · Agg${cvd.n_sources ? `(${cvd.n_sources})` : ''}`
                      : 'Auto';
       auto.textContent = srcLabel;
     }
@@ -3578,8 +3585,10 @@ function renderGtk(gtk, symbol) {
   }
   grid.innerHTML = `
     <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">${tiles.join('')}</div>
-    <div class="macro-reason" style="margin-top:8px">${gtk.note || ''} · ${gtk.epoch_note || ''}${
-      gtk.onchain_ready ? '' : ' · <em>Add ETHERSCAN_API_KEY to unlock on-chain burn tracking</em>'}</div>`;
+    <div class="macro-reason" style="margin-top:8px">${
+      [gtk.note, gtk.epoch_note,
+       gtk.onchain_ready ? '' : '<em>Add ETHERSCAN_API_KEY to unlock on-chain burn tracking</em>']
+        .filter(Boolean).join(' · ')}</div>`;
 }
 
 /* ─── Traditional markets + regime strip ──────────────────────────────────── */

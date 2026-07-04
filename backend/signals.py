@@ -1220,16 +1220,25 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(
                 f"🔝 Pi Cycle Top FIRED (111DMA ≥ 2×350DMA) — this cross marked the 2013/2017/2021 "
                 f"cycle tops within days; strong structural distribution signal")
-        elif heat >= 4:
-            score -= 12; g['sentiment'] -= 12
-            bear_reasons.append(
-                f"🔝 Cycle-top zone — Mayer {top_sig.get('mayer')}, Pi Cycle ratio {top_sig.get('pi_ratio')}, "
-                f"MVRV top band ${top_sig.get('top_band'):,.0f} within {top_sig.get('top_band_dist_pct')}%; trim into strength")
         elif heat >= 2:
-            score -= 5; g['sentiment'] -= 5
-            bear_reasons.append(
-                f"🔝 Top indicators warming (heat {heat}/6) — Mayer {top_sig.get('mayer')}, "
-                f"Pi Cycle ratio {top_sig.get('pi_ratio')}; not a top yet, but upside is maturing")
+            # Describe only the indicators that actually have values — never
+            # print "Mayer None" or crash formatting a missing top band.
+            _parts = []
+            if top_sig.get("mayer") is not None:
+                _parts.append(f"Mayer {top_sig['mayer']}")
+            if top_sig.get("pi_ratio") is not None:
+                _parts.append(f"Pi Cycle at {top_sig['pi_ratio']*100:.0f}% of trigger")
+            if top_sig.get("top_band") and top_sig.get("top_band_dist_pct") is not None:
+                _parts.append(f"MVRV top band ${top_sig['top_band']:,.0f} "
+                              f"({top_sig['top_band_dist_pct']:+.0f}% away)")
+            _detail = "; ".join(_parts) if _parts else "multiple cycle metrics elevated"
+            if heat >= 4:
+                score -= 12; g['sentiment'] -= 12
+                bear_reasons.append(f"🔝 Cycle-top zone (heat {heat}/6) — {_detail}; trim into strength")
+            else:
+                score -= 5; g['sentiment'] -= 5
+                bear_reasons.append(f"🔝 Top indicators warming (heat {heat}/6) — {_detail}; "
+                                    f"not a top yet, but upside is maturing")
 
     # ── Combo 11: Fresh macro inflection + technical alignment (regime change) ───
     # A just-released data point that FLIPPED direction (e.g. CPI reaccelerating
