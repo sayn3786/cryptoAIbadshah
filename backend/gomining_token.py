@@ -53,8 +53,10 @@ def _supply_trend() -> Optional[Dict]:
     try:
         j = None
         for attempt in range(2):   # one retry — CoinGecko free tier 429s often
+            # days=365 → auto-daily granularity (the interval param is
+            # Enterprise-only and errors on the free tier)
             r = _s.get("https://api.coingecko.com/api/v3/coins/gomining-token/market_chart",
-                       params={"vs_currency": "usd", "days": 30, "interval": "daily"},
+                       params={"vs_currency": "usd", "days": 365},
                        timeout=TIMEOUT)
             if r.status_code == 429 and attempt == 0:
                 time.sleep(1.5)
@@ -71,6 +73,7 @@ def _supply_trend() -> Optional[Dict]:
         for (ts, cap), (_, px) in zip(caps, prices):
             if px and cap:
                 supply.append((int(ts), cap / px))
+        supply = supply[-31:]   # 365d of daily points → keep the last month
         if len(supply) < 8:
             return None
         cur    = supply[-1][1]

@@ -309,9 +309,11 @@ def _btc_top_signals(realized_price, spot_price=None):
             # Cycle needs. Stitch CoinGecko's 365-day daily history in that case.
             if len(closes) < 350:
                 try:
+                    # NOTE: no interval param — it's Enterprise-only on CoinGecko;
+                    # days>90 auto-returns daily granularity on the free tier.
                     _r = _requests.get(
                         "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-                        params={"vs_currency": "usd", "days": 365, "interval": "daily"},
+                        params={"vs_currency": "usd", "days": 365},
                         timeout=8, headers={"User-Agent": "CryptoBadshah/2.0"})
                     _prices = (_r.json() or {}).get("prices") or []
                     if len(_prices) >= 350:

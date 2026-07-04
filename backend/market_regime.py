@@ -38,11 +38,13 @@ def _cg_global() -> Optional[Dict]:
 def _usdt_mcap_30d() -> Optional[float]:
     """USDT market-cap % change over ~30d — proxy for crypto liquidity flow."""
     try:
+        # days=365 → auto-daily granularity (interval param is Enterprise-only
+        # on CoinGecko's free tier and errors the request)
         r = _s.get("https://api.coingecko.com/api/v3/coins/tether/market_chart",
-                   params={"vs_currency": "usd", "days": 30, "interval": "daily"},
+                   params={"vs_currency": "usd", "days": 365},
                    timeout=TIMEOUT)
         r.raise_for_status()
-        caps = (r.json() or {}).get("market_caps") or []
+        caps = ((r.json() or {}).get("market_caps") or [])[-31:]
         if len(caps) < 2 or not caps[0][1]:
             return None
         return (caps[-1][1] / caps[0][1] - 1) * 100
