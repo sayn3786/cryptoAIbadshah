@@ -1626,6 +1626,20 @@ function renderCVDPanel(id, cvd, series, valId, trendId) {
     if (lbl) lbl.textContent = cvd.n_sources > 1 ? `Agg. (${cvd.n_sources} ex.)` : 'Aggregated';
   }
 
+  // Reflect the real futures data source in the "Auto" dropdown option so the
+  // user can confirm whether CoinGlass (multi-exchange) or the free aggregation
+  // is actually powering the panel.
+  if (id === 'fut') {
+    const sel = document.getElementById('futCvdSource');
+    const auto = sel && sel.querySelector('option[value="auto"]');
+    if (auto) {
+      const srcLabel = cvd.source === 'coinglass' ? 'Auto · CoinGlass'
+                     : cvd.source === 'aggregated' ? `Auto · Agg${cvd.n_sources ? ` (${cvd.n_sources} ex.)` : ''}`
+                     : 'Auto';
+      auto.textContent = srcLabel;
+    }
+  }
+
   const tEl = document.getElementById(trendId);
   tEl.textContent = isFlat ? 'unavailable' : (cvd.trend || 'neutral');
   tEl.className = `cvd-trend ${cvd.trend || 'neutral'}`;
@@ -2610,6 +2624,8 @@ function setFutCvdNA() {
   if (v) { v.textContent = 'N/A'; v.style.color = 'var(--muted)'; }
   if (t) { t.textContent = 'No perp market'; t.className = 'cvd-trend neutral'; }
   if (S.futCvdSeries) S.futCvdSeries.setData([]);
+  const auto = document.querySelector('#futCvdSource option[value="auto"]');
+  if (auto) auto.textContent = 'Auto';
 }
 
 /* ─── Selector wiring ─────────────────────────────────────────────────────── */
