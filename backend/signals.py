@@ -1158,6 +1158,57 @@ def generate_signal(analysis: Dict) -> Dict:
             combo_pts -= pts
             bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk")
 
+    # ── Combo 11: Fresh macro inflection + technical alignment (regime change) ───
+    # A just-released data point that FLIPPED direction (e.g. CPI reaccelerating
+    # after months of cooling, claims spiking after a calm stretch) is how macro
+    # regime changes start. When technicals already lean the same way, both are
+    # telling the same reversal story → meaningful extra weight.
+    macro_ev_l = (analysis.get("macro") or {}).get("events") or []
+    fresh_flips = [e for e in macro_ev_l
+                   if e.get("inflection") and e.get("fresh")
+                   and e.get("impact") in ("bullish", "bearish")]
+    flips_bull = [e for e in fresh_flips if e["impact"] == "bullish"]
+    flips_bear = [e for e in fresh_flips if e["impact"] == "bearish"]
+    if n_agree >= 2:
+        if score > 0 and flips_bull:
+            pts = min(14, 7 * len(flips_bull))
+            combo_pts += pts
+            names = ", ".join(e["label"].split(" (")[0] for e in flips_bull[:3])
+            bull_reasons.append(
+                f"🔄 Fresh macro turn + technicals aligned — {names} just flipped bullish "
+                f"and {n_agree} indicator groups agree; possible macro-driven trend reversal (+{pts})")
+        elif score < 0 and flips_bear:
+            pts = min(14, 7 * len(flips_bear))
+            combo_pts -= pts
+            names = ", ".join(e["label"].split(" (")[0] for e in flips_bear[:3])
+            bear_reasons.append(
+                f"🔄 Fresh macro turn + technicals aligned — {names} just flipped bearish "
+                f"and {n_agree} indicator groups agree; possible macro-driven trend reversal (−{pts})")
+
+    # ── Combo 12: ETF flow reversal day + technical alignment ─────────────────────
+    # A counter-streak flow day alone is damped (unconfirmed). But when technicals
+    # point the SAME way as the flip, institutions and price action agree — the
+    # damped flow day gets its weight back as an early reversal signal.
+    etf_l    = analysis.get("etf_flows") or {}
+    etf_td   = etf_l.get("today_m") or 0
+    etf_wk   = etf_l.get("week_total_m") or 0
+    etf_flip = etf_td and etf_wk and (etf_td > 0) != (etf_wk > 0)
+    if etf_flip and n_agree >= 2:
+        if etf_td > 0 and score > 0:
+            pts = 8
+            combo_pts += pts
+            bull_reasons.append(
+                f"🔄 ETF flow reversal + technicals aligned — first inflow day "
+                f"(+${abs(etf_td):.0f}M) after an outflow week and {n_agree} groups lean bullish; "
+                f"early institutional turn signal (+{pts})")
+        elif etf_td < 0 and score < 0:
+            pts = 8
+            combo_pts -= pts
+            bear_reasons.append(
+                f"🔄 ETF flow reversal + technicals aligned — first outflow day "
+                f"(−${abs(etf_td):.0f}M) after an inflow week and {n_agree} groups lean bearish; "
+                f"early institutional exit signal (−{pts})")
+
     # Apply combo points
     score += combo_pts
 

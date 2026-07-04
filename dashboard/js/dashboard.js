@@ -3503,7 +3503,7 @@ function renderMacro(data) {
   grid.innerHTML = data.events.map(e => `
     <div class="macro-item ${impactCls(e.impact)}">
       <div class="macro-top">
-        <span class="macro-label">${e.label}</span>
+        <span class="macro-label">${e.label}${e.inflection && e.fresh ? ' <span class="macro-flip" title="This release flipped direction vs the prior one — possible regime change">🔄 TURN</span>' : ''}</span>
         <span class="macro-cadence">${e.cadence}</span>
       </div>
       <div class="macro-vals">

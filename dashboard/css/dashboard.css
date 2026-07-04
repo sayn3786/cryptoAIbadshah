@@ -1575,6 +1575,9 @@ a:hover { color: var(--gold2); }
 .macro-badge.macro-neu  { color: var(--muted, #94a3b8); background: rgba(148,163,184,.12); }
 .macro-asof   { font-size: .56rem; color: var(--muted); }
 .macro-reason { font-size: .62rem; color: var(--muted); margin-top: 6px; line-height: 1.35; }
+.macro-flip   { font-size: .56rem; font-weight: 700; color: #fbbf24;
+                background: rgba(251,191,36,.14); padding: 1px 6px;
+                border-radius: 20px; letter-spacing: .03em; vertical-align: middle; }
 .macro-bull   { color: var(--bull, #10b981); }
 .macro-bear   { color: var(--bear, #ef4444); }
 

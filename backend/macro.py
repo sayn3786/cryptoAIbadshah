@@ -215,16 +215,19 @@ def _yoy(series: List[tuple], back: int) -> Optional[float]:
 
 def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
     t = ind["transform"]
+    prev2 = None   # value one release earlier than `prev` — for inflection detection
     try:
         if t == "yoy":
             cur  = _yoy(series, 0)
             prev = _yoy(series, 1)
+            prev2 = _yoy(series, 2)
             as_of = series[-1][0]
         elif t == "mom_diff":
             if len(series) < 3:
                 return None
             cur   = series[-1][1] - series[-2][1]
             prev  = series[-2][1] - series[-3][1]
+            prev2 = (series[-3][1] - series[-4][1]) if len(series) >= 4 else None
             as_of = series[-1][0]
             # PAYEMS is in thousands already
         elif t == "mom_pct":
@@ -232,6 +235,8 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
                 return None
             cur   = (series[-1][1] / series[-2][1] - 1.0) * 100.0 if series[-2][1] else None
             prev  = (series[-2][1] / series[-3][1] - 1.0) * 100.0 if series[-3][1] else None
+            prev2 = ((series[-3][1] / series[-4][1] - 1.0) * 100.0
+                     if len(series) >= 4 and series[-4][1] else None)
             as_of = series[-1][0]
         elif t == "level_vs_4wk":
             # Weekly series are noisy (±5-10K swings) — compare the latest print
@@ -240,15 +245,19 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
                 return None
             cur   = series[-1][1]
             prev  = sum(v for _, v in series[-5:-1]) / 4.0
+            prev2 = (sum(v for _, v in series[-6:-2]) / 4.0) if len(series) >= 6 else None
             as_of = series[-1][0]
             if ind["series"] == "ICSA":  # raw counts → thousands
                 cur, prev = cur / 1000.0, prev / 1000.0
+                prev2 = prev2 / 1000.0 if prev2 is not None else None
         else:  # level
             if len(series) < 2:
                 return None
             cur, prev, as_of = series[-1][1], series[-2][1], series[-1][0]
+            prev2 = series[-3][1] if len(series) >= 3 else None
             if ind["series"] == "ICSA":  # weekly claims come as raw count → thousands
                 cur, prev = cur / 1000.0, prev / 1000.0
+                prev2 = prev2 / 1000.0 if prev2 is not None else None
     except Exception:
         return None
 
@@ -269,9 +278,33 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
     elif direction == "down": impact, reason = falling, ind["why_down"]
     else:                     impact, reason = "neutral", "In line with prior release — limited new impact"
 
+    # Inflection: this release moved OPPOSITE to the prior release's move —
+    # e.g. CPI was cooling and just reaccelerated. Fresh inflections are how
+    # macro regime changes start, so they carry extra weight below.
+    inflection = False
+    if prev2 is not None and direction != "flat":
+        prev_change = prev - prev2
+        if abs(prev_change) > eps:
+            prev_dir = "up" if prev_change > 0 else "down"
+            inflection = (prev_dir != direction)
+
+    # Freshness: how recent is this release relative to its cadence?
+    days_old = None
+    fresh = False
+    try:
+        rel = datetime.strptime(str(as_of)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        days_old = (datetime.now(timezone.utc) - rel).days
+        fresh_window = {"Weekly": 7, "Monthly": 40, "Quarterly": 100}.get(ind["cadence"], 40)
+        fresh = days_old <= fresh_window
+    except Exception:
+        pass
+
     # Signal points for confluence: high-impact indicators weigh more
     weight = 8 if ind["key"] in ("cpi", "core_cpi", "fed_funds", "nfp", "unemployment") else 4
     pts = weight if impact == "bullish" else -weight if impact == "bearish" else 0
+    # Fresh direction flip = potential regime change → 1.5× weight
+    if pts and inflection and fresh:
+        pts = int(round(pts * 1.5))
 
     return {
         "key":       ind["key"],
@@ -286,6 +319,9 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
         "impact":    impact,
         "reason":    reason,
         "signal_pts": pts,
+        "inflection": inflection,
+        "fresh":      fresh,
+        "days_old":   days_old,
     }
 
 
