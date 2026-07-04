@@ -4,6 +4,7 @@ import sys
 import json
 import time
 import math
+import requests as _requests
 sys.path.insert(0, os.path.dirname(__file__))
 from btc_onchain import get_btc_mining_signals, get_gomining_strategy, get_lth_accumulation_proxy
 from options import get_options_expiry_data
@@ -303,6 +304,20 @@ def _btc_top_signals(realized_price, spot_price=None):
         try:
             daily = client.get_spot_klines("BTCUSDT", "1d", 1000) or []
             closes = [c["close"] for c in daily]
+            # Binance (1000 daily candles) is geo-blocked on some hosts and the
+            # fallback exchanges cap at ~300 — not enough for the 350DMA the Pi
+            # Cycle needs. Stitch CoinGecko's 365-day daily history in that case.
+            if len(closes) < 350:
+                try:
+                    _r = _requests.get(
+                        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+                        params={"vs_currency": "usd", "days": 365, "interval": "daily"},
+                        timeout=8, headers={"User-Agent": "CryptoBadshah/2.0"})
+                    _prices = (_r.json() or {}).get("prices") or []
+                    if len(_prices) >= 350:
+                        closes = [p[1] for p in _prices]
+                except Exception:
+                    pass
             n = len(closes)
             # Degrade gracefully: Binance (1000 daily) may be geo-blocked on the
             # host and fallback exchanges return ~300 candles — compute whatever
@@ -834,7 +849,7 @@ def api_btc_top():
     rp = (mining or {}).get("realized_price")
     _px = None
     try:
-        _d = client.get_spot_klines("BTCUSDT", "1d", 2) or []
+        _d = client.get_spot_klines("BTCUSDT", "1d", 30) or []
         _px = _d[-1]["close"] if _d else None
     except Exception:
         pass

@@ -832,7 +832,10 @@ class BinanceClient:
         # of rows for recently-listed tokens, which breaks every indicator.
         # Ichimoku needs 52 candles; require at least 26 for intraday/daily so
         # SuperTrend/BB/RSI can compute. Use 3 for weekly/monthly (sparse by nature).
-        _min_candles = 3 if use_weekly_fallbacks else 26
+        # Cap the minimum by the requested limit — a caller asking for 5 candles
+        # can never satisfy ">= 26", which would reject every real source and
+        # fall through to the last-resort/demo data.
+        _min_candles = min(3 if use_weekly_fallbacks else 26, max(1, limit))
 
         def _ok(r):
             return bool(r) and len(r) >= _min_candles
@@ -975,7 +978,8 @@ class BinanceClient:
 
     def get_futures_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
         is_weekly  = (interval in ("1w", "1W", "1M"))
-        _min_f = 3 if is_weekly else 26
+        # Capped by requested limit — see get_spot_klines for rationale
+        _min_f = min(3 if is_weekly else 26, max(1, limit))
 
         def _ok(r):
             return bool(r) and len(r) >= _min_f
