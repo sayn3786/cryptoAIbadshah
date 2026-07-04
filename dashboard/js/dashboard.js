@@ -533,6 +533,12 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol)
   const unique = [...new Map(data.map(d => [d.time, d])).values()].sort((a, b) => a.time - b.time);
   S.candleSeries.setData(unique);
 
+  // Restore autoscale on every render. Dragging/pinching the price axis turns
+  // autoscale OFF permanently; the broken viewport then persists across data
+  // refreshes — candles squish into a band and out-of-range level labels
+  // (Swing/Realized/FVG) pile into a uniform stack that reads as "inverted".
+  S.mainChart.priceScale('right').applyOptions({ autoScale: true });
+
   // FVG overlays — draw after setData so Y-axis is already anchored to real prices.
   // Only the midpoint carries an axis label; top/bottom boundaries are visual-only
   // (axisLabelVisible: false) so the price scale doesn't get flooded with numbers.
