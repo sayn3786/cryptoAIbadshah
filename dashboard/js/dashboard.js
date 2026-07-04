@@ -510,6 +510,19 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol)
     timeScale: { borderColor: '#1e2d44', timeVisible: intraday, secondsVisible: false },
   });
 
+  // Adapt price precision to the token's magnitude so sub-dollar tokens like
+  // GOMINING (~$0.28) don't collapse every level to "0.28". Precision is chosen
+  // from the latest price and applied to the axis + all price-line labels.
+  const lastPrice = Math.abs(candles[candles.length - 1].close) || 1;
+  let prec, minMove;
+  if      (lastPrice >= 1000) { prec = 2; minMove = 0.01; }
+  else if (lastPrice >= 1)    { prec = 4; minMove = 0.0001; }
+  else if (lastPrice >= 0.01) { prec = 5; minMove = 0.00001; }
+  else                        { prec = 8; minMove = 0.00000001; }
+  S.candleSeries.applyOptions({
+    priceFormat: { type: 'price', precision: prec, minMove },
+  });
+
   const data = candles.map(c => ({
     time: Math.floor(c.timestamp / 1000),
     open: c.open, high: c.high, low: c.low, close: c.close,
