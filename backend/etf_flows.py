@@ -155,6 +155,7 @@ ETF_ASSETS = {
     "ETH": {"slug": "us-eth-spot", "cg": "ethereum", "cache": "eth_etf"},
     "SOL": {"slug": "us-sol-spot", "cg": "solana",   "cache": "sol_etf"},
     "XRP": {"slug": "us-xrp-spot", "cg": "xrp",      "cache": "xrp_etf"},
+    "HBAR": {"slug": "us-hbar-spot", "cg": "hedera", "cache": "hbar_etf"},
 }
 
 
