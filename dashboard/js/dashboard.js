@@ -1700,7 +1700,7 @@ function renderNewsCard(news) {
     } catch { return ''; }
   };
 
-  list.innerHTML = articles.slice(0, 6).map(a => {
+  const item = a => {
     const sc  = a.sentiment === 'bullish' ? 'bull' : a.sentiment === 'bearish' ? 'bear' : 'muted2';
     const dot = a.sentiment === 'bullish' ? '▲' : a.sentiment === 'bearish' ? '▼' : '·';
     const src = (a.source || '').replace('www.', '');
@@ -1712,7 +1712,15 @@ function renderNewsCard(news) {
         <span class="news-meta">${src} · ${timeAgo(a.published_at)}</span>
       </div>
     </div>`;
-  }).join('');
+  };
+  const head = articles.slice(0, 6).map(item).join('');
+  const rest = articles.slice(6).map(item).join('');
+  list.innerHTML = head +
+    (rest ? `<div id="newsRest" style="display:none">${rest}</div>
+      <button class="sn-showall" onclick="const r=document.getElementById('newsRest');
+        const open=r.style.display==='none'; r.style.display=open?'':'none';
+        this.textContent=open?'Show less':'Show all ${articles.length} articles ▾';">
+        Show all ${articles.length} articles ▾</button>` : '');
 }
 
 function renderCVDPanel(id, cvd, series, valId, trendId) {

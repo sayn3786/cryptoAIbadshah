@@ -367,7 +367,7 @@ def _aggregate(articles: List[Dict]) -> Dict:
     else:
         signal = "neutral"
 
-    top = sorted(articles, key=lambda a: a.get("published_at", ""), reverse=True)[:8]
+    top = sorted(articles, key=lambda a: a.get("published_at", ""), reverse=True)[:30]
     return {
         "signal":   signal,
         "bullish":  len(bull_art),
