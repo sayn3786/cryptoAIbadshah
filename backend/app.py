@@ -843,7 +843,14 @@ def api_symbols():
 @app.get("/api/news")
 def api_news():
     symbol = request.args.get("symbol", "BTCUSDT").upper()
-    return jsonify(fetch_news_sentiment(symbol))
+    result = fetch_news_sentiment(symbol)
+    if request.args.get("debug"):
+        from news import _ssv_pool
+        return jsonify({"data": result, "debug": {
+            "sosovalue_pool": {"n": len(_ssv_pool.get("articles") or []),
+                               "age_s": round(time.time() - _ssv_pool.get("ts", 0)),
+                               "status": _ssv_pool.get("status", "")}}})
+    return jsonify(result)
 
 
 @app.get("/api/etf")

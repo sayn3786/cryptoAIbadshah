@@ -53,6 +53,13 @@ _cache: Dict[str, Dict] = {}
 _cache_lock = threading.Lock()
 CACHE_TTL = 3600  # 60 min — LunarCrush has strict rate limits
 
+# SoSoValue featured-news pool — fetched ONCE for all currencies and filtered
+# per coin by aliases, so one API call serves every token (free-tier friendly).
+SSV_NEWS_KEY  = os.getenv("SOSOVALUE_API_KEY", "")
+_ssv_pool: Dict = {"articles": [], "ts": 0.0, "status": ""}
+_SSV_POOL_TTL  = 1800   # 30 min
+_SSV_FAIL_TTL  = 300
+
 
 # ── Sentiment helpers ─────────────────────────────────────────────────────────
 
@@ -186,6 +193,100 @@ def _fetch_rss(symbol: str) -> List[Dict]:
     return articles
 
 
+# ── SoSoValue featured news ───────────────────────────────────────────────────
+
+def _ssv_norm_time(v) -> str:
+    """SoSoValue timestamps come as ms/s epoch or ISO — normalise to ISO."""
+    try:
+        if isinstance(v, str) and not v.isdigit():
+            return v
+        t = float(v)
+        if t > 1e12:
+            t /= 1000
+        return datetime.fromtimestamp(t, tz=timezone.utc).isoformat()
+    except Exception:
+        return ""
+
+
+def _fetch_ssv_pool() -> List[Dict]:
+    """Featured news across ALL currencies, cached 30 min, parsed defensively."""
+    now = time.time()
+    age = now - _ssv_pool["ts"]
+    if _ssv_pool["articles"] and age < _SSV_POOL_TTL:
+        return _ssv_pool["articles"]
+    if not _ssv_pool["articles"] and _ssv_pool["ts"] and age < _SSV_FAIL_TTL:
+        return []
+    if not SSV_NEWS_KEY:
+        _ssv_pool.update({"ts": now, "status": "no key"})
+        return []
+
+    articles: List[Dict] = []
+    status = ""
+    # Docs say openapi.sosovalue.com; the ETF endpoint answers on
+    # api.sosovalue.xyz — try both.
+    for base in ("https://openapi.sosovalue.com", "https://api.sosovalue.xyz"):
+        try:
+            url = (f"{base}/api/v1/news/featured/currency?pageNum=1&pageSize=100")
+            req = urllib.request.Request(url, headers={
+                "x-soso-api-key": SSV_NEWS_KEY,
+                "accept": "application/json",
+                "User-Agent": "CryptoBadshah/2.0",
+            })
+            with urllib.request.urlopen(req, timeout=8) as r:
+                payload = json.loads(r.read().decode("utf-8", "replace"))
+            if str(payload.get("code")) not in ("0", "200"):
+                status = f"{base}: code={payload.get('code')} {str(payload.get('msg'))[:60]}"
+                continue
+            data = payload.get("data") or {}
+            rows = data.get("list") or data.get("data") or []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                title = (row.get("title") or row.get("enTitle") or
+                         row.get("newsTitle") or row.get("content") or "")
+                title = str(title).strip()
+                if not title or len(title) < 8:
+                    continue
+                link = (row.get("sourceUrl") or row.get("url") or
+                        row.get("link") or row.get("sourceLink") or "")
+                pub  = _ssv_norm_time(row.get("publishTime") or row.get("pubDate") or
+                                      row.get("createTime") or row.get("timestamp") or "")
+                articles.append({
+                    "title":        title[:200],
+                    "url":          link,
+                    "published_at": pub,
+                    "source":       "sosovalue",
+                    "bullish_votes": 0,
+                    "bearish_votes": 0,
+                    "sentiment":    _keyword_sentiment(title),
+                })
+            status = f"{base}: ok ({len(articles)} items)"
+            break
+        except Exception as e:
+            status = f"{base}: {type(e).__name__}: {e}"[:120]
+            continue
+
+    _ssv_pool.update({"articles": articles, "ts": now, "status": status})
+    return articles
+
+
+def _fetch_sosovalue(symbol: str) -> List[Dict]:
+    """Per-coin filter over the shared pool using the same alias matching as RSS."""
+    aliases = COIN_ALIASES.get(symbol, [])
+    if not aliases:
+        return []
+    pool = _fetch_ssv_pool()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    out = []
+    for a in pool:
+        if not any(al.lower() in a["title"].lower() for al in aliases):
+            continue
+        if a["published_at"] and a["published_at"] < cutoff:
+            continue
+        out.append(a)
+    return out[:12]
+
+
 # ── Aggregation ───────────────────────────────────────────────────────────────
 
 def _aggregate(articles: List[Dict]) -> Dict:
@@ -232,19 +333,21 @@ def fetch_news_sentiment(symbol: str) -> Dict:
 
     lc_articles, lc_error = _fetch_lunarcrush(symbol)
     rss_articles = _fetch_rss(symbol)
+    ssv_articles = _fetch_sosovalue(symbol)
 
-    # Deduplicate RSS vs LunarCrush by title similarity
-    lc_titles = {a["title"].lower()[:60] for a in lc_articles}
-    rss_unique = [a for a in rss_articles if a["title"].lower()[:60] not in lc_titles]
+    # Deduplicate across sources by title prefix
+    seen = {a["title"].lower()[:60] for a in lc_articles}
+    rss_unique = [a for a in rss_articles if a["title"].lower()[:60] not in seen]
+    seen |= {a["title"].lower()[:60] for a in rss_unique}
+    ssv_unique = [a for a in ssv_articles if a["title"].lower()[:60] not in seen]
 
-    articles = lc_articles + rss_unique
+    articles = lc_articles + rss_unique + ssv_unique
 
-    if lc_articles and rss_unique:
-        src = "lunarcrush+rss"
-    elif lc_articles:
-        src = "lunarcrush"
-    else:
-        src = "rss"
+    src_parts = []
+    if lc_articles: src_parts.append("lunarcrush")
+    if rss_unique:  src_parts.append("rss")
+    if ssv_unique:  src_parts.append("sosovalue")
+    src = "+".join(src_parts) or "rss"
 
     result = _aggregate(articles)
     result["source"] = src
