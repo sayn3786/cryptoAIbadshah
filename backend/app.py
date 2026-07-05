@@ -59,7 +59,7 @@ SYMBOLS = {
     "ALGO": "ALGOUSDT",
     "XMR":  "XMRUSDT",
     "XRP":  "XRPUSDT",
-    "TON":  "TONUSDT",
+    "GRAM": "GRAMUSDT",
     "SOL":  "SOLUSDT",
     "ONDO":   "ONDOUSDT",
     "AAVE":   "AAVEUSDT",
@@ -93,7 +93,7 @@ _BTC_CORR = {
     # XRP: SEC lawsuit / regulatory narrative decouples it significantly
     "XRP": 0.4,
     # Moderate decouplers — own L1 ecosystems but still react to BTC risk-off
-    "SOL": 0.7, "TON": 0.6, "HYPE": 0.6, "KAS": 0.5,
+    "SOL": 0.7, "GRAM": 0.6, "HYPE": 0.6, "KAS": 0.5,
     # Tokenised gold — moves on macro/USD/inflation, not BTC cycles
     "XAUT": 0.1, "PAXG": 0.1,
     "GOMINING": 0.5,  # Mining platform token — moderately correlated with BTC mining profitability

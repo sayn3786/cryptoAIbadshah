@@ -24,7 +24,7 @@ _OKX_CCY = {
     "BTCUSDT":    "BTC",    "ETHUSDT":    "ETH",    "LINKUSDT":   "LINK",
     "SUIUSDT":    "SUI",    "TAOUSDT":    "TAO",    "HYPEUSDT":   "HYPE",
     "KASUSDT":    "KAS",    "ALGOUSDT":   "ALGO",   "XRPUSDT":    "XRP",
-    "TONUSDT":    "TON",    "SOLUSDT":    "SOL",    "ONDOUSDT":   "ONDO",
+    "GRAMUSDT":    "GRAM",    "SOLUSDT":    "SOL",    "ONDOUSDT":   "ONDO",
     "AAVEUSDT":   "AAVE",   "RENDERUSDT": "RENDER", "BNBUSDT":    "BNB",
     "BLURUSDT":   "BLUR",
     # OKX also lists these — a missing/unlisted ccy returns no data and falls
@@ -38,7 +38,7 @@ _KUCOIN = {
     "BTCUSDT":    "BTC-USDT",    "ETHUSDT":    "ETH-USDT",    "LINKUSDT":   "LINK-USDT",
     "SUIUSDT":    "SUI-USDT",    "TAOUSDT":    "TAO-USDT",    "HYPEUSDT":   "HYPE-USDT",
     "KASUSDT":    "KAS-USDT",    "ALGOUSDT":   "ALGO-USDT",   "XMRUSDT":    "XMR-USDT",
-    "XRPUSDT":    "XRP-USDT",    "TONUSDT":    "TON-USDT",    "SOLUSDT":    "SOL-USDT",
+    "XRPUSDT":    "XRP-USDT",    "GRAMUSDT":    "GRAM-USDT",    "SOLUSDT":    "SOL-USDT",
     "ONDOUSDT":   "ONDO-USDT",   "AAVEUSDT":   "AAVE-USDT",   "RENDERUSDT": "RENDER-USDT",
     "BNBUSDT":    "BNB-USDT",    "BLURUSDT":   "BLUR-USDT",
 }
@@ -46,7 +46,7 @@ _GATE = {
     "BTCUSDT":    "BTC_USDT",    "ETHUSDT":    "ETH_USDT",    "LINKUSDT":   "LINK_USDT",
     "SUIUSDT":    "SUI_USDT",    "TAOUSDT":    "TAO_USDT",    "HYPEUSDT":   "HYPE_USDT",
     "KASUSDT":    "KAS_USDT",    "ALGOUSDT":   "ALGO_USDT",   "XMRUSDT":    "XMR_USDT",
-    "XRPUSDT":    "XRP_USDT",    "TONUSDT":    "TON_USDT",    "SOLUSDT":    "SOL_USDT",
+    "XRPUSDT":    "XRP_USDT",    "GRAMUSDT":    "GRAM_USDT",    "SOLUSDT":    "SOL_USDT",
     "ONDOUSDT":   "ONDO_USDT",   "AAVEUSDT":   "AAVE_USDT",   "RENDERUSDT": "RENDER_USDT",
     "BNBUSDT":    "BNB_USDT",    "BLURUSDT":   "BLUR_USDT",
 }
@@ -61,7 +61,7 @@ _CG_IDS = {
     "BTCUSDT":    "bitcoin",       "ETHUSDT":    "ethereum",      "LINKUSDT":   "chainlink",
     "SUIUSDT":    "sui",           "TAOUSDT":    "bittensor",     "HYPEUSDT":   "hyperliquid",
     "KASUSDT":    "kaspa",         "ALGOUSDT":   "algorand",      "XMRUSDT":    "monero",
-    "XRPUSDT":    "ripple",        "TONUSDT":    "the-open-network", "SOLUSDT":  "solana",
+    "XRPUSDT":    "ripple",        "GRAMUSDT":    "the-open-network", "SOLUSDT":  "solana",
     "ONDOUSDT":   "ondo-finance",  "AAVEUSDT":   "aave",          "RENDERUSDT": "render-token",
     "BNBUSDT":    "binancecoin",   "BLURUSDT":   "blur",
 }
@@ -69,7 +69,7 @@ _CMC_IDS = {
     "BTCUSDT": 1,      "ETHUSDT": 1027,   "LINKUSDT": 1975,
     "SUIUSDT": 20947,  "TAOUSDT": 22974,  "HYPEUSDT": 32196,
     "KASUSDT": 20396,  "ALGOUSDT": 4030,  "XMRUSDT":  328,
-    "XRPUSDT": 52,     "TONUSDT":  11419, "SOLUSDT":  5426,
+    "XRPUSDT": 52,     "GRAMUSDT":  11419, "SOLUSDT":  5426,
     "ONDOUSDT": 21159, "AAVEUSDT": 7278,  "RENDERUSDT": 22118,
     "BNBUSDT":  1839,  "BLURUSDT": 23121,
 }

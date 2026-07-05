@@ -27,7 +27,7 @@ CG_SYMBOLS = {
     "ALGOUSDT":   "ALGO",
     "XMRUSDT":    "XMR",
     "XRPUSDT":    "XRP",
-    "TONUSDT":    "TON",
+    "GRAMUSDT":    "GRAM",
     "SOLUSDT":    "SOL",
     "ONDOUSDT":   "ONDO",
     "AAVEUSDT":   "AAVE",

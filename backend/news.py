@@ -27,7 +27,7 @@ COIN_ALIASES = {
     "ALGOUSDT": ["ALGO", "Algorand", "algorand"],
     "XMRUSDT":  ["XMR", "Monero", "monero"],
     "XRPUSDT":  ["XRP", "Ripple", "ripple"],
-    "TONUSDT":  ["TON", "Toncoin", "toncoin", "The Open Network"],
+    "GRAMUSDT":  ["GRAM", "Gram", "Toncoin", "TON rebrand", "The Open Network"],
     "SOLUSDT":  ["SOL", "Solana", "solana"],
     "AAVEUSDT":   ["AAVE", "Aave", "aave"],
     "RENDERUSDT": ["RENDER", "Render", "render", "Render Network"],
@@ -82,7 +82,7 @@ LC_SYMBOLS = {
     "BTCUSDT": "btc",   "ETHUSDT": "eth",   "LINKUSDT": "link",
     "TAOUSDT": "tao",   "HYPEUSDT": "hype", "ONDOUSDT": "ondo",
     "SUIUSDT": "sui",   "KASUSDT": "kas",   "ALGOUSDT": "algo",
-    "XMRUSDT": "xmr",  "XRPUSDT": "xrp",  "TONUSDT": "ton",
+    "XMRUSDT": "xmr",  "XRPUSDT": "xrp",  "GRAMUSDT": "gram",
     "SOLUSDT": "sol",   "AAVEUSDT": "aave", "RENDERUSDT": "render",
     "BNBUSDT": "bnb",   "BLURUSDT": "blur",
 }
