@@ -154,8 +154,10 @@ ETF_ASSETS = {
     "BTC": {"slug": "us-btc-spot", "cg": "bitcoin",  "cache": "btc_etf"},
     "ETH": {"slug": "us-eth-spot", "cg": "ethereum", "cache": "eth_etf"},
     "SOL": {"slug": "us-sol-spot", "cg": "solana",   "cache": "sol_etf"},
-    "XRP": {"slug": "us-xrp-spot", "cg": "xrp",      "cache": "xrp_etf"},
-    "HBAR": {"slug": "us-hbar-spot", "cg": "hedera", "cache": "hbar_etf"},
+    "XRP": {"slug": "us-xrp-spot", "cg": "xrp",      "cache": "xrp_etf",
+            "alt_slugs": ["us-xrp-etf", "xrp-us-spot", "us-ripple-spot"]},
+    "HBAR": {"slug": "us-hbar-spot", "cg": "hedera", "cache": "hbar_etf",
+             "alt_slugs": ["us-hbar-etf", "us-hedera-spot"]},
 }
 
 
@@ -166,57 +168,71 @@ def _ssv_api_flows(symbol: str) -> Optional[Dict]:
     """
     if not SSV_API_KEY:
         return None
-    etf_type = (ETF_ASSETS.get(symbol) or {}).get("slug")
-    if not etf_type:
+    cfg = ETF_ASSETS.get(symbol) or {}
+    if not cfg.get("slug"):
         return None
+    # Primary slug + alternates — newer listings sometimes use different type
+    # strings on the API than the dashboard URL.
+    type_candidates = [cfg["slug"]] + cfg.get("alt_slugs", [])
     path = "/openapi/v2/etf/historicalInflowChart"
-    try:
-        r = requests.post(
-            f"{SSV_API}{path}",
-            json={"type": etf_type},
-            headers={"x-soso-api-key": SSV_API_KEY,
-                     "Content-Type": "application/json",
-                     "User-Agent": "CryptoBadshah/2.0"},
-            timeout=TIMEOUT,
-        )
-        if r.status_code != 200:
-            _log(symbol, "sosovalue-api", path, f"HTTP {r.status_code}: {r.text[:80]}")
-            return None
-        payload = r.json()
-        if str(payload.get("code")) not in ("0", "200"):
-            _log(symbol, "sosovalue-api", path,
-                 f"code={payload.get('code')} msg={payload.get('msg')}")
-            return None
-        rows = payload.get("data") or []
-        if isinstance(rows, dict):
-            rows = rows.get("list") or rows.get("data") or []
-        daily = []
-        from datetime import datetime, timezone
-        for row in rows:
-            if not isinstance(row, dict):
+    from datetime import datetime, timezone
+    for etf_type in type_candidates:
+        try:
+            r = requests.post(
+                f"{SSV_API}{path}",
+                json={"type": etf_type},
+                headers={"x-soso-api-key": SSV_API_KEY,
+                         "Content-Type": "application/json",
+                         "User-Agent": "CryptoBadshah/2.0"},
+                timeout=TIMEOUT,
+            )
+            if r.status_code != 200:
+                _log(symbol, "sosovalue-api", path, f"{etf_type}: HTTP {r.status_code}: {r.text[:70]}")
                 continue
-            net = (row.get("totalNetInflow") or row.get("netInflow") or
-                   row.get("dailyNetInflow") or row.get("totalNetFlow"))
-            ds  = row.get("date") or row.get("day") or row.get("time") or 0
-            if net is None:
+            payload = r.json()
+            if str(payload.get("code")) not in ("0", "200"):
+                _log(symbol, "sosovalue-api", path,
+                     f"{etf_type}: code={payload.get('code')} msg={payload.get('msg')}")
                 continue
-            try:
-                if isinstance(ds, str) and "-" in ds:
-                    ts = int(datetime.strptime(ds[:10], "%Y-%m-%d")
-                             .replace(tzinfo=timezone.utc).timestamp() * 1000)
-                else:
-                    ts = int(ds)
-                daily.append({"ts": ts, "net_usd": float(net)})
-            except (TypeError, ValueError):
+            rows = payload.get("data") or []
+            if isinstance(rows, dict):
+                rows = rows.get("list") or rows.get("data") or rows.get("records") or []
+            if not rows:
+                _log(symbol, "sosovalue-api", path, f"{etf_type}: code ok, 0 rows returned")
                 continue
-        if not daily:
-            _log(symbol, "sosovalue-api", path, "200 but no parsable rows")
-            return None
-        _log(symbol, "sosovalue-api", path, f"200 ok ({len(daily)} days)")
-        return _build_result(daily, symbol, source="sosovalue")
-    except Exception as e:
-        _log(symbol, "sosovalue-api", path, f"{type(e).__name__}: {e}")
-        return None
+            daily = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                net = (row.get("totalNetInflow") or row.get("netInflow") or
+                       row.get("dailyNetInflow") or row.get("totalNetFlow") or
+                       row.get("netFlow") or row.get("flow"))
+                ds  = (row.get("date") or row.get("day") or row.get("time") or
+                       row.get("timestamp") or 0)
+                if net is None:
+                    continue
+                try:
+                    if isinstance(ds, str) and "-" in ds:
+                        ts = int(datetime.strptime(ds[:10], "%Y-%m-%d")
+                                 .replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    else:
+                        ts = int(ds)
+                    daily.append({"ts": ts, "net_usd": float(net)})
+                except (TypeError, ValueError):
+                    continue
+            if not daily:
+                # Rows exist but fields didn't parse — log the actual row keys
+                rk = (",".join(list(rows[0].keys())[:14])
+                      if isinstance(rows[0], dict) else type(rows[0]).__name__)
+                _log(symbol, "sosovalue-api", path,
+                     f"{etf_type}: {len(rows)} rows, 0 parsed (row keys: {rk})")
+                continue
+            _log(symbol, "sosovalue-api", path, f"{etf_type}: 200 ok ({len(daily)} days)")
+            return _build_result(daily, symbol, source="sosovalue")
+        except Exception as e:
+            _log(symbol, "sosovalue-api", path, f"{etf_type}: {type(e).__name__}: {e}"[:150])
+            continue
+    return None
 
 
 def _ssv_etf_flows(symbol: str) -> Optional[Dict]:
