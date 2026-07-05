@@ -25,8 +25,14 @@ TAOSTATS_KEY  = os.getenv("TAOSTATS_API_KEY", "")
 TIMEOUT = 10
 
 _cache: Dict[str, tuple] = {}
-_TTL      = 1800   # 30 min — well inside 5 calls/min budget
-_FAIL_TTL = 300
+_TTL         = 1800   # 30 min — well inside 5 calls/min budget
+_PARTIAL_TTL = 180    # some endpoints 429'd — retry the gaps soon
+_FAIL_TTL    = 300
+
+# Last-good sections — a rate-limited refresh must not wipe data we already
+# had (free tier: 5 calls/min; two lambdas colliding 429s some of the 4 calls)
+_last_good: Dict[str, tuple] = {}   # section -> (data, ts)
+_LAST_GOOD_MAX_AGE = 6 * 3600
 
 # Attempt log for /api/tao-ecosystem?debug=1
 _attempts: List[Dict] = []
@@ -241,9 +247,11 @@ def get_tao_ecosystem() -> Optional[Dict]:
         return None
     cached = _cache.get("eco")
     if cached:
-        ttl = _TTL if cached[0] is not None else _FAIL_TTL
+        c = cached[0]
+        complete = bool(c and c.get("stats") and c.get("subnets") and c.get("flow"))
+        ttl = _TTL if complete else (_PARTIAL_TTL if c else _FAIL_TTL)
         if time.time() - cached[1] < ttl:
-            return cached[0]
+            return c
 
     # Parallel fetch — 4 sequential calls at up to 10s each could push the
     # whole analyze request past the serverless limit; parallel = one RTT.
@@ -262,6 +270,22 @@ def get_tao_ecosystem() -> Optional[Dict]:
         subnets = _safe(f_subnets)
         pools   = _safe(f_pools)
         flow    = _safe(f_flow)
+
+    # Backfill rate-limited sections from the last successful fetch, and
+    # remember fresh sections for next time.
+    now = time.time()
+    def _memo(name, val):
+        if val is not None:
+            _last_good[name] = (val, now)
+            return val
+        prev = _last_good.get(name)
+        if prev and now - prev[1] < _LAST_GOOD_MAX_AGE:
+            return prev[0]
+        return None
+    stats   = _memo("stats", stats)
+    subnets = _memo("subnets", subnets)
+    pools   = _memo("pools", pools)
+    flow    = _memo("flow", flow)
 
     if not stats and not subnets and not flow:
         _cache["eco"] = (None, time.time())

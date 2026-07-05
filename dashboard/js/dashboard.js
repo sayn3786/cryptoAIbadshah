@@ -3687,6 +3687,11 @@ function renderTaoEco(eco, symbol) {
         Show all ${sn.top.length} subnets by emission ▾</button>` : ''}`;
   }
 
+  if (!table) {
+    table = `<div class="etf-unavailable" style="padding:10px 0">Subnet emission table refreshing —
+      Taostats rate limit (5 calls/min) hit; retries automatically within ~3 minutes</div>`;
+  }
+
   const notes = (eco.notes || [])
     .map(n => (n && typeof n === 'object') ? n.text : n)
     .filter(Boolean).join(' · ');
