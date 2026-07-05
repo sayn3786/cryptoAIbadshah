@@ -217,6 +217,7 @@ function renderAll(a) {
   renderRSICard(a.rsi);
   renderFunding(a.funding_rate);
   renderOI(a.open_interest);
+  renderOiRotation(a.regime, a.symbol);
   renderLiquidations(a.liquidations);
   renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol);
@@ -458,6 +459,23 @@ function renderFunding(f) {
 }
 
 /* ─── Open Interest ───────────────────────────────────────────────────────── */
+/* ─── ALT/BTC OI rotation badge on the Open Interest card ─────────────────── */
+function renderOiRotation(regime, symbol) {
+  const el = document.getElementById('oiRotation');
+  if (!el) return;
+  const oi = regime?.oi;
+  if (!oi || oi.alt_btc_ratio == null) { el.style.display = 'none'; return; }
+  const cls = oi.zone === 'room-to-run' ? 'bull'
+            : (oi.zone === 'alt-froth' || oi.zone === 'heating') ? 'bear' : '';
+  const lbl = oi.zone === 'alt-froth' ? '⚠ exit alts'
+            : oi.zone === 'heating' ? 'heating'
+            : oi.zone === 'room-to-run' ? 'room to run' : 'balanced';
+  el.style.display = '';
+  el.className = `oi-rotation ${cls}`;
+  el.title = `${oi.note || ''} · BTC OI $${oi.btc_oi_b}B · ETH $${oi.eth_oi_b}B · ALTs $${oi.alt_oi_b}B (OKX perps)`;
+  el.textContent = `ALT/BTC ${oi.alt_btc_ratio} — ${lbl}`;
+}
+
 function renderOI(oi) {
   if (!oi) return;
   document.getElementById('oiValue').textContent = fmtK(oi.value);

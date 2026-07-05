@@ -1717,3 +1717,10 @@ a:hover { color: var(--gold2); }
 @media (max-width: 600px) {
   .gm-settings { grid-template-columns: 1fr; }
 }
+
+/* ALT/BTC OI rotation badge on the Open Interest card */
+.oi-rotation { margin-top: 6px; font-size: .62rem; font-weight: 700;
+               padding: 2px 8px; border-radius: 20px; display: inline-block;
+               background: rgba(148,163,184,.1); color: var(--muted2); }
+.oi-rotation.bull { color: var(--bull); background: rgba(16,185,129,.12); }
+.oi-rotation.bear { color: var(--bear); background: rgba(239,68,68,.12); }
