@@ -702,6 +702,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "vol_regime":             vol_regime,
         "gomining_tokenomics":    gomining_tokenomics,
         "tao_ecosystem":          tao_ecosystem,
+        "generated_at":           int(time.time() * 1000),
     }
     analysis["signal"] = generate_signal(analysis)
 

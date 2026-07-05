@@ -245,10 +245,23 @@ def get_tao_ecosystem() -> Optional[Dict]:
         if time.time() - cached[1] < ttl:
             return cached[0]
 
-    stats   = _network_stats()
-    subnets = _subnets()
-    pools   = _pools()
-    flow    = _flow_from_history()
+    # Parallel fetch — 4 sequential calls at up to 10s each could push the
+    # whole analyze request past the serverless limit; parallel = one RTT.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as pool_ex:
+        f_stats   = pool_ex.submit(_network_stats)
+        f_subnets = pool_ex.submit(_subnets)
+        f_pools   = pool_ex.submit(_pools)
+        f_flow    = pool_ex.submit(_flow_from_history)
+        def _safe(f):
+            try:
+                return f.result(timeout=12)
+            except Exception:
+                return None
+        stats   = _safe(f_stats)
+        subnets = _safe(f_subnets)
+        pools   = _safe(f_pools)
+        flow    = _safe(f_flow)
 
     if not stats and not subnets and not flow:
         _cache["eco"] = (None, time.time())

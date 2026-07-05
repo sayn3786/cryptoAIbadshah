@@ -252,7 +252,15 @@ function renderPrice(a) {
   chgEl.textContent = `${up ? '▲' : '▼'} ${pct(chg)}`;
   chgEl.className = `price-change ${up ? 'up' : 'dn'}`;
   const periodEl = document.getElementById('priceChangePeriod');
-  if (periodEl) periodEl.textContent = `${a.timeframe} change`;
+  if (periodEl) {
+    // "as of" = the live candle's fetch moment. Each timeframe is cached
+    // independently for up to 30 min, so small price differences between TFs
+    // are timing + per-TF data source, not bad data.
+    const src = a.data_source ? ` · ${a.data_source}` : '';
+    const asOf = a.generated_at ? new Date(a.generated_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+                                : new Date(last.timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    periodEl.textContent = `${a.timeframe} change · as of ${asOf}${src}`;
+  }
   document.getElementById('priceHigh').textContent = `H: ${fmtPrice(last.high)}`;
   document.getElementById('priceLow').textContent  = `L: ${fmtPrice(last.low)}`;
   document.getElementById('priceVol').textContent  = `Vol: ${fmtK(last.volume)}`;
@@ -3603,8 +3611,12 @@ function renderTaoEco(eco, symbol) {
   const sec  = document.getElementById('taoEcoSection');
   const grid = document.getElementById('taoEcoGrid');
   if (!sec || !grid) return;
-  if (symbol !== 'TAO' || !eco) { sec.style.display = 'none'; return; }
+  if (symbol !== 'TAO') { sec.style.display = 'none'; return; }
   sec.style.display = '';
+  if (!eco) {
+    grid.innerHTML = '<div class="etf-unavailable">Ecosystem data temporarily unavailable — Taostats fetch retrying (rate limit is 5 calls/min; data refreshes within a few minutes)</div>';
+    return;
+  }
 
   const st = eco.stats || {}, fl = eco.flow || {}, sn = eco.subnets || {};
   const fmtTao = v => v == null ? '—' :
