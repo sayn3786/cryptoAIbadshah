@@ -222,29 +222,57 @@ def _fetch_ssv_pool() -> List[Dict]:
 
     articles: List[Dict] = []
     status = ""
-    # Docs say openapi.sosovalue.com; the ETF endpoint answers on
-    # api.sosovalue.xyz — try both.
+    # Docs say GET on openapi.sosovalue.com, but SoSoValue's other endpoints
+    # (ETF flows) are POST-with-JSON-body on api.sosovalue.xyz — probe both
+    # hosts and both methods, and log the response shape for diagnosis.
+    attempts = []
     for base in ("https://openapi.sosovalue.com", "https://api.sosovalue.xyz"):
+        for method in ("GET", "POST"):
+            attempts.append((base, method))
+
+    for base, method in attempts:
         try:
-            url = (f"{base}/api/v1/news/featured/currency?pageNum=1&pageSize=100")
-            req = urllib.request.Request(url, headers={
+            headers = {
                 "x-soso-api-key": SSV_NEWS_KEY,
                 "accept": "application/json",
                 "User-Agent": "CryptoBadshah/2.0",
-            })
+            }
+            if method == "GET":
+                url = f"{base}/api/v1/news/featured/currency?pageNum=1&pageSize=100"
+                req = urllib.request.Request(url, headers=headers)
+            else:
+                url = f"{base}/api/v1/news/featured/currency"
+                headers["Content-Type"] = "application/json"
+                body = json.dumps({"pageNum": 1, "pageSize": 100}).encode()
+                req = urllib.request.Request(url, data=body, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=8) as r:
                 payload = json.loads(r.read().decode("utf-8", "replace"))
             if str(payload.get("code")) not in ("0", "200"):
-                status = f"{base}: code={payload.get('code')} {str(payload.get('msg'))[:60]}"
+                status = f"{method} {base}: code={payload.get('code')} {str(payload.get('msg'))[:60]}"
                 continue
-            data = payload.get("data") or {}
-            rows = data.get("list") or data.get("data") or []
+            data = payload.get("data")
+            if isinstance(data, list):
+                rows = data
+            elif isinstance(data, dict):
+                rows = (data.get("list") or data.get("data") or
+                        data.get("records") or data.get("rows") or [])
+            else:
+                rows = []
+            if not rows:
+                # Log the shape so the next debug round shows what came back
+                dkeys = (",".join(list(data.keys())[:10]) if isinstance(data, dict)
+                         else type(data).__name__)
+                status = f"{method} {base}: code ok but 0 rows (data: {dkeys})"
+                continue
+            import re as _re
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                title = (row.get("title") or row.get("enTitle") or
-                         row.get("newsTitle") or row.get("content") or "")
-                title = str(title).strip()
+                title = (row.get("title") or row.get("enTitle") or row.get("titleEn") or
+                         row.get("newsTitle") or row.get("sourceTitle") or
+                         row.get("multilanguageContent") or row.get("content") or "")
+                title = _re.sub(r"<[^>]+>", " ", str(title))       # strip HTML
+                title = _re.sub(r"\s+", " ", title).strip()
                 if not title or len(title) < 8:
                     continue
                 link = (row.get("sourceUrl") or row.get("url") or
@@ -260,10 +288,14 @@ def _fetch_ssv_pool() -> List[Dict]:
                     "bearish_votes": 0,
                     "sentiment":    _keyword_sentiment(title),
                 })
-            status = f"{base}: ok ({len(articles)} items)"
-            break
+            if articles:
+                status = f"{method} {base}: ok ({len(articles)} items)"
+                break
+            # rows existed but nothing parsed — log first-row keys for diagnosis
+            rk = ",".join(list(rows[0].keys())[:14]) if isinstance(rows[0], dict) else type(rows[0]).__name__
+            status = f"{method} {base}: {len(rows)} rows, 0 parsed (row keys: {rk})"
         except Exception as e:
-            status = f"{base}: {type(e).__name__}: {e}"[:120]
+            status = f"{method} {base}: {type(e).__name__}: {e}"[:130]
             continue
 
     _ssv_pool.update({"articles": articles, "ts": now, "status": status})
