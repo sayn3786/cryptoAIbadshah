@@ -154,10 +154,13 @@ ETF_ASSETS = {
     "BTC": {"slug": "us-btc-spot", "cg": "bitcoin",  "cache": "btc_etf"},
     "ETH": {"slug": "us-eth-spot", "cg": "ethereum", "cache": "eth_etf"},
     "SOL": {"slug": "us-sol-spot", "cg": "solana",   "cache": "sol_etf"},
-    "XRP": {"slug": "us-xrp-spot", "cg": "xrp",      "cache": "xrp_etf",
-            "alt_slugs": ["us-xrp-etf", "xrp-us-spot", "us-ripple-spot"]},
-    "HBAR": {"slug": "us-hbar-spot", "cg": "hedera", "cache": "hbar_etf",
-             "alt_slugs": ["us-hbar-etf", "us-hedera-spot"]},
+    # XRP/HBAR: ETFs are live and SoSoValue's DASHBOARD tracks them, but their
+    # Open API returns empty for these types as of Jul 2026 (verified: any
+    # unknown type returns code-ok/0-rows, SOL works) — API coverage lag.
+    # Probing alternates gained nothing; keep the primary so it lights up the
+    # day SoSoValue adds API support.
+    "XRP": {"slug": "us-xrp-spot", "cg": "xrp",      "cache": "xrp_etf"},
+    "HBAR": {"slug": "us-hbar-spot", "cg": "hedera", "cache": "hbar_etf"},
 }
 
 

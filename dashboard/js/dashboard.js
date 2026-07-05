@@ -1560,7 +1560,18 @@ function renderEtfFlows(etf, symbol) {
   sec.style.display = '';
 
   if (!etf) {
-    grid.innerHTML = '<div class="etf-unavailable">ETF flow data unavailable — data source unreachable</div>';
+    // XRP/HBAR: ETFs are live but SoSoValue's Open API doesn't serve their
+    // flow history yet (dashboard-only). Link to the live dashboard meanwhile.
+    const SLUGS = { BTC: 'us-btc-spot', ETH: 'us-eth-spot', SOL: 'us-sol-spot',
+                    XRP: 'us-xrp-spot', HBAR: 'us-hbar-spot' };
+    const apiLag = (symbol === 'XRP' || symbol === 'HBAR');
+    const slug = SLUGS[symbol];
+    grid.innerHTML = `<div class="etf-unavailable">${apiLag
+      ? `${symbol} spot ETFs are live, but SoSoValue's API doesn't serve their flow history yet
+         (dashboard-only). View live flows at
+         <a href="https://sosovalue.com/assets/etf/${slug}" target="_blank" rel="noopener">sosovalue.com/assets/etf/${slug}</a>
+         — this card will populate automatically once their API adds coverage.`
+      : 'ETF flow data unavailable — data source unreachable, retrying automatically'}</div>`;
     const sub = document.getElementById('etfFlowsSub');
     if (sub) sub.textContent = 'Institutional inflow / outflow';
     return;
