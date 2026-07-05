@@ -3745,19 +3745,29 @@ function renderTaoEco(eco, symbol) {
 
 /* ─── Traditional markets + regime strip ──────────────────────────────────── */
 function renderMarketContext(markets, regime) {
+  // Traditional-markets pills (DXY / 10Y / SPX) stay in the Macro card —
+  // they ARE macro. Crypto-structure pills get their own card below.
   const el = document.getElementById('marketsStrip');
-  if (!el) return;
+  if (el) {
+    const pills = (markets?.markets || []).map(m => {
+      const cls = m.impact === 'bullish' ? 'bull' : m.impact === 'bearish' ? 'bear' : '';
+      const arr = m.trend === 'up' ? '↑' : m.trend === 'down' ? '↓' : '→';
+      return `<span class="ctx-pill ${cls}" title="${m.reason}">${m.label} ${m.value} ${arr}</span>`;
+    });
+    el.innerHTML = pills.join('');
+    el.style.display = pills.length ? '' : 'none';
+  }
+
+  // 🌊 Crypto Market Regime card: BTC.D, rotation, stables, OI split
+  const sec   = document.getElementById('cryptoRegimeSection');
+  const strip = document.getElementById('cryptoRegimeStrip');
+  if (!sec || !strip) return;
   const pills = [];
-  (markets?.markets || []).forEach(m => {
-    const cls = m.impact === 'bullish' ? 'bull' : m.impact === 'bearish' ? 'bear' : '';
-    const arr = m.trend === 'up' ? '↑' : m.trend === 'down' ? '↓' : '→';
-    pills.push(`<span class="ctx-pill ${cls}" title="${m.reason}">${m.label} ${m.value} ${arr}</span>`);
-  });
   if (regime) {
     if (regime.btc_dominance != null)
       pills.push(`<span class="ctx-pill" title="Bitcoin market-cap dominance">BTC.D ${regime.btc_dominance}%</span>`);
     const rCls = regime.regime === 'altseason' ? 'bull' : regime.regime === 'btc-led' ? 'bear' : '';
-    pills.push(`<span class="ctx-pill ${rCls}" title="${regime.regime_note || ''}">Regime: ${regime.regime}${regime.alt_spread_7d != null ? ` (${regime.alt_spread_7d > 0 ? '+' : ''}${regime.alt_spread_7d}pp)` : ''}</span>`);
+    pills.push(`<span class="ctx-pill ${rCls}" title="${regime.regime_note || ''}">Rotation: ${regime.regime}${regime.alt_spread_7d != null ? ` (${regime.alt_spread_7d > 0 ? '+' : ''}${regime.alt_spread_7d}pp)` : ''}</span>`);
     if (regime.stable_30d_pct != null) {
       const sCls = regime.stable_30d_pct >= 2 ? 'bull' : regime.stable_30d_pct <= -1 ? 'bear' : '';
       pills.push(`<span class="ctx-pill ${sCls}" title="USDT market-cap change over 30d — crypto liquidity proxy">Stables ${regime.stable_30d_pct > 0 ? '+' : ''}${regime.stable_30d_pct}%/30d</span>`);
@@ -3770,8 +3780,8 @@ function renderMarketContext(markets, regime) {
       pills.push(`<span class="ctx-pill ${oCls}" title="${oi.note || ''} · BTC OI $${oi.btc_oi_b}B · ETH $${oi.eth_oi_b}B · ALTs $${oi.alt_oi_b}B (OKX perps)">ALT/BTC OI ${oi.alt_btc_ratio} — ${oLbl}</span>`);
     }
   }
-  el.innerHTML = pills.join('');
-  el.style.display = pills.length ? '' : 'none';
+  strip.innerHTML = pills.join('');
+  sec.style.display = pills.length ? '' : 'none';
 }
 
 /* ─── Upcoming economic events ────────────────────────────────────────────── */

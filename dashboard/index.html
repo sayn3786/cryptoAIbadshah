@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=58" />
+  <link rel="stylesheet" href="css/dashboard.css?v=59" />
 </head>
 <body>
 
@@ -589,6 +589,17 @@
     </div>
   </section>
 
+  <!-- Crypto market regime (BTC dominance, rotation, liquidity, OI split) -->
+  <section class="row-analysis" id="cryptoRegimeSection" style="display:none">
+    <div class="card">
+      <div class="card-hdr">
+        <span>🌊 Crypto Market Regime</span>
+        <span class="card-sub">BTC dominance · alt rotation · stablecoin liquidity · leverage split</span>
+      </div>
+      <div class="ctx-strip" id="cryptoRegimeStrip"></div>
+    </div>
+  </section>
+
   <!-- Macro economic events (global — affects all crypto) -->
   <section class="row-analysis" id="macroSection" style="display:none">
     <div class="card" id="macroCard">
@@ -697,7 +708,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=58"></script>
+<script src="js/dashboard.js?v=59"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
