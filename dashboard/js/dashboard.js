@@ -3744,6 +3744,13 @@ function renderMarketContext(markets, regime) {
       const sCls = regime.stable_30d_pct >= 2 ? 'bull' : regime.stable_30d_pct <= -1 ? 'bear' : '';
       pills.push(`<span class="ctx-pill ${sCls}" title="USDT market-cap change over 30d — crypto liquidity proxy">Stables ${regime.stable_30d_pct > 0 ? '+' : ''}${regime.stable_30d_pct}%/30d</span>`);
     }
+    const oi = regime.oi;
+    if (oi && oi.alt_btc_ratio != null) {
+      const oCls = oi.zone === 'room-to-run' ? 'bull' : (oi.zone === 'alt-froth' || oi.zone === 'heating') ? 'bear' : '';
+      const oLbl = oi.zone === 'alt-froth' ? 'exit alts' : oi.zone === 'heating' ? 'heating' :
+                   oi.zone === 'room-to-run' ? 'room to run' : 'balanced';
+      pills.push(`<span class="ctx-pill ${oCls}" title="${oi.note || ''} · BTC OI $${oi.btc_oi_b}B · ETH $${oi.eth_oi_b}B · ALTs $${oi.alt_oi_b}B (OKX perps)">ALT/BTC OI ${oi.alt_btc_ratio} — ${oLbl}</span>`);
+    }
   }
   el.innerHTML = pills.join('');
   el.style.display = pills.length ? '' : 'none';

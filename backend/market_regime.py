@@ -82,6 +82,66 @@ def _alt_spread_7d() -> Optional[float]:
         return None
 
 
+def _oi_split() -> Optional[Dict]:
+    """
+    BTC vs ALT open-interest split — one OKX call covers every USDT perp.
+    The rotation heuristic: when total ALT OI exceeds BTC OI, speculative
+    leverage has crowded into alts (historically the time to exit/trim alt
+    positions); when ALT OI is well below BTC OI, alts have room to run.
+    """
+    try:
+        r = _s.get("https://www.okx.com/api/v5/public/open-interest",
+                   params={"instType": "SWAP"}, timeout=TIMEOUT)
+        r.raise_for_status()
+        rows = (r.json() or {}).get("data") or []
+        btc = eth = alt = 0.0
+        for row in rows:
+            inst = row.get("instId", "")
+            if "-USDT-SWAP" not in inst and "-USD-SWAP" not in inst:
+                continue
+            try:
+                usd = float(row.get("oiUsd") or 0)
+            except (TypeError, ValueError):
+                continue
+            if usd <= 0:
+                continue
+            if inst.startswith("BTC-"):
+                btc += usd
+            elif inst.startswith("ETH-"):
+                eth += usd
+            else:
+                alt += usd
+        if btc <= 0:
+            return None
+        ratio = alt / btc
+        if ratio >= 1.0:
+            zone, tilt = "alt-froth", -6
+            note = (f"ALT OI ({alt/1e9:.1f}B) exceeds BTC OI ({btc/1e9:.1f}B) — leverage "
+                    f"crowded into alts; historically the exit/trim window for alt positions")
+        elif ratio >= 0.85:
+            zone, tilt = "heating", -3
+            note = (f"ALT OI at {ratio:.0%} of BTC OI — alt leverage heating up, "
+                    f"late innings of the rotation")
+        elif ratio <= 0.60:
+            zone, tilt = "room-to-run", 4
+            note = (f"ALT OI only {ratio:.0%} of BTC OI — leverage still concentrated "
+                    f"in BTC; room for alts to run")
+        else:
+            zone, tilt = "balanced", 0
+            note = f"ALT OI at {ratio:.0%} of BTC OI — no extreme either way"
+        return {
+            "btc_oi_b":      round(btc / 1e9, 2),
+            "eth_oi_b":      round(eth / 1e9, 2),
+            "alt_oi_b":      round(alt / 1e9, 2),
+            "alt_btc_ratio": round(ratio, 2),
+            "zone":          zone,
+            "oi_tilt_pts":   tilt,
+            "note":          note,
+        }
+    except Exception:
+        return None
+
+
 def get_market_regime() -> Optional[Dict]:
     cached = _cache.get("regime")
     if cached:
@@ -136,5 +196,11 @@ def get_market_regime() -> Optional[Dict]:
         "liq_tilt_pts":    liq_tilt,
         "liq_note":        liq_note,
     }
+
+    # BTC-vs-ALT open-interest rotation gauge (one OKX call, all perps)
+    oi = _oi_split()
+    if oi:
+        result["oi"] = oi
+
     _cache["regime"] = (result, time.time())
     return result

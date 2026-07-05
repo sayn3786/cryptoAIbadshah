@@ -676,6 +676,15 @@ def generate_signal(analysis: Dict) -> Dict:
         if liq_tilt:
             score += liq_tilt; g['sentiment'] += liq_tilt
             (bull_reasons if liq_tilt > 0 else bear_reasons).append(reg.get("liq_note") or "")
+        # BTC-vs-ALT open-interest rotation: ALT OI > BTC OI = leverage crowded
+        # into alts (exit window); ALT OI well below BTC OI = room for alts to
+        # run. Applies to alt positions only — BTC itself is the reference leg.
+        oi_reg = reg.get("oi") or {}
+        oi_tilt = oi_reg.get("oi_tilt_pts", 0) or 0
+        if oi_tilt and sym_l != "BTC":
+            score += oi_tilt; g['sentiment'] += oi_tilt
+            (bull_reasons if oi_tilt > 0 else bear_reasons).append(
+                f"⚖️ OI rotation: {oi_reg.get('note', '')} ({oi_tilt:+d})")
 
     # ── GOMINING tokenomics (burn vs mint supply dynamics) ────────────────────
     # GOMINING burns all tokens spent on miner maintenance weekly; supply
