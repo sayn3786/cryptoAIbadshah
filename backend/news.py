@@ -288,20 +288,51 @@ def _fetch_ssv_pool() -> List[Dict]:
                 status = f"{method} {base}: code ok but 0 rows (data: {dkeys})"
                 continue
             import re as _re
+
+            def _extract_en(raw):
+                """multilanguageContent is a (sometimes Python-repr) stringified
+                list of {language, title, content} variants — pick the English
+                one; fall back to its content when title is null."""
+                variants = raw
+                if isinstance(raw, str) and raw.lstrip().startswith("[{"):
+                    try:
+                        variants = json.loads(raw)
+                    except Exception:
+                        try:
+                            import ast
+                            variants = ast.literal_eval(raw)
+                        except Exception:
+                            variants = raw
+                if isinstance(variants, list):
+                    en = next((v for v in variants if isinstance(v, dict)
+                               and str(v.get("language", "")).startswith("en")), None)
+                    en = en or next((v for v in variants if isinstance(v, dict)), None)
+                    if en:
+                        return en.get("title") or en.get("content") or ""
+                    return ""
+                return raw if isinstance(raw, str) else ""
+
             for row in rows:
                 if not isinstance(row, dict):
                     continue
                 title = (row.get("title") or row.get("enTitle") or row.get("titleEn") or
-                         row.get("newsTitle") or row.get("sourceTitle") or
-                         row.get("multilanguageContent") or row.get("content") or "")
+                         row.get("newsTitle") or row.get("sourceTitle") or "")
+                if not title:
+                    title = _extract_en(row.get("multilanguageContent") or
+                                        row.get("content") or "")
                 title = _re.sub(r"<[^>]+>", " ", str(title))       # strip HTML
                 title = _re.sub(r"\s+", " ", title).strip()
                 if not title or len(title) < 8:
                     continue
+                if len(title) > 160:                               # content-derived
+                    title = title[:157].rsplit(" ", 1)[0] + "…"
                 link = (row.get("sourceUrl") or row.get("url") or
                         row.get("link") or row.get("sourceLink") or "")
                 pub  = _ssv_norm_time(row.get("publishTime") or row.get("pubDate") or
-                                      row.get("createTime") or row.get("timestamp") or "")
+                                      row.get("createTime") or row.get("timestamp") or
+                                      row.get("publishedAt") or row.get("createdAt") or
+                                      row.get("showTime") or row.get("newsTime") or
+                                      row.get("releaseTime") or row.get("ctime") or "")
                 articles.append({
                     "title":        title[:200],
                     "url":          link,
@@ -312,7 +343,10 @@ def _fetch_ssv_pool() -> List[Dict]:
                     "sentiment":    _keyword_sentiment(title),
                 })
             if articles:
-                status = f"{method} {base}: ok ({len(articles)} items)"
+                _n_dated = sum(1 for a in articles if a["published_at"])
+                _rk = ",".join(list(rows[0].keys())[:14]) if isinstance(rows[0], dict) else ""
+                status = (f"{method} {base}: ok ({len(articles)} items, {_n_dated} dated; "
+                          f"row keys: {_rk})")
                 break
             # rows existed but nothing parsed — log first-row keys for diagnosis
             rk = ",".join(list(rows[0].keys())[:14]) if isinstance(rows[0], dict) else type(rows[0]).__name__

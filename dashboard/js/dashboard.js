@@ -1705,6 +1705,7 @@ function renderNewsCard(news) {
   const timeAgo = (iso) => {
     try {
       const diff = (Date.now() - new Date(iso).getTime()) / 60000;
+      if (!isFinite(diff)) return 'recent';
       if (diff < 60)   return `${Math.round(diff)}m ago`;
       if (diff < 1440) return `${Math.round(diff / 60)}h ago`;
       return `${Math.round(diff / 1440)}d ago`;
