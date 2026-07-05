@@ -202,5 +202,26 @@ def get_market_regime() -> Optional[Dict]:
     if oi:
         result["oi"] = oi
 
+    # ── Rolled-up summary: what does the whole regime say for alt positions? ──
+    oi_tilt = (oi or {}).get("oi_tilt_pts", 0) or 0
+    alt_pts = alt_tilt + oi_tilt            # both apply to alts only
+    if alt_pts >= 4:
+        bias = "alt-friendly"
+    elif alt_pts <= -4:
+        bias = "alt-hostile"
+    else:
+        bias = "neutral"
+    parts = [f"rotation {regime}"]
+    if oi:
+        parts.append(f"leverage {oi['zone']}")
+    if stable_30d is not None:
+        parts.append(f"liquidity {'expanding' if stable_30d >= 2 else 'contracting' if stable_30d <= -1 else 'flat'}")
+    result["summary"] = {
+        "bias":     bias,
+        "alt_pts":  alt_pts,
+        "liq_pts":  liq_tilt,
+        "text":     " · ".join(parts),
+    }
+
     _cache["regime"] = (result, time.time())
     return result

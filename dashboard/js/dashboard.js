@@ -3782,6 +3782,22 @@ function renderMarketContext(markets, regime) {
   }
   strip.innerHTML = pills.join('');
   sec.style.display = pills.length ? '' : 'none';
+
+  // Rolled-up verdict for alt positions + header sub
+  const sumEl = document.getElementById('cryptoRegimeSummary');
+  const subEl = document.getElementById('cryptoRegimeSub');
+  const s = regime?.summary;
+  if (sumEl && s) {
+    const bCls = s.bias === 'alt-friendly' ? 'bull' : s.bias === 'alt-hostile' ? 'bear' : '';
+    sumEl.style.display = '';
+    sumEl.innerHTML = `Alt bias: <span class="${bCls}" style="font-weight:700">${s.bias.toUpperCase()}</span>` +
+      `${s.alt_pts ? ` (${s.alt_pts > 0 ? '+' : ''}${s.alt_pts} pts to alt signals)` : ''}` +
+      `${s.liq_pts ? ` · liquidity ${s.liq_pts > 0 ? '+' : ''}${s.liq_pts} (all tokens)` : ''}` +
+      ` — ${s.text}`;
+    if (subEl) subEl.textContent = `Net: ${s.bias.toUpperCase()} for alts`;
+  } else if (sumEl) {
+    sumEl.style.display = 'none';
+  }
 }
 
 /* ─── Upcoming economic events ────────────────────────────────────────────── */
