@@ -63,8 +63,31 @@ _SSV_FAIL_TTL  = 300
 
 # ── Sentiment helpers ─────────────────────────────────────────────────────────
 
+# Phrase-level overrides checked BEFORE keyword counting — naive keyword
+# matching reads "bear-market end" as bearish because it contains "bear",
+# when calling the END of a bear market is bullish. Context beats keywords.
+_BULL_PHRASES = [
+    "bear market end", "bear-market end", "end of bear", "end of the bear",
+    "bear market over", "bottom is in", "bottom in", "bear trap",
+    "capitulation over", "selling exhausted", "short squeeze", "shorts squeezed",
+    "oversold bounce", "fear peaks", "worst is over", "reversal from lows",
+]
+_BEAR_PHRASES = [
+    "bull market end", "bull-market end", "end of bull", "end of the bull",
+    "bull market over", "top is in", "bull trap", "rally stalls",
+    "rally fades", "rally exhausted", "euphoria peaks", "overbought warning",
+    "profit-taking", "profit taking accelerates",
+]
+
+
 def _keyword_sentiment(title: str) -> str:
     t = title.lower()
+    for p in _BULL_PHRASES:
+        if p in t:
+            return "bullish"
+    for p in _BEAR_PHRASES:
+        if p in t:
+            return "bearish"
     bull = sum(1 for kw in _BULL_KW if kw in t)
     bear = sum(1 for kw in _BEAR_KW if kw in t)
     if bull > bear:

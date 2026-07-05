@@ -768,11 +768,26 @@ def generate_signal(analysis: Dict) -> Dict:
     news_signal = news.get("signal", "neutral")
     news_bull   = news.get("bullish", 0)
     news_bear   = news.get("bearish", 0)
+
+    # "Buy the rumor, sell the news" filter — headlines confirm what price has
+    # already done. Bullish news into an extended/greedy tape is usually priced
+    # in (distribution risk); bearish news at washed-out lows is usually priced
+    # in too (capitulation headlines mark bottoms). Halve the news weight in
+    # those states instead of piling on.
+    _top_heat = ((analysis.get("btc_mining") or {}).get("top_signals") or {}).get("heat", 0) or 0
+    _extended  = (rsi is not None and rsi >= 70) or (fg_val is not None and fg_val >= 75) or _top_heat >= 2
+    _washed_out = (rsi is not None and rsi <= 30) or (fg_val is not None and fg_val <= 25)
+
     if news_signal == "bullish":
         raw = min(15, max(6, news_bull * 4))   # cap lowered 20→15, base 8→6
         pts = round(raw * tf_macro_w)
-        score += pts; g['sentiment'] += pts
         tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
+        if _extended:
+            pts = max(2, pts // 2)
+            bear_reasons.append(
+                "⚖️ 'Buy the rumor, sell the news' — bullish headlines into an already "
+                "extended/greedy tape are usually priced in; news weight halved")
+        score += pts; g['sentiment'] += pts
         bull_reasons.append(
             f"News sentiment bullish — {news_bull} bullish vs {news_bear} bearish "
             f"articles in last 48h{tf_note}"
@@ -780,8 +795,13 @@ def generate_signal(analysis: Dict) -> Dict:
     elif news_signal == "bearish":
         raw = min(15, max(6, news_bear * 4))
         pts = round(raw * tf_macro_w)
-        score -= pts; g['sentiment'] -= pts
         tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
+        if _washed_out:
+            pts = max(2, pts // 2)
+            bull_reasons.append(
+                "⚖️ 'Sell the rumor, buy the news' — bearish headlines at washed-out "
+                "lows are usually priced in (capitulation news marks bottoms); news weight halved")
+        score -= pts; g['sentiment'] -= pts
         bear_reasons.append(
             f"News sentiment bearish — {news_bear} bearish vs {news_bull} bullish "
             f"articles in last 48h{tf_note}"
