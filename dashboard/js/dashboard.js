@@ -1552,7 +1552,7 @@ function renderEtfFlows(etf, symbol) {
   const grid = document.getElementById('etfFlowGrid');
   if (!sec || !grid) return;
 
-  const ETF_SYMBOLS = ['BTC', 'ETH', 'XRP'];
+  const ETF_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP'];
   if (!ETF_SYMBOLS.includes(symbol)) {
     sec.style.display = 'none';
     return;

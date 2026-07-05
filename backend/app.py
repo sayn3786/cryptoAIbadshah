@@ -543,15 +543,15 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
                 mvrv_zone=(btc_mining.get("mvrv") or {}).get("zone"),
             )
 
-    # ETF flows: daily net inflow/outflow for spot ETFs (BTC/ETH/XRP only).
+    # ETF flows: daily net inflow/outflow for US spot ETFs. Assets with live
+    # ETFs are defined in etf_flows.ETF_ASSETS (BTC/ETH/SOL/XRP as of mid-2026).
+    from etf_flows import ETF_ASSETS as _ETF_ASSETS
     etf_flows = None
-    if symbol in ("BTC", "ETH", "XRP"):
-        if symbol == "BTC":
-            etf_flows = etf_client.get_btc_etf_flows()
-        elif symbol == "ETH":
-            etf_flows = etf_client.get_eth_etf_flows()
-        elif symbol == "XRP":
-            etf_flows = etf_client.get_xrp_etf_flows()
+    if symbol in _ETF_ASSETS:
+        try:
+            etf_flows = etf_client.get_etf_flows(symbol)
+        except Exception:
+            etf_flows = None
 
     # Macro backdrop: high-impact US releases (CPI, Fed, jobs…). Global to all
     # crypto — cached 6h in macro.py so this call is essentially free per token.
@@ -857,10 +857,8 @@ def api_news():
 def api_etf():
     """ETF flows for one symbol; ?debug=1 shows every source attempt."""
     symbol = request.args.get("symbol", "BTC").upper()
-    fn = {"BTC": etf_client.get_btc_etf_flows,
-          "ETH": etf_client.get_eth_etf_flows,
-          "XRP": etf_client.get_xrp_etf_flows}.get(symbol)
-    data = fn() if fn else None
+    from etf_flows import ETF_ASSETS as _EA
+    data = etf_client.get_etf_flows(symbol) if symbol in _EA else None
     if request.args.get("debug"):
         from etf_flows import get_etf_debug
         return jsonify({"data": data, "debug": get_etf_debug()})

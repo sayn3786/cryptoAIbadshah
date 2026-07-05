@@ -146,14 +146,28 @@ def _build_result(daily: List[Dict], symbol: str, source: str) -> Optional[Dict]
         return None
 
 
+# US spot-ETF coverage per asset: SoSoValue type slug + CoinGlass v4 coin path.
+# BTC/ETH since Jan/Jul 2024; SOL and XRP launched late 2025 under the SEC's
+# generic listing standards. Extend this table as more of the tracked tokens
+# get ETFs approved (ADA/HBAR/LINK filings pending).
+ETF_ASSETS = {
+    "BTC": {"slug": "us-btc-spot", "cg": "bitcoin",  "cache": "btc_etf"},
+    "ETH": {"slug": "us-eth-spot", "cg": "ethereum", "cache": "eth_etf"},
+    "SOL": {"slug": "us-sol-spot", "cg": "solana",   "cache": "sol_etf"},
+    "XRP": {"slug": "us-xrp-spot", "cg": "xrp",      "cache": "xrp_etf"},
+}
+
+
 def _ssv_api_flows(symbol: str) -> Optional[Dict]:
     """
     SoSoValue official Open API (free key): POST /openapi/v2/etf/historicalInflowChart
-    with {"type": "us-btc-spot" | "us-eth-spot"}. Returns daily totalNetInflow in USD.
+    with {"type": "<us-xxx-spot>"}. Returns daily totalNetInflow in USD.
     """
     if not SSV_API_KEY:
         return None
-    etf_type = "us-btc-spot" if symbol == "BTC" else "us-eth-spot"
+    etf_type = (ETF_ASSETS.get(symbol) or {}).get("slug")
+    if not etf_type:
+        return None
     path = "/openapi/v2/etf/historicalInflowChart"
     try:
         r = requests.post(
@@ -206,8 +220,11 @@ def _ssv_api_flows(symbol: str) -> Optional[Dict]:
 
 def _ssv_etf_flows(symbol: str) -> Optional[Dict]:
     """Best-effort SoSoValue fetch (unofficial endpoints, no key)."""
-    channel  = "BTC" if symbol == "BTC" else "ETH"
-    etf_slug = "us-btc-spot" if symbol == "BTC" else "us-eth-spot"
+    cfg = ETF_ASSETS.get(symbol)
+    if not cfg:
+        return None
+    channel  = symbol
+    etf_slug = cfg["slug"]
 
     raw = None
     for path, params in [
@@ -348,25 +365,24 @@ class ETFFlowClient:
         _cache[cache_key] = (result, time.time())
         return result
 
+    def get_etf_flows(self, symbol: str) -> Optional[Dict]:
+        """Daily net ETF flow for any asset in ETF_ASSETS (BTC/ETH/SOL/XRP)."""
+        cfg = ETF_ASSETS.get(symbol)
+        if not cfg:
+            return None
+        v2 = [f"/etf/{cfg['cg']}_spot_etf_daily_chart",
+              f"/etf/{cfg['cg']}_spot_etf_history"]
+        return self._flows(symbol, cfg["cache"], cfg["cg"], v2, ssv=True)
+
+    # Legacy per-coin wrappers (used by older call sites)
     def get_btc_etf_flows(self) -> Optional[Dict]:
-        """Daily net flow for all US BTC spot ETFs (IBIT, FBTC, GBTC, etc.)."""
-        return self._flows("BTC", "btc_etf", "bitcoin", [
-            "/etf/bitcoin_spot_etf_daily_chart",
-            "/etf/bitcoin_spot_etf_history",
-        ], ssv=True)
+        return self.get_etf_flows("BTC")
 
     def get_eth_etf_flows(self) -> Optional[Dict]:
-        """Daily net flow for US ETH spot ETFs (ETHA, FETH, etc.)."""
-        return self._flows("ETH", "eth_etf", "ethereum", [
-            "/etf/ethereum_spot_etf_daily_chart",
-            "/etf/ethereum_spot_etf_history",
-        ], ssv=True)
+        return self.get_etf_flows("ETH")
 
     def get_xrp_etf_flows(self) -> Optional[Dict]:
-        """Daily net flow for XRP spot ETFs (launched 2025 — sparse data)."""
-        return self._flows("XRP", "xrp_etf", "xrp", [
-            "/etf/xrp_spot_etf_daily_chart",
-        ], ssv=False)
+        return self.get_etf_flows("XRP")
 
     # ── v2 parser (legacy response shapes) ────────────────────────────────────
 
