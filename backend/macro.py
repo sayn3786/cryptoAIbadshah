@@ -133,7 +133,7 @@ INDICATORS = [
     # Fed manufacturing surveys that FRED hosts and that LEAD the ISM print.
     # Diffusion indices centred on 0: >0 = expansion, <0 = contraction.
     {
-        "key": "philly_fed", "label": "Philly Fed Mfg (ISM proxy)", "series": "GACDISA066MSFRBPHI",
+        "key": "philly_fed", "label": "Philly Fed Mfg (ISM proxy)", "series": "GACDFSA066MSFRBPHI",
         "cadence": "Monthly", "transform": "level", "unit": "idx", "flat_band": 2.0,
         "rising_impact": "bullish",
         "why_up": "Manufacturing activity improving → growth → risk-on (leads ISM Mfg PMI)",
