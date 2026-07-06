@@ -129,6 +129,23 @@ INDICATORS = [
         "why_up": "Improving sentiment → risk appetite up → bullish",
         "why_down": "Deteriorating sentiment → risk-off → bearish",
     },
+    # ISM PMI itself is licensed (not on any free API), so use the free regional
+    # Fed manufacturing surveys that FRED hosts and that LEAD the ISM print.
+    # Diffusion indices centred on 0: >0 = expansion, <0 = contraction.
+    {
+        "key": "philly_fed", "label": "Philly Fed Mfg (ISM proxy)", "series": "GACDISA066MSFRBPHI",
+        "cadence": "Monthly", "transform": "level", "unit": "idx", "flat_band": 2.0,
+        "rising_impact": "bullish",
+        "why_up": "Manufacturing activity improving → growth → risk-on (leads ISM Mfg PMI)",
+        "why_down": "Manufacturing activity contracting → slowdown → risk-off",
+    },
+    {
+        "key": "empire_fed", "label": "Empire State Mfg (ISM proxy)", "series": "GACDISA066MSFRBNY",
+        "cadence": "Monthly", "transform": "level", "unit": "idx", "flat_band": 2.0,
+        "rising_impact": "bullish",
+        "why_up": "NY manufacturing expanding → growth → risk-on (leads ISM Mfg PMI)",
+        "why_down": "NY manufacturing softening → slowdown → risk-off",
+    },
 ]
 
 
