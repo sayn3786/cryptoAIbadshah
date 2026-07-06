@@ -449,9 +449,12 @@ class BinanceClient:
 
     # ── KuCoin ────────────────────────────────────────────────────────────────
 
+    # UTC-aligned bars for 12H+ (…utc suffix) — OKX's default 1D/1W/1M open at
+    # Hong Kong 00:00 (UTC+8), which shifts every daily/weekly/monthly candle
+    # 8h vs KuCoin/Binance/TradingView. The utc variants match the standard.
     _OKX_BAR_SPOT = {
         "1h": "1H", "2h": "2H", "4h": "4H", "8h": "8H",
-        "12h": "12H", "1d": "1D", "1w": "1W", "1W": "1W", "1M": "1M",
+        "12h": "12Hutc", "1d": "1Dutc", "1w": "1Wutc", "1W": "1Wutc", "1M": "1Mutc",
     }
 
     def _okx_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
@@ -527,9 +530,9 @@ class BinanceClient:
         inst_id = spot_id + "-SWAP"   # BTC-USDT → BTC-USDT-SWAP
         _OKX_BAR = {
             "1h": "1H", "2h": "2H", "4h": "4H",  "8h": "8H",
-            "12h": "12H", "1d": "1D", "1w": "1W", "1W": "1W", "1M": "1M",
+            "12h": "12Hutc", "1d": "1Dutc", "1w": "1Wutc", "1W": "1Wutc", "1M": "1Mutc",
         }
-        bar = _OKX_BAR.get(interval, "1W")
+        bar = _OKX_BAR.get(interval, "1Wutc")
         try:
             data = self._get(f"{OKX_BASE}/api/v5/market/candles",
                              {"instId": inst_id, "bar": bar, "limit": min(limit, 300)})
@@ -661,8 +664,10 @@ class BinanceClient:
             data = self._get(f"{KUCOIN_BASE}/api/v1/market/candles",
                              {"type": kc_type, "symbol": pair})
             raw = (data.get("data") or []) if isinstance(data, dict) else []
+            # Newest-first, so the newest `limit` candles are raw[:limit]; taking
+            # raw[-limit:] would grab the OLDEST limit and drop the current one.
             out = []
-            for k in reversed(raw[-limit:]):
+            for k in reversed(raw[:limit]):
                 out.append({
                     "timestamp":        int(k[0]) * 1000,
                     "open":             float(k[1]),
@@ -685,8 +690,10 @@ class BinanceClient:
             data = self._get(f"{KUCOIN_BASE}/api/v1/market/candles",
                              {"type": "1week", "symbol": pair})
             raw = (data.get("data") or []) if isinstance(data, dict) else []
+            # raw[:limit] = newest limit (newest-first); raw[-limit:] would drop
+            # the current week and show a stale candle as the latest.
             out = []
-            for k in reversed(raw[-limit:]):
+            for k in reversed(raw[:limit]):
                 out.append({
                     "timestamp":        int(k[0]) * 1000,
                     "open":             float(k[1]),
