@@ -1601,7 +1601,14 @@ function renderEtfFlows(etf, symbol) {
   const sub = document.getElementById('etfFlowsSub');
   if (sub) {
     const src = etf.source === 'sosovalue' ? 'SoSoValue' : etf.source === 'coinglass' ? 'CoinGlass' : etf.source || '';
-    sub.textContent = `Institutional inflow / outflow${src ? ' · ' + src : ''}`;
+    // Flag if the latest available day is >2 days old (weekend/holiday is
+    // normal; older than that suggests the feed itself is behind).
+    let asOf = '';
+    if (etf.as_of) {
+      const ageDays = Math.floor((Date.now() - new Date(etf.as_of + 'T00:00:00Z').getTime()) / 86400000);
+      asOf = ` · as of ${etf.as_of}${ageDays >= 3 ? ` (${ageDays}d old)` : ''}`;
+    }
+    sub.textContent = `Institutional inflow / outflow${src ? ' · ' + src : ''}${asOf}`;
   }
 
   const fmtM = v => {
@@ -1637,11 +1644,20 @@ function renderEtfFlows(etf, symbol) {
     </div>`;
   }).join('');
 
+  // "Today" is misleading when the latest available day is 1-3d back — label
+  // it with the actual weekday, or "Today"/"Yesterday" when it truly is.
+  const _etfDayLabel = (iso) => {
+    const d = Math.floor((Date.now() - new Date(iso + 'T00:00:00Z').getTime()) / 86400000);
+    if (d <= 0) return 'Today';
+    if (d === 1) return 'Yesterday';
+    return new Date(iso + 'T00:00:00Z').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+
   grid.innerHTML = `
     <div class="etf-summary">
       <div class="etf-today">
         <div class="etf-today-val ${trendCls}">${fmtM(etf.today_m)}</div>
-        <div class="etf-today-lbl">Today</div>
+        <div class="etf-today-lbl">${etf.as_of ? _etfDayLabel(etf.as_of) : 'Latest'}</div>
         <div class="etf-trend-badge ${trendCls}">${trendLbl}</div>
       </div>
       <div class="etf-stats">

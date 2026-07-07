@@ -127,8 +127,20 @@ def _build_result(daily: List[Dict], symbol: str, source: str) -> Optional[Dict]
 
         def _m(v): return round(v / 1_000_000, 1)
 
+        # The date the "today" figure is actually for — ETF flows publish after
+        # US close with weekend/holiday gaps, so the latest available day is
+        # often 1-3 days back. Surfacing it distinguishes "latest available"
+        # from "stale".
+        _last_ts = nonempty[-1]["ts"]
+        try:
+            from datetime import datetime, timezone
+            _as_of = datetime.fromtimestamp(_last_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        except Exception:
+            _as_of = None
+
         return {
             "symbol":        symbol,
+            "as_of":         _as_of,
             "today_m":       _m(today_usd),
             "week_total_m":  _m(week_total),
             "month_total_m": _m(month_total),
