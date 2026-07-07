@@ -205,7 +205,11 @@ def _fetch_sopr_realized_puell() -> dict:
             today_rev = rev_vals[-1]
             ma365     = sum(rev_vals[-365:]) / min(len(rev_vals), 365)
             puell     = round(today_rev / ma365, 3) if ma365 else None
-            if puell:
+            # Sanity floor: real BTC miner revenue is tens of $M/day and Puell
+            # has never gone below ~0.3 historically. A near-zero reading (or
+            # sub-$1M/day revenue) is broken data, NOT capitulation — skip it
+            # so it can't emit a false "STRONG BUY".
+            if puell and puell >= 0.15 and today_rev >= 1_000_000:
                 if puell < 0.5:
                     pz, pc, pl = "deep_undervalued", "bull", "Miners Capitulating — STRONG BUY"
                 elif puell < 0.8:
@@ -439,11 +443,17 @@ def get_btc_mining_signals() -> dict:
     # If blockchain.info charts call fails, use the revenue already fetched from
     # blockchain.info /stats, divided by a cycle-average estimate (~$35M/day
     # post-2024-halving cycle average, covers ~$25M bear to ~$65M bull peaks).
-    if not result.get("puell_multiple") and result.get("miner_revenue_usd"):
+    # Only estimate when revenue is a plausible figure (real BTC miner revenue
+    # runs ~$15-70M/day). A tiny/zero value means the source is broken —
+    # estimating from it would print a fake "Miners Capitulating — STRONG BUY".
+    if (not result.get("puell_multiple")
+            and (result.get("miner_revenue_usd") or 0) >= 1_000_000):
         CYCLE_AVG_REVENUE_USD = 35_000_000
         today_rev = result["miner_revenue_usd"]
         puell_est = round(today_rev / CYCLE_AVG_REVENUE_USD, 3)
-        if puell_est < 0.5:
+        if puell_est < 0.15:
+            pz = pc = pl = None          # implausibly low — treat as no data
+        elif puell_est < 0.5:
             pz, pc, pl = "deep_undervalued", "bull", "Miners Capitulating — STRONG BUY"
         elif puell_est < 0.8:
             pz, pc, pl = "undervalued",      "bull", "Low Miner Revenue — Accumulate"
@@ -453,15 +463,16 @@ def get_btc_mining_signals() -> dict:
             pz, pc, pl = "elevated",         "",     "High Miner Revenue — Caution"
         else:
             pz, pc, pl = "extreme",          "bear", "Peak Miner Revenue — SELL"
-        result["puell_multiple"] = {
-            "value":         puell_est,
-            "zone":          pz,
-            "cls":           pc,
-            "label":         pl,
-            "daily_rev_usd": round(today_rev, 0),
-            "ma365_rev_usd": CYCLE_AVG_REVENUE_USD,
-            "estimated":     True,
-        }
+        if pz:                               # skip when flagged as no-data
+            result["puell_multiple"] = {
+                "value":         puell_est,
+                "zone":          pz,
+                "cls":           pc,
+                "label":         pl,
+                "daily_rev_usd": round(today_rev, 0),
+                "ma365_rev_usd": CYCLE_AVG_REVENUE_USD,
+                "estimated":     True,
+            }
 
     # ── Realized Price — derived from MVRV (btc_price / mvrv_score) ──────────
     # MVRV = market cap / realized cap, so realized price = btc_price / mvrv

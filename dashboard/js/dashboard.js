@@ -1192,7 +1192,10 @@ function renderOnchainMetrics(mining, symbol, lth) {
 
   // ── Puell Multiple ────────────────────────────────────────────────────────
   const puell = mining.puell_multiple;
-  if (puell) {
+  // Guard: a Puell < 0.15 or missing revenue is broken data, not capitulation —
+  // never render a "STRONG BUY" from it (belt-and-suspenders with the backend).
+  if (puell && puell.value != null && puell.value >= 0.15 &&
+      (puell.daily_rev_usd == null || puell.daily_rev_usd >= 1_000_000)) {
     const PUELL_DESC = {
       deep_undervalued: 'Miner capitulation — historical buy zone',
       undervalued:      'Revenue below avg — good accumulation',
