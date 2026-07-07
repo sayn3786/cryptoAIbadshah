@@ -1740,3 +1740,20 @@ a:hover { color: var(--gold2); }
                           background: rgba(139,92,246,.15); color: #a78bfa;
                           border: 1px solid rgba(139,92,246,.35); border-radius: 6px; cursor: pointer; }
 .gtk-manual-form button:hover { background: rgba(139,92,246,.25); }
+
+/* GoMining daily maintenance sparkline + large moves */
+.gtk-daily-hdr { font-size: .62rem; color: var(--muted); margin: 10px 0 4px;
+                 display: flex; justify-content: space-between; gap: 8px; }
+.gtk-barchart { display: flex; align-items: flex-end; gap: 2px; height: 46px; }
+.gtk-bar-wrap { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.gtk-bar { width: 100%; background: var(--bull); border-radius: 2px 2px 0 0; opacity: .8; }
+.gtk-bar-wrap:hover .gtk-bar { opacity: 1; }
+.gtk-moves { display: flex; flex-direction: column; gap: 3px; }
+.gtk-move-row { display: grid; grid-template-columns: 62px 1.1fr 1.4fr 44px; gap: 6px;
+                align-items: center; font-size: .64rem; padding: 4px 6px;
+                border: 1px solid var(--border); border-radius: 6px;
+                background: rgba(255,255,255,.02); }
+.gtk-move-amt { font-weight: 700; font-family: var(--mono); }
+.gtk-move-kind { color: var(--text); }
+.gtk-move-cp { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gtk-move-age { color: var(--muted); text-align: right; }

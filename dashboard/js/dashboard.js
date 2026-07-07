@@ -3664,8 +3664,44 @@ function renderGtk(gtk, symbol) {
       <div class="etf-stat"><span class="etf-stat-lbl">Maintenance WoW</span>
         <span class="etf-stat-val ${wowCls}">${mt.wow_ratio != null ? ((mt.wow_ratio-1)*100 >= 0 ? '+' : '') + ((mt.wow_ratio-1)*100).toFixed(0) + '%' : '—'}</span></div>`);
   }
+  // Daily maintenance-paid trend (on-chain) — mini bar sparkline
+  let dailyHtml = '';
+  const dd = mt?.daily;
+  if (dd && dd.length >= 3) {
+    const mx = Math.max(...dd.map(d => d.amount)) || 1;
+    const trendCls = (mt.avg_per_day != null && mt.avg_per_day_prev)
+      ? (mt.avg_per_day > mt.avg_per_day_prev * 1.05 ? 'bull'
+         : mt.avg_per_day < mt.avg_per_day_prev * 0.95 ? 'bear' : '') : '';
+    const bars = dd.map(d => `<div class="gtk-bar-wrap" title="${d.date}: ${d.amount.toLocaleString()} GMT">
+        <div class="gtk-bar" style="height:${Math.max(4, d.amount / mx * 100)}%"></div></div>`).join('');
+    dailyHtml = `
+      <div class="gtk-daily-hdr">Daily maintenance paid (21d, on-chain)
+        <span class="${trendCls}">avg ${(mt.avg_per_day||0).toLocaleString()}/d${
+          mt.avg_per_day_prev ? ` (${mt.avg_per_day>mt.avg_per_day_prev?'+':''}${Math.round((mt.avg_per_day/mt.avg_per_day_prev-1)*100)}% vs prior 7d)` : ''}</span></div>
+      <div class="gtk-barchart">${bars}</div>`;
+  }
+
+  // Large GMT movements — trend-setters (locks/unlocks/whales)
+  let movesHtml = '';
+  const mv = gtk.large_moves;
+  if (mv && mv.length) {
+    const rows = mv.map(m => {
+      const ago = Math.round((Date.now() - m.ts) / 86400000);
+      const cls = m.kind.includes('burn') ? 'bull' : m.kind === 'whale transfer' ? '' : 'bear';
+      return `<div class="gtk-move-row">
+        <span class="gtk-move-amt ${cls}">${(m.amount/1e6).toFixed(2)}M</span>
+        <span class="gtk-move-kind">${m.kind}</span>
+        <span class="gtk-move-cp">${m.from_lbl} → ${m.to_lbl}</span>
+        <span class="gtk-move-age">${ago===0?'today':ago+'d'}</span></div>`;
+    }).join('');
+    movesHtml = `<div class="gtk-daily-hdr" style="margin-top:10px">Large GMT moves (14d, ≥1M) — potential lock/unlock/whale</div>
+      <div class="gtk-moves">${rows}</div>`;
+  }
+
   grid.innerHTML = `
     <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">${tiles.join('')}</div>
+    ${dailyHtml}
+    ${movesHtml}
     <div class="macro-reason" style="margin-top:8px">${
       [gtk.note, gtk.maint_note, gtk.epoch_note,
        gtk.onchain_ready ? '' : '<em>Add ETHERSCAN_API_KEY to unlock on-chain burn tracking</em>']

@@ -178,12 +178,84 @@ def _maintenance_paid() -> Optional[Dict]:
         wk_prev = sum(x["amount"] for x in inflow
                       if now - 14 * 86400_000 <= x["ts"] < now - 7 * 86400_000)
         mom = round(wk1 / wk_prev, 3) if wk_prev else None
+
+        # Daily series (last 21 days) — bucket inflows by UTC day for the trend.
+        buckets: Dict[str, float] = {}
+        for x in inflow:
+            d = datetime.fromtimestamp(x["ts"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            buckets[d] = buckets.get(d, 0.0) + x["amount"]
+        daily = [{"date": d, "amount": round(v)} for d, v in sorted(buckets.items())][-21:]
+        # 7d avg/day vs the prior 7d avg/day — a cleaner daily-trend read
+        d7  = [b["amount"] for b in daily[-7:]]
+        d7p = [b["amount"] for b in daily[-14:-7]]
+        avg7  = sum(d7) / len(d7) if d7 else 0
+        avg7p = sum(d7p) / len(d7p) if d7p else 0
         return {
-            "maint_7d":   round(wk1),
-            "maint_35d":  round(sum(x["amount"] for x in inflow)),
-            "prev_week":  round(wk_prev) if wk_prev else None,
-            "wow_ratio":  mom,          # >1 demand rising, <1 falling
+            "maint_7d":     round(wk1),
+            "maint_35d":    round(sum(x["amount"] for x in inflow)),
+            "prev_week":    round(wk_prev) if wk_prev else None,
+            "wow_ratio":    mom,          # >1 demand rising, <1 falling
+            "daily":        daily,
+            "avg_per_day":  round(avg7),
+            "avg_per_day_prev": round(avg7p),
         }
+    except Exception:
+        return None
+
+
+def _large_moves(threshold: float = 1_000_000) -> Optional[List[Dict]]:
+    """
+    Flag unusually large GMT transfers in the last ~14d — potential lock,
+    unlock or whale moves (trend-setters). Counterparties we know are labeled;
+    everything else is an 'unknown wallet' for the user to judge. Note: locks
+    via GoMining virtual wallets are custodial/off-chain and won't appear here.
+    """
+    if not ETHERSCAN_KEY:
+        return None
+    KNOWN = {
+        BURN_MINT_CONTRACT.lower(): "burn-mint (maintenance)",
+        DEAD_ADDRESSES[0].lower():  "burn address",
+        DEAD_ADDRESSES[1].lower():  "burn address",
+        GOMINING_CONTRACT.lower():  "token contract",
+    }
+    cutoff_ms = (time.time() - 14 * 86400) * 1000
+    out = []
+    try:
+        r = _s.get(ETHERSCAN_V2, params={
+            "chainid": 1, "module": "account", "action": "tokentx",
+            "contractaddress": GOMINING_CONTRACT,
+            "page": 1, "offset": 300, "sort": "desc", "apikey": ETHERSCAN_KEY,
+        }, timeout=TIMEOUT)
+        rows = (r.json() or {}).get("result") or []
+        if not isinstance(rows, list):
+            return None
+        for tx in rows:
+            try:
+                ts_ms = int(tx["timeStamp"]) * 1000
+                if ts_ms < cutoff_ms:
+                    break                       # desc order — older beyond here
+                amt = int(tx["value"]) / 10 ** int(tx.get("tokenDecimal", 18))
+                if amt < threshold:
+                    continue
+                to = (tx.get("to") or "").lower()
+                frm = (tx.get("from") or "").lower()
+                to_lbl  = KNOWN.get(to, "wallet")
+                frm_lbl = KNOWN.get(frm, "wallet")
+                # Classify direction/intent
+                if to in KNOWN and "burn" in KNOWN[to]:
+                    kind = "burn/maintenance"
+                elif frm in KNOWN and "burn-mint" in KNOWN.get(frm, ""):
+                    kind = "mint/distribution out"
+                else:
+                    kind = "whale transfer"       # possible lock/unlock/exchange
+                out.append({
+                    "ts": ts_ms, "amount": round(amt),
+                    "from_lbl": frm_lbl, "to_lbl": to_lbl, "kind": kind,
+                    "hash": tx.get("hash", "")[:12],
+                })
+            except (KeyError, ValueError, TypeError):
+                continue
+        return out[:8] or None
     except Exception:
         return None
 
@@ -199,6 +271,7 @@ def get_gomining_tokenomics() -> Optional[Dict]:
     trend = _supply_trend()
     burns = _onchain_burns()
     maint = _maintenance_paid()
+    moves = _large_moves()
 
     if not trend and not burns and not maint:
         _cache["tk"] = (None, time.time())
@@ -258,6 +331,7 @@ def get_gomining_tokenomics() -> Optional[Dict]:
         "burns":          burns,                       # None until ETHERSCAN_API_KEY set
         "maintenance":    maint,
         "maint_note":     maint_note,
+        "large_moves":    moves,
         "onchain_ready":  bool(ETHERSCAN_KEY),
         "next_epoch":     nxt.strftime("%Y-%m-%d"),
         "days_to_epoch":  days_to_epoch,
