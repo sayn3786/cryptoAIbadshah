@@ -1757,3 +1757,11 @@ a:hover { color: var(--gold2); }
 .gtk-move-kind { color: var(--text); }
 .gtk-move-cp { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gtk-move-age { color: var(--muted); text-align: right; }
+
+/* GoMining manual log — date/history helpers */
+.gtk-manual-form input[type=date] { width: 130px; }
+.gtk-manual-note { font-size: .58rem; color: var(--muted); margin-top: 6px; font-style: italic; }
+.gtk-hist { font-size: .58rem; color: var(--muted); margin-top: 6px; display: flex;
+            flex-wrap: wrap; gap: 5px; align-items: center; }
+.gtk-hist-chip { background: rgba(255,255,255,.05); border: 1px solid var(--border);
+                 border-radius: 10px; padding: 1px 7px; font-family: var(--mono); }

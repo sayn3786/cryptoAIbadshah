@@ -3742,26 +3742,41 @@ function _renderGtkManual() {
         <div class="etf-stat"><span class="etf-stat-lbl">veGOMINING APR</span>
           <span class="etf-stat-val">${last.apr != null ? last.apr + '%' : '—'}${arrow(last.apr, prev?.apr, true)}</span></div>
       </div>
-      <div class="macro-reason" style="margin-top:4px">Logged ${last.date}${prev ? ` · vs ${prev.date}` : ''} · from GoMining app (not on-chain)</div>`;
+      <div class="macro-reason" style="margin-top:4px">Logged ${last.date}${prev ? ` · vs ${prev.date}${_gtkGap(prev.date, last.date)}` : ''} · from GoMining app (not on-chain)</div>`;
   }
+  const today = new Date().toISOString().slice(0, 10);
+  // Prior entries as a compact history so a backfill is easy to see
+  const hist = log.slice(-6).reverse().map(e =>
+    `<span class="gtk-hist-chip" title="mint ×${e.mint ?? '—'} · locked ${e.locked ?? '—'}M · TVL ${e.tvl ?? '—'}%">${e.date}</span>`).join('');
   return `
     <details class="gtk-manual">
       <summary>📝 Log weekly tokenomics (mint ratio · locked · TVL · APR — app-only)</summary>
       <div class="gtk-manual-form">
+        <label>Week of<input id="gtkDate" type="date" value="${today}" max="${today}"></label>
         <label>Mint ratio ×<input id="gtkMint" type="number" step="0.001" placeholder="0.979"></label>
         <label>Total locked (M)<input id="gtkLocked" type="number" step="0.1" placeholder="245.9"></label>
         <label>TVL locked %<input id="gtkTvl" type="number" step="0.1" placeholder="61"></label>
         <label>Maintained %<input id="gtkMaint" type="number" step="0.1" placeholder="46.18"></label>
         <label>veGOMINING APR %<input id="gtkApr" type="number" step="0.1" placeholder="21.42"></label>
-        <button onclick="saveGtkManual()">Save this week</button>
+        <button onclick="saveGtkManual()">Save</button>
       </div>
+      <div class="gtk-manual-note">Miss a week? Change the date to backfill it — entries auto-sort and the trend always compares your two most recent dates.</div>
+      ${hist ? `<div class="gtk-hist">Logged: ${hist}</div>` : ''}
     </details>
     ${latestHtml}`;
 }
 
+// Gap note between two ISO dates, e.g. " · 2wk gap" when a week was skipped
+function _gtkGap(a, b) {
+  const d = Math.round((new Date(b) - new Date(a)) / 86400000);
+  if (d >= 10) return ` · ${Math.round(d / 7)}wk gap`;
+  return '';
+}
+
 function saveGtkManual() {
   const num = id => { const v = parseFloat(document.getElementById(id)?.value); return isFinite(v) ? v : null; };
-  const entry = { date: new Date().toISOString().slice(0, 10),
+  const date = document.getElementById('gtkDate')?.value || new Date().toISOString().slice(0, 10);
+  const entry = { date,
     mint: num('gtkMint'), locked: num('gtkLocked'), tvl: num('gtkTvl'),
     maint: num('gtkMaint'), apr: num('gtkApr') };
   if (entry.mint == null && entry.locked == null && entry.tvl == null) {
@@ -3769,9 +3784,9 @@ function saveGtkManual() {
     return;
   }
   const log = _gtkManual.read();
-  // one entry per day — replace if same date
-  const i = log.findIndex(e => e.date === entry.date);
+  const i = log.findIndex(e => e.date === entry.date);   // replace same date
   if (i >= 0) log[i] = entry; else log.push(entry);
+  log.sort((x, y) => x.date < y.date ? -1 : 1);          // keep chronological
   while (log.length > 60) log.shift();
   _gtkManual.write(log);
   renderGtk(S.analysis?.gomining_tokenomics, S.analysis?.symbol);   // re-render
