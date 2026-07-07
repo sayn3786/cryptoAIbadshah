@@ -352,7 +352,12 @@ def get_btc_mining_signals() -> dict:
         result["hash_ribbon_ma60"] = ribbon["ma60"]
 
         if rates:
-            latest_hs = rates[-1]
+            # Use mempool's CURRENT hashrate estimate, not the last 3-month
+            # daily average (rates[-1]) — the daily avg lags a rising network
+            # and overstated reward/TH by ~23% (57.99 vs GoMining's real 47
+            # sats: 776 vs 957 EH/s). currentHashrate matches pool payouts.
+            cur_hs = hr_data.get("currentHashrate")
+            latest_hs = cur_hs if (cur_hs and cur_hs > 0) else rates[-1]
             be = _break_even(latest_hs)
             result["break_even_usd"] = be
             # Reward per TH/day = total daily BTC / network hashrate in TH
