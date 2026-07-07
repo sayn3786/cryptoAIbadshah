@@ -871,21 +871,35 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
     swing_highs = [(i, highs[i], rsi_v[i]) for i in range(pw, n - pw)
                    if highs[i] == max(highs[i - pw: i + pw + 1])]
 
+    # Evaluate BOTH, then report whichever is anchored to the more RECENT pivot.
+    # (Previously bullish-on-lows was checked first and returned early, masking a
+    # fresher bearish-on-highs — so a topping divergence could be hidden behind
+    # an older bottoming one.)
+    bull = bear = None
     if len(swing_lows) >= 2:
-        _, p_price, p_rsi = swing_lows[-2]
-        _, c_price, c_rsi = swing_lows[-1]
+        i2, p_price, p_rsi = swing_lows[-2]
+        i1, c_price, c_rsi = swing_lows[-1]
         if (p_price - c_price) / (p_price + 1e-12) > 0.005 and c_rsi - p_rsi > 2:
-            return {"type": "bullish", "strength": round(c_rsi - p_rsi, 1),
+            bull = {"type": "bullish", "strength": round(c_rsi - p_rsi, 1), "_idx": i1,
                     "description": f"Bullish RSI divergence — price lower low but RSI rising (+{c_rsi - p_rsi:.1f} pts), classic reversal setup"}
-
     if len(swing_highs) >= 2:
-        _, p_price, p_rsi = swing_highs[-2]
-        _, c_price, c_rsi = swing_highs[-1]
+        i2, p_price, p_rsi = swing_highs[-2]
+        i1, c_price, c_rsi = swing_highs[-1]
         if (c_price - p_price) / (p_price + 1e-12) > 0.005 and p_rsi - c_rsi > 2:
-            return {"type": "bearish", "strength": round(p_rsi - c_rsi, 1),
+            bear = {"type": "bearish", "strength": round(p_rsi - c_rsi, 1), "_idx": i1,
                     "description": f"Bearish RSI divergence — price higher high but RSI falling (-{p_rsi - c_rsi:.1f} pts), classic reversal setup"}
 
-    return empty
+    both = [d for d in (bull, bear) if d]
+    if not both:
+        return empty
+    # Most recent pivot wins; on a tie, the stronger divergence.
+    chosen = max(both, key=lambda d: (d["_idx"], d["strength"]))
+    if bull and bear:
+        other = "bearish (on highs)" if chosen["type"] == "bullish" else "bullish (on lows)"
+        chosen["also"] = ("bearish" if chosen["type"] == "bullish" else "bullish")
+        chosen["description"] += f" · note: a {other} divergence also present — mixed/choppy structure"
+    chosen.pop("_idx", None)
+    return chosen
 
 
 def calculate_vwap(candles: List[Dict], period: int = 50) -> Dict:
