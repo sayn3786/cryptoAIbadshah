@@ -242,7 +242,18 @@ def _ssv_api_flows(symbol: str) -> Optional[Dict]:
                 _log(symbol, "sosovalue-api", path,
                      f"{etf_type}: {len(rows)} rows, 0 parsed (row keys: {rk})")
                 continue
-            _log(symbol, "sosovalue-api", path, f"{etf_type}: 200 ok ({len(daily)} days)")
+            # Log SoSoValue's newest RAW date + its flow, so debug shows whether
+            # the feed itself stops at a date or we drop newer (e.g. zero) days.
+            _mx = max(daily, key=lambda d: d["ts"])
+            _nz = [d for d in daily if d["net_usd"] != 0]
+            _mxnz = max(_nz, key=lambda d: d["ts"]) if _nz else None
+            def _d(ts):
+                try: return datetime.fromtimestamp(ts/1000, tz=timezone.utc).strftime("%Y-%m-%d")
+                except Exception: return "?"
+            _log(symbol, "sosovalue-api", path,
+                 f"{etf_type}: 200 ok ({len(daily)} days; newest raw {_d(_mx['ts'])}="
+                 f"{_mx['net_usd']/1e6:.0f}M; newest nonzero "
+                 f"{_d(_mxnz['ts']) if _mxnz else '-'})")
             return _build_result(daily, symbol, source="sosovalue")
         except Exception as e:
             _log(symbol, "sosovalue-api", path, f"{etf_type}: {type(e).__name__}: {e}"[:150])
