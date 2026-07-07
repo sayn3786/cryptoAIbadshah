@@ -699,6 +699,11 @@ def generate_signal(analysis: Dict) -> Dict:
         bull_reasons.append(
             f"🔥 On-chain burns: {burns_g['burn_7d']:,} GOMINING destroyed in 7d "
             f"({burns_g.get('n_burn_tx', 0)} txs, 35d total {burns_g.get('burn_35d', 0):,})")
+    # Maintenance-demand momentum (on-chain, leads supply) — its own reason line
+    _mt = gtk.get("maintenance") or {}
+    if gtk.get("maint_note") and _mt.get("wow_ratio") is not None:
+        _up = _mt["wow_ratio"] >= 1.0
+        (bull_reasons if _up else bear_reasons).append(f"🔧 {gtk['maint_note']}")
 
     # ── TAO / Bittensor ecosystem (subnet pool flows + alpha breadth) ─────────
     # Net TAO flowing into subnet Alpha pools is staked/illiquid supply — the

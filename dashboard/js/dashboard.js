@@ -3655,10 +3655,19 @@ function renderGtk(gtk, symbol) {
       <div class="etf-stat"><span class="etf-stat-lbl">Burned 35d</span>
         <span class="etf-stat-val bull">${(b.burn_35d || 0).toLocaleString()}</span></div>`);
   }
+  const mt = gtk.maintenance;
+  if (mt) {
+    const wowCls = mt.wow_ratio == null ? '' : mt.wow_ratio >= 1.1 ? 'bull' : mt.wow_ratio <= 0.9 ? 'bear' : '';
+    tiles.push(`
+      <div class="etf-stat"><span class="etf-stat-lbl">Maintenance paid 7d</span>
+        <span class="etf-stat-val">${(mt.maint_7d || 0).toLocaleString()} GMT</span></div>
+      <div class="etf-stat"><span class="etf-stat-lbl">Maintenance WoW</span>
+        <span class="etf-stat-val ${wowCls}">${mt.wow_ratio != null ? ((mt.wow_ratio-1)*100 >= 0 ? '+' : '') + ((mt.wow_ratio-1)*100).toFixed(0) + '%' : '—'}</span></div>`);
+  }
   grid.innerHTML = `
     <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">${tiles.join('')}</div>
     <div class="macro-reason" style="margin-top:8px">${
-      [gtk.note, gtk.epoch_note,
+      [gtk.note, gtk.maint_note, gtk.epoch_note,
        gtk.onchain_ready ? '' : '<em>Add ETHERSCAN_API_KEY to unlock on-chain burn tracking</em>']
         .filter(Boolean).join(' · ')}</div>`;
 }

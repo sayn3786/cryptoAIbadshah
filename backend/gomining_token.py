@@ -23,6 +23,10 @@ import requests
 from typing import Optional, Dict, List
 
 GOMINING_CONTRACT = "0x7Ddc52c4De30e94Be3A6A0A2b259b2850f421989"
+# GoMining Burn & Mint contract — its methods are "Make Daily…"/"Make Weekly…"
+# (the Tuesday burn/mint). GMT flowing INTO it = tokens paid for maintenance,
+# the core utility-demand metric (GoMining has no API, so we read it on-chain).
+BURN_MINT_CONTRACT = "0x44DDEF36f5d4926de2edc495938ADF854C93fA5C"
 DEAD_ADDRESSES = [
     "0x000000000000000000000000000000000000dEaD",
     "0x0000000000000000000000000000000000000000",
@@ -135,6 +139,55 @@ def _onchain_burns() -> Optional[Dict]:
         return None
 
 
+def _maintenance_paid() -> Optional[Dict]:
+    """
+    GMT flowing INTO the Burn & Mint contract = tokens paid for maintenance —
+    GoMining's core utility-demand metric ('PAID FOR MAINTENANCE' in-app).
+    Read on-chain via Etherscan since GoMining exposes no API.
+    """
+    if not ETHERSCAN_KEY:
+        return None
+    dst = BURN_MINT_CONTRACT.lower()
+    cutoff_ms = (time.time() - 35 * 86400) * 1000
+    inflow = []
+    try:
+        r = _s.get(ETHERSCAN_V2, params={
+            "chainid": 1, "module": "account", "action": "tokentx",
+            "contractaddress": GOMINING_CONTRACT, "address": BURN_MINT_CONTRACT,
+            "page": 1, "offset": 500, "sort": "desc",
+            "apikey": ETHERSCAN_KEY,
+        }, timeout=TIMEOUT)
+        rows = (r.json() or {}).get("result") or []
+        if not isinstance(rows, list):
+            return None
+        for tx in rows:
+            try:
+                if tx.get("to", "").lower() != dst:      # inflow only
+                    continue
+                ts_ms = int(tx["timeStamp"]) * 1000
+                if ts_ms < cutoff_ms:
+                    continue
+                amt = int(tx["value"]) / 10 ** int(tx.get("tokenDecimal", 18))
+                inflow.append({"ts": ts_ms, "amount": amt})
+            except (KeyError, ValueError, TypeError):
+                continue
+        if not inflow:
+            return None
+        now = time.time() * 1000
+        wk1 = sum(x["amount"] for x in inflow if x["ts"] >= now - 7 * 86400_000)
+        wk_prev = sum(x["amount"] for x in inflow
+                      if now - 14 * 86400_000 <= x["ts"] < now - 7 * 86400_000)
+        mom = round(wk1 / wk_prev, 3) if wk_prev else None
+        return {
+            "maint_7d":   round(wk1),
+            "maint_35d":  round(sum(x["amount"] for x in inflow)),
+            "prev_week":  round(wk_prev) if wk_prev else None,
+            "wow_ratio":  mom,          # >1 demand rising, <1 falling
+        }
+    except Exception:
+        return None
+
+
 def get_gomining_tokenomics() -> Optional[Dict]:
     cached = _cache.get("tk")
     if cached:
@@ -145,8 +198,9 @@ def get_gomining_tokenomics() -> Optional[Dict]:
     now = datetime.now(timezone.utc)
     trend = _supply_trend()
     burns = _onchain_burns()
+    maint = _maintenance_paid()
 
-    if not trend and not burns:
+    if not trend and not burns and not maint:
         _cache["tk"] = (None, time.time())
         return None
 
@@ -181,16 +235,35 @@ def get_gomining_tokenomics() -> Optional[Dict]:
         note = (f"{b7:,} GOMINING burned on-chain in 7d (~{pct_of_supply:.2f}% of supply) — "
                 f"maintenance demand visible; net-of-mint effect pending supply data")
 
+    # Maintenance-demand momentum: rising weekly maintenance paid = more miners
+    # paying in GOMINING = more burn pressure. This is the leading utility read
+    # (a demand rise shows here before it shows in supply). Adds a small tilt.
+    maint_note = None
+    if maint and maint.get("wow_ratio") is not None:
+        wow = maint["wow_ratio"]
+        if wow >= 1.10:
+            pts += 3
+            maint_note = (f"Maintenance paid {maint['maint_7d']:,} GMT this week, "
+                          f"{(wow-1)*100:+.0f}% WoW — utility demand accelerating")
+        elif wow <= 0.90:
+            pts -= 3
+            maint_note = (f"Maintenance paid {maint['maint_7d']:,} GMT this week, "
+                          f"{(wow-1)*100:+.0f}% WoW — utility demand cooling")
+        else:
+            maint_note = f"Maintenance paid {maint['maint_7d']:,} GMT this week (steady)"
+
     result = {
         "contract":       GOMINING_CONTRACT,
         "supply":         trend,
         "burns":          burns,                       # None until ETHERSCAN_API_KEY set
+        "maintenance":    maint,
+        "maint_note":     maint_note,
         "onchain_ready":  bool(ETHERSCAN_KEY),
         "next_epoch":     nxt.strftime("%Y-%m-%d"),
         "days_to_epoch":  days_to_epoch,
         "epoch_note":     "Burn & Mint closes every Tuesday — burns executed, "
                           "veGOMINING rewards distributed",
-        "signal_pts":     pts,
+        "signal_pts":     max(-12, min(12, pts)),
         "note":           note,
     }
     _cache["tk"] = (result, time.time())
