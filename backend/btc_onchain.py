@@ -138,7 +138,13 @@ def _fetch_mvrv() -> dict:
         return {}
     score  = values[-1]
     sma90  = round(sum(values[-90:]) / min(len(values), 90), 3) if len(values) >= 30 else None
-    sig    = _mvrv_signal(sma90 if sma90 else score)
+    # Sane band: real MVRV runs ~0.7-4 (even the Nov-2022 bottom was ~0.75).
+    # A bare >0 filter would let a broken 0.02 fall to the "Oversold/Bottom —
+    # strong buy" branch and cascade into NUPL, realized price and the score.
+    _eff = sma90 if sma90 else score
+    if not (0.3 <= _eff <= 15):
+        return {}
+    sig    = _mvrv_signal(_eff)
     return {
         "score":  round(score, 3),
         "sma90":  sma90,
@@ -170,7 +176,11 @@ def _fetch_sopr_realized_puell() -> dict:
                     if s > 0: sopr_vals.append(s)
                 except (TypeError, ValueError):
                     pass
-        if sopr_vals:
+        # Sane band: SOPR realistically sits ~0.85-1.2; even deep capitulation
+        # rarely dips below 0.9. A bare >0 filter would let a broken near-zero
+        # print the strongest "Panic Selling — BUY" and cascade into the score,
+        # LTH proxy and GoMining phase. Require a plausible value.
+        if sopr_vals and 0.5 <= sopr_vals[-1] <= 1.5:
             sopr  = sopr_vals[-1]
             sma7  = round(sum(sopr_vals[-7:]) / min(len(sopr_vals), 7), 4)
             if sopr < 0.95:
@@ -331,8 +341,12 @@ def get_btc_mining_signals() -> dict:
         ttl=600  # 10 min — keeps sats/TH in sync with live network hashrate
     )
     if hr_data and "hashrates" in hr_data:
-        rates = [h.get("avgHashrate", 0) for h in hr_data["hashrates"]]
-        ribbon = _hash_ribbon(rates)
+        # Drop missing/zero entries — trailing 0s would drag the 30d MA below
+        # the 60d and fake a "capitulation" cross. Only classify with enough
+        # real points for the 60-window.
+        rates = [r for r in (h.get("avgHashrate", 0) for h in hr_data["hashrates"])
+                 if r and r > 0]
+        ribbon = _hash_ribbon(rates)   # returns neutral when < 60 valid points
         result["hash_ribbon"]      = ribbon["direction"]
         result["hash_ribbon_ma30"] = ribbon["ma30"]
         result["hash_ribbon_ma60"] = ribbon["ma60"]

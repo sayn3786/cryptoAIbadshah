@@ -1130,7 +1130,10 @@ class BinanceClient:
 
         avg_long  = round(sum(r[0] for r in results) / len(results), 2)
         avg_short = round(100 - avg_long, 2)
-        avg_ratio = round(avg_long / avg_short, 4) if avg_short else 0
+        # ratio None (not 0) when shorts round to 0 — a 0 would read as
+        # "crowd heavily short → contrarian long", the exact inverse of a
+        # ~100%-long crowd. None makes the L/S block skip instead.
+        avg_ratio = round(avg_long / avg_short, 4) if avg_short else None
         return {
             "ratio":     avg_ratio,
             "long_pct":  avg_long,

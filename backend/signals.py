@@ -729,7 +729,7 @@ def generate_signal(analysis: Dict) -> Dict:
     ls_ratio   = ls.get("ratio")
     ls_long    = ls.get("long_pct", 50)
     ls_short   = ls.get("short_pct", 50)
-    if ls_ratio is not None:
+    if ls_ratio is not None and ls_ratio > 0:
         if ls_ratio < 0.65:
             score += 14; g['sentiment'] += 14
             bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — crowd heavily short, contrarian long signal")
@@ -750,7 +750,7 @@ def generate_signal(analysis: Dict) -> Dict:
     fg = analysis.get("fear_greed") or {}
     fg_val = fg.get("value")
     fg_lbl = fg.get("label", "")
-    if fg_val is not None:
+    if fg_val:                      # F&G index is 1-100; 0/None = no data, skip
         tf_note = f" (×{tf_macro_w:.0%} on {timeframe})" if tf_macro_w < 1.0 else ""
         if fg_val <= 15:
             pts = round(25 * tf_macro_w)

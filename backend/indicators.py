@@ -15,6 +15,8 @@ def calculate_rsi_series(closes: List[float], period: int = 14) -> List[Optional
     avg_loss = sum(losses[:period]) / period
 
     def _rsi(g: float, l: float) -> float:
+        if g == 0 and l == 0:      # flat/degenerate feed — not a real 100/0
+            return 50.0
         if l == 0:
             return 100.0
         return round(100.0 - 100.0 / (1.0 + g / l), 2)
