@@ -3669,7 +3669,76 @@ function renderGtk(gtk, symbol) {
     <div class="macro-reason" style="margin-top:8px">${
       [gtk.note, gtk.maint_note, gtk.epoch_note,
        gtk.onchain_ready ? '' : '<em>Add ETHERSCAN_API_KEY to unlock on-chain burn tracking</em>']
-        .filter(Boolean).join(' · ')}</div>`;
+        .filter(Boolean).join(' · ')}</div>
+    ${_renderGtkManual()}`;
+}
+
+/* ─── GoMining manual weekly tokenomics (app-only figures, this device) ─────── */
+const GTK_MANUAL_KEY = 'gtk_manual_v1';
+const _gtkManual = {
+  read()  { try { return JSON.parse(localStorage.getItem(GTK_MANUAL_KEY) || '[]'); } catch (_) { return []; } },
+  write(l){ try { localStorage.setItem(GTK_MANUAL_KEY, JSON.stringify(l)); } catch (_) {} },
+};
+
+function _renderGtkManual() {
+  const log = _gtkManual.read();
+  const last = log[log.length - 1];
+  const prev = log[log.length - 2];
+  const arrow = (cur, pv, goodUp) => {
+    if (pv == null || cur == null) return '';
+    const up = cur > pv, same = cur === pv;
+    const good = same ? '' : (up === goodUp ? 'bull' : 'bear');
+    return ` <span class="${good}">${same ? '' : up ? '↑' : '↓'}</span>`;
+  };
+  let latestHtml = '';
+  if (last) {
+    // mint ratio <1 = deflationary (good); locked/tvl/apr/maintained rising = good
+    latestHtml = `
+      <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-top:6px">
+        <div class="etf-stat"><span class="etf-stat-lbl">Mint ratio</span>
+          <span class="etf-stat-val ${last.mint != null && last.mint < 1 ? 'bull' : last.mint > 1 ? 'bear' : ''}">×${last.mint ?? '—'}${arrow(last.mint, prev?.mint, false)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">Total locked</span>
+          <span class="etf-stat-val">${last.locked != null ? last.locked + 'M' : '—'}${arrow(last.locked, prev?.locked, true)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">TVL (locked %)</span>
+          <span class="etf-stat-val">${last.tvl != null ? last.tvl + '%' : '—'}${arrow(last.tvl, prev?.tvl, true)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">Maintained %</span>
+          <span class="etf-stat-val">${last.maint != null ? last.maint + '%' : '—'}${arrow(last.maint, prev?.maint, true)}</span></div>
+        <div class="etf-stat"><span class="etf-stat-lbl">veGOMINING APR</span>
+          <span class="etf-stat-val">${last.apr != null ? last.apr + '%' : '—'}${arrow(last.apr, prev?.apr, true)}</span></div>
+      </div>
+      <div class="macro-reason" style="margin-top:4px">Logged ${last.date}${prev ? ` · vs ${prev.date}` : ''} · from GoMining app (not on-chain)</div>`;
+  }
+  return `
+    <details class="gtk-manual">
+      <summary>📝 Log weekly tokenomics (mint ratio · locked · TVL · APR — app-only)</summary>
+      <div class="gtk-manual-form">
+        <label>Mint ratio ×<input id="gtkMint" type="number" step="0.001" placeholder="0.979"></label>
+        <label>Total locked (M)<input id="gtkLocked" type="number" step="0.1" placeholder="245.9"></label>
+        <label>TVL locked %<input id="gtkTvl" type="number" step="0.1" placeholder="61"></label>
+        <label>Maintained %<input id="gtkMaint" type="number" step="0.1" placeholder="46.18"></label>
+        <label>veGOMINING APR %<input id="gtkApr" type="number" step="0.1" placeholder="21.42"></label>
+        <button onclick="saveGtkManual()">Save this week</button>
+      </div>
+    </details>
+    ${latestHtml}`;
+}
+
+function saveGtkManual() {
+  const num = id => { const v = parseFloat(document.getElementById(id)?.value); return isFinite(v) ? v : null; };
+  const entry = { date: new Date().toISOString().slice(0, 10),
+    mint: num('gtkMint'), locked: num('gtkLocked'), tvl: num('gtkTvl'),
+    maint: num('gtkMaint'), apr: num('gtkApr') };
+  if (entry.mint == null && entry.locked == null && entry.tvl == null) {
+    alert('Enter at least the mint ratio, locked, or TVL from the GoMining app.');
+    return;
+  }
+  const log = _gtkManual.read();
+  // one entry per day — replace if same date
+  const i = log.findIndex(e => e.date === entry.date);
+  if (i >= 0) log[i] = entry; else log.push(entry);
+  while (log.length > 60) log.shift();
+  _gtkManual.write(log);
+  renderGtk(S.analysis?.gomining_tokenomics, S.analysis?.symbol);   // re-render
 }
 
 /* ─── Bittensor / TAO ecosystem ───────────────────────────────────────────── */

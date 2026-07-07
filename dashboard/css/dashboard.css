@@ -1724,3 +1724,19 @@ a:hover { color: var(--gold2); }
                background: rgba(148,163,184,.1); color: var(--muted2); }
 .oi-rotation.bull { color: var(--bull); background: rgba(16,185,129,.12); }
 .oi-rotation.bear { color: var(--bear); background: rgba(239,68,68,.12); }
+
+/* GoMining manual weekly tokenomics form */
+.gtk-manual { margin-top: 10px; }
+.gtk-manual summary { cursor: pointer; font-size: .68rem; font-weight: 600;
+                      color: var(--muted2); padding: 6px 0; }
+.gtk-manual summary:hover { color: var(--text); }
+.gtk-manual-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; align-items: flex-end; }
+.gtk-manual-form label { display: flex; flex-direction: column; gap: 2px;
+                         font-size: .58rem; color: var(--muted); }
+.gtk-manual-form input { width: 90px; font-size: .72rem; padding: 4px 6px;
+                         background: var(--bg2); color: var(--text);
+                         border: 1px solid var(--border); border-radius: 6px; }
+.gtk-manual-form button { font-size: .66rem; font-weight: 600; padding: 6px 14px;
+                          background: rgba(139,92,246,.15); color: #a78bfa;
+                          border: 1px solid rgba(139,92,246,.35); border-radius: 6px; cursor: pointer; }
+.gtk-manual-form button:hover { background: rgba(139,92,246,.25); }
