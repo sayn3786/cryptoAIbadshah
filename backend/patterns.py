@@ -370,34 +370,35 @@ def detect_choch(candles: List[Dict], window: int = 3) -> Dict:
 
     # Need at least 2 pivot highs and 2 pivot lows to establish trend
     # Bearish CHoCH: was uptrend (HH, HL) → price breaks below last swing low
+    # Evaluate both; in the rare structure where last_high < last_low a single
+    # close can satisfy both — report the break of the more RECENT pivot rather
+    # than always preferring bearish by check order.
+    bear_choch = bull_choch = None
     if len(pl) >= 2:
-        last_low  = pl[-1]
-        prev_low  = pl[-2]
-        if last_low["price"] > prev_low["price"]:  # higher lows = uptrend
-            if cur_close < last_low["price"]:
-                candles_ago = len(candles) - 1 - last_low["index"]
-                return {
-                    "signal":     "bearish",
-                    "level":      round(last_low["price"], 8),
-                    "candles_ago": candles_ago,
-                    "label":      f"Broke below swing low ${last_low['price']:,.4f}",
-                }
-
-    # Bullish CHoCH: was downtrend (LH, LL) → price breaks above last swing high
+        last_low, prev_low = pl[-1], pl[-2]
+        if last_low["price"] > prev_low["price"] and cur_close < last_low["price"]:
+            bear_choch = {
+                "signal": "bearish", "level": round(last_low["price"], 8),
+                "candles_ago": len(candles) - 1 - last_low["index"],
+                "_idx": last_low["index"],
+                "label": f"Broke below swing low ${last_low['price']:,.4f}",
+            }
     if len(ph) >= 2:
-        last_high = ph[-1]
-        prev_high = ph[-2]
-        if last_high["price"] < prev_high["price"]:  # lower highs = downtrend
-            if cur_close > last_high["price"]:
-                candles_ago = len(candles) - 1 - last_high["index"]
-                return {
-                    "signal":     "bullish",
-                    "level":      round(last_high["price"], 8),
-                    "candles_ago": candles_ago,
-                    "label":      f"Broke above swing high ${last_high['price']:,.4f}",
-                }
+        last_high, prev_high = ph[-1], ph[-2]
+        if last_high["price"] < prev_high["price"] and cur_close > last_high["price"]:
+            bull_choch = {
+                "signal": "bullish", "level": round(last_high["price"], 8),
+                "candles_ago": len(candles) - 1 - last_high["index"],
+                "_idx": last_high["index"],
+                "label": f"Broke above swing high ${last_high['price']:,.4f}",
+            }
 
-    return {"signal": "none"}
+    both = [c for c in (bear_choch, bull_choch) if c]
+    if not both:
+        return {"signal": "none"}
+    chosen = max(both, key=lambda c: c["_idx"])   # more recent pivot break wins
+    chosen.pop("_idx", None)
+    return chosen
 
 
 def detect_liquidity_grab(candles: List[Dict], window: int = 3, lookback: int = 5) -> Dict:
@@ -651,41 +652,45 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
     eql = eq.get("eql")
     eqh = eq.get("eqh")
 
-    # ── Bullish pump setup ─────────────────────────────────────────────────────
+    # Evaluate BOTH pump (EQL+bear FVG below) and dump (EQH+bull FVG above)
+    # setups — in an accumulation/distribution box both can co-exist (Equal Lows
+    # at the bottom, Equal Highs at the top). Report whichever EQ level is more
+    # RECENT (smaller candles_ago); tie → higher strength. Checking bullish-first
+    # and returning early would mask a fresher/stronger bearish setup.
+    bull_setup = bear_setup = None
     if eql and bear_fvgs:
-        # EQL should be at or near the bottom of the range
         eql_near_low = abs(eql["price"] - acc["low"]) / acc["mid"] < 0.02
-        fvg = bear_fvgs[0]
         if eql_near_low or eql["touches"] >= 3:
             strength = min(100, 55
                            + (eql["touches"] - 2) * 10    # more touches = more liquidity
                            + (3 - min(3, eql["candles_ago"])) * 5
                            + (15 if eql_near_low else 0))
-            return {
+            bull_setup = {
                 "signal":   "bullish",
                 "label":    f"Acc + EQL ({eql['touches']} touches @ ${eql['price']:,.4f}) + FVG → PUMP setup",
-                "strength": strength,
-                "range":    acc,
-                "eq_level": eql,
-                "fvg":      fvg,
+                "strength": strength, "range": acc, "eq_level": eql,
+                "fvg": bear_fvgs[0], "_ago": eql["candles_ago"],
             }
-
-    # ── Bearish dump setup ─────────────────────────────────────────────────────
     if eqh and bull_fvgs:
         eqh_near_high = abs(eqh["price"] - acc["high"]) / acc["mid"] < 0.02
-        fvg = bull_fvgs[0]
         if eqh_near_high or eqh["touches"] >= 3:
             strength = min(100, 55
                            + (eqh["touches"] - 2) * 10
                            + (3 - min(3, eqh["candles_ago"])) * 5
                            + (15 if eqh_near_high else 0))
-            return {
+            bear_setup = {
                 "signal":   "bearish",
                 "label":    f"Acc + EQH ({eqh['touches']} touches @ ${eqh['price']:,.4f}) + FVG → DUMP setup",
-                "strength": strength,
-                "range":    acc,
-                "eq_level": eqh,
-                "fvg":      fvg,
+                "strength": strength, "range": acc, "eq_level": eqh,
+                "fvg": bull_fvgs[0], "_ago": eqh["candles_ago"],
             }
 
-    return result_base
+    both = [s for s in (bull_setup, bear_setup) if s]
+    if not both:
+        return result_base
+    # Most recent EQ level wins (smaller candles_ago); tie → stronger.
+    chosen = min(both, key=lambda s: (s["_ago"], -s["strength"]))
+    if bull_setup and bear_setup:
+        chosen["label"] += " (opposite setup also present — range, wait for break)"
+    chosen.pop("_ago", None)
+    return chosen
