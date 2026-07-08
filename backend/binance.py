@@ -83,6 +83,9 @@ CG_IDS = {
     "QNTUSDT":    "quant-network",
     "INJUSDT":    "injective-protocol",
     "FETUSDT":    "fetch-ai",
+    "ICPUSDT":    "internet-computer",
+    "ENJUSDT":    "enjincoin",
+    "TNSRUSDT":   "tensor",
     "XAUTUSDT":   "tether-gold",
     "PAXGUSDT":   "pax-gold",
     "GOMININGUSDT": "gomining-2",   # GoMining platform token — CoinGecko primary price
@@ -113,6 +116,8 @@ KRAKEN_PAIRS = {
     "QNTUSDT":    "QNTUSD",
     "INJUSDT":    "INJUSD",
     "FETUSDT":    "FETUSD",
+    "ICPUSDT":    "ICPUSD",
+    "TNSRUSDT":   "TNSRUSD",
     "XAUTUSDT":   "XAUTUSD",
     "PAXGUSDT":   "PAXGUSD",
 }
@@ -145,6 +150,9 @@ GATE_PAIRS = {
     "QNTUSDT":    "QNT_USDT",
     "INJUSDT":    "INJ_USDT",
     "FETUSDT":    "FET_USDT",
+    "ICPUSDT":    "ICP_USDT",
+    "ENJUSDT":    "ENJ_USDT",
+    "TNSRUSDT":   "TNSR_USDT",
     "XAUTUSDT":   "XAUT_USDT",
     "PAXGUSDT":   "PAXG_USDT",
 }
@@ -175,6 +183,9 @@ OKX_PAIRS = {
     "QNTUSDT":    "QNT-USDT",
     "INJUSDT":    "INJ-USDT",
     "FETUSDT":    "FET-USDT",
+    "ICPUSDT":    "ICP-USDT",
+    "ENJUSDT":    "ENJ-USDT",
+    "TNSRUSDT":   "TNSR-USDT",
     "XAUTUSDT":   "XAUT-USDT",
     "PAXGUSDT":   "PAXG-USDT",
 }
@@ -206,6 +217,9 @@ BYBIT_PAIRS = {
     "QNTUSDT":    "QNTUSDT",
     "INJUSDT":    "INJUSDT",
     "FETUSDT":    "FETUSDT",
+    "ICPUSDT":    "ICPUSDT",
+    "ENJUSDT":    "ENJUSDT",
+    "TNSRUSDT":   "TNSRUSDT",
     "XAUTUSDT":   "XAUTUSDT",
     "PAXGUSDT":   "PAXGUSDT",
 }
@@ -229,6 +243,9 @@ KUCOIN_PAIRS = {
     "RENDERUSDT": "RENDER-USDT",
     "BNBUSDT":    "BNB-USDT",
     "BLURUSDT":   "BLUR-USDT",
+    "ICPUSDT":    "ICP-USDT",
+    "ENJUSDT":    "ENJ-USDT",
+    "TNSRUSDT":   "TNSR-USDT",
     "XAUTUSDT":   "XAUT-USDT",
     "PAXGUSDT":     "PAXG-USDT",
     "GOMININGUSDT": "GOMINING-USDT",
@@ -245,6 +262,7 @@ MEXC_PAIRS = {
     "AAVEUSDT": "AAVEUSDT", "XMRUSDT": "XMRUSDT", "INJUSDT": "INJUSDT",
     "QNTUSDT": "QNTUSDT", "ALGOUSDT": "ALGOUSDT", "FETUSDT": "FETUSDT",
     "ZECUSDT": "ZECUSDT", "BLURUSDT": "BLURUSDT",
+    "ICPUSDT": "ICPUSDT", "ENJUSDT": "ENJUSDT", "TNSRUSDT": "TNSRUSDT",
     "XAUTUSDT": "XAUTUSDT", "PAXGUSDT": "PAXGUSDT",
 }
 

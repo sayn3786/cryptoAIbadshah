@@ -45,6 +45,9 @@ CG_SYMBOLS = {
     "INJUSDT":    "INJ",
     "FETUSDT":    "FET",
     "QNTUSDT":    "QNT",
+    "ICPUSDT":    "ICP",
+    "ENJUSDT":    "ENJ",
+    "TNSRUSDT":   "TNSR",
 }
 
 

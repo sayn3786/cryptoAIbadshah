@@ -33,6 +33,9 @@ COIN_ALIASES = {
     "RENDERUSDT": ["RENDER", "Render", "render", "Render Network"],
     "BNBUSDT":    ["BNB", "Binance Coin", "Binance coin"],
     "BLURUSDT":   ["BLUR", "Blur", "blur", "Blur NFT"],
+    "ICPUSDT":    ["ICP", "Internet Computer", "internet computer", "Dfinity"],
+    "ENJUSDT":    ["ENJ", "Enjin", "enjin", "Enjin Coin"],
+    "TNSRUSDT":   ["TNSR", "Tensor", "tensor", "Tensor NFT"],
 }
 
 # Keywords that shift a neutral headline toward bullish or bearish
@@ -115,6 +118,7 @@ LC_SYMBOLS = {
     "XMRUSDT": "xmr",  "XRPUSDT": "xrp",  "GRAMUSDT": "gram",
     "SOLUSDT": "sol",   "AAVEUSDT": "aave", "RENDERUSDT": "render",
     "BNBUSDT": "bnb",   "BLURUSDT": "blur",
+    "ICPUSDT": "icp",   "ENJUSDT": "enj",   "TNSRUSDT": "tnsr",
 }
 
 

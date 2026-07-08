@@ -75,6 +75,9 @@ SYMBOLS = {
     "QNT":    "QNTUSDT",
     "INJ":    "INJUSDT",
     "FET":    "FETUSDT",
+    "ICP":    "ICPUSDT",
+    "ENJ":    "ENJUSDT",
+    "TNSR":   "TNSRUSDT",   # Tensor (Solana NFT marketplace token) — "$TENSOR"
     # Tokenised commodities — low BTC correlation, move on macro/USD/inflation
     "XAUT":   "XAUTUSDT",   # Tether Gold  (1 troy oz)
     "PAXG":   "PAXGUSDT",   # PAX Gold      (1 troy oz)
@@ -94,6 +97,10 @@ _BTC_CORR = {
     "XRP": 0.4,
     # Moderate decouplers — own L1 ecosystems but still react to BTC risk-off
     "SOL": 0.7, "GRAM": 0.6, "HYPE": 0.6, "KAS": 0.5,
+    # ICP: own L1 ecosystem/narrative; ENJ: gaming/NFT demand driver
+    "ICP": 0.6, "ENJ": 0.7,
+    # TNSR: Solana NFT-marketplace token — high beta to SOL/BTC risk
+    "TNSR": 0.8,
     # Tokenised gold — moves on macro/USD/inflation, not BTC cycles
     "XAUT": 0.1, "PAXG": 0.1,
     "GOMINING": 0.5,  # Mining platform token — moderately correlated with BTC mining profitability
