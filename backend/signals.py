@@ -33,7 +33,7 @@ def _mcap_tier(market_cap):
     return "micro", "Micro Cap (<$200M)", 4.0
 
 
-def _reversal_radar(analysis: Dict) -> Dict:
+def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
     """Exhaustion / reversal detector — flips the question from "go with the
     trend?" to "is this trend running out of fuel?".
 
@@ -42,6 +42,12 @@ def _reversal_radar(analysis: Dict) -> Dict:
     about WHEN a healthy uptrend is exhausted and about to top, or when a
     downtrend is washed-out and about to bottom. This module answers exactly
     that, independent of the trade direction.
+
+    cycle_ok gates the daily+ on-chain checks (F&G, SOPR, Puell, MVRV, realized
+    price, cycle-top cluster). On low timeframes (1H/2H) these can't top or
+    bottom an intraday move, so the caller passes cycle_ok=False and only the
+    intraday-relevant checks (RSI, divergence, funding, Bollinger, Stoch RSI,
+    volume, L/S, CVD, EMA50 stretch) count toward the radar.
 
     Method: establish trend context (EMA50/200 + SuperTrend), then count how
     many independent contrarian conditions are present:
@@ -128,12 +134,12 @@ def _reversal_radar(analysis: Dict) -> Dict:
               "RSI overbought", f"RSI {rsi} ≥ 70 — buyers stretched" if rsi else "")
         check(True, rsi_div == "bearish",
               "Bearish RSI divergence", "price higher high, RSI lower high — momentum not confirming")
-        check(fg_val not in (None, 0), fg_val is not None and fg_val >= 75,
+        check(cycle_ok and fg_val not in (None, 0), fg_val is not None and fg_val >= 75,
               "Extreme greed", f"Fear & Greed {fg_val} — crowd euphoric, historically near tops")
         check(fr_val is not None, fr_val is not None and fr_val >= 0.03,
-              "Funding overheated", f"funding {fr_val:.3f}% — longs paying up, crowded long / squeeze fuel")
+              "Funding overheated", (f"funding {fr_val:.3f}% — longs paying up, crowded long / squeeze fuel" if fr_val is not None else ""))
         check(bb_pctb is not None, bb_pctb is not None and bb_pctb >= 0.95,
-              "Riding upper Bollinger", f"%B {bb_pctb:.2f} — price pinned to upper band, mean-reversion pressure")
+              "Riding upper Bollinger", (f"%B {bb_pctb:.2f} — price pinned to upper band, mean-reversion pressure" if bb_pctb is not None else ""))
         check(srsi_sig is not None, srsi_sig in ("bear_cross_overbought", "overbought"),
               "Stoch RSI rolling over", "fast momentum topping out from overbought")
         check(vol_sig is not None, vol_sig == "bearish" and vol_ratio >= 1.5,
@@ -142,16 +148,16 @@ def _reversal_radar(analysis: Dict) -> Dict:
               "Crowd extremely long", f"L/S {ls_ratio} — one-sided positioning, fuel for a long flush")
         check(bool(cvd_type), "futures_led_up" in cvd_type or "futures_dominated_up" in cvd_type,
               "Rally is leverage-only", "futures leading spot — no real buyers behind the move, prone to fade")
-        check(mining != {}, sopr_z == "euphoria",
+        check(cycle_ok and mining != {}, sopr_z == "euphoria",
               "SOPR euphoria", "on-chain holders taking profit aggressively — distribution")
-        check(mining != {}, puell_z == "extreme",
+        check(cycle_ok and mining != {}, puell_z == "extreme",
               "Puell extreme", "miner revenue at cycle-top levels — heavy sell incentive")
-        check(mining != {}, mvrv_z in ("overbought", "extreme_top"),
+        check(cycle_ok and mining != {}, mvrv_z in ("overbought", "extreme_top"),
               "MVRV overbought", "unrealized profit stretched — late-cycle valuation")
-        check(mining != {}, bool(pi_fired) or top_heat >= 4,
+        check(cycle_ok and mining != {}, bool(pi_fired) or top_heat >= 4,
               "Cycle-top cluster", "Pi Cycle / Mayer / MVRV top metrics clustered")
         check(stretch_pct is not None, stretch_pct is not None and stretch_pct >= 12,
-              "Stretched above EMA50", f"price {stretch_pct:+.1f}% over EMA50 — extended, mean-reversion pull")
+              "Stretched above EMA50", (f"price {stretch_pct:+.1f}% over EMA50 — extended, mean-reversion pull" if stretch_pct is not None else ""))
 
     elif mode == "bottom":
         # ── BOTTOMING checklist (downtrend reversal) ───────────────────────────
@@ -159,12 +165,12 @@ def _reversal_radar(analysis: Dict) -> Dict:
               "RSI oversold", f"RSI {rsi} ≤ 30 — sellers exhausted" if rsi else "")
         check(True, rsi_div == "bullish",
               "Bullish RSI divergence", "price lower low, RSI higher low — selling losing force")
-        check(fg_val not in (None, 0), fg_val is not None and fg_val <= 25,
+        check(cycle_ok and fg_val not in (None, 0), fg_val is not None and fg_val <= 25,
               "Extreme fear", f"Fear & Greed {fg_val} — capitulation sentiment, historically near bottoms")
         check(fr_val is not None, fr_val is not None and fr_val <= -0.03,
-              "Funding deeply negative", f"funding {fr_val:.3f}% — shorts paying up, crowded short / squeeze fuel")
+              "Funding deeply negative", (f"funding {fr_val:.3f}% — shorts paying up, crowded short / squeeze fuel" if fr_val is not None else ""))
         check(bb_pctb is not None, bb_pctb is not None and bb_pctb <= 0.05,
-              "Riding lower Bollinger", f"%B {bb_pctb:.2f} — price pinned to lower band, bounce pressure building")
+              "Riding lower Bollinger", (f"%B {bb_pctb:.2f} — price pinned to lower band, bounce pressure building" if bb_pctb is not None else ""))
         check(srsi_sig is not None, srsi_sig in ("bull_cross_oversold", "oversold"),
               "Stoch RSI turning up", "fast momentum bottoming out from oversold")
         check(vol_sig is not None, vol_ratio >= 2.5,
@@ -173,16 +179,16 @@ def _reversal_radar(analysis: Dict) -> Dict:
               "Crowd extremely short", f"L/S {ls_ratio} — one-sided shorts, fuel for a short squeeze")
         check(bool(cvd_type), "futures_led_down" in cvd_type or "futures_dominated_down" in cvd_type,
               "Selloff is leverage-only", "futures leading spot down — real holders not selling, squeeze risk")
-        check(mining != {}, sopr_z == "capitulation",
+        check(cycle_ok and mining != {}, sopr_z == "capitulation",
               "SOPR capitulation", "on-chain holders selling at a loss — panic bottom behaviour")
-        check(mining != {}, puell_z == "deep_undervalued",
+        check(cycle_ok and mining != {}, puell_z == "deep_undervalued",
               "Puell capitulation", "miner revenue at historical bottom zone")
-        check(mining != {}, mvrv_z == "oversold",
+        check(cycle_ok and mining != {}, mvrv_z == "oversold",
               "MVRV oversold", "holders underwater — historically strong accumulation zone")
-        check(mining != {}, ptr is not None and ptr < 1.0,
+        check(cycle_ok and mining != {}, ptr is not None and ptr < 1.0,
               "Price below realized", "average holder underwater — deep-value bottom signal")
         check(stretch_pct is not None, stretch_pct is not None and stretch_pct <= -12,
-              "Stretched below EMA50", f"price {stretch_pct:+.1f}% under EMA50 — oversold, mean-reversion pull")
+              "Stretched below EMA50", (f"price {stretch_pct:+.1f}% under EMA50 — oversold, mean-reversion pull" if stretch_pct is not None else ""))
 
     count = len(signals)
     pct = (count / applicable) if applicable else 0.0
@@ -245,6 +251,24 @@ def generate_signal(analysis: Dict) -> Dict:
         "1D": 1.00, "1W": 1.00, "2W": 1.00, "3W": 1.00,  "1M": 1.00,
     }
     tf_macro_w = _TF_MACRO_W.get(timeframe, 1.0)
+
+    # ── Timeframe weight for CYCLE / on-chain / structural context ─────────────
+    # ETF flows, macro releases, BTC on-chain (SOPR/Puell/MVRV/Hash Ribbon/
+    # Realized/Halving), cycle-top cluster, market regime, GoMining & TAO
+    # tokenomics all describe multi-day → multi-month behaviour. They cannot
+    # top or bottom a 1H/2H candle, so on low timeframes they only clutter and
+    # mislead the intraday read. Weighted even lower than macro (down to 15% on
+    # 1H) — kept as a faint tilt, not silenced, but never an intraday trigger.
+    _TF_CYCLE_W = {
+        "1H": 0.15, "2H": 0.25, "4H": 0.45, "8H": 0.65, "12H": 0.82,
+        "1D": 1.00, "1W": 1.00, "2W": 1.00, "3W": 1.00,  "1M": 1.00,
+    }
+    tf_cycle_w = _TF_CYCLE_W.get(timeframe, 1.0)
+    _cyc_note = (f" 🗓️[daily+ context ×{tf_cycle_w:.0%} on {timeframe}]"
+                 if tf_cycle_w < 1.0 else "")
+    def _cyc(pts):
+        """Scale a cycle/on-chain point value for the current timeframe."""
+        return int(round(pts * tf_cycle_w))
 
     # ── RSI level (contrarian — extreme readings only) ───────────────────────
     # Mid-range RSI (45–65) is genuinely ambiguous: the same reading occurs both
@@ -777,6 +801,7 @@ def generate_signal(analysis: Dict) -> Dict:
     etf_trend = etf.get("trend", "neutral") or "neutral"
     etf_vs_w  = etf.get("vs_week", "normal") or "normal"
     if etf_pts and etf_today:
+        etf_pts = _cyc(etf_pts)
         score += etf_pts; g['flow'] += etf_pts
         sym_tag = etf.get("symbol", "ETF")
         sign    = "+" if etf_today > 0 else ""
@@ -784,11 +809,11 @@ def generate_signal(analysis: Dict) -> Dict:
                   " — LOWEST in 7d"  if etf_vs_w == "lowest"  else ""
         if etf_trend == "inflow":
             bull_reasons.append(
-                f"{sym_tag} spot ETF: {sign}${abs(etf_today):.0f}M today (institutional buying){hi_tag}"
+                f"{sym_tag} spot ETF: {sign}${abs(etf_today):.0f}M today (institutional buying){hi_tag}{_cyc_note}"
             )
         else:
             bear_reasons.append(
-                f"{sym_tag} spot ETF: ${etf_today:.0f}M today (institutional selling){hi_tag}"
+                f"{sym_tag} spot ETF: ${etf_today:.0f}M today (institutional selling){hi_tag}{_cyc_note}"
             )
 
     # ── Macro backdrop (Fed / inflation / jobs) ───────────────────────────────
@@ -802,7 +827,7 @@ def generate_signal(analysis: Dict) -> Dict:
     macro_events  = macro.get("events") or []
     macro_net = macro_summary.get("net_pts", 0) or 0
     if macro_events and macro_net:
-        macro_pts = max(-18, min(18, int(round(macro_net * 0.4))))
+        macro_pts = _cyc(max(-18, min(18, int(round(macro_net * 0.4)))))
         if macro_pts:
             score += macro_pts; g['sentiment'] += macro_pts
             # Name the biggest drivers (up to 3 by absolute impact points)
@@ -814,11 +839,11 @@ def generate_signal(analysis: Dict) -> Dict:
             bias  = macro_summary.get("bias", "mixed")
             if macro_pts > 0:
                 bull_reasons.append(
-                    f"Macro tailwind ({bias.upper()}): {names} — adds strength until next release"
+                    f"Macro tailwind ({bias.upper()}): {names} — adds strength until next release{_cyc_note}"
                 )
             else:
                 bear_reasons.append(
-                    f"Macro headwind ({bias.upper()}): {names} — drops strength until next release"
+                    f"Macro headwind ({bias.upper()}): {names} — drops strength until next release{_cyc_note}"
                 )
 
     # ── Traditional markets backdrop (DXY / SPX / 10Y) ────────────────────────
@@ -827,53 +852,53 @@ def generate_signal(analysis: Dict) -> Dict:
     mkts = analysis.get("markets") or {}
     mkt_net = mkts.get("net_pts", 0) or 0
     if mkt_net:
-        mkt_pts = max(-8, min(8, mkt_net))
+        mkt_pts = _cyc(max(-8, min(8, mkt_net)))
         score += mkt_pts; g['sentiment'] += mkt_pts
         drivers = [m for m in (mkts.get("markets") or []) if m.get("impact") in ("bullish", "bearish")]
         names = ", ".join(f"{m['label']} {'↑' if m['trend']=='up' else '↓'}" for m in drivers[:3])
         if mkt_pts > 0:
-            bull_reasons.append(f"Traditional markets supportive: {names}")
+            bull_reasons.append(f"Traditional markets supportive: {names}{_cyc_note}")
         else:
-            bear_reasons.append(f"Traditional markets headwind: {names}")
+            bear_reasons.append(f"Traditional markets headwind: {names}{_cyc_note}")
 
     # ── Market regime (BTC dominance / stablecoin liquidity / alt rotation) ──
     reg = analysis.get("regime") or {}
     sym_l = analysis.get("symbol", "")
     if reg:
         # Alt tilt: only for non-BTC symbols — alt longs fight a BTC-led tape
-        alt_tilt = reg.get("alt_tilt_pts", 0) or 0
+        alt_tilt = _cyc(reg.get("alt_tilt_pts", 0) or 0)
         if alt_tilt and sym_l != "BTC":
             score += alt_tilt; g['sentiment'] += alt_tilt
             note = reg.get("regime_note", "")
             spread = reg.get("alt_spread_7d")
             spread_s = f" (alts {spread:+.1f}pp vs BTC 7d)" if spread is not None else ""
             if alt_tilt > 0:
-                bull_reasons.append(f"Altseason regime — {note}{spread_s}")
+                bull_reasons.append(f"Altseason regime — {note}{spread_s}{_cyc_note}")
             else:
-                bear_reasons.append(f"BTC-led regime — {note}{spread_s}")
+                bear_reasons.append(f"BTC-led regime — {note}{spread_s}{_cyc_note}")
         # Liquidity tilt: stablecoin supply expanding/contracting affects everything
-        liq_tilt = reg.get("liq_tilt_pts", 0) or 0
+        liq_tilt = _cyc(reg.get("liq_tilt_pts", 0) or 0)
         if liq_tilt:
             score += liq_tilt; g['sentiment'] += liq_tilt
-            (bull_reasons if liq_tilt > 0 else bear_reasons).append(reg.get("liq_note") or "")
+            (bull_reasons if liq_tilt > 0 else bear_reasons).append((reg.get("liq_note") or "") + _cyc_note)
         # BTC-vs-ALT open-interest rotation: ALT OI > BTC OI = leverage crowded
         # into alts (exit window); ALT OI well below BTC OI = room for alts to
         # run. Applies to alt positions only — BTC itself is the reference leg.
         oi_reg = reg.get("oi") or {}
-        oi_tilt = oi_reg.get("oi_tilt_pts", 0) or 0
+        oi_tilt = _cyc(oi_reg.get("oi_tilt_pts", 0) or 0)
         if oi_tilt and sym_l != "BTC":
             score += oi_tilt; g['sentiment'] += oi_tilt
             (bull_reasons if oi_tilt > 0 else bear_reasons).append(
-                f"⚖️ OI rotation: {oi_reg.get('note', '')} ({oi_tilt:+d})")
+                f"⚖️ OI rotation: {oi_reg.get('note', '')} ({oi_tilt:+d}){_cyc_note}")
 
     # ── GOMINING tokenomics (burn vs mint supply dynamics) ────────────────────
     # GOMINING burns all tokens spent on miner maintenance weekly; supply
     # contraction = real utility demand. Only fires on the GOMINING view.
     gtk = analysis.get("gomining_tokenomics") or {}
-    gtk_pts = gtk.get("signal_pts", 0) or 0
+    gtk_pts = _cyc(gtk.get("signal_pts", 0) or 0)
     if gtk_pts and gtk.get("note"):
         score += gtk_pts; g['flow'] += gtk_pts
-        (bull_reasons if gtk_pts > 0 else bear_reasons).append(f"🔥 GOMINING tokenomics: {gtk['note']}")
+        (bull_reasons if gtk_pts > 0 else bear_reasons).append(f"🔥 GOMINING tokenomics: {gtk['note']}{_cyc_note}")
     burns_g = gtk.get("burns") or {}
     if burns_g.get("burn_7d"):
         bull_reasons.append(
@@ -891,7 +916,7 @@ def generate_signal(analysis: Dict) -> Dict:
     # Each note lands as its own confluence line so the user sees exactly
     # which ecosystem parameter is adding or dropping strength.
     tao_eco = analysis.get("tao_ecosystem") or {}
-    tao_pts = tao_eco.get("signal_pts", 0) or 0
+    tao_pts = _cyc(tao_eco.get("signal_pts", 0) or 0)
     tao_notes = tao_eco.get("notes") or []
     if tao_pts and tao_notes:
         score += tao_pts; g['flow'] += tao_pts
@@ -901,9 +926,9 @@ def generate_signal(analysis: Dict) -> Dict:
             _imp = _n.get("impact")
             _pts_tag = f" ({_n['pts']:+d})" if _n.get("pts") else ""
             if _imp == "bullish":
-                bull_reasons.append(f"🧠 {_n['text']}{_pts_tag}")
+                bull_reasons.append(f"🧠 {_n['text']}{_pts_tag}{_cyc_note}")
             elif _imp == "bearish":
-                bear_reasons.append(f"🧠 {_n['text']}{_pts_tag}")
+                bear_reasons.append(f"🧠 {_n['text']}{_pts_tag}{_cyc_note}")
             # info notes stay on the ecosystem card only
 
     # ── Long / Short Ratio ────────────────────────────────────────────────────
@@ -1204,6 +1229,12 @@ def generate_signal(analysis: Dict) -> Dict:
     # Group mapping: Hash Ribbon + Profitability + Difficulty → g['flow'] (on-chain network signals)
     #                Halving phase → g['sentiment'] (macro cycle context)
     mining = analysis.get("btc_mining") or {}
+    # Snapshot before the on-chain/cycle block so its whole net contribution can
+    # be down-weighted on low timeframes (these are all daily+ cycle signals).
+    _mine_score0 = score
+    _mine_g0     = dict(g)
+    _mine_bull0  = len(bull_reasons)
+    _mine_bear0  = len(bear_reasons)
     if mining:
         ribbon = mining.get("hash_ribbon", "neutral")
         if ribbon == "buy":           # fresh 30d/60d bullish cross
@@ -1301,6 +1332,19 @@ def generate_signal(analysis: Dict) -> Dict:
             elif ptr > 3.5:     # very stretched above realized — euphoria
                 score -= 8;   g['flow'] -= 8
                 bear_reasons.append(f"▼ BTC {ptr:.1f}× above Realized Price (${rp:,.0f}) — stretched valuation, distribution risk")
+
+    # Down-weight the entire on-chain/cycle block on low timeframes. Rescale the
+    # net delta this block added to score and each group so the reduced weight
+    # also flows through the confluence engine below (cycle flow shouldn't drive
+    # 1H confluence). Reasons are tagged so the user sees they're daily+ context.
+    if tf_cycle_w < 1.0:
+        score = _mine_score0 + int(round((score - _mine_score0) * tf_cycle_w))
+        for _k in g:
+            g[_k] = _mine_g0[_k] + int(round((g[_k] - _mine_g0[_k]) * tf_cycle_w))
+        for _i in range(_mine_bull0, len(bull_reasons)):
+            bull_reasons[_i] += _cyc_note
+        for _i in range(_mine_bear0, len(bear_reasons)):
+            bear_reasons[_i] += _cyc_note
 
     # ── Confluence Engine ─────────────────────────────────────────────────────────
     # Analyzes cross-group relationships to dynamically adjust the final score.
@@ -1435,13 +1479,13 @@ def generate_signal(analysis: Dict) -> Dict:
         prof_local  = mining.get("profitability_ratio")
         phase_local = mining.get("halving_phase")
         if prof_local is not None and prof_local >= 2.0 and phase_local in ("mid", "early") and score > 0:
-            pts = 10
+            pts = _cyc(10)
             combo_pts += pts
-            bull_reasons.append(f"🔗 Miner Profitability+Halving Phase (BTC) — highly profitable ({prof_local:.1f}×) in {phase_local} post-halving phase = structural accumulation conditions")
+            bull_reasons.append(f"🔗 Miner Profitability+Halving Phase (BTC) — highly profitable ({prof_local:.1f}×) in {phase_local} post-halving phase = structural accumulation conditions{_cyc_note}")
         elif prof_local is not None and prof_local < 1.05 and phase_local == "late" and score < 0:
-            pts = 10
+            pts = _cyc(10)
             combo_pts -= pts
-            bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk")
+            bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk{_cyc_note}")
 
     # ── BTC cycle-top zone (mirror of the realized-price floor) ──────────────────
     # Pi Cycle Top (111DMA vs 2×350DMA), Mayer Multiple (price/200DMA) and the
@@ -1451,10 +1495,11 @@ def generate_signal(analysis: Dict) -> Dict:
     if top_sig:
         heat = top_sig.get("heat", 0) or 0
         if top_sig.get("pi_crossed"):
-            score -= 20; g['sentiment'] -= 20
+            _pc = _cyc(20)
+            score -= _pc; g['sentiment'] -= _pc
             bear_reasons.append(
                 f"🔝 Pi Cycle Top FIRED (111DMA ≥ 2×350DMA) — this cross marked the 2013/2017/2021 "
-                f"cycle tops within days; strong structural distribution signal")
+                f"cycle tops within days; strong structural distribution signal{_cyc_note}")
         elif heat >= 2:
             # Describe only the indicators that actually have values — never
             # print "Mayer None" or crash formatting a missing top band.
@@ -1468,12 +1513,14 @@ def generate_signal(analysis: Dict) -> Dict:
                               f"({top_sig['top_band_dist_pct']:+.0f}% away)")
             _detail = "; ".join(_parts) if _parts else "multiple cycle metrics elevated"
             if heat >= 4:
-                score -= 12; g['sentiment'] -= 12
-                bear_reasons.append(f"🔝 Cycle-top zone (heat {heat}/6) — {_detail}; trim into strength")
+                _hp = _cyc(12)
+                score -= _hp; g['sentiment'] -= _hp
+                bear_reasons.append(f"🔝 Cycle-top zone (heat {heat}/6) — {_detail}; trim into strength{_cyc_note}")
             else:
-                score -= 5; g['sentiment'] -= 5
+                _hp = _cyc(5)
+                score -= _hp; g['sentiment'] -= _hp
                 bear_reasons.append(f"🔝 Top indicators warming (heat {heat}/6) — {_detail}; "
-                                    f"not a top yet, but upside is maturing")
+                                    f"not a top yet, but upside is maturing{_cyc_note}")
 
     # ── Combo 11: Fresh macro inflection + technical alignment (regime change) ───
     # A just-released data point that FLIPPED direction (e.g. CPI reaccelerating
@@ -2000,7 +2047,7 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Reversal Radar — surface exhaustion / bottoming into confluence ────────
     # Independent of trade direction: warns when a trend the engine is following
     # is running out of fuel (topping in an uptrend, bottoming in a downtrend).
-    _rr = _reversal_radar(analysis)
+    _rr = _reversal_radar(analysis, cycle_ok=(timeframe not in ("1H", "2H")))
     if _rr.get("level") in ("elevated", "high") and _rr.get("mode"):
         _rr_labels = ", ".join(s["label"] for s in _rr.get("signals", [])[:4])
         if _rr["mode"] == "top":

@@ -235,7 +235,38 @@ function renderAll(a) {
   renderOrderBook(a.order_book);
   renderHolidayBanner(a.upcoming_holidays);
   renderOptionsBanner(a.options_expiry);
+  applyHtfContext(a.timeframe);
   document.getElementById('chartTitle').textContent = `${a.symbol}/USDT · ${a.timeframe}`;
+}
+
+/* ─── Higher-timeframe context tagging ─────────────────────────────────────────
+   ETF flows, macro, BTC on-chain, market regime, GoMining & TAO tokenomics are
+   all daily → multi-week signals. On 1H/2H they can't move an intraday candle,
+   so they're de-weighted in scoring (backend) AND flagged with a badge + dimmed
+   here so the user reads them as reference context, not intraday triggers. */
+function applyHtfContext(tf) {
+  const lowTf = ['1H', '2H'].includes(tf);
+  const sections = ['onchainMetricsSection', 'gominingSection', 'etfFlowsSection',
+                    'taoEcoSection', 'cryptoRegimeSection', 'macroSection'];
+  sections.forEach(id => {
+    const sec = document.getElementById(id);
+    if (!sec) return;
+    sec.classList.toggle('htf-dim', lowTf);
+    let badge = sec.querySelector('.htf-badge');
+    if (lowTf && !badge) {
+      const host = sec.querySelector('.card-title, .card-header, .card');
+      if (host) {
+        badge = document.createElement('span');
+        badge.className = 'htf-badge';
+        badge.textContent = '🗓️ daily+ context';
+        host.insertBefore(badge, host.firstChild);
+      }
+    } else if (!lowTf && badge) {
+      badge.remove();
+    } else if (badge) {
+      badge.textContent = '🗓️ daily+ context';
+    }
+  });
 }
 
 /* ─── Price panel ─────────────────────────────────────────────────────────── */
@@ -2628,9 +2659,25 @@ function renderConfluence(s) {
   // Show which TF this confluence is computed from
   if (labelEl) labelEl.textContent = `· ${S.symbol} ${S.timeframe}`;
 
+  // Split intraday-relevant reasons from daily+ cycle context (tagged 🗓️ by
+  // the backend on low timeframes). Show live signals first, then the cycle
+  // context dimmed under its own subheader so 1H/2H reads aren't cluttered by
+  // multi-week/month signals that can't move an intraday candle.
   const li = (txt) => `<li>${txt}</li>`;
-  bullEl.innerHTML = (s.bullish_reasons?.length ? s.bullish_reasons : ['No bullish confluence']).map(li).join('');
-  bearEl.innerHTML = (s.bearish_reasons?.length ? s.bearish_reasons : ['No bearish confluence']).map(li).join('');
+  const isHtf = (r) => r.includes('🗓️') || r.includes('daily+ context');
+  const build = (reasons, emptyMsg) => {
+    const list = reasons?.length ? reasons : [emptyMsg];
+    const live = list.filter(r => !isHtf(r));
+    const htf  = list.filter(isHtf);
+    let html = (live.length ? live : [emptyMsg]).map(li).join('');
+    if (htf.length) {
+      html += `<li class="conf-htf-head">🗓️ Higher-timeframe context (daily+ · down-weighted on ${S.timeframe})</li>`;
+      html += htf.map(r => `<li class="conf-htf">${r}</li>`).join('');
+    }
+    return html;
+  };
+  bullEl.innerHTML = build(s.bullish_reasons, 'No bullish confluence');
+  bearEl.innerHTML = build(s.bearish_reasons, 'No bearish confluence');
 }
 
 /* ─── X Posts — Signal Confluence ────────────────────────────────────────── */

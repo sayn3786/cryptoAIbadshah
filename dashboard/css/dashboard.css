@@ -574,6 +574,23 @@ a:hover { color: var(--gold2); }
 .conf-header.bearish { color: var(--bear); }
 .conf-list { list-style: none; display: flex; flex-direction: column; gap: 5px; }
 .conf-list li { font-size: .77rem; color: var(--muted2); padding: 5px 8px; background: var(--bg2); border-radius: 6px; }
+/* Higher-timeframe (daily+) context — de-emphasised on low TFs */
+.conf-list li.conf-htf-head {
+  font-size: .62rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); background: transparent; padding: 8px 2px 2px; margin-top: 2px;
+  border-top: 1px dashed var(--border); border-radius: 0;
+}
+.conf-list li.conf-htf { opacity: .55; font-size: .72rem; background: transparent; border: 1px dashed var(--border); }
+
+/* Higher-timeframe context cards (dimmed + badge on 1H/2H) */
+.htf-dim { opacity: .72; }
+.htf-dim .card { position: relative; }
+.htf-badge {
+  display: inline-block; font-size: .55rem; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); background: rgba(148,163,184,.14);
+  border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px;
+  margin: 0 8px 6px 0; vertical-align: middle;
+}
 
 /* ─── Row 6: Journal ──────────────────────────────────────────────────────────── */
 .row-journal { }
