@@ -352,6 +352,28 @@ def get_tao_ecosystem() -> Optional[Dict]:
             pts += p
             notes.append({"impact": "bearish", "pts": p, "text":
                 f"Subnet pool flow: {abs(f7):,.0f} TAO net OUT of Alpha pools (7d) — unstaking, potential sell pressure"})
+
+        # 24h flow — today's fresh staking demand (the "ETF-flow equivalent" for
+        # TAO). Faster and noisier than the 7d trend so it's weighted lighter and
+        # gated at ±3,000 TAO to skip noise. When it disagrees with the 7d trend
+        # it flags a momentum shift (flow turning before the weekly print does).
+        f24 = flow.get("net_24h_tao")
+        if f24 is not None and abs(f24) >= 3_000:
+            _div = (f24 > 0) != (f7 >= 0) and f7 != 0
+            if f24 > 0:
+                p = 4 if f24 > 10_000 else 2
+                pts += p
+                _tail = (" — today's flow turning UP against a negative 7d trend, early reversal"
+                         if _div else " — fresh staking demand today")
+                notes.append({"impact": "bullish", "pts": p, "text":
+                    f"Subnet pool flow (24h): +{f24:,.0f} TAO into Alpha pools today{_tail}"})
+            else:
+                p = -4 if f24 < -10_000 else -2
+                pts += p
+                _tail = (" — today's flow turning DOWN against a positive 7d trend, momentum fading"
+                         if _div else " — fresh unstaking pressure today")
+                notes.append({"impact": "bearish", "pts": p, "text":
+                    f"Subnet pool flow (24h): {f24:,.0f} TAO out of Alpha pools today{_tail}"})
     sn = result.get("subnets") or {}
     if sn.get("breadth_pct") is not None:
         if sn["breadth_pct"] >= 60:

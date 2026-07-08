@@ -920,7 +920,7 @@ def generate_signal(analysis: Dict) -> Dict:
     tao_notes = tao_eco.get("notes") or []
     if tao_pts and tao_notes:
         score += tao_pts; g['flow'] += tao_pts
-        for _n in tao_notes[:3]:
+        for _n in tao_notes[:5]:
             if not isinstance(_n, dict):
                 continue
             _imp = _n.get("impact")
