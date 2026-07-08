@@ -311,19 +311,33 @@ def get_gomining_tokenomics() -> Optional[Dict]:
     # Maintenance-demand momentum: rising weekly maintenance paid = more miners
     # paying in GOMINING = more burn pressure. This is the leading utility read
     # (a demand rise shows here before it shows in supply). Adds a small tilt.
+    # Graduated tiers — a ±10% dead-band was too wide: a real +5% WoW rise in
+    # maintenance demand fell through as "steady" with zero weight and no % shown.
+    # Now every move outside a tight ±3% flat-band registers, and the note always
+    # carries the actual WoW % so it's recognisable in the confluence list.
     maint_note = None
     if maint and maint.get("wow_ratio") is not None:
         wow = maint["wow_ratio"]
+        wow_pct = (wow - 1) * 100
+        m7 = maint["maint_7d"]
         if wow >= 1.10:
             pts += 3
-            maint_note = (f"Maintenance paid {maint['maint_7d']:,} GMT this week, "
-                          f"{(wow-1)*100:+.0f}% WoW — utility demand accelerating")
+            maint_note = (f"Maintenance paid {m7:,} GMT this week, "
+                          f"{wow_pct:+.0f}% WoW — utility demand accelerating")
+        elif wow >= 1.03:
+            pts += 2
+            maint_note = (f"Maintenance paid {m7:,} GMT this week, "
+                          f"{wow_pct:+.0f}% WoW — utility demand rising")
         elif wow <= 0.90:
             pts -= 3
-            maint_note = (f"Maintenance paid {maint['maint_7d']:,} GMT this week, "
-                          f"{(wow-1)*100:+.0f}% WoW — utility demand cooling")
+            maint_note = (f"Maintenance paid {m7:,} GMT this week, "
+                          f"{wow_pct:+.0f}% WoW — utility demand cooling")
+        elif wow <= 0.97:
+            pts -= 2
+            maint_note = (f"Maintenance paid {m7:,} GMT this week, "
+                          f"{wow_pct:+.0f}% WoW — utility demand easing")
         else:
-            maint_note = f"Maintenance paid {maint['maint_7d']:,} GMT this week (steady)"
+            maint_note = f"Maintenance paid {m7:,} GMT this week, {wow_pct:+.0f}% WoW (steady)"
 
     result = {
         "contract":       GOMINING_CONTRACT,
