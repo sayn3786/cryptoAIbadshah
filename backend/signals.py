@@ -33,6 +33,186 @@ def _mcap_tier(market_cap):
     return "micro", "Micro Cap (<$200M)", 4.0
 
 
+def _reversal_radar(analysis: Dict) -> Dict:
+    """Exhaustion / reversal detector — flips the question from "go with the
+    trend?" to "is this trend running out of fuel?".
+
+    The core signal engine is trend-following: it goes LONG in uptrends and
+    SHORT in downtrends. That is correct most of the time, but it says nothing
+    about WHEN a healthy uptrend is exhausted and about to top, or when a
+    downtrend is washed-out and about to bottom. This module answers exactly
+    that, independent of the trade direction.
+
+    Method: establish trend context (EMA50/200 + SuperTrend), then count how
+    many independent contrarian conditions are present:
+      • In an UPTREND  → count TOPPING signals (overbought / greed / froth).
+      • In a DOWNTREND → count BOTTOMING signals (oversold / fear / capitulation).
+
+    Returns a dict the frontend renders as a dedicated "Reversal Radar" card:
+      mode       'top' | 'bottom' | None
+      applicable how many checks were evaluable (data present)
+      count      how many fired
+      pct        count / applicable
+      level      'low' | 'building' | 'elevated' | 'high'
+      signals    list of {label, note} that fired
+      verdict    one-line plain-English read
+    """
+    candles = analysis.get("candles") or []
+    if not candles:
+        return {"mode": None, "applicable": 0, "count": 0, "pct": 0.0,
+                "level": "low", "signals": [], "verdict": "No data"}
+    price = candles[-1].get("close") or 0.0
+
+    ema      = analysis.get("ema_trend") or {}
+    above    = ema.get("above", []) or []
+    below    = ema.get("below", []) or []
+    ema50    = ema.get("ema50")
+    st       = analysis.get("supertrend") or {}
+    st_dir   = st.get("direction")
+
+    # ── Trend context — which side of the market are we in? ────────────────────
+    # Bias score: positive = uptrend, negative = downtrend. EMA50/200 carry the
+    # structural read, SuperTrend adds the dynamic-trend confirmation.
+    bias = 0
+    if 50 in above:  bias += 1
+    if 50 in below:  bias -= 1
+    if 200 in above: bias += 1
+    if 200 in below: bias -= 1
+    if st_dir == "bullish": bias += 1
+    elif st_dir == "bearish": bias -= 1
+
+    if bias > 0:
+        mode = "top"       # uptrend → look for exhaustion / topping
+    elif bias < 0:
+        mode = "bottom"    # downtrend → look for reversal / bottoming
+    else:
+        mode = None        # rangebound — no dominant trend to exhaust
+
+    # Pull every input once
+    rsi      = analysis.get("rsi")
+    rsi_div  = (analysis.get("rsi_divergence") or {}).get("type")
+    fg_val   = (analysis.get("fear_greed") or {}).get("value")
+    fr_val   = (analysis.get("funding_rate") or {}).get("current")
+    bb_pctb  = (analysis.get("bollinger") or {}).get("pct_b")
+    srsi_sig = (analysis.get("stoch_rsi") or {}).get("signal")
+    vol      = analysis.get("vol_signal") or {}
+    vol_sig  = vol.get("signal"); vol_ratio = vol.get("ratio", 0) or 0
+    ls_ratio = (analysis.get("long_short") or {}).get("ratio")
+    cvd_type = (analysis.get("cvd_divergence") or {}).get("type", "")
+    mining   = analysis.get("btc_mining") or {}
+    sopr_z   = (mining.get("sopr") or {}).get("zone")
+    puell_z  = (mining.get("puell_multiple") or {}).get("zone")
+    mvrv_z   = (mining.get("mvrv") or {}).get("zone")
+    ptr      = mining.get("price_to_realized")
+    top_heat = ((mining.get("top_signals") or {}).get("heat", 0) or 0)
+    pi_fired = (mining.get("top_signals") or {}).get("pi_crossed")
+
+    # Price stretch above/below EMA50 (mean-reversion pressure)
+    stretch_pct = None
+    if ema50 and price:
+        stretch_pct = (price - ema50) / ema50 * 100.0
+
+    signals: List[Dict] = []
+    applicable = 0
+
+    def check(evaluable, fired, label, note=""):
+        nonlocal applicable
+        if evaluable:
+            applicable += 1
+            if fired:
+                signals.append({"label": label, "note": note})
+
+    if mode == "top":
+        # ── TOPPING checklist (uptrend exhaustion) ─────────────────────────────
+        check(rsi is not None, rsi is not None and rsi >= 70,
+              "RSI overbought", f"RSI {rsi} ≥ 70 — buyers stretched" if rsi else "")
+        check(True, rsi_div == "bearish",
+              "Bearish RSI divergence", "price higher high, RSI lower high — momentum not confirming")
+        check(fg_val not in (None, 0), fg_val is not None and fg_val >= 75,
+              "Extreme greed", f"Fear & Greed {fg_val} — crowd euphoric, historically near tops")
+        check(fr_val is not None, fr_val is not None and fr_val >= 0.03,
+              "Funding overheated", f"funding {fr_val:.3f}% — longs paying up, crowded long / squeeze fuel")
+        check(bb_pctb is not None, bb_pctb is not None and bb_pctb >= 0.95,
+              "Riding upper Bollinger", f"%B {bb_pctb:.2f} — price pinned to upper band, mean-reversion pressure")
+        check(srsi_sig is not None, srsi_sig in ("bear_cross_overbought", "overbought"),
+              "Stoch RSI rolling over", "fast momentum topping out from overbought")
+        check(vol_sig is not None, vol_sig == "bearish" and vol_ratio >= 1.5,
+              "Distribution volume", f"heavy volume on down candles ({vol_ratio:.1f}× avg) — selling into strength")
+        check(ls_ratio is not None and ls_ratio > 0, ls_ratio is not None and ls_ratio >= 2.5,
+              "Crowd extremely long", f"L/S {ls_ratio} — one-sided positioning, fuel for a long flush")
+        check(bool(cvd_type), "futures_led_up" in cvd_type or "futures_dominated_up" in cvd_type,
+              "Rally is leverage-only", "futures leading spot — no real buyers behind the move, prone to fade")
+        check(mining != {}, sopr_z == "euphoria",
+              "SOPR euphoria", "on-chain holders taking profit aggressively — distribution")
+        check(mining != {}, puell_z == "extreme",
+              "Puell extreme", "miner revenue at cycle-top levels — heavy sell incentive")
+        check(mining != {}, mvrv_z in ("overbought", "extreme_top"),
+              "MVRV overbought", "unrealized profit stretched — late-cycle valuation")
+        check(mining != {}, bool(pi_fired) or top_heat >= 4,
+              "Cycle-top cluster", "Pi Cycle / Mayer / MVRV top metrics clustered")
+        check(stretch_pct is not None, stretch_pct is not None and stretch_pct >= 12,
+              "Stretched above EMA50", f"price {stretch_pct:+.1f}% over EMA50 — extended, mean-reversion pull")
+
+    elif mode == "bottom":
+        # ── BOTTOMING checklist (downtrend reversal) ───────────────────────────
+        check(rsi is not None, rsi is not None and rsi <= 30,
+              "RSI oversold", f"RSI {rsi} ≤ 30 — sellers exhausted" if rsi else "")
+        check(True, rsi_div == "bullish",
+              "Bullish RSI divergence", "price lower low, RSI higher low — selling losing force")
+        check(fg_val not in (None, 0), fg_val is not None and fg_val <= 25,
+              "Extreme fear", f"Fear & Greed {fg_val} — capitulation sentiment, historically near bottoms")
+        check(fr_val is not None, fr_val is not None and fr_val <= -0.03,
+              "Funding deeply negative", f"funding {fr_val:.3f}% — shorts paying up, crowded short / squeeze fuel")
+        check(bb_pctb is not None, bb_pctb is not None and bb_pctb <= 0.05,
+              "Riding lower Bollinger", f"%B {bb_pctb:.2f} — price pinned to lower band, bounce pressure building")
+        check(srsi_sig is not None, srsi_sig in ("bull_cross_oversold", "oversold"),
+              "Stoch RSI turning up", "fast momentum bottoming out from oversold")
+        check(vol_sig is not None, vol_ratio >= 2.5,
+              "Capitulation volume", f"volume spike ({vol_ratio:.1f}× avg) — climactic selling / seller exhaustion")
+        check(ls_ratio is not None and ls_ratio > 0, ls_ratio is not None and ls_ratio <= 0.65,
+              "Crowd extremely short", f"L/S {ls_ratio} — one-sided shorts, fuel for a short squeeze")
+        check(bool(cvd_type), "futures_led_down" in cvd_type or "futures_dominated_down" in cvd_type,
+              "Selloff is leverage-only", "futures leading spot down — real holders not selling, squeeze risk")
+        check(mining != {}, sopr_z == "capitulation",
+              "SOPR capitulation", "on-chain holders selling at a loss — panic bottom behaviour")
+        check(mining != {}, puell_z == "deep_undervalued",
+              "Puell capitulation", "miner revenue at historical bottom zone")
+        check(mining != {}, mvrv_z == "oversold",
+              "MVRV oversold", "holders underwater — historically strong accumulation zone")
+        check(mining != {}, ptr is not None and ptr < 1.0,
+              "Price below realized", "average holder underwater — deep-value bottom signal")
+        check(stretch_pct is not None, stretch_pct is not None and stretch_pct <= -12,
+              "Stretched below EMA50", f"price {stretch_pct:+.1f}% under EMA50 — oversold, mean-reversion pull")
+
+    count = len(signals)
+    pct = (count / applicable) if applicable else 0.0
+    if   pct >= 0.55 or count >= 6: level = "high"
+    elif pct >= 0.35 or count >= 4: level = "elevated"
+    elif count >= 2:                level = "building"
+    else:                           level = "low"
+
+    if mode == "top":
+        verb = {"high": "Uptrend looks EXHAUSTED", "elevated": "Uptrend exhaustion building",
+                "building": "Early topping signs", "low": "Uptrend healthy"}[level]
+        verdict = (f"{verb} — {count}/{applicable} topping signals firing. "
+                   + ("Reversal / pullback risk is high; consider trimming, tightening stops, "
+                      "or standing aside on new longs." if level in ("high", "elevated")
+                      else "Trend intact; watch these if the count rises."))
+    elif mode == "bottom":
+        verb = {"high": "Downtrend looks WASHED OUT", "elevated": "Bottoming pressure building",
+                "building": "Early bottoming signs", "low": "Downtrend intact"}[level]
+        verdict = (f"{verb} — {count}/{applicable} bottoming signals firing. "
+                   + ("Reversal / bounce potential is high; downtrend may be near a low — watch for "
+                      "confirmation before shorting further." if level in ("high", "elevated")
+                      else "Downtrend intact; watch these if the count rises."))
+    else:
+        verdict = "Rangebound — no dominant trend to exhaust; reversal radar idle."
+
+    return {"mode": mode, "applicable": applicable, "count": count,
+            "pct": round(pct, 2), "level": level, "signals": signals,
+            "verdict": verdict}
+
+
 def generate_signal(analysis: Dict) -> Dict:
     score = 0
     # Group contribution tracker — signed (positive = bull, negative = bear)
@@ -1817,6 +1997,21 @@ def generate_signal(analysis: Dict) -> Dict:
         _bear_flip_names if direction == "SHORT" else []
     )
 
+    # ── Reversal Radar — surface exhaustion / bottoming into confluence ────────
+    # Independent of trade direction: warns when a trend the engine is following
+    # is running out of fuel (topping in an uptrend, bottoming in a downtrend).
+    _rr = _reversal_radar(analysis)
+    if _rr.get("level") in ("elevated", "high") and _rr.get("mode"):
+        _rr_labels = ", ".join(s["label"] for s in _rr.get("signals", [])[:4])
+        if _rr["mode"] == "top":
+            bear_reasons.append(
+                f"🛑 Reversal Radar {_rr['level'].upper()} — {_rr['count']}/{_rr['applicable']} "
+                f"topping signals ({_rr_labels}); uptrend exhaustion / pullback risk rising")
+        else:
+            bull_reasons.append(
+                f"🟢 Reversal Radar {_rr['level'].upper()} — {_rr['count']}/{_rr['applicable']} "
+                f"bottoming signals ({_rr_labels}); downtrend may be washing out, watch for reversal")
+
     return {
         "direction": direction,
         "score": score,
@@ -1838,6 +2033,7 @@ def generate_signal(analysis: Dict) -> Dict:
         "exhaustion_flag":    exhaustion_flag,
         "reversal_count":     reversal_count,
         "flipped_indicators": flipped_indicators,
+        "reversal_radar":     _rr,
         "choch":           choch     if choch.get("signal")     != "none" else None,
         "liq_grab":        liq_grab  if liq_grab.get("signal")  != "none" else None,
         "acc_setup":       acc_setup if acc_setup.get("signal") != "none" else None,

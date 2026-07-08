@@ -323,6 +323,36 @@ function renderSignal(s) {
     }
   }
 
+  // Reversal Radar — exhaustion (in uptrends) / bottoming (in downtrends)
+  const radEl = document.getElementById('signalRadar');
+  if (radEl) {
+    const rr = s.reversal_radar;
+    if (rr && rr.mode && (rr.count > 0 || rr.level !== 'low')) {
+      const isTop = rr.mode === 'top';
+      const lvl   = rr.level || 'low';
+      const lvlCls = { low: 'rr-low', building: 'rr-building', elevated: 'rr-elevated', high: 'rr-high' }[lvl] || 'rr-low';
+      const icon  = isTop ? '🛑' : '🟢';
+      const title = isTop ? 'TOPPING RISK' : 'BOTTOMING WATCH';
+      const gauge = rr.applicable ? Math.round((rr.count / rr.applicable) * 100) : 0;
+      const sigs  = (rr.signals || []).map(x =>
+        `<div class="rr-sig"><span class="rr-sig-label">${isTop ? '▼' : '▲'} ${x.label}</span>${x.note ? `<span class="rr-sig-note">${x.note}</span>` : ''}</div>`
+      ).join('');
+      radEl.className = `reversal-radar ${lvlCls} ${isTop ? 'rr-top' : 'rr-bottom'}`;
+      radEl.innerHTML = `
+        <div class="rr-head">
+          <span class="rr-title">${icon} REVERSAL RADAR · ${title}</span>
+          <span class="rr-count">${rr.count}/${rr.applicable}</span>
+        </div>
+        <div class="rr-gauge-bg"><div class="rr-gauge-bar" style="width:${gauge}%"></div></div>
+        <div class="rr-level">${lvl.toUpperCase()} — ${rr.verdict || ''}</div>
+        ${sigs ? `<div class="rr-sigs">${sigs}</div>` : ''}`;
+      radEl.style.display = '';
+    } else {
+      radEl.innerHTML = '';
+      radEl.style.display = 'none';
+    }
+  }
+
   // SMC structure: Acc+EQL/EQH+FVG setup + CHoCH + Liquidity Grab
   const smcEl = document.getElementById('signalSMC');
   if (smcEl) {

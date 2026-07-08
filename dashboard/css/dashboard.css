@@ -1184,6 +1184,28 @@ a:hover { color: var(--gold2); }
 .sig-flip-item {
   font-size: .64rem; font-weight: 600; color: #c4b5fd;
 }
+/* Reversal Radar — exhaustion / bottoming detector */
+.reversal-radar { margin: 8px 0 4px; border-radius: 8px; padding: 8px 10px; border: 1px solid var(--border); }
+.reversal-radar.rr-top    { background: rgba(239,68,68,.07);  border-color: rgba(239,68,68,.28); }
+.reversal-radar.rr-bottom { background: rgba(34,197,94,.07);  border-color: rgba(34,197,94,.28); }
+.reversal-radar.rr-high    { box-shadow: inset 0 0 0 1px rgba(251,191,36,.35); }
+.rr-head   { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.rr-title  { font-size: .62rem; font-weight: 800; letter-spacing: .05em; }
+.rr-top    .rr-title { color: #fca5a5; }
+.rr-bottom .rr-title { color: #86efac; }
+.rr-count  { font-size: .74rem; font-weight: 800; color: var(--text); }
+.rr-gauge-bg  { height: 5px; background: rgba(255,255,255,.08); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+.rr-gauge-bar { height: 100%; border-radius: 3px; transition: width .4s; }
+.rr-top    .rr-gauge-bar { background: linear-gradient(90deg,#f59e0b,#ef4444); }
+.rr-bottom .rr-gauge-bar { background: linear-gradient(90deg,#22c55e,#10b981); }
+.rr-level  { font-size: .64rem; font-weight: 600; color: var(--muted2); margin-bottom: 6px; line-height: 1.4; }
+.rr-low      .rr-level { color: var(--muted); }
+.rr-elevated .rr-level, .rr-high .rr-level { color: #fcd34d; }
+.rr-sigs   { display: flex; flex-direction: column; gap: 3px; }
+.rr-sig    { display: flex; flex-direction: column; gap: 1px; padding: 3px 6px; border-radius: 4px; background: rgba(255,255,255,.03); }
+.rr-sig-label { font-size: .64rem; font-weight: 700; color: var(--text); }
+.rr-sig-note  { font-size: .58rem; color: var(--muted); }
+
 /* SMC structure block */
 #signalSMC      { margin: 8px 0 4px; background: rgba(99,102,241,.07); border: 1px solid rgba(99,102,241,.2); border-radius: 8px; padding: 8px 10px; }
 .smc-header     { font-size: .58rem; font-weight: 700; letter-spacing: .08em; color: var(--muted); margin-bottom: 6px; }
