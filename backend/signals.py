@@ -1039,11 +1039,12 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= 8; g['pattern'] -= 8
         bear_reasons.append(f"Elliott Wave: {wave_label} (bearish phase) — weak supporting signal")
 
-    # ── RSI Divergence ────────────────────────────────────────────────────────
-    # One of the most reliable reversal signals — price and momentum disagree.
-    # Bullish divergence (price lower low, RSI higher low) precedes many of the
-    # biggest altcoin pumps including XLM-style consolidation breakouts.
-    # Detected over a 14-candle window to avoid noise on very short timeframes.
+    # ── RSI Divergence (regular = reversal, hidden = continuation) ─────────────
+    # Regular bullish (price LL, RSI HL) / bearish (price HH, RSI LH) call a
+    # REVERSAL. Hidden bullish (price HL, RSI LL) / bearish (price LH, RSI HH)
+    # confirm the TREND continuing — Ted's "hidden bearish" downtrend read. Both
+    # score in their directional sense; hidden gets slightly less weight than a
+    # reversal since it's confirmation, not a turn.
     rsi_div = analysis.get("rsi_divergence") or {}
     div_type = rsi_div.get("type")
     div_desc = rsi_div.get("description", "")
@@ -1056,6 +1057,14 @@ def generate_signal(analysis: Dict) -> Dict:
         pts = 18 if div_str >= 5 else 12
         score -= pts; g['momentum'] -= pts
         bear_reasons.append(div_desc or "Bearish RSI divergence — price higher high, RSI lower high")
+    elif div_type == "hidden_bullish":
+        pts = 14 if div_str >= 5 else 10
+        score += pts; g['momentum'] += pts
+        bull_reasons.append(div_desc or "Hidden bullish divergence — price higher low, RSI lower low (uptrend continuation)")
+    elif div_type == "hidden_bearish":
+        pts = 14 if div_str >= 5 else 10
+        score -= pts; g['momentum'] -= pts
+        bear_reasons.append(div_desc or "Hidden bearish divergence — price lower high, RSI higher high (downtrend continuation)")
 
     # ── Bollinger Bands ───────────────────────────────────────────────────────
     # Squeeze = coiled spring. Breakout after squeeze = high-probability burst.
@@ -1429,8 +1438,8 @@ def generate_signal(analysis: Dict) -> Dict:
     macd_local     = analysis.get("macd") or {}
     macd_cross_local = macd_local.get("cross")
     macd_zero_local  = macd_local.get("zero_cross")
-    rsi_div_bull  = div_type_local == 'bullish'
-    rsi_div_bear  = div_type_local == 'bearish'
+    rsi_div_bull  = div_type_local in ('bullish', 'hidden_bullish')
+    rsi_div_bear  = div_type_local in ('bearish', 'hidden_bearish')
     macd_bull_sig = macd_cross_local == 'bullish' or macd_zero_local == 'bullish'
     macd_bear_sig = macd_cross_local == 'bearish' or macd_zero_local == 'bearish'
     if (rsi_div_bull and macd_bull_sig) or (rsi_div_bear and macd_bear_sig):

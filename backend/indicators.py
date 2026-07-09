@@ -860,44 +860,76 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
     if len(pairs) < pivot_window * 2 + 4:
         return empty
 
-    lows  = [c["low"]  for c, _ in pairs]
-    highs = [c["high"] for c, _ in pairs]
-    rsi_v = [r         for _, r in pairs]
+    lows  = [c["low"]   for c, _ in pairs]
+    highs = [c["high"]  for c, _ in pairs]
+    closes = [c["close"] for c, _ in pairs]
+    rsi_v = [r          for _, r in pairs]
     n     = len(pairs)
     pw    = pivot_window
+
+    # ── Trend context ────────────────────────────────────────────────────────
+    # Hidden divergence is a CONTINUATION signal — it only makes sense WITH the
+    # trend (hidden bullish in an uptrend, hidden bearish in a downtrend). A
+    # hidden bullish in a downtrend is not a real signal, so we gate on trend.
+    half = n // 2
+    older_avg  = sum(closes[:half]) / max(half, 1)
+    recent_avg = sum(closes[half:]) / max(n - half, 1)
+    if   recent_avg > older_avg * 1.01: trend = "up"
+    elif recent_avg < older_avg * 0.99: trend = "down"
+    else:                                trend = "flat"
 
     swing_lows  = [(i, lows[i],  rsi_v[i]) for i in range(pw, n - pw)
                    if lows[i]  == min(lows[i - pw: i + pw + 1])]
     swing_highs = [(i, highs[i], rsi_v[i]) for i in range(pw, n - pw)
                    if highs[i] == max(highs[i - pw: i + pw + 1])]
 
-    # Evaluate BOTH, then report whichever is anchored to the more RECENT pivot.
-    # (Previously bullish-on-lows was checked first and returned early, masking a
-    # fresher bearish-on-highs — so a topping divergence could be hidden behind
-    # an older bottoming one.)
-    bull = bear = None
-    if len(swing_lows) >= 2:
-        i2, p_price, p_rsi = swing_lows[-2]
-        i1, c_price, c_rsi = swing_lows[-1]
-        if (p_price - c_price) / (p_price + 1e-12) > 0.005 and c_rsi - p_rsi > 2:
-            bull = {"type": "bullish", "strength": round(c_rsi - p_rsi, 1), "_idx": i1,
-                    "description": f"Bullish RSI divergence — price lower low but RSI rising (+{c_rsi - p_rsi:.1f} pts), classic reversal setup"}
-    if len(swing_highs) >= 2:
-        i2, p_price, p_rsi = swing_highs[-2]
-        i1, c_price, c_rsi = swing_highs[-1]
-        if (c_price - p_price) / (p_price + 1e-12) > 0.005 and p_rsi - c_rsi > 2:
-            bear = {"type": "bearish", "strength": round(p_rsi - c_rsi, 1), "_idx": i1,
-                    "description": f"Bearish RSI divergence — price higher high but RSI falling (-{p_rsi - c_rsi:.1f} pts), classic reversal setup"}
+    # Evaluate ALL FOUR divergence types (regular + hidden), then report the one
+    # anchored to the most RECENT pivot so a fresh signal isn't masked by an
+    # older one on the opposite side. Regular = reversal; hidden = continuation.
+    PX = 0.005   # min 0.5% price move between the two pivots
+    RS = 2.0     # min 2-pt RSI move between the two pivots
+    cands = []
 
-    both = [d for d in (bull, bear) if d]
-    if not both:
+    if len(swing_lows) >= 2:
+        _,  p_price, p_rsi = swing_lows[-2]
+        i1, c_price, c_rsi = swing_lows[-1]
+        price_ll = (p_price - c_price) / (p_price + 1e-12) > PX   # lower low
+        price_hl = (c_price - p_price) / (p_price + 1e-12) > PX   # higher low
+        # Regular bullish — price lower low, RSI higher low → reversal UP
+        if price_ll and c_rsi - p_rsi > RS:
+            cands.append({"type": "bullish", "strength": round(c_rsi - p_rsi, 1), "_idx": i1,
+                "description": f"Bullish RSI divergence — price lower low but RSI rising (+{c_rsi - p_rsi:.1f} pts), classic reversal setup"})
+        # Hidden bullish — price higher low, RSI lower low → uptrend CONTINUES
+        if price_hl and p_rsi - c_rsi > RS and trend != "down":
+            cands.append({"type": "hidden_bullish", "strength": round(p_rsi - c_rsi, 1), "_idx": i1,
+                "description": f"Hidden bullish divergence — price higher low but RSI lower low (−{p_rsi - c_rsi:.1f} pts), uptrend-continuation (buy-the-dip) signal"})
+
+    if len(swing_highs) >= 2:
+        _,  p_price, p_rsi = swing_highs[-2]
+        i1, c_price, c_rsi = swing_highs[-1]
+        price_hh = (c_price - p_price) / (p_price + 1e-12) > PX   # higher high
+        price_lh = (p_price - c_price) / (p_price + 1e-12) > PX   # lower high
+        # Regular bearish — price higher high, RSI lower high → reversal DOWN
+        if price_hh and p_rsi - c_rsi > RS:
+            cands.append({"type": "bearish", "strength": round(p_rsi - c_rsi, 1), "_idx": i1,
+                "description": f"Bearish RSI divergence — price higher high but RSI falling (−{p_rsi - c_rsi:.1f} pts), classic reversal setup"})
+        # Hidden bearish — price lower high, RSI higher high → downtrend CONTINUES
+        if price_lh and c_rsi - p_rsi > RS and trend != "up":
+            cands.append({"type": "hidden_bearish", "strength": round(c_rsi - p_rsi, 1), "_idx": i1,
+                "description": f"Hidden bearish divergence — price lower high but RSI higher high (+{c_rsi - p_rsi:.1f} pts), downtrend-continuation (sell-the-bounce) signal"})
+
+    if not cands:
         return empty
     # Most recent pivot wins; on a tie, the stronger divergence.
-    chosen = max(both, key=lambda d: (d["_idx"], d["strength"]))
-    if bull and bear:
-        other = "bearish (on highs)" if chosen["type"] == "bullish" else "bullish (on lows)"
-        chosen["also"] = ("bearish" if chosen["type"] == "bullish" else "bullish")
-        chosen["description"] += f" · note: a {other} divergence also present — mixed/choppy structure"
+    chosen = max(cands, key=lambda d: (d["_idx"], d["strength"]))
+    _dir = lambda t: "bullish" if t in ("bullish", "hidden_bullish") else "bearish"
+    dirs = {_dir(d["type"]) for d in cands}
+    if len(dirs) > 1:
+        opp = "bearish" if _dir(chosen["type"]) == "bullish" else "bullish"
+        chosen["also"] = opp
+        chosen["description"] += (f" · note: an opposing {opp} divergence also present "
+                                  f"— mixed/choppy structure, wait for confirmation")
+    chosen["trend"] = trend
     chosen.pop("_idx", None)
     return chosen
 

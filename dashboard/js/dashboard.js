@@ -937,9 +937,18 @@ function renderRsiDivCard(div) {
     descEl.style.color = 'var(--muted2)';
     return;
   }
-  const bull = div.type === 'bullish';
-  typeEl.textContent = bull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence';
-  typeEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+  // Four types: regular bullish/bearish (reversal) + hidden bullish/bearish
+  // (trend continuation). Colour by direction; label distinguishes reversal vs
+  // continuation so a hidden bearish (downtrend continuation) reads clearly.
+  const LABELS = {
+    bullish:        '🔼 Bullish Divergence',
+    bearish:        '🔽 Bearish Divergence',
+    hidden_bullish: '🔼 Hidden Bullish · continuation',
+    hidden_bearish: '🔽 Hidden Bearish · continuation',
+  };
+  const isBull = div.type === 'bullish' || div.type === 'hidden_bullish';
+  typeEl.textContent = LABELS[div.type] || (isBull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence');
+  typeEl.style.color = isBull ? 'var(--bull)' : 'var(--bear)';
   descEl.textContent = div.description || '';
   descEl.style.color = 'var(--muted2)';
 }
