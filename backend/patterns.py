@@ -776,14 +776,35 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
         if sB > sA and lows[sB] >= lows[sA] * 0.998:
             macro = _build(sA, lows[sA], sB, lows[sB], "support", "ascending", "macro")
 
-    # ── LOCAL: two most-recent swing pivots (near price) ──────────────────────
+    # ── LOCAL: recent swing pivots near price, wick-damped ────────────────────
+    # Anchor on candle BODIES (max/min of open/close), not raw wicks, so a lone
+    # spike candle can't drag the line — a wick to 0.30 that closed at 0.28
+    # registers as 0.28. Window 2 (vs macro's 3) catches recent minor swings so
+    # the line hugs price. Only anchors from the recent ~65% of the window are
+    # eligible, so a far-back spike can't own the "local" line.
+    bhigh = [max(c["open"], c["close"]) for c in candles]
+    blow  = [min(c["open"], c["close"]) for c in candles]
+    def _body_pivots(vals, want_high, win=2):
+        out = []
+        for i in range(win, n - win):
+            seg = vals[i - win:i + win + 1]
+            if (vals[i] == max(seg)) if want_high else (vals[i] == min(seg)):
+                out.append({"index": i, "price": vals[i], "timestamp": candles[i]["timestamp"]})
+        return out
+    lph = _body_pivots(bhigh, True)
+    lpl = _body_pivots(blow, False)
+    recent_cut = int(n * 0.35)
+
     def _local(pivots, kind, descending):
-        if len(pivots) < 2:
+        cand = [p for p in pivots if p["index"] >= recent_cut]
+        if len(cand) < 2:
+            cand = pivots            # fall back to all if too few recent pivots
+        if len(cand) < 2:
             return None
         for a, b in ((-2, -1), (-3, -1)):
-            if len(pivots) < -a:
+            if len(cand) < -a:
                 continue
-            P1, P2 = pivots[a], pivots[b]
+            P1, P2 = cand[a], cand[b]
             slopes_ok = (P2["price"] <= P1["price"] * 1.01) if descending \
                         else (P2["price"] >= P1["price"] * 0.99)
             if slopes_ok and P2["index"] > P1["index"]:
@@ -791,9 +812,9 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
                               kind, "descending" if descending else "ascending", "local")
         return None
 
-    if   trend == "down": local = _local(ph, "resistance", True)  or _local(pl, "support", False)
-    elif trend == "up":   local = _local(pl, "support", False)    or _local(ph, "resistance", True)
-    else:                 local = _local(ph, "resistance", True)  or _local(pl, "support", False)
+    if   trend == "down": local = _local(lph, "resistance", True)  or _local(lpl, "support", False)
+    elif trend == "up":   local = _local(lpl, "support", False)    or _local(lph, "resistance", True)
+    else:                 local = _local(lph, "resistance", True)  or _local(lpl, "support", False)
 
     # Drop a decisively-broken macro line. Once price has moved well past it (a
     # steep line extrapolating below/above price by >5%), it's no longer acting
