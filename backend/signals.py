@@ -1066,29 +1066,49 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= pts; g['momentum'] -= pts
         bear_reasons.append(div_desc or "Hidden bearish divergence — price lower high, RSI higher high (downtrend continuation)")
 
-    # ── Diagonal trendline (auto-drawn) ───────────────────────────────────────
-    # A break of a descending resistance line is an early bullish trend change;
-    # a break of an ascending support line is an early bearish one. When intact,
-    # price pressing INTO the line from below (resistance) is a rejection risk;
-    # riding along an ascending support is trend-intact bullish.
-    tl = analysis.get("trendline") or {}
-    tl_type = tl.get("type")
-    if tl_type == "resistance":
-        line_v = tl.get("current_value")
-        if tl.get("broken") == "up":
+    # ── Diagonal trendlines — LOCAL (trigger) + MACRO (bias filter) ───────────
+    # LOCAL line sits near price: its break/rejection is an actionable trigger.
+    # MACRO line is the multi-week ceiling/floor: it sets regime bias (favour the
+    # dominant trend, treat counter-trend entries as lower-probability) and a
+    # macro break is a high-conviction regime change.
+    _tl_all   = analysis.get("trendline") or {}
+    _tl_local = _tl_all.get("local")  or {}
+    _tl_macro = _tl_all.get("macro")  or {}
+
+    lt, lv = _tl_local.get("type"), _tl_local.get("current_value")
+    if lt == "resistance" and lv:
+        if _tl_local.get("broken") == "up":
             score += 14; g['trend'] += 14
-            bull_reasons.append(f"Trendline BREAKOUT — price broke above the descending resistance line (~${line_v:,.4f}); downtrend structure cracking, early bullish reversal")
-        elif tl.get("dist_pct") is not None and -1.2 <= tl["dist_pct"] < 0:
+            bull_reasons.append(f"Local trendline BREAKOUT — price broke the near-term descending resistance (~${lv:,.4f}); immediate downtrend line cracked, early bullish shift")
+        elif _tl_local.get("dist_pct") is not None and -1.2 <= _tl_local["dist_pct"] < 0:
             score -= 8; g['trend'] -= 8
-            bear_reasons.append(f"Price pressing into descending resistance (~${line_v:,.4f}, {abs(tl['dist_pct']):.1f}% below) — rejection risk, downtrend line still capping")
-    elif tl_type == "support":
-        line_v = tl.get("current_value")
-        if tl.get("broken") == "down":
+            bear_reasons.append(f"Price pressing into near-term descending resistance (~${lv:,.4f}, {abs(_tl_local['dist_pct']):.1f}% below) — rejection risk")
+    elif lt == "support" and lv:
+        if _tl_local.get("broken") == "down":
             score -= 14; g['trend'] -= 14
-            bear_reasons.append(f"Trendline BREAKDOWN — price broke below the ascending support line (~${line_v:,.4f}); uptrend structure cracking, early bearish reversal")
-        elif tl.get("dist_pct") is not None and 0 < tl["dist_pct"] <= 1.2:
+            bear_reasons.append(f"Local trendline BREAKDOWN — price broke the near-term ascending support (~${lv:,.4f}); immediate uptrend line cracked, early bearish shift")
+        elif _tl_local.get("dist_pct") is not None and 0 < _tl_local["dist_pct"] <= 1.2:
             score += 8; g['trend'] += 8
-            bull_reasons.append(f"Price holding above ascending support (~${line_v:,.4f}, {tl['dist_pct']:.1f}% above) — uptrend line intact, buyers defending")
+            bull_reasons.append(f"Price holding above near-term ascending support (~${lv:,.4f}, {_tl_local['dist_pct']:.1f}% above) — buyers defending the line")
+
+    # A macro break only counts as a FRESH regime change when price just crossed
+    # the line (≤6% past it). A far larger gap means the steep line has simply
+    # extrapolated past price — not a real reclaim — so it stays a bias filter.
+    mt, mv, mdist = _tl_macro.get("type"), _tl_macro.get("current_value"), _tl_macro.get("dist_pct")
+    if mt == "resistance" and mv and mdist is not None:
+        if _tl_macro.get("broken") == "up" and 0 < mdist <= 6:
+            score += 12; g['trend'] += 12
+            bull_reasons.append(f"MACRO trendline BREAK — price reclaimed the multi-week descending ceiling (~${mv:,.4f}); dominant downtrend regime shifting bullish")
+        elif mdist < 0:
+            score -= 5; g['trend'] -= 5
+            bear_reasons.append(f"⤵ Under the macro descending ceiling (~${mv:,.4f}, {abs(mdist):.0f}% below) — dominant downtrend intact; counter-trend longs are lower-probability")
+    elif mt == "support" and mv and mdist is not None:
+        if _tl_macro.get("broken") == "down" and -6 <= mdist < 0:
+            score -= 12; g['trend'] -= 12
+            bear_reasons.append(f"MACRO trendline BREAK — price lost the multi-week ascending floor (~${mv:,.4f}); dominant uptrend regime shifting bearish")
+        elif mdist > 0:
+            score += 5; g['trend'] += 5
+            bull_reasons.append(f"⤴ Above the macro ascending floor (~${mv:,.4f}, {mdist:.0f}% above) — dominant uptrend intact; counter-trend shorts are lower-probability")
 
     # ── Supply / demand zones (S/R bands) ─────────────────────────────────────
     # Price inside or approaching an overhead supply zone = sellers likely to
@@ -1867,7 +1887,9 @@ def generate_signal(analysis: Dict) -> Dict:
         # trades WITH structure: enter at a zone/line, stop just beyond it, and
         # target the opposing zone/line. `_tl_val` is the trendline's price at
         # the current candle (a diagonal, dynamic level like SuperTrend).
-        _tl       = analysis.get("trendline") or {}
+        # Use the LOCAL line for level anchoring — the macro line is too far from
+        # price to place a stop or target on.
+        _tl       = (analysis.get("trendline") or {}).get("local") or {}
         _tl_val   = _tl.get("current_value")
         _tl_type  = _tl.get("type")         # 'resistance' | 'support'
         _tl_sup   = _tl_val if _tl_type == "support"    else None

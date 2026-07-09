@@ -87,9 +87,10 @@ function initCharts() {
   S.ichimokuSpanASeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#a855f7', lineWidth: 2, lineStyle: 2 });
   S.ichimokuSpanBSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#22d3ee', lineWidth: 2, lineStyle: 2 });
 
-  // Auto-drawn diagonal trendline (descending resistance / ascending support).
-  // Colour is set per-render (red for resistance, green for support).
-  S.trendlineSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#e2e8f0', lineWidth: 2 });
+  // Auto-drawn diagonal trendlines. LOCAL = near-price actionable line (solid,
+  // coloured per-render); MACRO = multi-week ceiling/floor (dimmer, dashed).
+  S.trendlineSeries      = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#e2e8f0', lineWidth: 2 });
+  S.trendlineMacroSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#94a3b8', lineWidth: 1, lineStyle: 2 });
 
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
@@ -702,22 +703,25 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     }));
   }
 
-  // ── Diagonal trendline (descending resistance / ascending support) ────────
-  if (trendline?.type && trendline.anchor && trendline.end) {
-    const isRes = trendline.type === 'resistance';
-    const broke = trendline.broken;               // 'up' | 'down' | null
-    // Green when support / bullish break, red when resistance / bearish break.
+  // ── Diagonal trendlines — LOCAL (near price) + MACRO (multi-week) ─────────
+  const _drawTrend = (series, line, isMacro) => {
+    if (!line?.type || !line.anchor || !line.end) { series.setData([]); return; }
+    const isRes = line.type === 'resistance';
+    const broke = line.broken;                    // 'up' | 'down' | null
+    // Green for support / bullish break, red for resistance / bearish break.
     const col = (isRes && broke === 'up') ? '#10b981'
               : (!isRes && broke === 'down') ? '#ef4444'
+              : isMacro ? (isRes ? '#b45f5f' : '#5f9e7f')   // muted for macro
               : isRes ? '#f87171' : '#34d399';
-    S.trendlineSeries.applyOptions({ color: col, lineStyle: broke ? 0 : 2 });
-    S.trendlineSeries.setData([
-      { time: Math.floor(trendline.anchor.timestamp / 1000), value: trendline.anchor.value },
-      { time: Math.floor(trendline.end.timestamp    / 1000), value: trendline.end.value },
+    // Local: solid on break else dashed. Macro: always dashed & thin.
+    series.applyOptions({ color: col, lineWidth: isMacro ? 1 : 2, lineStyle: isMacro ? 2 : (broke ? 0 : 2) });
+    series.setData([
+      { time: Math.floor(line.anchor.timestamp / 1000), value: line.anchor.value },
+      { time: Math.floor(line.end.timestamp    / 1000), value: line.end.value },
     ]);
-  } else {
-    S.trendlineSeries.setData([]);
-  }
+  };
+  _drawTrend(S.trendlineSeries,      trendline?.local, false);
+  _drawTrend(S.trendlineMacroSeries, trendline?.macro, true);
 
   // ── Supply / demand zones — draw each band as top/mid/bottom price lines ──
   // (mirrors the FVG style; lightweight-charts v4 has no native filled boxes).

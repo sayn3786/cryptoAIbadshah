@@ -697,21 +697,19 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
 
 
 def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
-    """Auto-drawn diagonal trendline across recent swing pivots.
+    """Two-scale auto-drawn diagonal trendlines.
 
-    In a downtrend it fits a DESCENDING resistance line across the swing highs;
-    in an uptrend an ASCENDING support line across the swing lows. The slope is
-    the regression slope of the recent pivots; the intercept is anchored to the
-    extreme pivot so the line hugs the tops (resistance) or bottoms (support),
-    exactly like a hand-drawn trendline. Also reports whether price has broken
-    the line (a trendline break is an early trend-change signal).
+    Returns {"macro": {...}|None, "local": {...}|None}:
+      • MACRO — the dominant trend ceiling/floor, anchored on the raw price
+        extremes of the early half vs the recent half. Far from price, rarely
+        touched, but a break is a regime change. Used as a BIAS filter.
+      • LOCAL — the near-price line across the two most-recent swing pivots.
+        The actionable line: its break/rejection is a trigger and its value
+        anchors entry/SL/TP. Used as the TRIGGER.
 
-    Returns {} when there's no clean trend / not enough pivots. Otherwise:
-      type          'resistance' | 'support'
-      direction     'descending' | 'ascending'
-      anchor/end    {timestamp, value} — two points to draw the line
-      current_value line value at the latest candle
-      dist_pct      price vs line (%), touches, broken ('up'|'down'|None)
+    Each sub-dict: type ('resistance'|'support'), direction, scale, touches,
+    anchor/end {timestamp,value} to draw, current_value, price, dist_pct,
+    broken ('up'|'down'|None). Returns {} only when neither line can be built.
     """
     n = len(candles)
     if n < window * 2 + 6:
@@ -726,14 +724,38 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
     if   recent < older * 0.998: trend = "down"
     elif recent > older * 1.002: trend = "up"
     else:                         trend = "flat"
+    cur = closes[-1]
+    xN  = n - 1
 
-    # Anchor on the raw price extremes of the early half vs the recent half.
-    # A steep leg of a trend often has NO swing-high pivots (each bar just lower
-    # than the last), so a pivot-only line silently fails there — the whole
-    # reason the line wasn't drawing. Connecting the early extreme to the recent
-    # extreme always produces a line and matches how auto-trendline tools work.
+    def _build(iA, pA, iB, pB, kind, direction, scale):
+        dx = iB - iA
+        if dx == 0:
+            return None
+        slope = (pB - pA) / dx
+        at = lambda x: pA + slope * (x - iA)
+        line_now = at(xN)
+        buf = abs(line_now) * 0.0015
+        broken = None
+        if kind == "resistance" and cur > line_now + buf:
+            broken = "up"
+        elif kind == "support" and cur < line_now - buf:
+            broken = "down"
+        piv = ph if kind == "resistance" else pl
+        touches = 2 + sum(1 for p in piv
+                          if abs(p["price"] - at(p["index"])) / (p["price"] + 1e-9) < 0.005)
+        return {
+            "type": kind, "direction": direction, "scale": scale, "touches": touches,
+            "anchor":        {"timestamp": candles[iA]["timestamp"], "value": round(pA, 8)},
+            "end":           {"timestamp": candles[xN]["timestamp"], "value": round(line_now, 8)},
+            "current_value": round(line_now, 8),
+            "price":         round(cur, 8),
+            "dist_pct":      round((cur - line_now) / (line_now + 1e-9) * 100, 2),
+            "broken":        broken,
+        }
+
+    # ── MACRO: raw price extremes, early half → recent half ───────────────────
     w      = window
-    lo_end = max(w + 1, int(n * 0.5))          # boundary between early / recent
+    lo_end = max(w + 1, int(n * 0.5))
     def _argext(seq, a, b, want_max):
         b = min(b, n - 1)
         idx = a
@@ -742,55 +764,40 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
                 idx = i
         return idx
 
-    # Resistance: early peak → recent (lower) peak → descending line
-    rA = _argext(highs, w, lo_end, True)
-    rB = _argext(highs, lo_end + 1, n - 1 - w, True)
-    res = (rA, rB) if (rB > rA and highs[rB] <= highs[rA] * 1.002) else None
-    # Support: early trough → recent (higher) trough → ascending line
-    sA = _argext(lows, w, lo_end, False)
-    sB = _argext(lows, lo_end + 1, n - 1 - w, False)
-    sup = (sA, sB) if (sB > sA and lows[sB] >= lows[sA] * 0.998) else None
+    macro = None
+    if trend in ("down", "flat"):
+        rA = _argext(highs, w, lo_end, True)
+        rB = _argext(highs, lo_end + 1, n - 1 - w, True)
+        if rB > rA and highs[rB] <= highs[rA] * 1.002:
+            macro = _build(rA, highs[rA], rB, highs[rB], "resistance", "descending", "macro")
+    if macro is None and trend in ("up", "flat"):
+        sA = _argext(lows, w, lo_end, False)
+        sB = _argext(lows, lo_end + 1, n - 1 - w, False)
+        if sB > sA and lows[sB] >= lows[sA] * 0.998:
+            macro = _build(sA, lows[sA], sB, lows[sB], "support", "ascending", "macro")
 
-    if   trend == "down" and res: pair, kind, direction, src = res, "resistance", "descending", highs
-    elif trend == "up"   and sup: pair, kind, direction, src = sup, "support",    "ascending",  lows
-    elif res and (not sup or trend == "down"):
-        pair, kind, direction, src = res, "resistance", "descending", highs
-    elif sup:
-        pair, kind, direction, src = sup, "support", "ascending", lows
-    else:
+    # ── LOCAL: two most-recent swing pivots (near price) ──────────────────────
+    def _local(pivots, kind, descending):
+        if len(pivots) < 2:
+            return None
+        for a, b in ((-2, -1), (-3, -1)):
+            if len(pivots) < -a:
+                continue
+            P1, P2 = pivots[a], pivots[b]
+            slopes_ok = (P2["price"] <= P1["price"] * 1.01) if descending \
+                        else (P2["price"] >= P1["price"] * 0.99)
+            if slopes_ok and P2["index"] > P1["index"]:
+                return _build(P1["index"], P1["price"], P2["index"], P2["price"],
+                              kind, "descending" if descending else "ascending", "local")
+        return None
+
+    if   trend == "down": local = _local(ph, "resistance", True)  or _local(pl, "support", False)
+    elif trend == "up":   local = _local(pl, "support", False)    or _local(ph, "resistance", True)
+    else:                 local = _local(ph, "resistance", True)  or _local(pl, "support", False)
+
+    if not macro and not local:
         return {}
-
-    iA, iB = pair
-    dx = iB - iA
-    if dx == 0:
-        return {}
-    slope = (src[iB] - src[iA]) / dx
-    at = lambda x: src[iA] + slope * (x - iA)
-    xN       = n - 1
-    line_now = at(xN)
-    cur      = closes[-1]
-    buf      = abs(line_now) * 0.0015
-    broken   = None
-    if kind == "resistance" and cur > line_now + buf:
-        broken = "up"      # bullish break of descending resistance
-    elif kind == "support" and cur < line_now - buf:
-        broken = "down"    # bearish break of ascending support
-
-    piv = ph if kind == "resistance" else pl
-    touches = 2 + sum(1 for p in piv
-                      if abs(p["price"] - at(p["index"])) / (p["price"] + 1e-9) < 0.005)
-
-    return {
-        "type":          kind,
-        "direction":     direction,
-        "touches":       touches,
-        "anchor":        {"timestamp": candles[iA]["timestamp"], "value": round(src[iA], 8)},
-        "end":           {"timestamp": candles[xN]["timestamp"], "value": round(line_now, 8)},
-        "current_value": round(line_now, 8),
-        "price":         round(cur, 8),
-        "dist_pct":      round((cur - line_now) / (line_now + 1e-9) * 100, 2),
-        "broken":        broken,
-    }
+    return {"macro": macro, "local": local}
 
 
 def detect_sr_zones(candles: List[Dict], window: int = 3,
