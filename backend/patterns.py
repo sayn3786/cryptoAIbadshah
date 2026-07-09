@@ -795,6 +795,13 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
     elif trend == "up":   local = _local(pl, "support", False)    or _local(ph, "resistance", True)
     else:                 local = _local(ph, "resistance", True)  or _local(pl, "support", False)
 
+    # Drop a decisively-broken macro line. Once price has moved well past it (a
+    # steep line extrapolating below/above price by >5%), it's no longer acting
+    # as structure — drawing a "resistance" line sitting under price just reads
+    # as wrong. A FRESH break (≤5% past) is kept so the just-broken line shows.
+    if macro and macro.get("broken") and abs(macro.get("dist_pct", 0)) > 5:
+        macro = None
+
     if not macro and not local:
         return {}
     return {"macro": macro, "local": local}
