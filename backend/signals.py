@@ -1066,6 +1066,48 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= pts; g['momentum'] -= pts
         bear_reasons.append(div_desc or "Hidden bearish divergence — price lower high, RSI higher high (downtrend continuation)")
 
+    # ── Diagonal trendline (auto-drawn) ───────────────────────────────────────
+    # A break of a descending resistance line is an early bullish trend change;
+    # a break of an ascending support line is an early bearish one. When intact,
+    # price pressing INTO the line from below (resistance) is a rejection risk;
+    # riding along an ascending support is trend-intact bullish.
+    tl = analysis.get("trendline") or {}
+    tl_type = tl.get("type")
+    if tl_type == "resistance":
+        line_v = tl.get("current_value")
+        if tl.get("broken") == "up":
+            score += 14; g['trend'] += 14
+            bull_reasons.append(f"Trendline BREAKOUT — price broke above the descending resistance line (~${line_v:,.4f}); downtrend structure cracking, early bullish reversal")
+        elif tl.get("dist_pct") is not None and -1.2 <= tl["dist_pct"] < 0:
+            score -= 8; g['trend'] -= 8
+            bear_reasons.append(f"Price pressing into descending resistance (~${line_v:,.4f}, {abs(tl['dist_pct']):.1f}% below) — rejection risk, downtrend line still capping")
+    elif tl_type == "support":
+        line_v = tl.get("current_value")
+        if tl.get("broken") == "down":
+            score -= 14; g['trend'] -= 14
+            bear_reasons.append(f"Trendline BREAKDOWN — price broke below the ascending support line (~${line_v:,.4f}); uptrend structure cracking, early bearish reversal")
+        elif tl.get("dist_pct") is not None and 0 < tl["dist_pct"] <= 1.2:
+            score += 8; g['trend'] += 8
+            bull_reasons.append(f"Price holding above ascending support (~${line_v:,.4f}, {tl['dist_pct']:.1f}% above) — uptrend line intact, buyers defending")
+
+    # ── Supply / demand zones (S/R bands) ─────────────────────────────────────
+    # Price inside or approaching an overhead supply zone = sellers likely to
+    # defend (bearish lean); inside/approaching a demand zone = buyers likely to
+    # step in (bullish lean). Modest weight — structure context, not a trigger.
+    srz = analysis.get("sr_zones") or {}
+    _rz = srz.get("resistance") or {}
+    _sz = srz.get("support") or {}
+    if _rz.get("status") in ("inside", "approaching"):
+        pts = 8 if _rz["status"] == "inside" else 5
+        score -= pts; g['pattern'] -= pts
+        _w = "inside" if _rz["status"] == "inside" else f"approaching ({abs(_rz.get('dist_pct',0)):.1f}% away)"
+        bear_reasons.append(f"Price {_w} supply/resistance zone ${_rz.get('bottom'):,.4f}–${_rz.get('top'):,.4f} ({_rz.get('touches',0)} touches) — overhead sellers, rejection risk")
+    if _sz.get("status") in ("inside", "approaching"):
+        pts = 8 if _sz["status"] == "inside" else 5
+        score += pts; g['pattern'] += pts
+        _w = "inside" if _sz["status"] == "inside" else f"approaching ({abs(_sz.get('dist_pct',0)):.1f}% away)"
+        bull_reasons.append(f"Price {_w} demand/support zone ${_sz.get('bottom'):,.4f}–${_sz.get('top'):,.4f} ({_sz.get('touches',0)} touches) — buyers likely to defend, bounce zone")
+
     # ── Bollinger Bands ───────────────────────────────────────────────────────
     # Squeeze = coiled spring. Breakout after squeeze = high-probability burst.
     # Weights conservative until we have live performance data — can raise later.

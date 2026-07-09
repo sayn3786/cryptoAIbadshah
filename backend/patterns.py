@@ -694,3 +694,134 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
         chosen["label"] += " (opposite setup also present — range, wait for break)"
     chosen.pop("_ago", None)
     return chosen
+
+
+def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
+    """Auto-drawn diagonal trendline across recent swing pivots.
+
+    In a downtrend it fits a DESCENDING resistance line across the swing highs;
+    in an uptrend an ASCENDING support line across the swing lows. The slope is
+    the regression slope of the recent pivots; the intercept is anchored to the
+    extreme pivot so the line hugs the tops (resistance) or bottoms (support),
+    exactly like a hand-drawn trendline. Also reports whether price has broken
+    the line (a trendline break is an early trend-change signal).
+
+    Returns {} when there's no clean trend / not enough pivots. Otherwise:
+      type          'resistance' | 'support'
+      direction     'descending' | 'ascending'
+      anchor/end    {timestamp, value} — two points to draw the line
+      current_value line value at the latest candle
+      dist_pct      price vs line (%), touches, broken ('up'|'down'|None)
+    """
+    n = len(candles)
+    if n < window * 2 + 6:
+        return {}
+    ph, pl = find_pivots(candles, window=window)
+    closes = [c["close"] for c in candles]
+    half = n // 2
+    older  = sum(closes[:half])  / max(half, 1)
+    recent = sum(closes[half:])  / max(n - half, 1)
+    if   recent < older * 0.997: trend = "down"
+    elif recent > older * 1.003: trend = "up"
+    else:                         trend = "flat"
+
+    def _fit(pivots: List[Dict], kind: str):
+        pts = pivots[-4:] if len(pivots) >= 3 else pivots[-2:]
+        if len(pts) < 2:
+            return None
+        xs = [p["index"] for p in pts]
+        ys = [p["price"] for p in pts]
+        m  = len(xs)
+        mean_x = sum(xs) / m
+        mean_y = sum(ys) / m
+        den = sum((x - mean_x) ** 2 for x in xs)
+        if den == 0:
+            return None
+        slope = sum((xs[i] - mean_x) * (ys[i] - mean_y) for i in range(m)) / den
+        # Anchor intercept to the extreme pivot so the line sits ON the tops
+        # (resistance) or bottoms (support) rather than through their middle.
+        resid = [ys[i] - slope * xs[i] for i in range(m)]
+        b = max(resid) if kind == "resistance" else min(resid)
+        at = lambda x: slope * x + b
+        touches = sum(1 for p in pivots
+                      if abs(p["price"] - at(p["index"])) / (p["price"] + 1e-9) < 0.004)
+        x0, xN = xs[0], n - 1
+        return {"slope": slope, "at": at, "x0": x0, "xN": xN,
+                "v0": at(x0), "vN": at(xN), "touches": touches}
+
+    if trend == "down":
+        fit, kind, direction = _fit(ph, "resistance"), "resistance", "descending"
+    elif trend == "up":
+        fit, kind, direction = _fit(pl, "support"), "support", "ascending"
+    else:
+        return {}
+    if not fit or fit["touches"] < 2:
+        return {}
+
+    cur      = closes[-1]
+    line_now = fit["vN"]
+    buf      = abs(line_now) * 0.0015
+    broken   = None
+    if kind == "resistance" and cur > line_now + buf:
+        broken = "up"      # bullish break of descending resistance
+    elif kind == "support" and cur < line_now - buf:
+        broken = "down"    # bearish break of ascending support
+
+    return {
+        "type":          kind,
+        "direction":     direction,
+        "touches":       fit["touches"],
+        "anchor":        {"timestamp": candles[fit["x0"]]["timestamp"], "value": round(fit["v0"], 8)},
+        "end":           {"timestamp": candles[fit["xN"]]["timestamp"], "value": round(fit["vN"], 8)},
+        "current_value": round(line_now, 8),
+        "price":         round(cur, 8),
+        "dist_pct":      round((cur - line_now) / (line_now + 1e-9) * 100, 2),
+        "broken":        broken,
+    }
+
+
+def detect_sr_zones(candles: List[Dict], window: int = 3,
+                    cluster_pct: float = 0.006) -> Dict:
+    """Nearest supply (resistance) zone above price and demand (support) zone
+    below price, each built by clustering swing highs / lows.
+
+    A zone is a band (top/bottom), not a single line — the "decision box" a
+    trader draws around a level. `status` tells whether price is inside the
+    zone, approaching it, or away. Feeds "price into resistance/support" into
+    confluence and draws the band on the chart.
+    """
+    n = len(candles)
+    if n < window * 2 + 4:
+        return {}
+    ph, pl = find_pivots(candles, window=window)
+    cur = candles[-1]["close"]
+
+    def _zone(pivots: List[Dict], above: bool):
+        levels = sorted(p["price"] for p in pivots if (p["price"] > cur) == above)
+        if not levels:
+            return None
+        anchor  = levels[0] if above else levels[-1]     # nearest to price
+        cluster = [x for x in levels if abs(x - anchor) / (anchor + 1e-9) <= cluster_pct * 2]
+        top, bottom = max(cluster), min(cluster)
+        if top == bottom:                                # single touch → pad to a band
+            pad = top * (cluster_pct / 2)
+            top, bottom = top + pad, bottom - pad
+        mid = (top + bottom) / 2
+        dist_pct = (mid - cur) / (cur + 1e-9) * 100
+        if bottom <= cur <= top:
+            status = "inside"
+        elif abs(dist_pct) <= 0.5:
+            status = "approaching"
+        else:
+            status = "away"
+        return {"top": round(top, 8), "bottom": round(bottom, 8), "mid": round(mid, 8),
+                "touches": len(cluster), "dist_pct": round(dist_pct, 2), "status": status}
+
+    out: Dict = {}
+    res = _zone(ph, above=True)
+    sup = _zone(pl, above=False)
+    if res: out["resistance"] = res
+    if sup: out["support"]    = sup
+    if out:
+        out["price"] = round(cur, 8)
+    return out

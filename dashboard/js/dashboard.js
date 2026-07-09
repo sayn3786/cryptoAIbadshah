@@ -87,6 +87,10 @@ function initCharts() {
   S.ichimokuSpanASeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#a855f7', lineWidth: 2, lineStyle: 2 });
   S.ichimokuSpanBSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#22d3ee', lineWidth: 2, lineStyle: 2 });
 
+  // Auto-drawn diagonal trendline (descending resistance / ascending support).
+  // Colour is set per-render (red for resistance, green for support).
+  S.trendlineSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#e2e8f0', lineWidth: 2 });
+
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
     ...CHART_OPTS,
@@ -220,7 +224,7 @@ function renderAll(a) {
   renderOiRotation(a.regime, a.symbol);
   renderLiquidations(a.liquidations);
   renderMarketCap(a.market_cap);
-  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol);
+  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones);
   renderRSIChart(a.rsi_series);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
@@ -586,7 +590,7 @@ function renderMarketCap(mcap) {
   rankEl.textContent = 'Live · CoinGecko';
 }
 
-function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol) {
+function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol, trendline, srZones) {
   if (!candles?.length || !S.candleSeries) return;
 
   // Clear FVG + swing/realized price lines and wave markers from the previous token/TF.
@@ -697,6 +701,39 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol)
       title: `Top band $${(topSig.top_band/1000).toFixed(1)}K`,
     }));
   }
+
+  // ── Diagonal trendline (descending resistance / ascending support) ────────
+  if (trendline?.type && trendline.anchor && trendline.end) {
+    const isRes = trendline.type === 'resistance';
+    const broke = trendline.broken;               // 'up' | 'down' | null
+    // Green when support / bullish break, red when resistance / bearish break.
+    const col = (isRes && broke === 'up') ? '#10b981'
+              : (!isRes && broke === 'down') ? '#ef4444'
+              : isRes ? '#f87171' : '#34d399';
+    S.trendlineSeries.applyOptions({ color: col, lineStyle: broke ? 0 : 2 });
+    S.trendlineSeries.setData([
+      { time: Math.floor(trendline.anchor.timestamp / 1000), value: trendline.anchor.value },
+      { time: Math.floor(trendline.end.timestamp    / 1000), value: trendline.end.value },
+    ]);
+  } else {
+    S.trendlineSeries.setData([]);
+  }
+
+  // ── Supply / demand zones — draw each band as top/mid/bottom price lines ──
+  // (mirrors the FVG style; lightweight-charts v4 has no native filled boxes).
+  const drawZone = (z, isRes) => {
+    if (!z) return;
+    const strong = z.status === 'inside' || z.status === 'approaching';
+    const col    = isRes ? 'rgba(239,68,68,0.75)'  : 'rgba(16,185,129,0.75)';
+    const dim    = isRes ? 'rgba(239,68,68,0.28)'  : 'rgba(16,185,129,0.28)';
+    const label  = isRes ? 'Resistance Zone' : 'Support Zone';
+    const tag    = z.status === 'inside' ? ' • IN ZONE' : z.status === 'approaching' ? ' • near' : '';
+    S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.top,    color: dim, lineWidth: strong ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
+    S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.mid,    color: col, lineWidth: strong ? 2 : 1, lineStyle: 3, title: `${label}${tag}` }));
+    S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.bottom, color: dim, lineWidth: strong ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
+  };
+  if (srZones?.resistance) drawZone(srZones.resistance, true);
+  if (srZones?.support)    drawZone(srZones.support, false);
 
   S.mainChart.timeScale().fitContent();
 }

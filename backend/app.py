@@ -36,7 +36,7 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     calculate_vwap, calculate_stoch_rsi, calculate_volume_signal)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
-from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup
+from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
 from signals import generate_signal
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs
@@ -495,6 +495,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     choch    = detect_choch(spot, window=3)
     liq_grab = detect_liquidity_grab(spot, window=3, lookback=5)
     acc_setup = detect_acc_eql_fvg_setup(spot, fvgs, window=20)
+    # Diagonal trendline + supply/demand zones — computed on the same 60-candle
+    # window the chart draws so the overlay lines up with the visible candles.
+    _chart_win = spot[-60:] if len(spot) >= 60 else spot
+    trendline = detect_trendline(_chart_win, window=3)
+    sr_zones  = detect_sr_zones(_chart_win, window=3)
 
     # Flag patterns — detect on the same candles already fetched for this TF.
     # One flag set per timeframe, no cross-TF duplication.
@@ -670,6 +675,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "choch":        choch,
         "liq_grab":     liq_grab,
         "acc_setup":    acc_setup,
+        "trendline":    trendline,
+        "sr_zones":     sr_zones,
         "engulfing":    engulfing,
         "flags":        flags,
         "elliott_wave": elliott,
