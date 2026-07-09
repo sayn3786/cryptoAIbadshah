@@ -79,8 +79,8 @@ function initCharts() {
   // autoscaleInfoProvider: () => null prevents these overlay series from
   // stretching the Y-axis — only candles drive the price scale.
   const _overlayOpts = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
-  S.supertrendUpSeries   = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#3b82f6', lineWidth: 2 });
-  S.supertrendDownSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#fb923c', lineWidth: 2 });
+  S.supertrendUpSeries   = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#3b82f6', lineWidth: 3 });
+  S.supertrendDownSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#fb923c', lineWidth: 3 });
 
   // Ichimoku cloud boundaries (Span A / Span B) — purple/cyan, distinct from
   // every other overlay color on the chart.
@@ -88,9 +88,10 @@ function initCharts() {
   S.ichimokuSpanBSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#22d3ee', lineWidth: 2, lineStyle: 2 });
 
   // Auto-drawn diagonal trendlines. LOCAL = near-price actionable line (solid,
-  // coloured per-render); MACRO = multi-week ceiling/floor (dimmer, dashed).
-  S.trendlineSeries      = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#e2e8f0', lineWidth: 2 });
-  S.trendlineMacroSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#94a3b8', lineWidth: 1, lineStyle: 2 });
+  // thick, red=resistance / green=support); MACRO = multi-week context line
+  // (grey, dashed). Colours match the chart legend.
+  S.trendlineSeries      = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#ef4444', lineWidth: 3 });
+  S.trendlineMacroSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#cbd5e1', lineWidth: 2, lineStyle: 2 });
 
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
@@ -708,13 +709,18 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     if (!line?.type || !line.anchor || !line.end) { series.setData([]); return; }
     const isRes = line.type === 'resistance';
     const broke = line.broken;                    // 'up' | 'down' | null
-    // Green for support / bullish break, red for resistance / bearish break.
-    const col = (isRes && broke === 'up') ? '#10b981'
-              : (!isRes && broke === 'down') ? '#ef4444'
-              : isMacro ? (isRes ? '#b45f5f' : '#5f9e7f')   // muted for macro
-              : isRes ? '#f87171' : '#34d399';
-    // Local: solid on break else dashed. Macro: always dashed & thin.
-    series.applyOptions({ color: col, lineWidth: isMacro ? 1 : 2, lineStyle: isMacro ? 2 : (broke ? 0 : 2) });
+    let col, style, width;
+    if (isMacro) {
+      // Macro = neutral grey dashed context line (one legend colour).
+      col = '#cbd5e1'; style = 2; width = 2;
+    } else {
+      // Local = solid, thick. Red = resistance / green = support; on a break the
+      // line flips to the breakout-direction colour.
+      col = isRes ? (broke === 'up' ? '#22c55e' : '#ef4444')
+                  : (broke === 'down' ? '#ef4444' : '#22c55e');
+      style = 0; width = 3;
+    }
+    series.applyOptions({ color: col, lineWidth: width, lineStyle: style });
     series.setData([
       { time: Math.floor(line.anchor.timestamp / 1000), value: line.anchor.value },
       { time: Math.floor(line.end.timestamp    / 1000), value: line.end.value },
@@ -733,7 +739,7 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     const label  = isRes ? 'Resistance Zone' : 'Support Zone';
     const tag    = z.status === 'inside' ? ' • IN ZONE' : z.status === 'approaching' ? ' • near' : '';
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.top,    color: dim, lineWidth: strong ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
-    S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.mid,    color: col, lineWidth: strong ? 2 : 1, lineStyle: 3, title: `${label}${tag}` }));
+    S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.mid,    color: col, lineWidth: strong ? 3 : 2, lineStyle: 3, title: `${label}${tag}` }));
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.bottom, color: dim, lineWidth: strong ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
   };
   if (srZones?.resistance) drawZone(srZones.resistance, true);
