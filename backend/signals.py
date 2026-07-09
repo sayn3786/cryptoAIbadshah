@@ -1862,6 +1862,22 @@ def generate_signal(analysis: Dict) -> Dict:
         st_price = _st.get("value")
         st_dir   = _st.get("direction")
 
+        # ── Structure levels: diagonal trendline + supply/demand zones ────────
+        # Retrofit the trendline & S/R zones into the trade levels so the plan
+        # trades WITH structure: enter at a zone/line, stop just beyond it, and
+        # target the opposing zone/line. `_tl_val` is the trendline's price at
+        # the current candle (a diagonal, dynamic level like SuperTrend).
+        _tl       = analysis.get("trendline") or {}
+        _tl_val   = _tl.get("current_value")
+        _tl_type  = _tl.get("type")         # 'resistance' | 'support'
+        _tl_sup   = _tl_val if _tl_type == "support"    else None
+        _tl_res   = _tl_val if _tl_type == "resistance" else None
+        _srz      = analysis.get("sr_zones") or {}
+        _demand   = _srz.get("support")    or {}   # zone BELOW price
+        _supply   = _srz.get("resistance") or {}   # zone ABOVE price
+        _dem_top, _dem_bot = _demand.get("top"), _demand.get("bottom")
+        _sup_bot, _sup_top = _supply.get("bottom"), _supply.get("top")
+
         def _gap(level, above: bool) -> float:
             if level is None or current_price <= 0:
                 return float("inf")
@@ -1870,7 +1886,9 @@ def generate_signal(analysis: Dict) -> Dict:
         if direction == "LONG":
             # Entry: market price or limit within 1% at a nearby support
             _vwap_val  = (analysis.get("vwap") or {}).get("vwap")
-            _close_sup = [lv for lv in [ema21_val, bb_lower, _vwap_val]
+            # Entry: nearest support — now including the demand-zone top edge and
+            # an ascending support trendline (both natural limit-buy levels).
+            _close_sup = [lv for lv in [ema21_val, bb_lower, _vwap_val, _dem_top, _tl_sup]
                           if lv and 0 <= _gap(lv, above=False) <= ENTRY_LIMIT]
             if swing_low and 0 <= _gap(swing_low, above=False) <= ENTRY_LIMIT:
                 _close_sup.append(swing_low)
@@ -1880,9 +1898,10 @@ def generate_signal(analysis: Dict) -> Dict:
             else:
                 entry = round(current_price * 0.998, 8)  # 0.2% pullback limit
 
-            # SL: just below nearest technical invalidation level
+            # SL: just below nearest invalidation — demand-zone BOTTOM and the
+            # ascending support line are added (losing the zone/line = thesis dead).
             _sl_anchors = []
-            for _lv in [ema21_val, bb_lower, swing_low]:
+            for _lv in [ema21_val, bb_lower, swing_low, _dem_bot, _tl_sup]:
                 if _lv and 0 < (entry - _lv) / entry <= SL_ANCHOR_MAX:
                     _sl_anchors.append(_lv)
             if st_price and st_dir == "bullish" and 0 < (entry - st_price) / entry <= SL_ANCHOR_MAX:
@@ -1900,7 +1919,9 @@ def generate_signal(analysis: Dict) -> Dict:
 
         elif direction == "SHORT":
             _vwap_val  = (analysis.get("vwap") or {}).get("vwap")
-            _close_res = [lv for lv in [ema21_val, bb_upper, _vwap_val]
+            # Entry: nearest resistance — now including the supply-zone bottom edge
+            # and a descending resistance trendline (natural limit-short levels).
+            _close_res = [lv for lv in [ema21_val, bb_upper, _vwap_val, _sup_bot, _tl_res]
                           if lv and 0 <= _gap(lv, above=True) <= ENTRY_LIMIT]
             if swing_high and 0 <= _gap(swing_high, above=True) <= ENTRY_LIMIT:
                 _close_res.append(swing_high)
@@ -1910,8 +1931,10 @@ def generate_signal(analysis: Dict) -> Dict:
             else:
                 entry = round(current_price * 1.002, 8)  # 0.2% bounce limit
 
+            # SL: above nearest invalidation — supply-zone TOP and the descending
+            # resistance line added (reclaiming the zone/line = short is wrong).
             _sl_anchors = []
-            for _lv in [ema21_val, bb_upper, swing_high]:
+            for _lv in [ema21_val, bb_upper, swing_high, _sup_top, _tl_res]:
                 if _lv and 0 < (_lv - entry) / entry <= SL_ANCHOR_MAX:
                     _sl_anchors.append(_lv)
             if st_price and st_dir == "bearish" and 0 < (st_price - entry) / entry <= SL_ANCHOR_MAX:
@@ -1993,6 +2016,39 @@ def generate_signal(analysis: Dict) -> Dict:
                 _tp_short(tp2_dist),
                 _tp_short(tp3_dist),
             ]
+
+        # ── Retrofit TP to the opposing structure (zone / trendline) ──────────
+        # The most natural target is the next wall: an overhead supply zone or a
+        # descending resistance line for a LONG, a demand zone or ascending
+        # support line for a SHORT. When that structure sits within reach and
+        # offers a worthwhile R (≥1.4× the SL distance), anchor TP2 to it, TP1
+        # partway, and TP3 as the break-through extension — so the plan trades
+        # to real structure instead of pure ATR multiples. Otherwise the tuned
+        # ATR/RR targets above stand unchanged.
+        if sl and tp_targets and tp_targets[0] and entry:
+            _risk = abs(sl - entry)
+            if direction == "LONG":
+                _cands = [lv for lv in [_sup_bot, _tl_res] if lv and lv > entry * 1.005]
+                _opp = min(_cands) if _cands else None
+                _main = _opp - abs(_opp - entry) * 0.05 if _opp else None
+            else:  # SHORT
+                _cands = [lv for lv in [_dem_top, _tl_sup] if lv and lv < entry * 0.995]
+                _opp = max(_cands) if _cands else None
+                _main = _opp + abs(entry - _opp) * 0.05 if _opp else None
+
+            if _main and _risk > 0:
+                _d = abs(_main - entry)
+                if _d >= _risk * 1.4 and _d <= _max_tp3_abs * 1.05:
+                    _sgn = 1 if direction == "LONG" else -1
+                    tp_targets = [
+                        round(entry + _sgn * _d * 0.55, 8),   # TP1 — partway to the wall
+                        round(entry + _sgn * _d,        8),   # TP2 — the opposing zone/line
+                        round(entry + _sgn * _d * 1.45, 8),   # TP3 — break-through extension
+                    ]
+                    _lbl = ("supply zone / resistance line" if direction == "LONG"
+                            else "demand zone / support line")
+                    (bull_reasons if direction == "LONG" else bear_reasons).append(
+                        f"🎯 TP2 anchored to the opposing {_lbl} (~${_main:,.4f}) — trading to real structure, not just ATR")
 
         if sl and sl != entry and tp_targets and tp_targets[0] is not None:
             rr_ratio = round(abs((tp_targets[1] or tp_targets[0]) - entry) / abs(sl - entry), 2)
