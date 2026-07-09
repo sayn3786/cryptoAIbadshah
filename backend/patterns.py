@@ -717,49 +717,58 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
     if n < window * 2 + 6:
         return {}
     ph, pl = find_pivots(candles, window=window)
+    highs  = [c["high"]  for c in candles]
+    lows   = [c["low"]   for c in candles]
     closes = [c["close"] for c in candles]
     half = n // 2
     older  = sum(closes[:half])  / max(half, 1)
     recent = sum(closes[half:])  / max(n - half, 1)
-    if   recent < older * 0.997: trend = "down"
-    elif recent > older * 1.003: trend = "up"
+    if   recent < older * 0.998: trend = "down"
+    elif recent > older * 1.002: trend = "up"
     else:                         trend = "flat"
 
-    def _fit(pivots: List[Dict], kind: str):
-        pts = pivots[-4:] if len(pivots) >= 3 else pivots[-2:]
-        if len(pts) < 2:
-            return None
-        xs = [p["index"] for p in pts]
-        ys = [p["price"] for p in pts]
-        m  = len(xs)
-        mean_x = sum(xs) / m
-        mean_y = sum(ys) / m
-        den = sum((x - mean_x) ** 2 for x in xs)
-        if den == 0:
-            return None
-        slope = sum((xs[i] - mean_x) * (ys[i] - mean_y) for i in range(m)) / den
-        # Anchor intercept to the extreme pivot so the line sits ON the tops
-        # (resistance) or bottoms (support) rather than through their middle.
-        resid = [ys[i] - slope * xs[i] for i in range(m)]
-        b = max(resid) if kind == "resistance" else min(resid)
-        at = lambda x: slope * x + b
-        touches = sum(1 for p in pivots
-                      if abs(p["price"] - at(p["index"])) / (p["price"] + 1e-9) < 0.004)
-        x0, xN = xs[0], n - 1
-        return {"slope": slope, "at": at, "x0": x0, "xN": xN,
-                "v0": at(x0), "vN": at(xN), "touches": touches}
+    # Anchor on the raw price extremes of the early half vs the recent half.
+    # A steep leg of a trend often has NO swing-high pivots (each bar just lower
+    # than the last), so a pivot-only line silently fails there — the whole
+    # reason the line wasn't drawing. Connecting the early extreme to the recent
+    # extreme always produces a line and matches how auto-trendline tools work.
+    w      = window
+    lo_end = max(w + 1, int(n * 0.5))          # boundary between early / recent
+    def _argext(seq, a, b, want_max):
+        b = min(b, n - 1)
+        idx = a
+        for i in range(a, b + 1):
+            if (seq[i] > seq[idx]) if want_max else (seq[i] < seq[idx]):
+                idx = i
+        return idx
 
-    if trend == "down":
-        fit, kind, direction = _fit(ph, "resistance"), "resistance", "descending"
-    elif trend == "up":
-        fit, kind, direction = _fit(pl, "support"), "support", "ascending"
+    # Resistance: early peak → recent (lower) peak → descending line
+    rA = _argext(highs, w, lo_end, True)
+    rB = _argext(highs, lo_end + 1, n - 1 - w, True)
+    res = (rA, rB) if (rB > rA and highs[rB] <= highs[rA] * 1.002) else None
+    # Support: early trough → recent (higher) trough → ascending line
+    sA = _argext(lows, w, lo_end, False)
+    sB = _argext(lows, lo_end + 1, n - 1 - w, False)
+    sup = (sA, sB) if (sB > sA and lows[sB] >= lows[sA] * 0.998) else None
+
+    if   trend == "down" and res: pair, kind, direction, src = res, "resistance", "descending", highs
+    elif trend == "up"   and sup: pair, kind, direction, src = sup, "support",    "ascending",  lows
+    elif res and (not sup or trend == "down"):
+        pair, kind, direction, src = res, "resistance", "descending", highs
+    elif sup:
+        pair, kind, direction, src = sup, "support", "ascending", lows
     else:
         return {}
-    if not fit or fit["touches"] < 2:
-        return {}
 
+    iA, iB = pair
+    dx = iB - iA
+    if dx == 0:
+        return {}
+    slope = (src[iB] - src[iA]) / dx
+    at = lambda x: src[iA] + slope * (x - iA)
+    xN       = n - 1
+    line_now = at(xN)
     cur      = closes[-1]
-    line_now = fit["vN"]
     buf      = abs(line_now) * 0.0015
     broken   = None
     if kind == "resistance" and cur > line_now + buf:
@@ -767,12 +776,16 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
     elif kind == "support" and cur < line_now - buf:
         broken = "down"    # bearish break of ascending support
 
+    piv = ph if kind == "resistance" else pl
+    touches = 2 + sum(1 for p in piv
+                      if abs(p["price"] - at(p["index"])) / (p["price"] + 1e-9) < 0.005)
+
     return {
         "type":          kind,
         "direction":     direction,
-        "touches":       fit["touches"],
-        "anchor":        {"timestamp": candles[fit["x0"]]["timestamp"], "value": round(fit["v0"], 8)},
-        "end":           {"timestamp": candles[fit["xN"]]["timestamp"], "value": round(fit["vN"], 8)},
+        "touches":       touches,
+        "anchor":        {"timestamp": candles[iA]["timestamp"], "value": round(src[iA], 8)},
+        "end":           {"timestamp": candles[xN]["timestamp"], "value": round(line_now, 8)},
         "current_value": round(line_now, 8),
         "price":         round(cur, 8),
         "dist_pct":      round((cur - line_now) / (line_now + 1e-9) * 100, 2),
