@@ -545,7 +545,18 @@ function renderOiRotation(regime, symbol) {
 
 function renderOI(oi) {
   if (!oi) return;
-  document.getElementById('oiValue').textContent = fmtK(oi.value);
+  const valEl = document.getElementById('oiValue');
+  valEl.textContent = fmtK(oi.value);
+  // Flag when the value is a mock estimate (no live perp data reachable) vs a
+  // live exchange source, so a fixed fallback number can't be mistaken for real.
+  const src = oi.source;
+  if (src === 'mock') {
+    valEl.title = 'Estimated — live open-interest source unavailable';
+    valEl.style.opacity = '0.55';
+  } else {
+    valEl.title = src ? `Live OI (USD) via ${src.toUpperCase()}` : '';
+    valEl.style.opacity = '';
+  }
   const badge = document.getElementById('oiChange');
   const chg = oi.change_pct ?? 0;
   badge.textContent = pct(chg);

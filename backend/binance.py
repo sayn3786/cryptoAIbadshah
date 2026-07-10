@@ -1053,19 +1053,59 @@ class BinanceClient:
         return mock_funding_rate(symbol, limit)
 
     def get_open_interest(self, symbol: str) -> Dict:
+        """Open interest in USD. Primary source is OKX (works where Binance
+        futures is geo-blocked and covers alts like TAO that Binance may not
+        list); Binance is a USD fallback. Only when every live source fails do
+        we return a mock estimate (flagged source='mock')."""
+        base = symbol[:-4] if symbol.endswith("USDT") else symbol
+
+        # ── Primary: OKX perpetual OI in USD ────────────────────────────────
         try:
-            cur = float(self._get(f"{FUTURES_BASE}/fapi/v1/openInterest",
-                                  {"symbol": symbol})["openInterest"])
-            hist = self._get(f"{FUTURES_BASE}/futures/data/openInterestHist",
-                             {"symbol": symbol, "period": "1d", "limit": 14})
-            history = [{"timestamp": int(d["timestamp"]),
-                        "oi": float(d["sumOpenInterest"])} for d in hist]
-            chg = (cur - history[0]["oi"]) / history[0]["oi"] * 100 if history else 0.0
-            return {"value": round(cur, 2), "change_pct": round(chg, 2), "history": history}
+            d = self._get(f"{OKX_BASE}/api/v5/public/open-interest",
+                          {"instId": f"{base}-USDT-SWAP"})
+            rows = (d or {}).get("data") or []
+            oi_usd = float(rows[0].get("oiUsd") or 0) if rows else 0.0
+            if oi_usd > 0:
+                history, chg = [], 0.0
+                try:
+                    h = self._get(f"{OKX_BASE}/api/v5/rubik/stat/contracts/open-interest-volume",
+                                  {"ccy": base, "period": "1D"})
+                    hrows = sorted(((h or {}).get("data") or []), key=lambda r: int(r[0]))[-14:]
+                    history = [{"timestamp": int(r[0]), "oi": float(r[1])} for r in hrows]
+                    if len(history) >= 2 and history[0]["oi"] > 0:
+                        chg = (history[-1]["oi"] - history[0]["oi"]) / history[0]["oi"] * 100
+                except Exception:
+                    pass
+                return {"value": round(oi_usd, 2), "change_pct": round(chg, 2),
+                        "history": history, "source": "okx"}
         except Exception:
             pass
+
+        # ── Fallback: Binance futures, converted to USD ─────────────────────
+        try:
+            cur_coins = float(self._get(f"{FUTURES_BASE}/fapi/v1/openInterest",
+                                        {"symbol": symbol})["openInterest"])
+            mark = float(self._get(f"{FUTURES_BASE}/fapi/v1/premiumIndex",
+                                   {"symbol": symbol})["markPrice"])
+            oi_usd = cur_coins * mark
+            hist = self._get(f"{FUTURES_BASE}/futures/data/openInterestHist",
+                             {"symbol": symbol, "period": "1d", "limit": 14})
+            # sumOpenInterestValue is already USD (sumOpenInterest is coins)
+            history = [{"timestamp": int(d["timestamp"]),
+                        "oi": float(d.get("sumOpenInterestValue") or 0)} for d in hist]
+            chg = ((history[-1]["oi"] - history[0]["oi"]) / history[0]["oi"] * 100
+                   if len(history) >= 2 and history[0]["oi"] > 0 else 0.0)
+            if oi_usd > 0:
+                return {"value": round(oi_usd, 2), "change_pct": round(chg, 2),
+                        "history": history, "source": "binance"}
+        except Exception:
+            pass
+
+        # ── Last resort: mock estimate (no live perp data reachable) ────────
         from mock_data import mock_open_interest
-        return mock_open_interest(symbol)
+        m = mock_open_interest(symbol)
+        m["source"] = "mock"
+        return m
 
     def get_liquidations(self, symbol: str) -> Dict:
         try:
