@@ -718,6 +718,12 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
     highs  = [c["high"]  for c in candles]
     lows   = [c["low"]   for c in candles]
     closes = [c["close"] for c in candles]
+    # Body extremes (open/close) — both lines anchor on BODIES, not raw wicks, so
+    # a lone spike candle can't drag a trendline to a level price never accepted.
+    # Break confirmation still uses the close (in _build), so a wick poking
+    # through the line is ignored — only a close beyond it counts as a break.
+    bhigh  = [max(c["open"], c["close"]) for c in candles]
+    blow   = [min(c["open"], c["close"]) for c in candles]
     half = n // 2
     older  = sum(closes[:half])  / max(half, 1)
     recent = sum(closes[half:])  / max(n - half, 1)
@@ -753,7 +759,7 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
             "broken":        broken,
         }
 
-    # ── MACRO: raw price extremes, early half → recent half ───────────────────
+    # ── MACRO: body extremes, early half → recent half ────────────────────────
     w      = window
     lo_end = max(w + 1, int(n * 0.5))
     def _argext(seq, a, b, want_max):
@@ -766,15 +772,15 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
 
     macro = None
     if trend in ("down", "flat"):
-        rA = _argext(highs, w, lo_end, True)
-        rB = _argext(highs, lo_end + 1, n - 1 - w, True)
-        if rB > rA and highs[rB] <= highs[rA] * 1.002:
-            macro = _build(rA, highs[rA], rB, highs[rB], "resistance", "descending", "macro")
+        rA = _argext(bhigh, w, lo_end, True)
+        rB = _argext(bhigh, lo_end + 1, n - 1 - w, True)
+        if rB > rA and bhigh[rB] <= bhigh[rA] * 1.002:
+            macro = _build(rA, bhigh[rA], rB, bhigh[rB], "resistance", "descending", "macro")
     if macro is None and trend in ("up", "flat"):
-        sA = _argext(lows, w, lo_end, False)
-        sB = _argext(lows, lo_end + 1, n - 1 - w, False)
-        if sB > sA and lows[sB] >= lows[sA] * 0.998:
-            macro = _build(sA, lows[sA], sB, lows[sB], "support", "ascending", "macro")
+        sA = _argext(blow, w, lo_end, False)
+        sB = _argext(blow, lo_end + 1, n - 1 - w, False)
+        if sB > sA and blow[sB] >= blow[sA] * 0.998:
+            macro = _build(sA, blow[sA], sB, blow[sB], "support", "ascending", "macro")
 
     # ── LOCAL: recent swing pivots near price, wick-damped ────────────────────
     # Anchor on candle BODIES (max/min of open/close), not raw wicks, so a lone
@@ -782,8 +788,6 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
     # registers as 0.28. Window 2 (vs macro's 3) catches recent minor swings so
     # the line hugs price. Only anchors from the recent ~65% of the window are
     # eligible, so a far-back spike can't own the "local" line.
-    bhigh = [max(c["open"], c["close"]) for c in candles]
-    blow  = [min(c["open"], c["close"]) for c in candles]
     def _body_pivots(vals, want_high, win=2):
         out = []
         for i in range(win, n - win):
