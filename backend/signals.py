@@ -716,6 +716,31 @@ def generate_signal(analysis: Dict) -> Dict:
         score -= 6; g['momentum'] -= 6
         bear_reasons.append("EMA7 below EMA21 — short-term trend bearish; near-term sellers in control")
 
+    # ── 200 EMA retest — the classic pullback-to-trend entry ──────────────────
+    # In an uptrend (EMA50 > EMA200) price dipping back to the 200 EMA and
+    # bouncing is a high-quality continuation BUY; in a downtrend, rallying up
+    # into the 200 EMA and rejecting is the mirror SELL. Requires the 200 EMA to
+    # exist (enough history) and price to have actually tagged the zone, then
+    # closed back in the trend direction (close-confirmed, wick tags ignored).
+    ema200_v = ema.get("ema200")
+    ema50_v  = ema.get("ema50")
+    if ema200_v and current_price and len(candles) >= 5:
+        _band   = ema200_v * 0.012           # 1.2% zone around the 200 EMA
+        _recent = candles[-4:]
+        _tagged = any(c["low"] <= ema200_v + _band and c["high"] >= ema200_v - _band
+                      for c in _recent)
+        _last     = candles[-1]
+        _bounced  = _last["close"] > _last["open"] and _last["close"] > ema200_v
+        _rejected = _last["close"] < _last["open"] and _last["close"] < ema200_v
+        _up_struct = (ema50_v is not None and ema50_v > ema200_v) or (200 in ema_above)
+        _dn_struct = (ema50_v is not None and ema50_v < ema200_v) or (200 in ema_below)
+        if _tagged and _up_struct and _bounced:
+            score += 12; g['trend'] += 12
+            bull_reasons.append(f"200 EMA retest → bounce (${ema200_v:,.4f}) — price pulled back to the 200 EMA in an uptrend and held; classic trend-continuation buy")
+        elif _tagged and _dn_struct and _rejected:
+            score -= 12; g['trend'] -= 12
+            bear_reasons.append(f"200 EMA retest → rejection (${ema200_v:,.4f}) — price rallied into the 200 EMA in a downtrend and turned back down; trend-continuation sell")
+
     # ── Order Book Imbalance ──────────────────────────────────────────────────
     # Live bid/ask walls aggregated across exchanges. Timeframe-independent —
     # it's a market snapshot, not candle-derived. Not scaled by tf_macro_w.

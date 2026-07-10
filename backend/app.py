@@ -114,10 +114,15 @@ TF_AGG = {"2W": 2, "3W": 3}
 
 # Candle limits per timeframe — more candles for shorter bars so the chart
 # covers enough history to be useful.
+# ≥220 on 1H–1D so the EMA200 (needs 200 closes to seed) is actually computed
+# and can drive the trend score, the 200-EMA-retest signal, and the chart line.
+# The chart still only renders the last 60 candles; the extra history is used
+# for indicator seeding. 1W/1M keep less — 200 weeks/months of history rarely
+# exists for crypto, so EMA200 is expected to be unavailable there.
 TF_LIMIT = {
-    "1H": 120, "2H": 120,
-    "4H": 100, "8H": 120, "12H": 120, "1D": 100,
-    "1W": 100, "2W": 150, "3W":  150, "1M": 100,
+    "1H": 240, "2H": 240,
+    "4H": 240, "8H": 240, "12H": 240, "1D": 240,
+    "1W": 150, "2W": 150, "3W":  150, "1M": 100,
 }
 
 # Minimum pole size (%) required for flag detection per TF.
@@ -160,6 +165,22 @@ def _ema_val(values: List[float], period: int):
     for v in values[period:]:
         e = v * k + e * (1 - k)
     return e
+
+
+def _ema_series(values: List[float], period: int) -> List:
+    """EMA value at each index (None before there's enough data to seed it).
+    Used to draw the EMA line on the chart aligned candle-for-candle."""
+    n = len(values)
+    out = [None] * n
+    if n < period:
+        return out
+    k = 2.0 / (period + 1)
+    e = sum(values[:period]) / period
+    out[period - 1] = e
+    for i in range(period, n):
+        e = values[i] * k + e * (1 - k)
+        out[i] = e
+    return out
 
 
 def _quick_tf_dir(symbol: str, tf: str) -> str:
@@ -445,6 +466,20 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     closes     = [c["close"] for c in spot]
     macd         = calculate_macd(closes)
     ema_trend    = calculate_ema_trend(closes)
+    # EMA 50/200 series for the chart line, aligned to the visible 60-candle
+    # window. EMA200 needs 200 closes to seed — on TFs with less history it
+    # stays empty and simply isn't drawn.
+    _ema50_s  = _ema_series(closes, 50)
+    _ema200_s = _ema_series(closes, 200)
+    _cut_ts   = spot[-60]["timestamp"] if len(spot) >= 60 else (spot[0]["timestamp"] if spot else 0)
+    ema_lines = {
+        "ema50":  [{"timestamp": spot[i]["timestamp"], "value": round(_ema50_s[i], 8)}
+                   for i in range(len(spot))
+                   if _ema50_s[i] is not None and spot[i]["timestamp"] >= _cut_ts],
+        "ema200": [{"timestamp": spot[i]["timestamp"], "value": round(_ema200_s[i], 8)}
+                   for i in range(len(spot))
+                   if _ema200_s[i] is not None and spot[i]["timestamp"] >= _cut_ts],
+    }
     long_short   = client.get_long_short_ratio(bs)
     fear_greed   = _fetch_fear_greed()
     news         = fetch_news_sentiment(bs)
@@ -692,6 +727,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "cvd_divergence":    detect_cvd_divergence(spot_cvd, fut_cvd, spot),
         "macd":          macd,
         "ema_trend":     ema_trend,
+        "ema_lines":     ema_lines,
         "long_short":    long_short,
         "fear_greed":    fear_greed,
         "news":          news,

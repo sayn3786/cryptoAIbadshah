@@ -93,6 +93,12 @@ function initCharts() {
   S.trendlineSeries      = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#ef4444', lineWidth: 3 });
   S.trendlineMacroSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#cbd5e1', lineWidth: 2, lineStyle: 2 });
 
+  // EMA 50 (pink) and EMA 200 (yellow) — the 200 is the key dynamic S/R the
+  // "200 EMA retest" play trades off. autoscale off so a far EMA200 can't
+  // stretch the price axis (candles drive the scale).
+  S.ema50Series  = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#f472b6', lineWidth: 1 });
+  S.ema200Series = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#facc15', lineWidth: 2 });
+
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
     ...CHART_OPTS,
@@ -226,7 +232,7 @@ function renderAll(a) {
   renderOiRotation(a.regime, a.symbol);
   renderLiquidations(a.liquidations);
   renderMarketCap(a.market_cap);
-  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones);
+  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines);
   renderRSIChart(a.rsi_series);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
@@ -603,7 +609,7 @@ function renderMarketCap(mcap) {
   rankEl.textContent = 'Live · CoinGecko';
 }
 
-function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol, trendline, srZones) {
+function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol, trendline, srZones, emaLines) {
   if (!candles?.length || !S.candleSeries) return;
 
   // Clear FVG + swing/realized price lines and wave markers from the previous token/TF.
@@ -739,6 +745,13 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   };
   _drawTrend(S.trendlineSeries,      trendline?.local, false);
   _drawTrend(S.trendlineMacroSeries, trendline?.macro, true);
+
+  // ── EMA 50 / EMA 200 lines ────────────────────────────────────────────────
+  const _emaData = (arr) => (arr || [])
+    .map(p => ({ time: Math.floor(p.timestamp / 1000), value: p.value }))
+    .filter((d, i, a) => i === 0 || d.time !== a[i - 1].time);
+  S.ema50Series.setData(_emaData(emaLines?.ema50));
+  S.ema200Series.setData(_emaData(emaLines?.ema200));
 
   // ── Supply / demand zones — draw each band as top/mid/bottom price lines ──
   // (mirrors the FVG style; lightweight-charts v4 has no native filled boxes).
