@@ -265,7 +265,11 @@ a:hover { color: var(--gold2); }
 /* short line segment for diagonal-line legend items (trendlines) */
 .legend-line { width: 18px; height: 0; border-top: 3px solid var(--muted); flex-shrink: 0; }
 .legend-line.dashed { border-top-style: dashed; border-top-width: 2px; }
-.main-chart { flex: 1; height: 380px; border-radius: 8px; overflow: hidden; }
+/* Viewport-based height: scales with the screen instead of a fixed 380px —
+   ~55% of the viewport on desktop/laptop, clamped so it never gets absurd.
+   svh (small viewport height) keeps mobile browsers' URL bar from causing
+   jumps; falls back to vh where unsupported. */
+.main-chart { flex: 1; height: clamp(420px, 55vh, 720px); height: clamp(420px, 55svh, 720px); border-radius: 8px; overflow: hidden; }
 
 .chart-sidebar { display: flex; flex-direction: column; gap: 12px; }
 .cvd-card { display: flex; flex-direction: column; gap: 8px; }
@@ -980,7 +984,7 @@ a:hover { color: var(--gold2); }
     flex-wrap: wrap;
     gap: 6px 10px;
   }
-  .main-chart { height: 320px; }
+  .main-chart { height: clamp(320px, 48vh, 560px); height: clamp(320px, 48svh, 560px); }
   .chart-sidebar {
     flex-direction: column;
   }
@@ -1072,7 +1076,7 @@ a:hover { color: var(--gold2); }
   }
   .gauge-wrap { justify-content: flex-start; }
   .liq-row { justify-content: flex-start; }
-  .main-chart { height: 280px; }
+  .main-chart { height: clamp(300px, 44vh, 480px); height: clamp(300px, 44svh, 480px); }
   .rsi-chart { height: 96px; }
   .rsi-levels {
     flex-wrap: wrap;

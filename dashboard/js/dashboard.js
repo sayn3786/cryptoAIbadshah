@@ -130,10 +130,28 @@ function initCharts() {
   });
   S.futCvdSeries = S.futCvdChart.addAreaSeries({ lineColor: '#6366f1', topColor: '#6366f133', bottomColor: '#6366f100', lineWidth: 2 });
 
-  window.addEventListener('resize', () => {
-    S.mainChart.resize(mainEl.clientWidth, mainEl.clientHeight || 380);
-    S.rsiChart.resize(rsiEl.clientWidth, 120);
-  });
+  // Keep every chart sized to its container. ResizeObserver fires on ANY
+  // layout change — phone rotation, tablet sidebar wrap, PWA window resize,
+  // browser zoom — where window 'resize' alone is unreliable (mobile rotation
+  // and CSS-driven wraps often don't dispatch it). CVD minis included: they
+  // were never resized before and broke when the sidebar reflowed.
+  const _fit = () => {
+    if (mainEl.clientWidth) S.mainChart.resize(mainEl.clientWidth, mainEl.clientHeight || 420);
+    if (rsiEl.clientWidth)  S.rsiChart.resize(rsiEl.clientWidth, rsiEl.clientHeight || 120);
+    if (sEl.clientWidth)    S.spotCvdChart.resize(sEl.clientWidth, sEl.clientHeight || 80);
+    if (fEl.clientWidth)    S.futCvdChart.resize(fEl.clientWidth, fEl.clientHeight || 80);
+  };
+  let _fitRaf = null;
+  const _fitSoon = () => {           // coalesce bursts of observer callbacks
+    if (_fitRaf) return;
+    _fitRaf = requestAnimationFrame(() => { _fitRaf = null; _fit(); });
+  };
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(_fitSoon);
+    [mainEl, rsiEl, sEl, fEl].forEach(el => ro.observe(el));
+  }
+  window.addEventListener('resize', _fitSoon);
+  window.addEventListener('orientationchange', () => setTimeout(_fit, 250));
 }
 
 /* ─── Fetch dashboard overview ────────────────────────────────────────────── */
