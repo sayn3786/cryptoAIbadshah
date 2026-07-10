@@ -759,7 +759,7 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
             "broken":        broken,
         }
 
-    # ── MACRO: body extremes, early half → recent half ────────────────────────
+    # ── Swing-pivot helpers (body-based) ──────────────────────────────────────
     w      = window
     lo_end = max(w + 1, int(n * 0.5))
     def _argext(seq, a, b, want_max):
@@ -769,34 +769,53 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
             if (seq[i] > seq[idx]) if want_max else (seq[i] < seq[idx]):
                 idx = i
         return idx
-
-    macro = None
-    if trend in ("down", "flat"):
-        rA = _argext(bhigh, w, lo_end, True)
-        rB = _argext(bhigh, lo_end + 1, n - 1 - w, True)
-        if rB > rA and bhigh[rB] <= bhigh[rA] * 1.002:
-            macro = _build(rA, bhigh[rA], rB, bhigh[rB], "resistance", "descending", "macro")
-    if macro is None and trend in ("up", "flat"):
-        sA = _argext(blow, w, lo_end, False)
-        sB = _argext(blow, lo_end + 1, n - 1 - w, False)
-        if sB > sA and blow[sB] >= blow[sA] * 0.998:
-            macro = _build(sA, blow[sA], sB, blow[sB], "support", "ascending", "macro")
-
-    # ── LOCAL: recent swing pivots near price, wick-damped ────────────────────
-    # Anchor on candle BODIES (max/min of open/close), not raw wicks, so a lone
-    # spike candle can't drag the line — a wick to 0.30 that closed at 0.28
-    # registers as 0.28. Window 2 (vs macro's 3) catches recent minor swings so
-    # the line hugs price. Only anchors from the recent ~65% of the window are
-    # eligible, so a far-back spike can't own the "local" line.
-    def _body_pivots(vals, want_high, win=2):
+    def _body_pivots(vals, want_high, win):
         out = []
         for i in range(win, n - win):
             seg = vals[i - win:i + win + 1]
             if (vals[i] == max(seg)) if want_high else (vals[i] == min(seg)):
                 out.append({"index": i, "price": vals[i], "timestamp": candles[i]["timestamp"]})
         return out
-    lph = _body_pivots(bhigh, True)
-    lpl = _body_pivots(blow, False)
+    def _pick(pivs, a, b, want_max):
+        seg = [p for p in pivs if a <= p["index"] <= b]
+        if not seg:
+            return None
+        return max(seg, key=lambda p: p["price"]) if want_max else min(seg, key=lambda p: p["price"])
+
+    # ── MACRO: connect actual swing pivots (standard trendline) ───────────────
+    # A trendline joins real reaction highs/lows — the textbook way to draw one.
+    # We anchor on body swing pivots so the line visibly starts FROM a pivot
+    # candle (not just "the lowest body somewhere in the window"). Falls back to
+    # the raw body extreme only when a trend leg is so steep it has no pivots, so
+    # a line still always draws.
+    mhi = _body_pivots(bhigh, True,  w)
+    mlo = _body_pivots(blow,  False, w)
+    macro = None
+    if trend in ("down", "flat"):
+        A = _pick(mhi, w, lo_end, True)
+        B = _pick(mhi, lo_end + 1, n - 1 - w, True)
+        if A and B and B["index"] > A["index"] and B["price"] <= A["price"] * 1.002:
+            macro = _build(A["index"], A["price"], B["index"], B["price"], "resistance", "descending", "macro")
+        else:
+            rA = _argext(bhigh, w, lo_end, True); rB = _argext(bhigh, lo_end + 1, n - 1 - w, True)
+            if rB > rA and bhigh[rB] <= bhigh[rA] * 1.002:
+                macro = _build(rA, bhigh[rA], rB, bhigh[rB], "resistance", "descending", "macro")
+    if macro is None and trend in ("up", "flat"):
+        A = _pick(mlo, w, lo_end, False)
+        B = _pick(mlo, lo_end + 1, n - 1 - w, False)
+        if A and B and B["index"] > A["index"] and B["price"] >= A["price"] * 0.998:
+            macro = _build(A["index"], A["price"], B["index"], B["price"], "support", "ascending", "macro")
+        else:
+            sA = _argext(blow, w, lo_end, False); sB = _argext(blow, lo_end + 1, n - 1 - w, False)
+            if sB > sA and blow[sB] >= blow[sA] * 0.998:
+                macro = _build(sA, blow[sA], sB, blow[sB], "support", "ascending", "macro")
+
+    # ── LOCAL: recent swing pivots near price, body-based ─────────────────────
+    # Same standard — connect real swing pivots — but window 2 (vs macro's 3) so
+    # it catches recent minor swings and hugs price. Only anchors from the recent
+    # ~65% of the window are eligible, so a far-back spike can't own the line.
+    lph = _body_pivots(bhigh, True,  2)
+    lpl = _body_pivots(blow,  False, 2)
     recent_cut = int(n * 0.35)
 
     def _local(pivots, kind, descending):
