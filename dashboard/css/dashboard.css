@@ -253,7 +253,9 @@ a:hover { color: var(--gold2); }
 .liq-total { font-size: .72rem; color: var(--muted); font-family: var(--mono); margin-top: 4px; }
 
 /* ─── Row 2: Chart ────────────────────────────────────────────────────────────── */
-.row-chart { display: grid; grid-template-columns: 1fr 240px; gap: 12px; }
+/* Chart gets the FULL row width; the CVD minis sit side-by-side underneath.
+   The old 240px sidebar column stole width from the main chart. */
+.row-chart { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .chart-card { padding: 16px; display: flex; flex-direction: column; }
 .chart-header { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 10px; }
 .chart-title { font-size: .85rem; font-weight: 700; color: var(--text); font-family: var(--mono); }
@@ -269,9 +271,10 @@ a:hover { color: var(--gold2); }
    ~55% of the viewport on desktop/laptop, clamped so it never gets absurd.
    svh (small viewport height) keeps mobile browsers' URL bar from causing
    jumps; falls back to vh where unsupported. */
-.main-chart { flex: 1; height: clamp(420px, 55vh, 720px); height: clamp(420px, 55svh, 720px); border-radius: 8px; overflow: hidden; }
+.main-chart { flex: 1; height: clamp(480px, 62vh, 820px); height: clamp(480px, 62svh, 820px); border-radius: 8px; overflow: hidden; }
 
-.chart-sidebar { display: flex; flex-direction: column; gap: 12px; }
+.chart-sidebar { display: flex; flex-direction: row; gap: 12px; }
+.chart-sidebar .cvd-card { flex: 1; min-width: 0; }
 .cvd-card { display: flex; flex-direction: column; gap: 8px; }
 .cvd-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .cvd-source-sel {

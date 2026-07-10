@@ -53,7 +53,7 @@ const ts = (ms) => new Date(ms).toLocaleDateString('en-US', { month: 'short', da
 
 /* ─── Chart colour theme ──────────────────────────────────────────────────── */
 const CHART_OPTS = {
-  layout: { background: { color: '#111827' }, textColor: '#94a3b8' },
+  layout: { background: { color: '#111827' }, textColor: '#94a3b8', fontSize: 13 },
   grid: { vertLines: { color: '#1e2d44' }, horzLines: { color: '#1e2d44' } },
   crosshair: { mode: 1 },
   rightPriceScale: { borderColor: '#1e2d44' },
@@ -669,12 +669,16 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   // (Swing/Realized/FVG) pile into a uniform stack that reads as "inverted".
   S.mainChart.priceScale('right').applyOptions({ autoScale: true });
 
-  // FVG overlays — draw after setData so Y-axis is already anchored to real prices.
-  // Only the midpoint carries an axis label; top/bottom boundaries are visual-only
-  // (axisLabelVisible: false) so the price scale doesn't get flooded with numbers.
-  // Capped at 4 nearest zones — more than that was unreadable on mobile.
+  // FVG overlays — decluttered: cap at the 3 NEAREST unfilled gaps within 12%
+  // of price (far-away gaps stacked labels without being tradeable), and only
+  // BAG (strong) gaps get their top/bottom boundary lines — plain FVGs are a
+  // single labelled midline, so the chart isn't a wall of dashed lines.
   if (fvgs?.length) {
-    const unfilled = fvgs.filter(f => !f.filled).slice(0, 4);
+    const px = candles[candles.length - 1].close;
+    const unfilled = fvgs
+      .filter(f => !f.filled && px > 0 && Math.abs(f.midpoint - px) / px <= 0.12)
+      .sort((a, b) => Math.abs(a.midpoint - px) - Math.abs(b.midpoint - px))
+      .slice(0, 3);
     unfilled.forEach(f => {
       const isBull = f.type === 'bullish';
       const isBag  = f.gap_type === 'bag';
@@ -682,9 +686,11 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
       const dimCol = isBull ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)';
       const arrow  = isBull ? '↑' : '↓';
       const label  = isBag ? 'BAG' : 'FVG';
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,      color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color,         lineWidth: isBag ? 2 : 1, lineStyle: 3, title: `${arrow} ${label} ${f.size_pct.toFixed(1)}%` }));
-      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom,   color: dimCol, lineWidth: isBag ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
+      if (isBag) {
+        S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.top,    color: dimCol, lineWidth: 2, lineStyle: 2, title: '', axisLabelVisible: false }));
+        S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.bottom, color: dimCol, lineWidth: 2, lineStyle: 2, title: '', axisLabelVisible: false }));
+      }
+      S.fvgPriceLines.push(S.candleSeries.createPriceLine({ price: f.midpoint, color, lineWidth: isBag ? 2 : 1, lineStyle: 3, title: `${arrow} ${label} ${f.size_pct.toFixed(1)}%` }));
     });
   }
 
