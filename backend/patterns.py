@@ -718,12 +718,25 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
     highs  = [c["high"]  for c in candles]
     lows   = [c["low"]   for c in candles]
     closes = [c["close"] for c in candles]
-    # Body extremes (open/close) — both lines anchor on BODIES, not raw wicks, so
-    # a lone spike candle can't drag a trendline to a level price never accepted.
-    # Break confirmation still uses the close (in _build), so a wick poking
-    # through the line is ignored — only a close beyond it counts as a break.
+    # Clamped-wick anchors. Support is defended at the WICK lows and resistance
+    # rejected at the WICK highs — pure body anchoring put an uptrend's support
+    # line above the wick lows, so normal wicks poked through and flagged false
+    # "structure breaks" while the trend was intact. But raw wicks let a single
+    # freak spike own the line (the GOMINING 0.30 case). Middle path: anchor on
+    # the wick, CLAMPED — a wick may extend at most 2.5× the window's median
+    # wick beyond its body; anything longer is an anomaly and gets damped.
+    # Break confirmation still uses the close (in _build).
     bhigh  = [max(c["open"], c["close"]) for c in candles]
     blow   = [min(c["open"], c["close"]) for c in candles]
+    _uw = sorted(candles[i]["high"] - bhigh[i] for i in range(n))
+    _dw = sorted(blow[i] - candles[i]["low"]   for i in range(n))
+    _med_u = _uw[n // 2]
+    _med_d = _dw[n // 2]
+    _floor = (closes[-1] or 1) * 0.0008          # tiny allowance on wickless tapes
+    _allow_u = max(_med_u * 2.5, _floor)
+    _allow_d = max(_med_d * 2.5, _floor)
+    ahigh = [bhigh[i] + min(candles[i]["high"] - bhigh[i], _allow_u) for i in range(n)]
+    alow  = [blow[i]  - min(blow[i] - candles[i]["low"],   _allow_d) for i in range(n)]
     half = n // 2
     older  = sum(closes[:half])  / max(half, 1)
     recent = sum(closes[half:])  / max(n - half, 1)
@@ -784,12 +797,12 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
 
     # ── MACRO: connect actual swing pivots (standard trendline) ───────────────
     # A trendline joins real reaction highs/lows — the textbook way to draw one.
-    # We anchor on body swing pivots so the line visibly starts FROM a pivot
-    # candle (not just "the lowest body somewhere in the window"). Falls back to
-    # the raw body extreme only when a trend leg is so steep it has no pivots, so
-    # a line still always draws.
-    mhi = _body_pivots(bhigh, True,  w)
-    mlo = _body_pivots(blow,  False, w)
+    # Pivots are found on the clamped-wick anchors so support sits at the true
+    # (defended) lows and resistance at the true (rejected) highs. Falls back to
+    # the raw clamped extreme only when a trend leg is so steep it has no pivots,
+    # so a line still always draws.
+    mhi = _body_pivots(ahigh, True,  w)
+    mlo = _body_pivots(alow,  False, w)
     macro = None
     if trend in ("down", "flat"):
         A = _pick(mhi, w, lo_end, True)
@@ -797,25 +810,25 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
         if A and B and B["index"] > A["index"] and B["price"] <= A["price"] * 1.002:
             macro = _build(A["index"], A["price"], B["index"], B["price"], "resistance", "descending", "macro")
         else:
-            rA = _argext(bhigh, w, lo_end, True); rB = _argext(bhigh, lo_end + 1, n - 1 - w, True)
-            if rB > rA and bhigh[rB] <= bhigh[rA] * 1.002:
-                macro = _build(rA, bhigh[rA], rB, bhigh[rB], "resistance", "descending", "macro")
+            rA = _argext(ahigh, w, lo_end, True); rB = _argext(ahigh, lo_end + 1, n - 1 - w, True)
+            if rB > rA and ahigh[rB] <= ahigh[rA] * 1.002:
+                macro = _build(rA, ahigh[rA], rB, ahigh[rB], "resistance", "descending", "macro")
     if macro is None and trend in ("up", "flat"):
         A = _pick(mlo, w, lo_end, False)
         B = _pick(mlo, lo_end + 1, n - 1 - w, False)
         if A and B and B["index"] > A["index"] and B["price"] >= A["price"] * 0.998:
             macro = _build(A["index"], A["price"], B["index"], B["price"], "support", "ascending", "macro")
         else:
-            sA = _argext(blow, w, lo_end, False); sB = _argext(blow, lo_end + 1, n - 1 - w, False)
-            if sB > sA and blow[sB] >= blow[sA] * 0.998:
-                macro = _build(sA, blow[sA], sB, blow[sB], "support", "ascending", "macro")
+            sA = _argext(alow, w, lo_end, False); sB = _argext(alow, lo_end + 1, n - 1 - w, False)
+            if sB > sA and alow[sB] >= alow[sA] * 0.998:
+                macro = _build(sA, alow[sA], sB, alow[sB], "support", "ascending", "macro")
 
-    # ── LOCAL: recent swing pivots near price, body-based ─────────────────────
+    # ── LOCAL: recent swing pivots near price, clamped-wick based ─────────────
     # Same standard — connect real swing pivots — but window 2 (vs macro's 3) so
     # it catches recent minor swings and hugs price. Only anchors from the recent
     # ~65% of the window are eligible, so a far-back spike can't own the line.
-    lph = _body_pivots(bhigh, True,  2)
-    lpl = _body_pivots(blow,  False, 2)
+    lph = _body_pivots(ahigh, True,  2)
+    lpl = _body_pivots(alow,  False, 2)
     recent_cut = int(n * 0.35)
 
     def _local(pivots, kind, descending):
