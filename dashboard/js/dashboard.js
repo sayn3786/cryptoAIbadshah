@@ -754,6 +754,12 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   }
 
   // ── Diagonal trendlines — LOCAL (near price) + MACRO (multi-week) ─────────
+  // Median bar interval (seconds) — used to project the lines forward.
+  const _barSec = unique.length > 1
+    ? (unique[unique.length - 1].time - unique[0].time) / (unique.length - 1)
+    : 3600;
+  const PROJ_BARS = 8;   // TradingView-style ray: extend ~8 bars past the live candle
+
   const _drawTrend = (series, line, isMacro) => {
     if (!line?.type || !line.anchor || !line.end) { series.setData([]); return; }
     const isRes = line.type === 'resistance';
@@ -770,10 +776,20 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
       style = 0; width = 3;
     }
     series.applyOptions({ color: col, lineWidth: width, lineStyle: style });
-    series.setData([
-      { time: Math.floor(line.anchor.timestamp / 1000), value: line.anchor.value },
-      { time: Math.floor(line.end.timestamp    / 1000), value: line.end.value },
-    ]);
+    const t0 = Math.floor(line.anchor.timestamp / 1000);
+    const t1 = Math.floor(line.end.timestamp    / 1000);
+    const pts = [
+      { time: t0, value: line.anchor.value },
+      { time: t1, value: line.end.value },
+    ];
+    // Project forward past the live candle so you can see where price would
+    // meet the line over the next few bars.
+    if (t1 > t0) {
+      const slopePerSec = (line.end.value - line.anchor.value) / (t1 - t0);
+      const tf = t1 + Math.round(PROJ_BARS * _barSec);
+      pts.push({ time: tf, value: line.end.value + slopePerSec * (tf - t1) });
+    }
+    series.setData(pts);
   };
   _drawTrend(S.trendlineSeries,      trendline?.local, false);
   _drawTrend(S.trendlineMacroSeries, trendline?.macro, true);
