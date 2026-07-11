@@ -772,28 +772,22 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
             "broken":        broken,
         }
 
-    # ── Swing-pivot helpers (body-based) ──────────────────────────────────────
-    w      = window
-    def _body_pivots(vals, want_high, win):
-        out = []
-        for i in range(win, n - win):
-            seg = vals[i - win:i + win + 1]
-            if (vals[i] == max(seg)) if want_high else (vals[i] == min(seg)):
-                out.append({"index": i, "price": vals[i], "timestamp": candles[i]["timestamp"]})
-        return out
-
-    # ── MACRO: containment line from the window's TRUE extreme ────────────────
-    # The major trendline is defined by two rules (and nothing else):
-    #   1. Anchor at the GLOBAL extreme of the window — the major low for an
+    # ── Containment trendline (textbook, both scales) ─────────────────────────
+    # A trendline is defined by two rules, nothing else:
+    #   1. Anchor at the TRUE extreme of the segment — the major low for an
     #      ascending support, the major high for a descending resistance.
     #   2. Second point = the later candle giving the SHALLOWEST slope, i.e. the
     #      line that keeps ALL later price action on the correct side.
-    # Anchoring at the global extreme makes containment mathematically
+    # Anchoring at the segment extreme makes containment mathematically
     # guaranteed: no later low can sit below the min-slope line from the lowest
-    # low (mirror for highs). The old half-window pivot anchor could sit higher
-    # and earlier than a later deeper low, so the line sliced through candles.
-    def _containment(vals, want_support):
-        rng = range(1, n - 1)
+    # low (mirror for highs). MACRO runs this over the whole window; LOCAL runs
+    # the exact same construction over the recent ~40% (the current leg), so the
+    # near-price line obeys the same textbook rule instead of just connecting
+    # the last two pivots (which could nick through candles between them).
+    def _containment(vals, want_support, start=1):
+        if n - start < 6:
+            return None
+        rng = range(start, n - 1)
         iA = (min(rng, key=lambda i: vals[i]) if want_support
               else max(rng, key=lambda i: vals[i]))
         if iA >= n - 3:
@@ -807,44 +801,35 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
             return None                      # no valid ascending/descending line
         return iA, iB
 
+    def _line(want_support, scale, start=1):
+        vals = alow if want_support else ahigh
+        pr = _containment(vals, want_support, start)
+        if not pr:
+            return None
+        kind = "support" if want_support else "resistance"
+        direction = "ascending" if want_support else "descending"
+        return _build(pr[0], vals[pr[0]], pr[1], vals[pr[1]], kind, direction, scale)
+
     macro = None
     if trend in ("down", "flat"):
-        pr = _containment(ahigh, want_support=False)
-        if pr:
-            macro = _build(pr[0], ahigh[pr[0]], pr[1], ahigh[pr[1]], "resistance", "descending", "macro")
+        macro = _line(want_support=False, scale="macro")
     if macro is None and trend in ("up", "flat"):
-        pr = _containment(alow, want_support=True)
-        if pr:
-            macro = _build(pr[0], alow[pr[0]], pr[1], alow[pr[1]], "support", "ascending", "macro")
+        macro = _line(want_support=True, scale="macro")
 
-    # ── LOCAL: recent swing pivots near price, clamped-wick based ─────────────
-    # Same standard — connect real swing pivots — but window 2 (vs macro's 3) so
-    # it catches recent minor swings and hugs price. Only anchors from the recent
-    # ~65% of the window are eligible, so a far-back spike can't own the line.
-    lph = _body_pivots(ahigh, True,  2)
-    lpl = _body_pivots(alow,  False, 2)
-    recent_cut = int(n * 0.35)
+    # LOCAL: same containment rule over the current leg (recent ~40%).
+    tail = max(1, int(n * 0.6))
+    if   trend == "down":
+        local = _line(False, "local", tail) or _line(True, "local", tail)
+    elif trend == "up":
+        local = _line(True, "local", tail)  or _line(False, "local", tail)
+    else:
+        local = _line(False, "local", tail) or _line(True, "local", tail)
 
-    def _local(pivots, kind, descending):
-        cand = [p for p in pivots if p["index"] >= recent_cut]
-        if len(cand) < 2:
-            cand = pivots            # fall back to all if too few recent pivots
-        if len(cand) < 2:
-            return None
-        for a, b in ((-2, -1), (-3, -1)):
-            if len(cand) < -a:
-                continue
-            P1, P2 = cand[a], cand[b]
-            slopes_ok = (P2["price"] <= P1["price"] * 1.01) if descending \
-                        else (P2["price"] >= P1["price"] * 0.99)
-            if slopes_ok and P2["index"] > P1["index"]:
-                return _build(P1["index"], P1["price"], P2["index"], P2["price"],
-                              kind, "descending" if descending else "ascending", "local")
-        return None
-
-    if   trend == "down": local = _local(lph, "resistance", True)  or _local(lpl, "support", False)
-    elif trend == "up":   local = _local(lpl, "support", False)    or _local(lph, "resistance", True)
-    else:                 local = _local(lph, "resistance", True)  or _local(lpl, "support", False)
+    # Drop a local line that duplicates the macro (same side, same anchor candle)
+    # — happens when the window's true extreme sits inside the recent leg.
+    if local and macro and local["type"] == macro["type"] \
+       and local["anchor"]["timestamp"] == macro["anchor"]["timestamp"]:
+        local = None
 
     # Drop a decisively-broken macro line. Once price has moved well past it (a
     # steep line extrapolating below/above price by >5%), it's no longer acting
