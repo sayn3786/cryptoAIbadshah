@@ -774,14 +774,6 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
 
     # ── Swing-pivot helpers (body-based) ──────────────────────────────────────
     w      = window
-    lo_end = max(w + 1, int(n * 0.5))
-    def _argext(seq, a, b, want_max):
-        b = min(b, n - 1)
-        idx = a
-        for i in range(a, b + 1):
-            if (seq[i] > seq[idx]) if want_max else (seq[i] < seq[idx]):
-                idx = i
-        return idx
     def _body_pivots(vals, want_high, win):
         out = []
         for i in range(win, n - win):
@@ -789,55 +781,41 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
             if (vals[i] == max(seg)) if want_high else (vals[i] == min(seg)):
                 out.append({"index": i, "price": vals[i], "timestamp": candles[i]["timestamp"]})
         return out
-    def _pick(pivs, a, b, want_max):
-        seg = [p for p in pivs if a <= p["index"] <= b]
-        if not seg:
-            return None
-        return max(seg, key=lambda p: p["price"]) if want_max else min(seg, key=lambda p: p["price"])
 
-    # ── MACRO: connect actual swing pivots (standard trendline) ───────────────
-    # A trendline joins real reaction highs/lows — the textbook way to draw one.
-    # Pivots are found on the clamped-wick anchors so support sits at the true
-    # (defended) lows and resistance at the true (rejected) highs. Falls back to
-    # the raw clamped extreme only when a trend leg is so steep it has no pivots,
-    # so a line still always draws.
-    mhi = _body_pivots(ahigh, True,  w)
-    mlo = _body_pivots(alow,  False, w)
-    # Second anchor by CONTAINMENT (lower/upper hull): a support line must keep
-    # the price action ABOVE it, a resistance line below it. Among later pivots,
-    # pick the one giving the SHALLOWEST ascending slope (support) / shallowest
-    # descending slope (resistance) from the anchor — that's the line that hugs
-    # the structure instead of slicing through it (picking the lowest recent
-    # pivot made steep-rally support lines cut through candles and extrapolate
-    # above price, reading "broken" while the trend was intact).
-    def _hull_b(A, pivots, ascending):
-        cands = [p for p in pivots if p["index"] > A["index"] + 1 and
-                 ((p["price"] >= A["price"] * 0.998) if ascending
-                  else (p["price"] <= A["price"] * 1.002))]
-        if not cands:
-            return None
-        slope = lambda p: (p["price"] - A["price"]) / (p["index"] - A["index"])
-        return min(cands, key=slope) if ascending else max(cands, key=slope)
+    # ── MACRO: containment line from the window's TRUE extreme ────────────────
+    # The major trendline is defined by two rules (and nothing else):
+    #   1. Anchor at the GLOBAL extreme of the window — the major low for an
+    #      ascending support, the major high for a descending resistance.
+    #   2. Second point = the later candle giving the SHALLOWEST slope, i.e. the
+    #      line that keeps ALL later price action on the correct side.
+    # Anchoring at the global extreme makes containment mathematically
+    # guaranteed: no later low can sit below the min-slope line from the lowest
+    # low (mirror for highs). The old half-window pivot anchor could sit higher
+    # and earlier than a later deeper low, so the line sliced through candles.
+    def _containment(vals, want_support):
+        rng = range(1, n - 1)
+        iA = (min(rng, key=lambda i: vals[i]) if want_support
+              else max(rng, key=lambda i: vals[i]))
+        if iA >= n - 3:
+            return None                      # extreme too recent — no room to draw
+        later = range(iA + 1, n)
+        slope_of = lambda i: (vals[i] - vals[iA]) / (i - iA)
+        iB = (min(later, key=slope_of) if want_support
+              else max(later, key=slope_of))
+        s = slope_of(iB)
+        if (want_support and s <= 0) or (not want_support and s >= 0):
+            return None                      # no valid ascending/descending line
+        return iA, iB
 
     macro = None
     if trend in ("down", "flat"):
-        A = _pick(mhi, w, lo_end, True)
-        B = _hull_b(A, mhi, ascending=False) if A else None
-        if A and B:
-            macro = _build(A["index"], A["price"], B["index"], B["price"], "resistance", "descending", "macro")
-        else:
-            rA = _argext(ahigh, w, lo_end, True); rB = _argext(ahigh, lo_end + 1, n - 1 - w, True)
-            if rB > rA and ahigh[rB] <= ahigh[rA] * 1.002:
-                macro = _build(rA, ahigh[rA], rB, ahigh[rB], "resistance", "descending", "macro")
+        pr = _containment(ahigh, want_support=False)
+        if pr:
+            macro = _build(pr[0], ahigh[pr[0]], pr[1], ahigh[pr[1]], "resistance", "descending", "macro")
     if macro is None and trend in ("up", "flat"):
-        A = _pick(mlo, w, lo_end, False)
-        B = _hull_b(A, mlo, ascending=True) if A else None
-        if A and B:
-            macro = _build(A["index"], A["price"], B["index"], B["price"], "support", "ascending", "macro")
-        else:
-            sA = _argext(alow, w, lo_end, False); sB = _argext(alow, lo_end + 1, n - 1 - w, False)
-            if sB > sA and alow[sB] >= alow[sA] * 0.998:
-                macro = _build(sA, alow[sA], sB, alow[sB], "support", "ascending", "macro")
+        pr = _containment(alow, want_support=True)
+        if pr:
+            macro = _build(pr[0], alow[pr[0]], pr[1], alow[pr[1]], "support", "ascending", "macro")
 
     # ── LOCAL: recent swing pivots near price, clamped-wick based ─────────────
     # Same standard — connect real swing pivots — but window 2 (vs macro's 3) so
