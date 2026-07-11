@@ -140,6 +140,14 @@ function initCharts() {
     if (rsiEl.clientWidth)  S.rsiChart.resize(rsiEl.clientWidth, rsiEl.clientHeight || 120);
     if (sEl.clientWidth)    S.spotCvdChart.resize(sEl.clientWidth, sEl.clientHeight || 80);
     if (fEl.clientWidth)    S.futCvdChart.resize(fEl.clientWidth, fEl.clientHeight || 80);
+    // Re-fit the visible range after the box changes. Without this, a chart
+    // that GROWS (sidebar reflow, font load, rotation) keeps its old range
+    // anchored left and the right half of the canvas stays blank — candles and
+    // trendlines look like they "stop" mid-chart.
+    try { S.mainChart.timeScale().fitContent(); } catch (_) {}
+    try { S.rsiChart.timeScale().fitContent(); } catch (_) {}
+    try { S.spotCvdChart.timeScale().fitContent(); } catch (_) {}
+    try { S.futCvdChart.timeScale().fitContent(); } catch (_) {}
   };
   let _fitRaf = null;
   const _fitSoon = () => {           // coalesce bursts of observer callbacks
