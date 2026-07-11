@@ -782,12 +782,18 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
       { time: t0, value: line.anchor.value },
       { time: t1, value: line.end.value },
     ];
-    // Project forward past the live candle so you can see where price would
-    // meet the line over the next few bars.
+    // Project forward past the live candle BAR BY BAR. The time scale spaces
+    // points by bar slots, not by elapsed time — a single point 8 bars ahead
+    // gets only ONE slot, compressing 8 bars of slope into it and making the
+    // ray kink steeper at the end. One point per future bar keeps each slot
+    // carrying exactly one bar of slope, so the line continues dead straight.
     if (t1 > t0) {
-      const slopePerSec = (line.end.value - line.anchor.value) / (t1 - t0);
-      const tf = t1 + Math.round(PROJ_BARS * _barSec);
-      pts.push({ time: tf, value: line.end.value + slopePerSec * (tf - t1) });
+      const step = Math.max(1, Math.round(_barSec));
+      const nBars = Math.max(1, Math.round((t1 - t0) / step));
+      const slopePerBar = (line.end.value - line.anchor.value) / nBars;
+      for (let k = 1; k <= PROJ_BARS; k++) {
+        pts.push({ time: t1 + k * step, value: line.end.value + slopePerBar * k });
+      }
     }
     series.setData(pts);
   };
