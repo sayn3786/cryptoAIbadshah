@@ -803,11 +803,27 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
     # so a line still always draws.
     mhi = _body_pivots(ahigh, True,  w)
     mlo = _body_pivots(alow,  False, w)
+    # Second anchor by CONTAINMENT (lower/upper hull): a support line must keep
+    # the price action ABOVE it, a resistance line below it. Among later pivots,
+    # pick the one giving the SHALLOWEST ascending slope (support) / shallowest
+    # descending slope (resistance) from the anchor — that's the line that hugs
+    # the structure instead of slicing through it (picking the lowest recent
+    # pivot made steep-rally support lines cut through candles and extrapolate
+    # above price, reading "broken" while the trend was intact).
+    def _hull_b(A, pivots, ascending):
+        cands = [p for p in pivots if p["index"] > A["index"] + 1 and
+                 ((p["price"] >= A["price"] * 0.998) if ascending
+                  else (p["price"] <= A["price"] * 1.002))]
+        if not cands:
+            return None
+        slope = lambda p: (p["price"] - A["price"]) / (p["index"] - A["index"])
+        return min(cands, key=slope) if ascending else max(cands, key=slope)
+
     macro = None
     if trend in ("down", "flat"):
         A = _pick(mhi, w, lo_end, True)
-        B = _pick(mhi, lo_end + 1, n - 1 - w, True)
-        if A and B and B["index"] > A["index"] and B["price"] <= A["price"] * 1.002:
+        B = _hull_b(A, mhi, ascending=False) if A else None
+        if A and B:
             macro = _build(A["index"], A["price"], B["index"], B["price"], "resistance", "descending", "macro")
         else:
             rA = _argext(ahigh, w, lo_end, True); rB = _argext(ahigh, lo_end + 1, n - 1 - w, True)
@@ -815,8 +831,8 @@ def detect_trendline(candles: List[Dict], window: int = 3) -> Dict:
                 macro = _build(rA, ahigh[rA], rB, ahigh[rB], "resistance", "descending", "macro")
     if macro is None and trend in ("up", "flat"):
         A = _pick(mlo, w, lo_end, False)
-        B = _pick(mlo, lo_end + 1, n - 1 - w, False)
-        if A and B and B["index"] > A["index"] and B["price"] >= A["price"] * 0.998:
+        B = _hull_b(A, mlo, ascending=True) if A else None
+        if A and B:
             macro = _build(A["index"], A["price"], B["index"], B["price"], "support", "ascending", "macro")
         else:
             sA = _argext(alow, w, lo_end, False); sB = _argext(alow, lo_end + 1, n - 1 - w, False)
