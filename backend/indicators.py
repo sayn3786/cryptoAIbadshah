@@ -918,6 +918,32 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
             cands.append({"type": "hidden_bearish", "strength": round(c_rsi - p_rsi, 1), "_idx": i1,
                 "description": f"Hidden bearish divergence — price lower high but RSI higher high (+{c_rsi - p_rsi:.1f} pts), downtrend-continuation (sell-the-bounce) signal"})
 
+    # ── FORMING divergence (unconfirmed) ──────────────────────────────────────
+    # A pivot needs `pw` closed candles on BOTH sides, so a fresh second low/high
+    # is invisible for pw more closes — on the WEEKLY that's weeks of lag, which
+    # is exactly when analysts call the divergence early ("weekly bullish
+    # divergence, pay attention"). If no confirmed divergence exists, check the
+    # last pw candles (too recent to be pivots) as a PROVISIONAL second pivot and
+    # report it flagged forming=True so it can be scored lighter / labelled ⏳.
+    if not cands and n > pw:
+        tail = range(n - pw, n)
+        if swing_lows:
+            _, p_price, p_rsi = swing_lows[-1]
+            ti = min(tail, key=lambda i: lows[i])
+            if (p_price - lows[ti]) / (p_price + 1e-12) > PX and rsi_v[ti] - p_rsi > RS:
+                cands.append({"type": "bullish", "forming": True, "_idx": ti,
+                    "strength": round(rsi_v[ti] - p_rsi, 1),
+                    "description": (f"⏳ Forming bullish RSI divergence — price lower low but RSI higher "
+                                    f"(+{rsi_v[ti] - p_rsi:.1f} pts); unconfirmed until {pw} more closes hold")})
+        if swing_highs:
+            _, p_price, p_rsi = swing_highs[-1]
+            ti = max(tail, key=lambda i: highs[i])
+            if (highs[ti] - p_price) / (p_price + 1e-12) > PX and p_rsi - rsi_v[ti] > RS:
+                cands.append({"type": "bearish", "forming": True, "_idx": ti,
+                    "strength": round(p_rsi - rsi_v[ti], 1),
+                    "description": (f"⏳ Forming bearish RSI divergence — price higher high but RSI lower "
+                                    f"(−{p_rsi - rsi_v[ti]:.1f} pts); unconfirmed until {pw} more closes hold")})
+
     if not cands:
         return empty
     # Most recent pivot wins; on a tie, the stronger divergence.

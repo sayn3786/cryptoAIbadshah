@@ -1042,8 +1042,11 @@ function renderRsiDivCard(div) {
     hidden_bearish: '🔽 Hidden Bearish · continuation',
   };
   const isBull = div.type === 'bullish' || div.type === 'hidden_bullish';
-  typeEl.textContent = LABELS[div.type] || (isBull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence');
+  let label = LABELS[div.type] || (isBull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence');
+  if (div.forming) label = label.replace('Divergence', 'Div. · forming ⏳');
+  typeEl.textContent = label;
   typeEl.style.color = isBull ? 'var(--bull)' : 'var(--bear)';
+  typeEl.style.opacity = div.forming ? '0.85' : '';
   descEl.textContent = div.description || '';
   descEl.style.color = 'var(--muted2)';
 }

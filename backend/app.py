@@ -557,7 +557,12 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     if ichimoku.get("series"):
         ichimoku["series"] = [p for p in ichimoku["series"] if p["timestamp"] >= _chart_cutoff_ts]
     bollinger     = calculate_bollinger_bands(spot)
-    rsi_div       = detect_rsi_divergence(spot, rsi_series)
+    # Weekly+ uses a 2-candle pivot window: with 3, a fresh swing low needs 3
+    # more WEEKLY closes to confirm — nearly a month of lag on the exact charts
+    # where analysts call divergences early.
+    rsi_div       = detect_rsi_divergence(
+        spot, rsi_series,
+        pivot_window=2 if timeframe in ("1W", "2W", "3W", "1M") else 3)
     vwap          = calculate_vwap(spot)
     stoch_rsi     = calculate_stoch_rsi([c["close"] for c in spot])
     vol_signal    = calculate_volume_signal(spot)

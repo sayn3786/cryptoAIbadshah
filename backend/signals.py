@@ -1074,12 +1074,13 @@ def generate_signal(analysis: Dict) -> Dict:
     div_type = rsi_div.get("type")
     div_desc = rsi_div.get("description", "")
     div_str  = rsi_div.get("strength", 0) or 0
+    div_forming = bool(rsi_div.get("forming"))   # provisional 2nd pivot — not confirmed yet
     if div_type == "bullish":
-        pts = 18 if div_str >= 5 else 12   # stronger divergence = more points
+        pts = 8 if div_forming else (18 if div_str >= 5 else 12)
         score += pts; g['momentum'] += pts
         bull_reasons.append(div_desc or "Bullish RSI divergence — price lower low, RSI higher low")
     elif div_type == "bearish":
-        pts = 18 if div_str >= 5 else 12
+        pts = 8 if div_forming else (18 if div_str >= 5 else 12)
         score -= pts; g['momentum'] -= pts
         bear_reasons.append(div_desc or "Bearish RSI divergence — price higher high, RSI lower high")
     elif div_type == "hidden_bullish":
