@@ -105,33 +105,36 @@ def _num(row: dict, *keys, div: float = 1.0):
 RAO = 1e9   # 1 TAO = 1e9 rao — Taostats returns many amounts in rao
 
 
-def _flow_val(row: dict, *keys):
-    """Per-subnet TAO flow field with unit sanity: rao-scaled values (>1e12)
-    are divided down; anything still >50M TAO is a unit misread → None."""
-    v = _num(row, *keys)
-    if v is None:
-        return None
-    if abs(v) > 1e12:
-        v /= RAO
-    if abs(v) > 5e7:
-        return None
-    return v
-
-
 def _flow_fields(row: dict) -> Dict:
-    """Candidate per-subnet net-TAO-flow fields (names vary by API version —
-    the ?debug=1 attempts log shows which keys the live payload carries)."""
+    """Per-subnet net TAO flow — the /api/subnet/latest/v1 payload carries
+    explicit net_flow_1_day / net_flow_7_days / net_flow_30_days fields
+    (confirmed via the ?debug=1 full key dump). Values stored RAW here; unit
+    normalisation is column-wise in _normalize_flow_cols."""
     return {
-        "flow_24h": _flow_val(row, "tao_in_change_1_day", "tao_in_1_day_change",
-                              "tao_in_change_24_hr", "net_tao_24_hr", "tao_net_flow_24_hr",
-                              "tao_flow_24_hr", "tao_in_pool_change_1_day", "reserve_change_1_day"),
-        "flow_7d":  _flow_val(row, "tao_in_change_7_day", "tao_in_7_day_change",
-                              "net_tao_7_day", "tao_net_flow_7_day", "tao_flow_7_day",
-                              "tao_in_pool_change_7_day", "reserve_change_7_day"),
-        "flow_30d": _flow_val(row, "tao_in_change_30_day", "tao_in_30_day_change",
-                              "net_tao_30_day", "tao_net_flow_30_day",
-                              "tao_in_pool_change_1_month", "reserve_change_30_day"),
+        "flow_24h": _num(row, "net_flow_1_day", "net_flow_1_days"),
+        "flow_7d":  _num(row, "net_flow_7_days", "net_flow_7_day"),
+        "flow_30d": _num(row, "net_flow_30_days", "net_flow_30_day"),
     }
+
+
+def _normalize_flow_cols(rows: List[Dict]):
+    """Column-wise unit detection: all subnets share one unit, so if the median
+    non-zero |value| exceeds 1e6 the column is rao-scaled (÷1e9); otherwise it's
+    already TAO. Per-value heuristics had a blind spot for mid-range rao values
+    (50–1000 TAO in rao is 5e10–1e12). Anything >50M TAO after scaling is a
+    misread → None."""
+    for key in ("flow_24h", "flow_7d", "flow_30d"):
+        vals = sorted(abs(r[key]) for r in rows if r.get(key))
+        if not vals:
+            continue
+        med = vals[len(vals) // 2]
+        scale = RAO if med > 1e6 else 1.0
+        for r in rows:
+            v = r.get(key)
+            if v is None:
+                continue
+            v /= scale
+            r[key] = v if abs(v) <= 5e7 else None
 
 
 # Per-subnet pool snapshot (warm-lambda fallback): when the API exposes no
@@ -195,6 +198,8 @@ def _subnets() -> Optional[List[Dict]]:
         out.append({"netuid": netuid, "name": str(name)[:24], "alpha_price_tao": price,
                     "emission": emis, "mcap": mcap, "tao_in_pool": tao_in,
                     "chg_7d": chg7, "chg_1d": chg1, **_flow_fields(r)})
+    if out:
+        _normalize_flow_cols(out)
     return out or None
 
 
@@ -221,9 +226,11 @@ def _pools() -> Optional[Dict[int, Dict]]:
             "alpha_price_tao": price,
             "tao_in_pool": tao_in,
             "mcap": mcap,
+            # NOTE: no flow fields here — the pool payload carries VOLUME
+            # (tao_volume_24_hr = turnover), not net flow; net_flow_* lives on
+            # the /api/subnet/latest/v1 payload.
             "chg_1d": _num(r, "price_change_1_day", "price_change_24h", "price_change_1d"),
             "chg_7d": _num(r, "price_change_7_day", "price_change_1_week", "price_change_7d"),
-            **_flow_fields(r),
         }
     return out or None
 
