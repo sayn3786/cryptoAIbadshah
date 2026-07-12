@@ -252,11 +252,15 @@ def _pools() -> Optional[Dict[int, Dict]]:
             "chg_7d": _num(r, "price_change_7_day", "price_change_1_week", "price_change_7d"),
         }
         # AMM net 24h flow = TAO swapped INTO the pool minus TAO swapped out —
-        # the unambiguous per-subnet 24h flow source (raw; calibrated later).
+        # the unambiguous per-subnet 24h flow source (raw; unit resolved later
+        # via the gross-turnover column, same unit family).
         _b = _num(r, "tao_buy_volume_24_hr")
         _sl = _num(r, "tao_sell_volume_24_hr")
         if _b is not None and _sl is not None:
             out[int(r["netuid"])]["amm_net_24h_raw"] = _b - _sl
+        _gv = _num(r, "tao_volume_24_hr")
+        if _gv is not None:
+            out[int(r["netuid"])]["amm_vol_24h_raw"] = _gv
     return out or None
 
 
@@ -405,7 +409,8 @@ def get_tao_ecosystem() -> Optional[Dict]:
             if not p:
                 continue
             for k in ("alpha_price_tao", "tao_in_pool", "mcap", "chg_1d", "chg_7d",
-                      "flow_24h", "flow_7d", "flow_30d", "amm_net_24h_raw"):
+                      "flow_24h", "flow_7d", "flow_30d",
+                      "amm_net_24h_raw", "amm_vol_24h_raw"):
                 if s.get(k) is None and p.get(k) is not None:
                     s[k] = p[k]
             if p.get("name") and s["name"].startswith("SN"):
@@ -420,11 +425,17 @@ def get_tao_ecosystem() -> Optional[Dict]:
                              (flow or {}).get("net_24h_tao"),
                              (flow or {}).get("net_7d_tao"))
         # Fallback for the 24h leaderboard when net_flow_* is rejected: AMM
-        # buy−sell volume is per-subnet net swap flow with unambiguous meaning —
-        # calibrate its unit the same way and use it for flow_24h.
+        # buy−sell = per-subnet net SWAP flow. It measures a different
+        # phenomenon than the staking aggregate (swaps vs staked-alpha delta),
+        # so it can't be validated against it — instead the unit is pinned by
+        # the GROSS turnover column (same unit family): total daily DEX
+        # turnover across all pools must land in a plausible TAO band, and the
+        # candidate scales are 1000× apart so only one can fit.
         if not any(s.get("flow_24h") is not None for s in subnets):
-            _sc = _calibrate_col(subnets, "amm_net_24h_raw",
-                                 (flow or {}).get("net_24h_tao"))
+            _gross = sum(abs(s["amm_vol_24h_raw"]) for s in subnets
+                         if s.get("amm_vol_24h_raw") is not None)
+            _sc = next((s_ for s_ in (1.0, 1e3, 1e6, 1e9, 1e12)
+                        if 30_000 <= _gross / s_ <= 20_000_000), None) if _gross else None
             if _sc:
                 for s in subnets:
                     v = s.get("amm_net_24h_raw")
