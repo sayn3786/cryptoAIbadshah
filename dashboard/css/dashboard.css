@@ -1685,6 +1685,9 @@ a:hover { color: var(--gold2); }
                   font-family: var(--mono); min-width: 34px; }
 .tao-lead-main  { font-size: .78rem; font-weight: 700; font-family: var(--mono); }
 .tao-lead-main.bull { color: var(--bull); }
+.tao-lead-sigma { font-size: .8rem; font-weight: 800; font-family: var(--mono); }
+.tao-lead-sigma.bull { color: var(--bull); }
+.tao-lead-sigma.bear { color: var(--bear); }
 .tao-lead-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .sn-chip        { font-size: .6rem; font-family: var(--mono); color: var(--muted2);
                   background: rgba(255,255,255,.04); border: 1px solid var(--border);

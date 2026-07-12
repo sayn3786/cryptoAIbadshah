@@ -4056,29 +4056,53 @@ function renderTaoEco(eco, symbol) {
     tiles.push(tile('Top-5 emission share', `${sn.top5_emission_pct}%`, '',
       'How concentrated rewards are — high = winner-take-most, watch the leaders'));
 
-  // 🏆 Subnet inflow leaders — which subnets the TAO actually flowed into
+  // 🏆 Subnet inflow leaders + Σ flow momentum (today vs prev 24h / 7d / 30d pace)
   let leadersBox = '';
   const ld = eco.flow_leaders;
-  if (ld && (ld.h24 || ld.d7 || ld.d30)) {
-    const rowL = (lbl, L) => {
-      if (!L) return '';
-      const t = L.top && L.top[0];
-      const chips = (L.top || []).slice(1)
+  const fc = eco.flow_cmp || {};
+  if ((ld && (ld.h24 || ld.d7 || ld.d30)) || fc.today != null) {
+    // Per-window Σ total + comparison chip
+    const sigma = (win) => {
+      if (win === 'h24' && fc.today != null) {
+        let cmpTxt = '';
+        if (fc.prev_24h != null) {
+          if (fc.prev_24h > 0 && fc.today > 0) {
+            const r = fc.today / fc.prev_24h;
+            cmpTxt = r >= 1.15 ? `×${r.toFixed(1)} vs prev 24h ↑` : r <= 0.85 ? `×${r.toFixed(1)} vs prev 24h ↓` : '≈ prev 24h';
+          } else if (fc.today > 0 && fc.prev_24h <= 0) cmpTxt = 'flipped + (prev 24h was outflow)';
+          else if (fc.today <= 0 && fc.prev_24h > 0)  cmpTxt = 'flipped − (prev 24h was inflow)';
+          else cmpTxt = `prev 24h ${fmtTao(fc.prev_24h)}`;
+          cmpTxt += fc.prev_est ? ' ~' : '';
+        }
+        return `<span class="tao-lead-sigma ${flCls(fc.today)}">Σ ${fmtTao(fc.today)}</span>${cmpTxt ? `<span class="sn-chip">${cmpTxt}</span>` : ''}`;
+      }
+      if (win === 'd7' && fc.d7_total != null)
+        return `<span class="tao-lead-sigma ${flCls(fc.d7_total)}">Σ ${fmtTao(fc.d7_total)}</span><span class="sn-chip">avg ${fmtTao(fc.d7_daily_avg)}/day${fc.today != null && fc.d7_daily_avg > 0 && fc.today > 0 ? ` · today ×${(fc.today / fc.d7_daily_avg).toFixed(1)} the pace` : ''}</span>`;
+      if (win === 'd30' && fc.d30_total != null)
+        return `<span class="tao-lead-sigma ${flCls(fc.d30_total)}">Σ ${fmtTao(fc.d30_total)}</span><span class="sn-chip">avg ${fmtTao(fc.d30_daily_avg)}/day</span>`;
+      return '';
+    };
+    const rowL = (lbl, win, L) => {
+      const sig = sigma(win);
+      if (!L && !sig) return '';
+      const t = L && L.top && L.top[0];
+      const chips = (L && L.top || []).slice(1)
         .map(x => `<span class="sn-chip">SN${x.netuid} ${x.name} ${fmtTao(x.flow)}</span>`).join('');
-      const outc = L.out
+      const outc = L && L.out
         ? `<span class="sn-chip bear">top outflow: SN${L.out.netuid} ${L.out.name} ${fmtTao(L.out.flow)}</span>` : '';
       return `<div class="tao-lead-row">
         <span class="tao-lead-win">${lbl}</span>
-        ${t ? `<span class="tao-lead-main bull">${fmtTao(t.flow)} → SN${t.netuid} ${t.name}</span>`
-            : `<span class="tao-lead-main">no net inflow</span>`}
+        ${sig}
+        ${t ? `<span class="tao-lead-main bull">top: ${fmtTao(t.flow)} → SN${t.netuid} ${t.name}</span>` : ''}
         <span class="tao-lead-chips">${chips}${outc}</span>
       </div>`;
     };
     leadersBox = `<div class="tao-leaders">
-      <div class="smc-header">🏆 SUBNET INFLOW LEADERS — where the TAO went</div>
-      ${rowL('24H', ld.h24)}${rowL('7D', ld.d7)}${rowL('30D', ld.d30)}
-      ${String(ld.basis_24h || '').startsWith('snapshot')
+      <div class="smc-header">🏆 SUBNET FLOWS — Σ totals, momentum & where the TAO went</div>
+      ${rowL('24H', 'h24', ld && ld.h24)}${rowL('7D', 'd7', ld && ld.d7)}${rowL('30D', 'd30', ld && ld.d30)}
+      ${String(ld && ld.basis_24h || '').startsWith('snapshot')
         ? `<div class="tao-stat-why">24h figures estimated from an in-app pool snapshot (${ld.basis_24h}) — approximate</div>` : ''}
+      ${fc.prev_est ? `<div class="tao-stat-why">"prev 24h" ~ estimated as the average of the prior 6 days</div>` : ''}
     </div>`;
   }
 

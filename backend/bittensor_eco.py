@@ -278,11 +278,24 @@ def _flow_from_history() -> Optional[Dict]:
 
     d24, w24 = _delta(1)
     d7,  w7  = _delta(7)
+    d30, _   = _delta(30)
+    # Previous 24h window (t-2d → t-1d) — the baseline for "is today's flow
+    # accelerating or fading vs yesterday".
+    def _val_at(days_ago: float):
+        target = t1 - days_ago * 86400
+        best = min(pts, key=lambda p: abs(p[0] - target))
+        if abs(best[0] - target) > days_ago * 43200 + 21600:   # ±(half-window+6h)
+            return None
+        return best[1]
+    _v1, _v2 = _val_at(1), _val_at(2)
+    prev24 = (_v1 - _v2) if (_v1 is not None and _v2 is not None) else None
     if d24 is None and d7 is None:
         return None
     return {
-        "net_24h_tao": round(d24) if d24 is not None else None,
-        "net_7d_tao":  round(d7)  if d7  is not None else None,
+        "net_24h_tao":      round(d24) if d24 is not None else None,
+        "net_prev_24h_tao": round(prev24) if prev24 is not None else None,
+        "net_7d_tao":       round(d7)  if d7  is not None else None,
+        "net_30d_tao":      round(d30) if d30 is not None else None,
         "window_days": round(w7 if w7 is not None else w24, 1),
         "basis": "staked_alpha change (stats history)",
     }
@@ -406,6 +419,42 @@ def get_tao_ecosystem() -> Optional[Dict]:
         if _fl["h24"] or _fl["d7"] or _fl["d30"]:
             result["flow_leaders"] = _fl
 
+    # ── Aggregate flow momentum: today vs prev 24h, vs 7d / 30d daily pace ────
+    # Totals prefer the aggregate history (one consistent source); per-subnet
+    # column sums fill the gaps (they're the only reliable 30d source, and the
+    # 7d/30d columns come straight from the API).
+    def _tot(key):
+        if not subnets:
+            return None
+        vals = [s[key] for s in subnets if s.get(key) is not None]
+        return round(sum(vals)) if vals else None
+    _today = (flow or {}).get("net_24h_tao")
+    if _today is None:
+        _today = _tot("flow_24h")
+    _d7t = (flow or {}).get("net_7d_tao")
+    if _d7t is None:
+        _d7t = _tot("flow_7d")
+    _d30t = _tot("flow_30d")
+    if _d30t is None:
+        _d30t = (flow or {}).get("net_30d_tao")
+    _prev24 = (flow or {}).get("net_prev_24h_tao")
+    _prev_est = False
+    if _prev24 is None and _d7t is not None and _today is not None:
+        _prev24 = round((_d7t - _today) / 6)   # avg of the prior 6 days
+        _prev_est = True
+    if _today is not None:
+        _cmp = {"today": round(_today)}
+        if _prev24 is not None:
+            _cmp["prev_24h"] = round(_prev24)
+            _cmp["prev_est"] = _prev_est
+        if _d7t is not None:
+            _cmp["d7_total"] = round(_d7t)
+            _cmp["d7_daily_avg"] = round(_d7t / 7)
+        if _d30t is not None:
+            _cmp["d30_total"] = round(_d30t)
+            _cmp["d30_daily_avg"] = round(_d30t / 30)
+        result["flow_cmp"] = _cmp
+
     if subnets:
         n = len(subnets)
         emis_vals = [(s["emission"] or 0) for s in subnets]
@@ -474,6 +523,25 @@ def get_tao_ecosystem() -> Optional[Dict]:
                          if _div else " — fresh unstaking pressure today")
                 notes.append({"impact": "bearish", "pts": p, "text":
                     f"Subnet pool flow (24h): {f24:,.0f} TAO out of Alpha pools today{_tail}"})
+    # Flow momentum — today's flow vs the 7d daily pace. Acceleration (≥2× the
+    # pace) or a fade (<half the pace / sign flip) is the earliest read on
+    # whether staking demand is picking up or drying out.
+    _fc = result.get("flow_cmp") or {}
+    _t, _avg = _fc.get("today"), _fc.get("d7_daily_avg")
+    if _t is not None and _avg and abs(_t) >= 3_000:
+        if _t > 0 and _avg > 0 and _t >= 2 * _avg:
+            pts += 3
+            notes.append({"impact": "bullish", "pts": 3, "text":
+                f"Flow momentum: today's +{_t:,.0f} TAO is {_t/_avg:.1f}× the 7d daily pace (+{_avg:,.0f}/d) — inflows accelerating"})
+        elif _t < 0 and _avg > 0:
+            pts -= 3
+            notes.append({"impact": "bearish", "pts": -3, "text":
+                f"Flow momentum: today flipped to {_t:,.0f} TAO against a +{_avg:,.0f}/d weekly pace — inflows stalling"})
+        elif _t < 0 and _avg < 0 and _t <= 2 * _avg:
+            pts -= 3
+            notes.append({"impact": "bearish", "pts": -3, "text":
+                f"Flow momentum: today's {_t:,.0f} TAO is {_t/_avg:.1f}× the 7d outflow pace ({_avg:,.0f}/d) — unstaking accelerating"})
+
     sn = result.get("subnets") or {}
     if sn.get("breadth_pct") is not None:
         if sn["breadth_pct"] >= 60:
