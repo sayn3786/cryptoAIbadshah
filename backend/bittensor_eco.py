@@ -117,6 +117,24 @@ def _flow_fields(row: dict) -> Dict:
     }
 
 
+def _calibrate_col(rows: List[Dict], key: str, ref):
+    """Find the unit scale for one column by matching its sum to a trusted
+    reference: pick the scale whose column-sum lands within ±60% of ref (the
+    two are measured differently so drift is normal; beyond that the column
+    doesn't mean what we think). Returns the scale or None."""
+    vals = [r[key] for r in rows if r.get(key) is not None]
+    if not ref or not vals:
+        return None
+    colsum = sum(vals)
+    if not colsum:
+        return None
+    scale = min((1.0, 1e3, 1e6, 1e9, 1e12),
+                key=lambda s_: abs(colsum / s_ - ref))
+    if abs(colsum / scale - ref) > abs(ref) * 0.6 + 1000:
+        return None
+    return scale
+
+
 def _calibrate_flow_cols(rows: List[Dict], agg24, agg7):
     """Unit calibration against the TRUSTED aggregate (staked_alpha history).
     Median/heuristic guessing produced absurd figures (a subnet showing +26M
@@ -126,20 +144,7 @@ def _calibrate_flow_cols(rows: List[Dict], agg24, agg7):
     mean net pool TAO flow → invalidate them entirely rather than show garbage.
     Returns the scale, or None if invalidated."""
     ref, refkey = (agg24, "flow_24h") if agg24 else (agg7, "flow_7d")
-    colsum = None
-    if ref:
-        vals = [r[refkey] for r in rows if r.get(refkey) is not None]
-        colsum = sum(vals) if vals else None
-    if not ref or not colsum:
-        scale = None
-    else:
-        scale = min((1.0, 1e3, 1e6, 1e9, 1e12),
-                    key=lambda s_: abs(colsum / s_ - ref))
-        # Column-sum must land within ±60% of the trusted aggregate — the two
-        # are measured differently so some drift is normal, but beyond that the
-        # column doesn't mean net pool flow.
-        if abs(colsum / scale - ref) > abs(ref) * 0.6 + 1000:
-            scale = None                     # column ≠ net pool flow — reject
+    scale = _calibrate_col(rows, refkey, ref)
     for r in rows:
         for key in ("flow_24h", "flow_7d", "flow_30d"):
             v = r.get(key)
@@ -243,12 +248,15 @@ def _pools() -> Optional[Dict[int, Dict]]:
             "alpha_price_tao": price,
             "tao_in_pool": tao_in,
             "mcap": mcap,
-            # NOTE: no flow fields here — the pool payload carries VOLUME
-            # (tao_volume_24_hr = turnover), not net flow; net_flow_* lives on
-            # the /api/subnet/latest/v1 payload.
             "chg_1d": _num(r, "price_change_1_day", "price_change_24h", "price_change_1d"),
             "chg_7d": _num(r, "price_change_7_day", "price_change_1_week", "price_change_7d"),
         }
+        # AMM net 24h flow = TAO swapped INTO the pool minus TAO swapped out —
+        # the unambiguous per-subnet 24h flow source (raw; calibrated later).
+        _b = _num(r, "tao_buy_volume_24_hr")
+        _sl = _num(r, "tao_sell_volume_24_hr")
+        if _b is not None and _sl is not None:
+            out[int(r["netuid"])]["amm_net_24h_raw"] = _b - _sl
     return out or None
 
 
@@ -397,7 +405,7 @@ def get_tao_ecosystem() -> Optional[Dict]:
             if not p:
                 continue
             for k in ("alpha_price_tao", "tao_in_pool", "mcap", "chg_1d", "chg_7d",
-                      "flow_24h", "flow_7d", "flow_30d"):
+                      "flow_24h", "flow_7d", "flow_30d", "amm_net_24h_raw"):
                 if s.get(k) is None and p.get(k) is not None:
                     s[k] = p[k]
             if p.get("name") and s["name"].startswith("SN"):
@@ -406,15 +414,28 @@ def get_tao_ecosystem() -> Optional[Dict]:
     # Calibrate per-subnet net_flow_* units against the trusted aggregate; if
     # no scale fits, the columns are invalidated (better no leaders than a
     # subnet showing +26M TAO/day).
+    flow_basis_24h = "api"
     if subnets:
         _calibrate_flow_cols(subnets,
                              (flow or {}).get("net_24h_tao"),
                              (flow or {}).get("net_7d_tao"))
+        # Fallback for the 24h leaderboard when net_flow_* is rejected: AMM
+        # buy−sell volume is per-subnet net swap flow with unambiguous meaning —
+        # calibrate its unit the same way and use it for flow_24h.
+        if not any(s.get("flow_24h") is not None for s in subnets):
+            _sc = _calibrate_col(subnets, "amm_net_24h_raw",
+                                 (flow or {}).get("net_24h_tao"))
+            if _sc:
+                for s in subnets:
+                    v = s.get("amm_net_24h_raw")
+                    if v is not None:
+                        v /= _sc
+                        s["flow_24h"] = v if abs(v) <= 5e7 else None
+                flow_basis_24h = "amm buy−sell 24h"
 
     # Per-subnet 24h flow fallback via warm-instance snapshot: if the API gave
     # no flow fields, diff each subnet's tao_in_pool against a snapshot ≥3h old
     # and scale to a 24h rate. Best-effort — a cold start loses the snapshot.
-    flow_basis_24h = "api"
     if subnets:
         have_api_flow = any(s.get("flow_24h") is not None for s in subnets)
         now2 = time.time()

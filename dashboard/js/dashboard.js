@@ -4165,8 +4165,10 @@ function renderTaoEco(eco, symbol) {
     leadersBox = `<div class="tao-leaders">
       <div class="smc-header">🏆 SUBNET FLOWS — Σ totals, momentum & where the TAO went</div>
       ${rowL('24H', 'h24', ld && ld.h24)}${rowL('7D', 'd7', ld && ld.d7)}${rowL('30D', 'd30', ld && ld.d30)}
-      ${String(ld && ld.basis_24h || '').startsWith('snapshot')
-        ? `<div class="tao-stat-why">24h figures estimated from an in-app pool snapshot (${ld.basis_24h}) — approximate</div>` : ''}
+      ${ld && ld.basis_24h && ld.basis_24h !== 'api'
+        ? `<div class="tao-stat-why">${String(ld.basis_24h).startsWith('snapshot')
+            ? `24h figures estimated from an in-app pool snapshot (${ld.basis_24h}) — approximate`
+            : `24h per-subnet figures from AMM buy−sell swap volume (net TAO swapped into each pool)`}</div>` : ''}
       ${fc.prev_est ? `<div class="tao-stat-why">"prev 24h" ~ estimated as the average of the prior 6 days</div>` : ''}
     </div>`;
   }
