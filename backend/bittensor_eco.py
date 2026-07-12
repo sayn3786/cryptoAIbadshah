@@ -93,6 +93,41 @@ def _num(row: dict, *keys, div: float = 1.0):
 RAO = 1e9   # 1 TAO = 1e9 rao — Taostats returns many amounts in rao
 
 
+def _flow_val(row: dict, *keys):
+    """Per-subnet TAO flow field with unit sanity: rao-scaled values (>1e12)
+    are divided down; anything still >50M TAO is a unit misread → None."""
+    v = _num(row, *keys)
+    if v is None:
+        return None
+    if abs(v) > 1e12:
+        v /= RAO
+    if abs(v) > 5e7:
+        return None
+    return v
+
+
+def _flow_fields(row: dict) -> Dict:
+    """Candidate per-subnet net-TAO-flow fields (names vary by API version —
+    the ?debug=1 attempts log shows which keys the live payload carries)."""
+    return {
+        "flow_24h": _flow_val(row, "tao_in_change_1_day", "tao_in_1_day_change",
+                              "tao_in_change_24_hr", "net_tao_24_hr", "tao_net_flow_24_hr",
+                              "tao_flow_24_hr", "tao_in_pool_change_1_day", "reserve_change_1_day"),
+        "flow_7d":  _flow_val(row, "tao_in_change_7_day", "tao_in_7_day_change",
+                              "net_tao_7_day", "tao_net_flow_7_day", "tao_flow_7_day",
+                              "tao_in_pool_change_7_day", "reserve_change_7_day"),
+        "flow_30d": _flow_val(row, "tao_in_change_30_day", "tao_in_30_day_change",
+                              "net_tao_30_day", "tao_net_flow_30_day",
+                              "tao_in_pool_change_1_month", "reserve_change_30_day"),
+    }
+
+
+# Per-subnet pool snapshot (warm-lambda fallback): when the API exposes no
+# per-subnet flow fields, diff tao_in_pool against a snapshot taken hours ago
+# and scale to a 24h rate. Ephemeral (lost on cold start) — best-effort only.
+_pool_snap: Dict = {}
+
+
 def _network_stats() -> Optional[Dict]:
     j = _get("/api/stats/latest/v1")
     if not j:
@@ -147,7 +182,7 @@ def _subnets() -> Optional[List[Dict]]:
         chg1  = _num(r, "price_change_1_day", "price_change_24h", "one_day_change")
         out.append({"netuid": netuid, "name": str(name)[:24], "alpha_price_tao": price,
                     "emission": emis, "mcap": mcap, "tao_in_pool": tao_in,
-                    "chg_7d": chg7, "chg_1d": chg1})
+                    "chg_7d": chg7, "chg_1d": chg1, **_flow_fields(r)})
     return out or None
 
 
@@ -176,6 +211,7 @@ def _pools() -> Optional[Dict[int, Dict]]:
             "mcap": mcap,
             "chg_1d": _num(r, "price_change_1_day", "price_change_24h", "price_change_1d"),
             "chg_7d": _num(r, "price_change_7_day", "price_change_1_week", "price_change_7d"),
+            **_flow_fields(r),
         }
     return out or None
 
@@ -298,13 +334,56 @@ def get_tao_ecosystem() -> Optional[Dict]:
             p = pools.get(s["netuid"])
             if not p:
                 continue
-            for k in ("alpha_price_tao", "tao_in_pool", "mcap", "chg_1d", "chg_7d"):
+            for k in ("alpha_price_tao", "tao_in_pool", "mcap", "chg_1d", "chg_7d",
+                      "flow_24h", "flow_7d", "flow_30d"):
                 if s.get(k) is None and p.get(k) is not None:
                     s[k] = p[k]
             if p.get("name") and s["name"].startswith("SN"):
                 s["name"] = str(p["name"])[:24]
 
+    # Per-subnet 24h flow fallback via warm-instance snapshot: if the API gave
+    # no flow fields, diff each subnet's tao_in_pool against a snapshot ≥3h old
+    # and scale to a 24h rate. Best-effort — a cold start loses the snapshot.
+    flow_basis_24h = "api"
+    if subnets:
+        have_api_flow = any(s.get("flow_24h") is not None for s in subnets)
+        now2 = time.time()
+        snap_ts  = _pool_snap.get("ts")
+        snap_val = _pool_snap.get("vals") or {}
+        if not have_api_flow and snap_ts and 3 * 3600 <= now2 - snap_ts <= 48 * 3600:
+            age_days = (now2 - snap_ts) / 86400
+            for s in subnets:
+                cur = s.get("tao_in_pool")
+                prev = snap_val.get(s["netuid"])
+                if cur is not None and prev is not None:
+                    s["flow_24h"] = round((cur - prev) / age_days)
+            flow_basis_24h = f"snapshot ~{(now2 - snap_ts) / 3600:.0f}h"
+        if not snap_ts or now2 - snap_ts > 26 * 3600:
+            _pool_snap["ts"]   = now2
+            _pool_snap["vals"] = {s["netuid"]: s["tao_in_pool"] for s in subnets
+                                  if s.get("tao_in_pool") is not None}
+
     result: Dict = {"stats": stats, "flow": flow}
+
+    # ── Subnet inflow leaders — which subnets the TAO actually went to ────────
+    if subnets:
+        def _leaders(key):
+            rows = [s for s in subnets if s.get(key) is not None]
+            if not rows:
+                return None
+            rows.sort(key=lambda s: s[key], reverse=True)
+            top = [{"netuid": s["netuid"], "name": s["name"], "flow": round(s[key])}
+                   for s in rows[:3] if s[key] > 0]
+            worst = rows[-1]
+            out_row = ({"netuid": worst["netuid"], "name": worst["name"], "flow": round(worst[key])}
+                       if worst[key] < 0 else None)
+            if not top and not out_row:
+                return None
+            return {"top": top, "out": out_row}
+        _fl = {"h24": _leaders("flow_24h"), "d7": _leaders("flow_7d"),
+               "d30": _leaders("flow_30d"), "basis_24h": flow_basis_24h}
+        if _fl["h24"] or _fl["d7"] or _fl["d30"]:
+            result["flow_leaders"] = _fl
 
     if subnets:
         n = len(subnets)

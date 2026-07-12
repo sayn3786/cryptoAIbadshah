@@ -4056,6 +4056,32 @@ function renderTaoEco(eco, symbol) {
     tiles.push(tile('Top-5 emission share', `${sn.top5_emission_pct}%`, '',
       'How concentrated rewards are — high = winner-take-most, watch the leaders'));
 
+  // 🏆 Subnet inflow leaders — which subnets the TAO actually flowed into
+  let leadersBox = '';
+  const ld = eco.flow_leaders;
+  if (ld && (ld.h24 || ld.d7 || ld.d30)) {
+    const rowL = (lbl, L) => {
+      if (!L) return '';
+      const t = L.top && L.top[0];
+      const chips = (L.top || []).slice(1)
+        .map(x => `<span class="sn-chip">SN${x.netuid} ${x.name} ${fmtTao(x.flow)}</span>`).join('');
+      const outc = L.out
+        ? `<span class="sn-chip bear">top outflow: SN${L.out.netuid} ${L.out.name} ${fmtTao(L.out.flow)}</span>` : '';
+      return `<div class="tao-lead-row">
+        <span class="tao-lead-win">${lbl}</span>
+        ${t ? `<span class="tao-lead-main bull">${fmtTao(t.flow)} → SN${t.netuid} ${t.name}</span>`
+            : `<span class="tao-lead-main">no net inflow</span>`}
+        <span class="tao-lead-chips">${chips}${outc}</span>
+      </div>`;
+    };
+    leadersBox = `<div class="tao-leaders">
+      <div class="smc-header">🏆 SUBNET INFLOW LEADERS — where the TAO went</div>
+      ${rowL('24H', ld.h24)}${rowL('7D', ld.d7)}${rowL('30D', ld.d30)}
+      ${String(ld.basis_24h || '').startsWith('snapshot')
+        ? `<div class="tao-stat-why">24h figures estimated from an in-app pool snapshot (${ld.basis_24h}) — approximate</div>` : ''}
+    </div>`;
+  }
+
   // Subnet table — full emission-sorted list; top 10 shown, rest expandable
   let table = '';
   if (sn.top && sn.top.length) {
@@ -4097,6 +4123,7 @@ function renderTaoEco(eco, symbol) {
     .filter(Boolean).join(' · ');
   grid.innerHTML = `
     <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">${tiles.join('')}</div>
+    ${leadersBox}
     ${table}
     ${notes ? `<div class="macro-reason" style="margin-top:8px">${notes}</div>` : ''}
     <div class="tao-explainer">The dTAO loop: buying a subnet's Alpha deposits TAO into its pool

@@ -1675,6 +1675,22 @@ a:hover { color: var(--gold2); }
                   border-left: 3px solid var(--border); background: rgba(255,255,255,.02);
                   border-radius: 0 8px 8px 0; }
 
+/* 🏆 Subnet inflow leaders */
+.tao-leaders    { margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+                  background: rgba(16,185,129,.05); border: 1px solid rgba(16,185,129,.18); }
+.tao-lead-row   { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
+                  padding: 4px 0; border-bottom: 1px dashed rgba(255,255,255,.05); }
+.tao-lead-row:last-of-type { border-bottom: none; }
+.tao-lead-win   { font-size: .64rem; font-weight: 800; color: var(--muted2);
+                  font-family: var(--mono); min-width: 34px; }
+.tao-lead-main  { font-size: .78rem; font-weight: 700; font-family: var(--mono); }
+.tao-lead-main.bull { color: var(--bull); }
+.tao-lead-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.sn-chip        { font-size: .6rem; font-family: var(--mono); color: var(--muted2);
+                  background: rgba(255,255,255,.04); border: 1px solid var(--border);
+                  border-radius: 5px; padding: 1px 6px; }
+.sn-chip.bear   { color: #f87171; border-color: rgba(239,68,68,.3); }
+
 /* ── GoMining Strategy Advisor ───────────────────────────────────────────── */
 .gomining-card    { padding: 18px 20px; }
 
