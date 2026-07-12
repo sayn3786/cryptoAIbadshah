@@ -22,7 +22,7 @@ from typing import Optional, Dict, List
 
 TAOSTATS_BASE = "https://api.taostats.io"
 TAOSTATS_KEY  = os.getenv("TAOSTATS_API_KEY", "")
-TIMEOUT = 10
+TIMEOUT = 16   # Taostats can be slow under load — 10s read-timed-out all 4 calls
 
 _cache: Dict[str, tuple] = {}
 _TTL         = 1800   # 30 min — well inside 5 calls/min budget
@@ -62,19 +62,28 @@ def get_tao_debug() -> Dict:
 
 
 def _get(path: str, params: dict = None):
-    try:
-        r = _s.get(f"{TAOSTATS_BASE}{path}", params=params or {}, timeout=TIMEOUT)
-        if r.status_code != 200:
-            _log(path, f"HTTP {r.status_code}: {r.text[:80]}")
+    # One retry on timeout/connection errors — Taostats intermittently stalls
+    # (all 4 calls read-timed-out in one refresh); a second attempt usually
+    # lands. HTTP errors (429/4xx/5xx) are NOT retried: 429 means slow down.
+    for attempt in (1, 2):
+        try:
+            r = _s.get(f"{TAOSTATS_BASE}{path}", params=params or {}, timeout=TIMEOUT)
+            if r.status_code != 200:
+                _log(path, f"HTTP {r.status_code}: {r.text[:80]}")
+                return None
+            j = r.json()
+            rows = j.get("data") if isinstance(j, dict) else j
+            sample = rows[0] if isinstance(rows, list) and rows else rows
+            _log(path, "200 ok", ",".join(list(sample.keys())[:18]) if isinstance(sample, dict) else str(type(sample)))
+            return j
+        except (requests.Timeout, requests.ConnectionError) as e:
+            _log(path, f"{type(e).__name__} (attempt {attempt}): {e}")
+            if attempt == 1:
+                time.sleep(1.5)
+        except Exception as e:
+            _log(path, f"{type(e).__name__}: {e}")
             return None
-        j = r.json()
-        rows = j.get("data") if isinstance(j, dict) else j
-        sample = rows[0] if isinstance(rows, list) and rows else rows
-        _log(path, "200 ok", ",".join(list(sample.keys())[:18]) if isinstance(sample, dict) else str(type(sample)))
-        return j
-    except Exception as e:
-        _log(path, f"{type(e).__name__}: {e}")
-        return None
+    return None
 
 
 def _num(row: dict, *keys, div: float = 1.0):
@@ -299,7 +308,9 @@ def get_tao_ecosystem() -> Optional[Dict]:
         f_flow    = pool_ex.submit(_flow_from_history)
         def _safe(f):
             try:
-                return f.result(timeout=12)
+                # 16s timeout + 1.5s pause + 16s retry ≈ 34s worst case; the
+                # function-level budget is 60s (vercel.json maxDuration).
+                return f.result(timeout=36)
             except Exception:
                 return None
         stats   = _safe(f_stats)
