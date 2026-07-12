@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=82" />
+  <link rel="stylesheet" href="css/dashboard.css?v=83" />
 </head>
 <body>
 
@@ -599,6 +599,17 @@
     </div>
   </section>
 
+  <!-- TAO daily pool-flow history (TAO view only) — ETF-flow-style bars -->
+  <section class="row-analysis" id="taoFlowSection" style="display:none">
+    <div class="card">
+      <div class="card-hdr">
+        <span>💧 TAO Pool Flow — daily</span>
+        <span class="card-sub">Net TAO into subnet Alpha pools per day · vs 7d & 30d pace</span>
+      </div>
+      <div id="taoFlowGrid"></div>
+    </div>
+  </section>
+
   <!-- Crypto market regime (BTC dominance, rotation, liquidity, OI split) -->
   <section class="row-analysis" id="cryptoRegimeSection" style="display:none">
     <div class="card">
@@ -719,7 +730,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=82"></script>
+<script src="js/dashboard.js?v=83"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.

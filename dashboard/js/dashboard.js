@@ -248,6 +248,7 @@ function renderAll(a) {
   renderEtfFlows(a.etf_flows, a.symbol);
   renderGtk(a.gomining_tokenomics, a.symbol);
   renderTaoEco(a.tao_ecosystem, a.symbol);
+  renderTaoFlowHist(a.tao_ecosystem, a.symbol);
   renderMarketContext(a.markets, a.regime);
   trackSignal(a);
   evaluateSignals(a);
@@ -4007,6 +4008,70 @@ function saveGtkManual() {
 }
 
 /* ─── Bittensor / TAO ecosystem ───────────────────────────────────────────── */
+/* ─── TAO daily pool-flow dashboard (ETF-flow style) ──────────────────────── */
+function renderTaoFlowHist(eco, symbol) {
+  const sec  = document.getElementById('taoFlowSection');
+  const grid = document.getElementById('taoFlowGrid');
+  if (!sec || !grid) return;
+  const daily = eco?.flow?.daily || [];
+  const fc    = eco?.flow_cmp || {};
+  if (symbol !== 'TAO' || (!daily.length && fc.today == null)) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+
+  const fmtT = v => v == null ? '—' :
+    `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v) >= 1e6 ? (Math.abs(v)/1e6).toFixed(2)+'M' : Math.abs(v).toLocaleString()} τ`;
+  const cls = v => v == null ? '' : v > 0 ? 'bull' : v < 0 ? 'bear' : '';
+
+  // Comparison tiles — today vs prev 24h, vs 7d pace, vs 30d pace
+  const tile = (lbl, val, vCls, sub) => `
+    <div class="etf-stat tao-stat">
+      <span class="etf-stat-lbl">${lbl}</span>
+      <span class="etf-stat-val ${vCls || ''}">${val}</span>
+      <span class="tao-stat-why">${sub || ''}</span>
+    </div>`;
+  const tiles = [];
+  if (fc.today != null) {
+    let sub = '';
+    if (fc.prev_24h != null) {
+      if (fc.today > 0 && fc.prev_24h > 0)      sub = `×${(fc.today / fc.prev_24h).toFixed(1)} vs prev 24h (${fmtT(fc.prev_24h)})`;
+      else if (fc.today > 0 && fc.prev_24h <= 0) sub = `flipped + — prev 24h was ${fmtT(fc.prev_24h)}`;
+      else if (fc.today <= 0 && fc.prev_24h > 0) sub = `flipped − — prev 24h was ${fmtT(fc.prev_24h)}`;
+      else                                       sub = `prev 24h ${fmtT(fc.prev_24h)}`;
+      if (fc.prev_est) sub += ' (est.)';
+    }
+    tiles.push(tile('Today (24h)', fmtT(fc.today), cls(fc.today), sub));
+  }
+  if (fc.d7_total != null)
+    tiles.push(tile('7 days', fmtT(fc.d7_total), cls(fc.d7_total),
+      `avg ${fmtT(fc.d7_daily_avg)}/day${fc.today != null && fc.d7_daily_avg ? ` · today ×${(fc.today / fc.d7_daily_avg).toFixed(1)}` : ''}`));
+  if (fc.d30_total != null)
+    tiles.push(tile('30 days', fmtT(fc.d30_total), cls(fc.d30_total),
+      `avg ${fmtT(fc.d30_daily_avg)}/day`));
+
+  // Daily bars — same visual language as the BTC ETF flow card
+  let chart = '';
+  if (daily.length >= 2) {
+    const mx = Math.max(...daily.map(d => Math.abs(d.net))) || 1;
+    const bars = daily.map(d => {
+      const h = Math.max(6, Math.round(Math.abs(d.net) / mx * 100));
+      return `<div class="etf-bar-wrap" title="${d.date}: ${fmtT(d.net)}">
+        <div class="etf-bar ${d.net >= 0 ? 'etf-bar-in' : 'etf-bar-out'}" style="height:${h}%"></div>
+      </div>`;
+    }).join('');
+    chart = `<div class="etf-barchart" style="margin-top:10px">${bars}</div>
+      <div class="etf-bar-legend"><span>${daily[0].date}</span>
+        <span>net TAO/day · ${daily.length} days of history</span>
+        <span>${daily[daily.length - 1].date}</span></div>`;
+  } else {
+    chart = `<div class="tao-stat-why" style="margin-top:8px">Daily history builds up as Taostats
+      snapshots accumulate — bars appear once ≥2 days are available.</div>`;
+  }
+
+  grid.innerHTML = `
+    <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">${tiles.join('')}</div>
+    ${chart}`;
+}
+
 function renderTaoEco(eco, symbol) {
   const sec  = document.getElementById('taoEcoSection');
   const grid = document.getElementById('taoEcoGrid');

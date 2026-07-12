@@ -117,24 +117,40 @@ def _flow_fields(row: dict) -> Dict:
     }
 
 
-def _normalize_flow_cols(rows: List[Dict]):
-    """Column-wise unit detection: all subnets share one unit, so if the median
-    non-zero |value| exceeds 1e6 the column is rao-scaled (÷1e9); otherwise it's
-    already TAO. Per-value heuristics had a blind spot for mid-range rao values
-    (50–1000 TAO in rao is 5e10–1e12). Anything >50M TAO after scaling is a
-    misread → None."""
-    for key in ("flow_24h", "flow_7d", "flow_30d"):
-        vals = sorted(abs(r[key]) for r in rows if r.get(key))
-        if not vals:
-            continue
-        med = vals[len(vals) // 2]
-        scale = RAO if med > 1e6 else 1.0
-        for r in rows:
+def _calibrate_flow_cols(rows: List[Dict], agg24, agg7):
+    """Unit calibration against the TRUSTED aggregate (staked_alpha history).
+    Median/heuristic guessing produced absurd figures (a subnet showing +26M
+    TAO/day — 2× total supply). All net_flow_* columns share one unit, so pick
+    the scale whose 24h column-sum lands nearest the aggregate 24h flow (7d as
+    fallback reference). If no scale gets within tolerance, the columns don't
+    mean net pool TAO flow → invalidate them entirely rather than show garbage.
+    Returns the scale, or None if invalidated."""
+    ref, refkey = (agg24, "flow_24h") if agg24 else (agg7, "flow_7d")
+    colsum = None
+    if ref:
+        vals = [r[refkey] for r in rows if r.get(refkey) is not None]
+        colsum = sum(vals) if vals else None
+    if not ref or not colsum:
+        scale = None
+    else:
+        scale = min((1.0, 1e3, 1e6, 1e9, 1e12),
+                    key=lambda s_: abs(colsum / s_ - ref))
+        # Column-sum must land within ±60% of the trusted aggregate — the two
+        # are measured differently so some drift is normal, but beyond that the
+        # column doesn't mean net pool flow.
+        if abs(colsum / scale - ref) > abs(ref) * 0.6 + 1000:
+            scale = None                     # column ≠ net pool flow — reject
+    for r in rows:
+        for key in ("flow_24h", "flow_7d", "flow_30d"):
             v = r.get(key)
             if v is None:
                 continue
-            v /= scale
-            r[key] = v if abs(v) <= 5e7 else None
+            if scale is None:
+                r[key] = None
+            else:
+                v /= scale
+                r[key] = v if abs(v) <= 5e7 else None
+    return scale
 
 
 # Per-subnet pool snapshot (warm-lambda fallback): when the API exposes no
@@ -198,8 +214,9 @@ def _subnets() -> Optional[List[Dict]]:
         out.append({"netuid": netuid, "name": str(name)[:24], "alpha_price_tao": price,
                     "emission": emis, "mcap": mcap, "tao_in_pool": tao_in,
                     "chg_7d": chg7, "chg_1d": chg1, **_flow_fields(r)})
-    if out:
-        _normalize_flow_cols(out)
+    # NOTE: flow_* stored RAW here — unit calibration against the trusted
+    # aggregate happens in the assembly (_calibrate_flow_cols), which needs
+    # the stats-history flow figures.
     return out or None
 
 
@@ -241,7 +258,7 @@ def _flow_from_history() -> Optional[Dict]:
     staked_alpha across stats-history snapshots — reliable units, unlike the
     raw tao_flow endpoint whose per-subnet field proved unit-ambiguous.
     """
-    j = _get("/api/stats/history/v1", {"limit": 200})
+    j = _get("/api/stats/history/v1", {"limit": 400})
     if not j:
         return None
     rows = j.get("data") or []
@@ -291,12 +308,23 @@ def _flow_from_history() -> Optional[Dict]:
     prev24 = (_v1 - _v2) if (_v1 is not None and _v2 is not None) else None
     if d24 is None and d7 is None:
         return None
+    # Daily net-flow series (last value per UTC day, diffed) — powers the
+    # ETF-style daily flow chart. Covers as many days as history depth allows.
+    from datetime import datetime, timezone
+    by_day: Dict[str, float] = {}
+    for t, sa in pts:                       # pts sorted asc → last write wins
+        d = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")
+        by_day[d] = sa
+    days = sorted(by_day)
+    daily = [{"date": days[i][5:], "net": round(by_day[days[i]] - by_day[days[i - 1]])}
+             for i in range(1, len(days))][-31:]
     return {
         "net_24h_tao":      round(d24) if d24 is not None else None,
         "net_prev_24h_tao": round(prev24) if prev24 is not None else None,
         "net_7d_tao":       round(d7)  if d7  is not None else None,
         "net_30d_tao":      round(d30) if d30 is not None else None,
         "window_days": round(w7 if w7 is not None else w24, 1),
+        "daily": daily,
         "basis": "staked_alpha change (stats history)",
     }
 
@@ -374,6 +402,14 @@ def get_tao_ecosystem() -> Optional[Dict]:
                     s[k] = p[k]
             if p.get("name") and s["name"].startswith("SN"):
                 s["name"] = str(p["name"])[:24]
+
+    # Calibrate per-subnet net_flow_* units against the trusted aggregate; if
+    # no scale fits, the columns are invalidated (better no leaders than a
+    # subnet showing +26M TAO/day).
+    if subnets:
+        _calibrate_flow_cols(subnets,
+                             (flow or {}).get("net_24h_tao"),
+                             (flow or {}).get("net_7d_tao"))
 
     # Per-subnet 24h flow fallback via warm-instance snapshot: if the API gave
     # no flow fields, diff each subnet's tao_in_pool against a snapshot ≥3h old
