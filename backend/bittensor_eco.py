@@ -46,7 +46,10 @@ _s.headers.update({
 
 
 def _log(path: str, status: str, keys: str = ""):
-    _attempts.append({"path": path, "status": status[:160], "keys": keys[:200]})
+    # Keys list must be COMPLETE — a truncated list hid whether the pool
+    # payload carries per-subnet flow fields (price_change_1_day was present
+    # but past the old 18-key cutoff).
+    _attempts.append({"path": path, "status": status[:160], "keys": keys[:1500]})
     if len(_attempts) > 20:
         del _attempts[:-20]
 
@@ -74,7 +77,7 @@ def _get(path: str, params: dict = None):
             j = r.json()
             rows = j.get("data") if isinstance(j, dict) else j
             sample = rows[0] if isinstance(rows, list) and rows else rows
-            _log(path, "200 ok", ",".join(list(sample.keys())[:18]) if isinstance(sample, dict) else str(type(sample)))
+            _log(path, "200 ok", ",".join(sample.keys()) if isinstance(sample, dict) else str(type(sample)))
             return j
         except (requests.Timeout, requests.ConnectionError) as e:
             _log(path, f"{type(e).__name__} (attempt {attempt}): {e}")
