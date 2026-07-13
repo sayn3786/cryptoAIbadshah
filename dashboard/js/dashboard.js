@@ -594,6 +594,27 @@ function renderOI(oi) {
   const chg = oi.change_pct ?? 0;
   badge.textContent = pct(chg);
   badge.className = `metric-badge ${chg >= 0 ? 'up' : 'dn'}`;
+  badge.title = oi.window_bars ? `OI change over ~5 candles of this timeframe (${oi.window_bars}×${oi.period} bars)` : '';
+
+  // OI-price quadrant + squeeze read — who is entering the market right now
+  const qEl = document.getElementById('oiQuadrant');
+  if (qEl) {
+    const M = {
+      shorts_building: ['⛽ Shorts crowding in — OI↑ while price↓', 'oiq-bull', 'short-squeeze fuel building'],
+      longs_building:  ['📈 New longs opening — OI↑ with price↑',   'oiq-neut', 'trend conviction'],
+      short_covering:  ['🔄 Short covering — OI↓ with price↑',      'oiq-warn', 'rally without new money — weaker'],
+      long_liquidation:['🧯 Long liquidation — OI↓ with price↓',    'oiq-bear', 'deleveraging / capitulation'],
+    };
+    if (oi.quadrant && M[oi.quadrant]) {
+      let [txt, cls, sub] = M[oi.quadrant];
+      if (oi.squeeze === 'short_squeeze_fuel') { cls = 'oiq-bull'; sub = 'SHORT-SQUEEZE fuel — funding flat/negative; a bounce forces shorts to buy back'; }
+      if (oi.squeeze === 'long_squeeze_risk')  { cls = 'oiq-bear'; sub = 'LONG-SQUEEZE risk — hot funding; dips get violent'; }
+      qEl.innerHTML = `<div class="oi-quad ${cls}">${txt}</div><div class="oi-quad-sub">${sub}</div>`;
+      qEl.style.display = '';
+    } else {
+      qEl.style.display = 'none';
+    }
+  }
 
   // Sparkline
   const hist = oi.history || [];

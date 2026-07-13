@@ -1694,6 +1694,15 @@ a:hover { color: var(--gold2); }
                   border-radius: 5px; padding: 1px 6px; }
 .sn-chip.bear   { color: #f87171; border-color: rgba(239,68,68,.3); }
 
+/* OI quadrant / squeeze read on the Open Interest card */
+.oi-quad     { font-size: .64rem; font-weight: 700; padding: 3px 7px; border-radius: 5px;
+               margin-top: 6px; display: inline-block; }
+.oi-quad.oiq-bull { color: #34d399; background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3); }
+.oi-quad.oiq-bear { color: #f87171; background: rgba(239,68,68,.12);  border: 1px solid rgba(239,68,68,.3); }
+.oi-quad.oiq-warn { color: #fcd34d; background: rgba(251,191,36,.1);  border: 1px solid rgba(251,191,36,.28); }
+.oi-quad.oiq-neut { color: var(--muted2); background: rgba(255,255,255,.04); border: 1px solid var(--border); }
+.oi-quad-sub { font-size: .58rem; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+
 /* ── GoMining Strategy Advisor ───────────────────────────────────────────── */
 .gomining-card    { padding: 18px 20px; }
 

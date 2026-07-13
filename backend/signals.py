@@ -105,6 +105,9 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
     vol_sig  = vol.get("signal"); vol_ratio = vol.get("ratio", 0) or 0
     ls_ratio = (analysis.get("long_short") or {}).get("ratio")
     cvd_type = (analysis.get("cvd_divergence") or {}).get("type", "")
+    _oi_r    = analysis.get("open_interest") or {}
+    oi_quad  = _oi_r.get("quadrant")
+    oi_sq    = _oi_r.get("squeeze")
     mining   = analysis.get("btc_mining") or {}
     sopr_z   = (mining.get("sopr") or {}).get("zone")
     puell_z  = (mining.get("puell_multiple") or {}).get("zone")
@@ -148,6 +151,8 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
               "Crowd extremely long", f"L/S {ls_ratio} — one-sided positioning, fuel for a long flush")
         check(bool(cvd_type), "futures_led_up" in cvd_type or "futures_dominated_up" in cvd_type,
               "Rally is leverage-only", "futures leading spot — no real buyers behind the move, prone to fade")
+        check("quadrant" in _oi_r, oi_sq == "long_squeeze_risk",
+              "Crowded longs (OI↑ + hot funding)", "leveraged longs stacked into the rally — long-squeeze fuel on any dip")
         check(cycle_ok and mining != {}, sopr_z == "euphoria",
               "SOPR euphoria", "on-chain holders taking profit aggressively — distribution")
         check(cycle_ok and mining != {}, puell_z == "extreme",
@@ -179,6 +184,8 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
               "Crowd extremely short", f"L/S {ls_ratio} — one-sided shorts, fuel for a short squeeze")
         check(bool(cvd_type), "futures_led_down" in cvd_type or "futures_dominated_down" in cvd_type,
               "Selloff is leverage-only", "futures leading spot down — real holders not selling, squeeze risk")
+        check("quadrant" in _oi_r, oi_quad == "shorts_building",
+              "Shorts crowding in (OI↑, price↓)", "open interest rising as price falls — short-squeeze fuel building")
         check(cycle_ok and mining != {}, sopr_z == "capitulation",
               "SOPR capitulation", "on-chain holders selling at a loss — panic bottom behaviour")
         check(cycle_ok and mining != {}, puell_z == "deep_undervalued",
@@ -486,6 +493,25 @@ def generate_signal(analysis: Dict) -> Dict:
             else:
                 score -= 8; g['flow'] -= 8
                 bear_reasons.append(f"OI declining ({oi_change:.1f}%) with falling price — longs capitulating")
+
+    # ── OI squeeze fuel (reversal read, on top of the continuation read) ──────
+    # price↓ + OI↑ is bearish NOW (new shorts) — but those same shorts are
+    # forced buyers on any bounce. When it's pronounced and funding isn't
+    # positive, flag SHORT-SQUEEZE fuel (softens the bearish OI score and warns
+    # of the snap-back). Mirror: OI↑ into a rally with hot funding = crowded
+    # longs = LONG-SQUEEZE risk.
+    _oi_sq = oi.get("squeeze")
+    if _oi_sq == "short_squeeze_fuel":
+        score += 6; g['flow'] += 6
+        bull_reasons.append(
+            f"⛽ Short-squeeze fuel — OI +{oi_change:.1f}% while price fell "
+            f"{oi.get('px_change_pct', 0):.1f}%: fresh shorts crowding in with funding flat/negative; "
+            f"any bounce forces them to buy back")
+    elif _oi_sq == "long_squeeze_risk":
+        score -= 6; g['flow'] -= 6
+        bear_reasons.append(
+            f"⛽ Long-squeeze risk — OI +{oi_change:.1f}% into the rally with hot funding: "
+            f"crowded leveraged longs are flush fuel on any dip")
 
     # ── Fair Value Gaps ───────────────────────────────────────────────────────
     # ICT concept — price tends to return to fill gaps ~70% of the time.

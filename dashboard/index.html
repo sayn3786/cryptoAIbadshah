@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=84" />
+  <link rel="stylesheet" href="css/dashboard.css?v=85" />
 </head>
 <body>
 
@@ -168,7 +168,8 @@
       <h3 class="card-title">Open Interest</h3>
       <div class="metric-value" id="oiValue">—</div>
       <div class="metric-badge" id="oiChange">—</div>
-      <div class="mini-sparkline" id="oiSparkline"></div>
+      <canvas class="mini-sparkline" id="oiSparkline"></canvas>
+      <div id="oiQuadrant" style="display:none"></div>
       <div class="oi-rotation" id="oiRotation" style="display:none"></div>
     </div>
 
@@ -730,7 +731,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=84"></script>
+<script src="js/dashboard.js?v=85"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.

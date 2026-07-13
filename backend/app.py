@@ -456,12 +456,40 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Use CoinGlass for richer derivatives data when API key is configured
     if cg_client.enabled:
         funding = cg_client.get_funding_rate(bs) or client.get_funding_rate(bs)
-        oi      = cg_client.get_open_interest(bs) or client.get_open_interest(bs)
+        oi      = cg_client.get_open_interest(bs) or client.get_open_interest(bs, timeframe)
         liq     = cg_client.get_liquidations(bs)  or client.get_liquidations(bs)
     else:
         funding = client.get_funding_rate(bs)
-        oi      = client.get_open_interest(bs)
+        oi      = client.get_open_interest(bs, timeframe)
         liq     = client.get_liquidations(bs)
+
+    # ── OI-price quadrant + squeeze-fuel classification ───────────────────────
+    # OI change (measured over ~5 candles of THIS timeframe) × price direction
+    # tells who is entering the market. Two quadrants are squeeze setups:
+    #   price ↓ + OI ↑  → new SHORTS piling in → short-squeeze fuel (bullish
+    #                     reversal potential, esp. when funding isn't positive)
+    #   price ↑ + OI ↑ + hot funding → crowded LONGS → long-squeeze risk
+    if oi and len(spot) >= 6:
+        _px0 = spot[-6]["close"]
+        _px_chg = (spot[-1]["close"] - _px0) / _px0 * 100 if _px0 else 0.0
+        _oic = oi.get("change_pct", 0.0) or 0.0
+        _fr  = (funding or {}).get("current", 0.0) or 0.0
+        quad = sq = None
+        if _oic >= 2 and _px_chg <= -0.5:
+            quad = "shorts_building"
+            if _oic >= 6 and _px_chg <= -1.5 and _fr <= 0.01:
+                sq = "short_squeeze_fuel"
+        elif _oic >= 2 and _px_chg >= 0.5:
+            quad = "longs_building"
+            if _oic >= 6 and _fr >= 0.02:
+                sq = "long_squeeze_risk"
+        elif _oic <= -2 and _px_chg >= 0.5:
+            quad = "short_covering"
+        elif _oic <= -2 and _px_chg <= -0.5:
+            quad = "long_liquidation"
+        oi["quadrant"]      = quad
+        oi["squeeze"]       = sq
+        oi["px_change_pct"] = round(_px_chg, 2)
 
     closes     = [c["close"] for c in spot]
     macd         = calculate_macd(closes)

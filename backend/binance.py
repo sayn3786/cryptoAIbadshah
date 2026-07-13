@@ -1052,12 +1052,27 @@ class BinanceClient:
         from mock_data import mock_funding_rate
         return mock_funding_rate(symbol, limit)
 
-    def get_open_interest(self, symbol: str) -> Dict:
-        """Open interest in USD. Primary source is OKX (works where Binance
-        futures is geo-blocked and covers alts like TAO that Binance may not
-        list); Binance is a USD fallback. Only when every live source fails do
-        we return a mock estimate (flagged source='mock')."""
+    # OI history granularity per request timeframe: intraday TFs get HOURLY
+    # OI bars (so "OI rising while price falls" is visible on the TF you
+    # trade), daily+ gets daily bars. (bar period, bars to keep, bars ≈ 5
+    # candles of the TF for the change window)
+    _OI_TF = {
+        "1H":  ("1H", 48, 5),   "2H": ("1H", 60, 10),
+        "4H":  ("1H", 96, 20),  "8H": ("1H", 120, 40), "12H": ("1H", 120, 60),
+        "1D":  ("1D", 30, 5),   "1W": ("1D", 60, 35),
+        "2W":  ("1D", 60, 60),  "3W": ("1D", 60, 60),  "1M":  ("1D", 60, 60),
+    }
+
+    def get_open_interest(self, symbol: str, timeframe: str = "1D") -> Dict:
+        """Open interest in USD with history matched to the request timeframe.
+        Primary source is OKX (works where Binance futures is geo-blocked and
+        covers alts like TAO that Binance may not list); Binance is a USD
+        fallback. Only when every live source fails do we return a mock
+        estimate (flagged source='mock'). change_pct is measured over ~5
+        candles of the request TF so it lines up with the price move the
+        signal engine compares it against."""
         base = symbol[:-4] if symbol.endswith("USDT") else symbol
+        period, keep, win = self._OI_TF.get(timeframe, ("1D", 30, 5))
 
         # ── Primary: OKX perpetual OI in USD ────────────────────────────────
         try:
@@ -1069,15 +1084,17 @@ class BinanceClient:
                 history, chg = [], 0.0
                 try:
                     h = self._get(f"{OKX_BASE}/api/v5/rubik/stat/contracts/open-interest-volume",
-                                  {"ccy": base, "period": "1D"})
-                    hrows = sorted(((h or {}).get("data") or []), key=lambda r: int(r[0]))[-14:]
+                                  {"ccy": base, "period": period})
+                    hrows = sorted(((h or {}).get("data") or []), key=lambda r: int(r[0]))[-keep:]
                     history = [{"timestamp": int(r[0]), "oi": float(r[1])} for r in hrows]
-                    if len(history) >= 2 and history[0]["oi"] > 0:
-                        chg = (history[-1]["oi"] - history[0]["oi"]) / history[0]["oi"] * 100
+                    ref = history[-(win + 1)] if len(history) > win else (history[0] if history else None)
+                    if ref and ref["oi"] > 0:
+                        chg = (history[-1]["oi"] - ref["oi"]) / ref["oi"] * 100
                 except Exception:
                     pass
                 return {"value": round(oi_usd, 2), "change_pct": round(chg, 2),
-                        "history": history, "source": "okx"}
+                        "history": history, "source": "okx",
+                        "period": period, "window_bars": win}
         except Exception:
             pass
 
