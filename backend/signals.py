@@ -475,24 +475,43 @@ def generate_signal(analysis: Dict) -> Dict:
     # Rising OI + rising price = new longs entering (bullish conviction).
     # Rising OI + falling price = new shorts entering (bearish conviction).
     # Widely used by futures-focused traders; works best as a confirmation filter.
+    # Thresholds are timeframe-scaled (set in app.py): the OI change covers
+    # ~5 candles of THIS TF, so a fixed ±5% bar was unreachable intraday and
+    # OI never appeared in confluence on 1H/2H.
     oi_change = oi.get("change_pct", 0.0) or 0.0
+    _oi_strong = oi.get("thr_strong") or 5.0
+    _oi_quad_t = oi.get("thr_quad") or 2.0
     if len(candles) >= 5:
         prev_price = candles[-5]["close"]
         price_up = current_price > prev_price
-        if oi_change > 5:
+        if oi_change > _oi_strong:
             if price_up:
                 score += 12; g['flow'] += 12
-                bull_reasons.append(f"OI +{oi_change:.1f}% with rising price — new longs opening, trend conviction")
+                bull_reasons.append(f"OI +{oi_change:.1f}% (5-candle window) with rising price — new longs opening, trend conviction")
             else:
                 score -= 12; g['flow'] -= 12
-                bear_reasons.append(f"OI +{oi_change:.1f}% with falling price — new shorts entering, bearish conviction")
-        elif oi_change < -5:
+                bear_reasons.append(f"OI +{oi_change:.1f}% (5-candle window) with falling price — new shorts entering, bearish conviction")
+        elif oi_change > _oi_quad_t:
+            if price_up:
+                score += 5; g['flow'] += 5
+                bull_reasons.append(f"OI building (+{oi_change:.1f}% over 5 candles) with rising price — longs adding")
+            else:
+                score -= 5; g['flow'] -= 5
+                bear_reasons.append(f"OI building (+{oi_change:.1f}% over 5 candles) with falling price — shorts adding (watch for squeeze fuel)")
+        elif oi_change < -_oi_strong:
             if price_up:
                 score += 8; g['flow'] += 8
                 bull_reasons.append(f"OI declining ({oi_change:.1f}%) with rising price — shorts being squeezed out")
             else:
                 score -= 8; g['flow'] -= 8
                 bear_reasons.append(f"OI declining ({oi_change:.1f}%) with falling price — longs capitulating")
+        elif oi_change < -_oi_quad_t:
+            if price_up:
+                score += 4; g['flow'] += 4
+                bull_reasons.append(f"OI easing ({oi_change:.1f}% over 5 candles) with rising price — short covering")
+            else:
+                score -= 4; g['flow'] -= 4
+                bear_reasons.append(f"OI easing ({oi_change:.1f}% over 5 candles) with falling price — longs closing out")
 
     # ── OI squeeze fuel (reversal read, on top of the continuation read) ──────
     # price↓ + OI↑ is bearish NOW (new shorts) — but those same shorts are

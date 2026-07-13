@@ -474,22 +474,34 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         _px_chg = (spot[-1]["close"] - _px0) / _px0 * 100 if _px0 else 0.0
         _oic = oi.get("change_pct", 0.0) or 0.0
         _fr  = (funding or {}).get("current", 0.0) or 0.0
+        # Thresholds scale with the timeframe — the OI change is measured over
+        # ~5 candles of THIS TF, so ±5% (a fine bar for a multi-day window) is
+        # nearly unreachable in 5 hours. (quad_min, strong_min) in %:
+        _OI_THR = {
+            "1H": (0.8, 2.5), "2H": (1.0, 3.0), "4H": (1.5, 4.0),
+            "8H": (2.0, 5.0), "12H": (2.5, 5.5), "1D": (3.0, 6.0),
+            "1W": (5.0, 10.0), "2W": (5.0, 10.0), "3W": (5.0, 10.0), "1M": (5.0, 10.0),
+        }
+        _qmin, _smin = _OI_THR.get(timeframe, (2.0, 5.0))
+        _px_q, _px_s = 0.4, 1.2
         quad = sq = None
-        if _oic >= 2 and _px_chg <= -0.5:
+        if _oic >= _qmin and _px_chg <= -_px_q:
             quad = "shorts_building"
-            if _oic >= 6 and _px_chg <= -1.5 and _fr <= 0.01:
+            if _oic >= _smin and _px_chg <= -_px_s and _fr <= 0.01:
                 sq = "short_squeeze_fuel"
-        elif _oic >= 2 and _px_chg >= 0.5:
+        elif _oic >= _qmin and _px_chg >= _px_q:
             quad = "longs_building"
-            if _oic >= 6 and _fr >= 0.02:
+            if _oic >= _smin and _fr >= 0.02:
                 sq = "long_squeeze_risk"
-        elif _oic <= -2 and _px_chg >= 0.5:
+        elif _oic <= -_qmin and _px_chg >= _px_q:
             quad = "short_covering"
-        elif _oic <= -2 and _px_chg <= -0.5:
+        elif _oic <= -_qmin and _px_chg <= -_px_q:
             quad = "long_liquidation"
         oi["quadrant"]      = quad
         oi["squeeze"]       = sq
         oi["px_change_pct"] = round(_px_chg, 2)
+        oi["thr_strong"]    = _smin
+        oi["thr_quad"]      = _qmin
 
     closes     = [c["close"] for c in spot]
     macd         = calculate_macd(closes)
