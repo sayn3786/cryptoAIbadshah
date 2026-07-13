@@ -19,6 +19,26 @@ def _get(url: str, params: dict = None, headers: dict = None) -> dict | list:
     return r.json()
 
 
+def _closed_series(series):
+    """Drop the still-forming last bar so CVD DIRECTION is read from completed
+    bars only (Phase-1 repaint elimination, extended to the flow feed). The
+    bar interval is inferred from the series' own median gap, so no interval
+    argument is needed and month-length variance doesn't matter. The forming
+    bar (open_time + interval > now) is removed; the cumulative `current`
+    value shown to the user can still include it."""
+    if not series or len(series) < 3:
+        return series
+    ts = [int(s.get("timestamp", 0)) for s in series]
+    gaps = sorted(ts[i] - ts[i - 1] for i in range(1, len(ts)))
+    iv = gaps[len(gaps) // 2] or 0
+    if iv <= 0:
+        return series
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if ts[-1] + iv > now_ms:                 # last bar's close is in the future
+        return series[:-1] or series
+    return series
+
+
 # ── Symbol maps ───────────────────────────────────────────────────────────────
 
 _OKX_CCY = {
@@ -145,7 +165,7 @@ def _cvd_usd_from_klines(candles: list, label: str) -> Optional[Dict]:
                            "delta": round(delta, 2)})
         if not series:
             return None
-        trend = cvd_trend(series)
+        trend = cvd_trend(_closed_series(series))
         return {"current": round(cvd, 2), "trend": trend,
                 "series": series[-30:], "label": label, "usd": True}
     except Exception:
@@ -268,7 +288,7 @@ def _okx_taker_cvd(symbol: str, inst_type: str, interval: str, label: str) -> Op
             delta = buy - sell
             cvd  += delta
             series.append({"timestamp": ts, "cvd": round(cvd, 4), "delta": round(delta, 4)})
-        trend = cvd_trend(series)
+        trend = cvd_trend(_closed_series(series))
         return {"current": round(cvd, 2), "trend": trend,
                 "series": series[-30:], "label": label}
     except Exception:
@@ -549,7 +569,7 @@ def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int) -> Optiona
         return None
 
     current = agg_series[-1]["cvd"]
-    trend   = cvd_trend(agg_series)
+    trend   = cvd_trend(_closed_series(agg_series))
 
     return {
         "current": round(current, 2),
@@ -612,7 +632,7 @@ def fetch_aggregated_futures_cvd(symbol: str, interval: str, limit: int) -> Opti
         return None
 
     current = agg_series[-1]["cvd"]
-    trend   = cvd_trend(agg_series)
+    trend   = cvd_trend(_closed_series(agg_series))
 
     return {
         "current":   round(current, 2),

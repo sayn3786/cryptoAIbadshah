@@ -1509,6 +1509,28 @@ def generate_signal(analysis: Dict) -> Dict:
                 f"🟢 Reversal Radar {_rr['level'].upper()} (+{_rr_pts}) — {_rr['count']}/{_rr['applicable']} "
                 f"bottoming signals ({_rr_labels}); downtrend may be washing out, watch for reversal")
 
+    # ── Group soft-caps (double-counting control) ─────────────────────────────
+    # Within a group the signals are CORRELATED, not independent: RSI level +
+    # RSI slope + ROC + candle-consistency + Stoch RSI are five reads of the
+    # same momentum; CVD + OI + order-book + volume are four reads of the same
+    # flow; funding + L/S + F&G + news are four reads of the same crowd. Left
+    # uncapped, one theme firing on all cylinders inflates the score far beyond
+    # its true independent information. Each group's net contribution is capped
+    # at a generous ceiling — high enough that a genuinely strong multi-read
+    # group is untouched, so only pathological single-theme stacking is trimmed.
+    # (The EMA/SuperTrend/Ichimoku trio is already capped at TREND_CAP=35
+    # upstream; this is the outer ceiling including VWAP/crosses/trendline.)
+    _GROUP_CAP = {"trend": 52, "momentum": 44, "flow": 48, "sentiment": 42, "pattern": 38}
+    for _grp, _cap in _GROUP_CAP.items():
+        _raw = g[_grp]
+        if abs(_raw) > _cap:
+            _capped  = _cap if _raw > 0 else -_cap
+            score   -= (_raw - _capped)     # remove only the over-stacked excess
+            g[_grp]  = _capped
+            (bull_reasons if _raw > 0 else bear_reasons).append(
+                f"⚖️ {_grp.capitalize()} group capped ({int(round(_raw)):+d}→{int(_capped):+d}) — "
+                f"multiple correlated {_grp} reads stacked; trimmed to avoid double-counting")
+
     # ── Confluence Engine ─────────────────────────────────────────────────────────
     # Analyzes cross-group relationships to dynamically adjust the final score.
     # Groups: TREND | MOMENTUM | FLOW | SENTIMENT | PATTERN

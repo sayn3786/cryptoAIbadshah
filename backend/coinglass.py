@@ -240,9 +240,10 @@ class CoinGlassClient:
                 return None
 
             from indicators import cvd_trend
+            from cvd_sources import _closed_series
             return {
                 "current": round(cvd, 2),
-                "trend":   cvd_trend(series),
+                "trend":   cvd_trend(_closed_series(series)),   # closed bars only
                 "series":  series[-30:],
                 "label":   "futures_aggregated",
                 "source":  "coinglass",
