@@ -1376,6 +1376,74 @@ def api_exhaustion(symbol):
     return jsonify(data)
 
 
+@app.get("/api/backtest/<symbol>")
+def api_backtest(symbol):
+    """Phase 4 — measurable validation. Replays the price/structure signal over
+    real candle history and returns expectancy, win-rate, profit-factor, drawdown
+    and (optionally) a per-group ablation study.
+
+    Query params:
+      tf            timeframe (default 2H — the primary trading TF)
+      limit         candles to pull for the backtest (default 500, max 1000)
+      min_strength  signal-strength gate to take a trade (default 35)
+      max_hold      bars held before a time-stop (default 24)
+      warmup        leading bars skipped for indicator seeding (default 60)
+      fee_bps       round-trip fee+slippage in bps deducted per trade (default 6)
+      stride        evaluate every Nth bar (default 1; use 2–3 with ablation)
+      ablation      1 = also run the group-suppression study (slower)
+      trades        1 = include the full per-trade ledger in the response
+
+    NOTE: only price/structure groups (trend/momentum/pattern) are replayable —
+    flow and sentiment/cycle inputs have no historical series (see scope_note).
+    """
+    symbol = symbol.upper()
+    if symbol not in SYMBOLS:
+        return jsonify({"error": f"Symbol {symbol} not supported"}), 404
+
+    args = request.args
+    tf = args.get("tf", "2H").upper()
+    if tf not in TF_INTERVAL:
+        return jsonify({"error": f"Unsupported timeframe {tf}"}), 400
+    try:
+        limit        = min(1000, max(120, int(args.get("limit", 500))))
+        min_strength = int(args.get("min_strength", 35))
+        max_hold     = max(1, int(args.get("max_hold", 24)))
+        warmup       = max(30, int(args.get("warmup", 60)))
+        fee_bps      = float(args.get("fee_bps", 6.0))
+        stride       = max(1, int(args.get("stride", 1)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid numeric parameter"}), 400
+    ablation     = args.get("ablation") in ("1", "true", "yes")
+    want_trades  = args.get("trades") in ("1", "true", "yes")
+
+    # Fetch a long history, aggregate for synthetic TFs, then keep CLOSED candles
+    # only (drop the still-forming bar) — the same repaint-free view the live
+    # engine trades on.
+    bs       = SYMBOLS[symbol]
+    interval = TF_INTERVAL.get(tf, "2h")
+    raw = client.get_spot_klines(bs, interval, limit)
+    src = client.data_source
+    if tf in TF_AGG:
+        raw = client.aggregate_candles(raw, TF_AGG[tf])
+    closed, _live = _split_closed(raw, TF_SECONDS.get(tf, 7200))
+
+    if src == "demo" or not closed or len(closed) < warmup + 10:
+        return jsonify({
+            "symbol": symbol, "timeframe": tf,
+            "error": "insufficient real candle history for a backtest",
+            "data_source": src, "candles_available": len(closed),
+        }), 200
+
+    from backtest import run_full_report
+    report = run_full_report(
+        closed, tf, symbol, ablation=ablation, keep_trades=want_trades,
+        min_strength=min_strength, max_hold=max_hold, warmup=warmup,
+        fee_bps=fee_bps, stride=stride,
+    )
+    report["data_source"] = src
+    return jsonify(report)
+
+
 @app.get("/api/dashboard")
 def api_dashboard():
     results = {}
