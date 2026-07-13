@@ -13,16 +13,20 @@
 4. [Step-by-Step: How to Use It](#4-step-by-step-how-to-use-it)
 5. [Understanding the Signal Card](#5-understanding-the-signal-card)
 6. [Every Indicator Explained Simply](#6-every-indicator-explained-simply)
-7. [The Recommendation Cards](#7-the-recommendation-cards)
-8. [Risk Management — The Most Important Section](#8-risk-management--the-most-important-section)
-9. [Common Beginner Mistakes](#9-common-beginner-mistakes)
-10. [Glossary](#10-glossary)
+7. [The Chart — Trendlines, Zones & Overlays](#7-the-chart--trendlines-zones--overlays)
+8. [The Reversal Radar — Spotting Exhaustion & Bottoms](#8-the-reversal-radar--spotting-exhaustion--bottoms)
+9. [Higher-Timeframe Context — Why Some Info is Dimmed](#9-higher-timeframe-context--why-some-info-is-dimmed)
+10. [Token-Specific Dashboards (BTC · TAO · GoMining)](#10-token-specific-dashboards-btc--tao--gomining)
+11. [The Recommendation Cards](#11-the-recommendation-cards)
+12. [Risk Management — The Most Important Section](#12-risk-management--the-most-important-section)
+13. [Common Beginner Mistakes](#13-common-beginner-mistakes)
+14. [Glossary](#14-glossary)
 
 ---
 
 ## 1. What is CryptoSTARS?
 
-CryptoSTARS is an **AI-powered crypto market analysis dashboard**. It watches 27 cryptocurrencies across multiple exchanges, runs 30+ technical indicators, and gives you a clear **BUY / SELL / WAIT** signal with an exact entry price, stop loss, and profit targets.
+CryptoSTARS is an **AI-powered crypto market analysis dashboard**. It watches 30 cryptocurrencies across multiple exchanges, runs 30+ technical indicators, and gives you a clear **BUY / SELL / WAIT** signal with an exact entry price, stop loss, and profit targets.
 
 **Think of it like this:**
 Imagine hiring 5 experienced traders to each look at the same chart, then they vote and tell you their combined conclusion. That is what CryptoSTARS does — automatically, in seconds, across all your favourite coins.
@@ -67,8 +71,8 @@ Step 4: Signal Output
 ## 3. Getting Around the Dashboard
 
 ### Top Bar
-- **Asset tabs** — click BTC, ETH, SOL, etc. to switch coins
-- **Timeframe tabs** — 1H, 2H, 4H, 8H, 12H, 1D, 1W, 2W, 1M
+- **Asset tabs** — click BTC, ETH, SOL, etc. to switch coins (30 coins, sorted by live market cap — includes TAO, GOMINING, ICP, ENJ, TNSR, tokenised gold XAUT/PAXG)
+- **Timeframe tabs** — 1H, 2H, 4H, 8H, 12H, 1D, 1W, 2W, 3W, 1M
 - **⟳ Refresh button** — get the latest data
 - **🔔 Bell icon** — alerts for weekly engulfing candle patterns
 
@@ -168,6 +172,21 @@ The dashboard suggests leverage based on market volatility. If it says **3×**, 
 
 > **Beginner warning:** If you are new, trade **spot only** (no leverage). Leverage can wipe out your account very quickly. Learn the market first.
 
+### Extra warnings on the Signal card
+
+- **⚠ Overbought/oversold at this TF** — the signal direction is fighting a momentum extreme; the entry is overextended, wait for a pullback
+- **⚡ N indicators just flipped** — fresh directional flips (MACD cross, SuperTrend flip, EMA cross…) — the earliest entry evidence
+- **🛑/🟢 Reversal Radar** — exhaustion/bottoming gauge for the current trend (full explanation in [Section 8](#8-the-reversal-radar--spotting-exhaustion--bottoms))
+- **Smart Money Structure** — CHoCH, Liquidity Grab and the ICT triple-combo setup when present
+
+### Why is it NEUTRAL when so many things look bullish?
+
+The confluence list can show many bullish lines yet the signal stays NEUTRAL. That's usually correct, because:
+- Many lines are **low-weight** (news, sentiment) or **down-weighted on your timeframe** (🗓️ daily+ context)
+- Strong structural signals on the other side (trend, real-money flow) cancel them
+- If only ONE group of indicators leans a direction (e.g. momentum alone, without trend or flow), the score is **damped 15%** — "⚠️ Unconfirmed signal" — so a lone momentum spike can't print a LONG
+- The bar is deliberately high: a signal needs the equivalent of 2–3 real indicators agreeing (score ±35) before it calls a side. NEUTRAL means "no edge worth risking money on."
+
 ---
 
 ## 6. Every Indicator Explained Simply
@@ -257,12 +276,21 @@ The dashboard suggests leverage based on market volatility. If it says **3×**, 
 
 ---
 
-#### RSI Divergence
-**What it is:** When price makes a new high but RSI makes a LOWER high (or vice versa). This is a warning sign that the move is losing steam.
+#### RSI Divergence — all FOUR types
+**What it is:** When price and RSI disagree. The direction of the disagreement tells you whether a trend is about to REVERSE or about to CONTINUE.
 
-**Simple rule:**
-- Price making higher highs but RSI making lower highs = **bearish divergence** — rally is weak, reversal coming
-- Price making lower lows but RSI making higher lows = **bullish divergence** — selloff is weak, reversal coming
+**The four types:**
+
+| Type | Price | RSI | Meaning |
+|---|---|---|---|
+| **Bullish (regular)** | Lower Low | Higher Low | Selloff losing force → reversal UP |
+| **Bearish (regular)** | Higher High | Lower High | Rally losing force → reversal DOWN |
+| **Hidden Bullish** | Higher Low | Lower Low | Uptrend CONTINUES — buy-the-dip signal |
+| **Hidden Bearish** | Lower High | Higher High | Downtrend CONTINUES — sell-the-bounce signal |
+
+**Key insight:** Regular divergence calls a *reversal*; hidden divergence confirms the *trend continuing*. Two analysts can look at the same chart and one says "bullish divergence" (reading the lows) while another says "hidden bearish" (reading the highs) — both can be technically present. In a downtrend, the trend-aligned hidden bearish is usually the higher-probability read. CryptoSTARS detects all four, reports the one on the most recent swing, and warns you when an opposing divergence coexists ("mixed structure — wait for confirmation").
+
+**⏳ Forming divergence:** a divergence needs a confirmed swing point, which takes a few closed candles — on the WEEKLY that can mean weeks of lag. When the newest candles show a divergence shaping up but not yet confirmed, the card shows it as **"forming ⏳"** with reduced weight. This is exactly when analysts on X call it early — you see it too, honestly labelled as unconfirmed.
 
 ---
 
@@ -498,13 +526,127 @@ A 1H signal saying LONG but the daily chart saying SHORT = high-risk trade. A 1H
 
 ---
 
-## 7. The Recommendation Cards
+## 7. The Chart — Trendlines, Zones & Overlays
+
+The main chart is now full-width and scales to your screen (works on desktop, laptop, and the Android/iPhone app). Every line on it is listed in the **legend** above the chart. Here is what each one means and how to use it.
+
+### The Two Trendlines (drawn automatically, textbook rules)
+
+| Line | Looks like | What it is | What it's for |
+|---|---|---|---|
+| **Local trendline** | Solid, thick — 🟢 green (support) or 🔴 red (resistance) | The floor/ceiling of the **current leg**, near price | The actionable line: its break is a trade trigger, and it anchors your Entry / Stop Loss / Take Profit |
+| **Macro line** | Grey dashed | The **multi-week** floor/ceiling of the whole visible window | The bias filter: while price is under a descending macro ceiling, counter-trend longs are lower-probability |
+
+**How they are drawn (the textbook two-rule method):**
+1. Anchor at the **true extreme** (the major low for an ascending support, the major high for a descending resistance)
+2. Take the **shallowest slope that keeps all later price action on the correct side** (a support line must stay below the candles, a resistance line above)
+
+**Details that make them trustworthy:**
+- Anchors use **candle wicks, clamped** — support sits at the real defended lows, but a single freak spike wick can't hijack the line
+- A **break only counts on a candle CLOSE** beyond the line — a wick poking through is a fakeout, not a break
+- On a break, the local line **flips colour** to the breakout direction
+- Both lines **project ~8 bars into the future** so you can see where price will meet them next
+- A macro line that price has decisively broken (moved >5% past) is **hidden** — a "resistance" under price is meaningless
+- In choppy sideways ranges you may see **no diagonal lines at all** — that's honest: no valid trendline exists there, and the zones (below) carry the structure
+
+**In the signal:** local line breakout/breakdown = ±14 points; pressing into resistance / holding support = ±8; a *fresh* macro-line break = ±12 (regime change); sitting under the macro ceiling = −5 bias against longs.
+
+### Supply & Demand Zones (the coloured bands)
+
+- 🟥 **Supply Zone** — a band **above** price where sellers have repeatedly defended (clustered swing highs). Expect rejection risk there.
+- 🟩 **Demand Zone** — a band **below** price where buyers have repeatedly stepped in (clustered swing lows). Expect bounce attempts there.
+- The label shows **"• IN ZONE"** or **"• near"** when price reaches one.
+- **In the signal:** inside/approaching a supply zone = −8/−5; inside/approaching a demand zone = +8/+5.
+- **In your trade levels:** entries anchor at the near edge of a zone, stops just beyond the far edge (losing the zone = thesis dead), and when the opposite zone offers at least 1.4× your risk, **TP2 is anchored to it** — you'll see "🎯 TP2 anchored to the opposing supply zone / resistance line" in the confluence list. Your plan trades to real structure, not just ATR maths.
+
+### EMA 50 & EMA 200 lines
+
+- **EMA 50** = pink line, **EMA 200** = yellow line, drawn on the chart.
+- The 200 EMA is the most-watched dynamic support/resistance in trading.
+- **200 EMA retest signal:** in an uptrend, price dipping to the 200 EMA and **closing back above** it = classic trend-continuation BUY (+12). In a downtrend, rallying into it and closing back below = continuation SELL (−12). Wick touches alone don't trigger it — the close decides.
+- Note: EMA 200 needs 200 candles of history, so it shows on 1H–1D; on 1W/1M most coins simply don't have 200 weeks/months of data yet.
+
+### Other overlays (quick reference)
+
+- **SuperTrend** — blue while bullish, orange while bearish; a dynamic trailing stop line
+- **Ichimoku Span A/B** — purple/cyan dashed; the "cloud" boundaries
+- **FVG lines** — only the **3 nearest unfilled gaps within 12% of price** are drawn now (far-away gaps cluttered the chart without being tradeable); strong BAG gaps keep their full band
+- **Swing High/Low, Realized Price (BTC), Top band (BTC)** — horizontal reference levels
+
+---
+
+## 8. The Reversal Radar — Spotting Exhaustion & Bottoms
+
+**The problem it solves:** trend-following signals say LONG in uptrends and SHORT in downtrends — but they never tell you when a good market is *exhausted* and about to top, or when a downtrend is *washed out* and about to reverse. The Reversal Radar answers exactly that.
+
+**How it works:** it first determines the trend, then counts **contrarian evidence**:
+- In an **UPTREND** it counts **topping signals**: RSI overbought, bearish divergence, extreme greed, overheated funding, price pinned to the upper Bollinger band, Stoch RSI rolling over, distribution volume, crowd extremely long, leverage-only rally (futures-led CVD), on-chain euphoria (SOPR/MVRV/Puell, BTC), price stretched far above the EMA50
+- In a **DOWNTREND** it counts the mirror **bottoming signals** (oversold, bullish divergence, extreme fear, negative funding, capitulation volume, crowd short, on-chain capitulation, etc.)
+
+**How to read it (on the Signal card):**
+
+| Level | Meaning | What to do |
+|---|---|---|
+| **Low** | Trend healthy | Trade with the trend normally |
+| **Building** | 2–3 warning signs | Stay alert, tighten management |
+| **Elevated** | ~35%+ of checks firing | Trim into strength / avoid fresh entries with the trend |
+| **High** | Majority firing | Reversal risk is high — consider standing aside or hunting the reversal |
+
+It shows e.g. **"🛑 TOPPING RISK — 8/14"** with a gauge and the exact list of firing signals. When elevated or high, it also adds a caution line into Signal Confluence.
+
+**On 1H/2H** the slow on-chain/cycle checks are excluded from the count — only intraday-relevant evidence is used (see next section for why).
+
+---
+
+## 9. Higher-Timeframe Context — Why Some Info is Dimmed
+
+Some data simply cannot move a 1-hour candle: ETF flows, macro releases (CPI, Fed), BTC on-chain cycle metrics (SOPR, Puell, MVRV, Hash Ribbon, halving phase), market regime (BTC dominance, stablecoin supply), GoMining tokenomics, TAO ecosystem flows. These describe **days-to-months** behaviour.
+
+**What the app does on 1H and 2H:**
+- These signals are **heavily down-weighted** in the score (as low as ×15%), so a "cycle top" reading can't distort your intraday signal
+- Their cards get a **🗓️ "daily+ context"** badge and are dimmed
+- In Signal Confluence they are moved into a separate dimmed group: **"🗓️ Higher-timeframe context (daily+ · down-weighted)"** — visible as background context, clearly separated from the live intraday drivers
+
+**On 4H and above** they progressively regain full weight (100% from 1D up) — because that's where they belong.
+
+> **Why this matters:** before this, a scary "Miners capitulating!" line could sit at the top of a 1H confluence list, implying it mattered for the next hour. It doesn't. Now what you see at the top of the list is always what's actually driving the current timeframe.
+
+---
+
+## 10. Token-Specific Dashboards (BTC · TAO · GoMining)
+
+### BTC extras
+- **Spot ETF Flows** — daily institutional inflow/outflow bars with an as-of date (like "ETF flow" you see on X, live from SoSoValue)
+- **BTC Mining / On-chain Health** — Hash Ribbon, Puell Multiple, SOPR, MVRV, Realized Price, halving phase, cycle-top cluster (Pi Cycle / Mayer). All zero/broken-data readings are sanity-guarded so a dead API can never print "STRONG BUY" from a 0.00 value
+- **Options Expiry / Max Pain** — weekly pinning pressure banner
+- **Open Interest** — now live in USD (OKX primary). If no live source is reachable the value is dimmed and labelled "Estimated" so a fallback can never masquerade as real data
+
+### TAO (Bittensor) — three layers
+
+**1. Bittensor Ecosystem card** — supply staked %, stake in Alphas vs Root, subnet pool flow (24h & 7d), active subnets, Alpha breadth, top-5 emission concentration, and the full 128-subnet emission table.
+
+**2. 🏆 Subnet Flows box** — answers "where did the TAO actually go?":
+- Each window (24H / 7D / 30D) leads with the **Σ total** and a momentum chip: today vs **previous 24h** (×ratio, or "flipped +/−"), and today vs the **7d and 30d daily pace**
+- The 24H row lists the **top inflow subnets** (and the biggest outflow) — per-subnet figures are unit-calibrated against trusted aggregates, and if the data can't be validated it's dropped rather than shown wrong
+- Flow momentum also feeds the signal: *"inflows accelerating (today ×5 the weekly pace)"* = bullish; a flip to outflow against a positive pace = bearish
+
+**3. 💧 TAO Pool Flow — daily** — a separate ETF-style dashboard: green/red bars of net TAO into subnet pools per day (up to 31 days), with Today / 7-day / 30-day comparison tiles. Read it exactly like the BTC ETF flow chart: strings of green bars = sustained staking demand pulling TAO off exchanges.
+
+### GoMining extras
+- **Tokenomics card** — supply trend, next Burn & Mint date, **maintenance paid on-chain** (7d total, week-over-week %, 21-day daily bars) — rising maintenance = miners paying more = more burn pressure (even small ±3% WoW moves now score)
+- **Large on-chain moves** — transfers ≥1M GOMINING flagged with counterparty labels (burn contract, distribution, whale)
+- **Weekly manual log** — app-only figures (mint ratio, total locked, TVL %, veGOMINING APR) that aren't on-chain can be logged weekly on your device, with backfill support for missed weeks
+- **Strategy Advisor** — reinvest vs collect BTC, payout currency, and sell radars
+
+---
+
+## 11. The Recommendation Cards
 
 The **Recommended Trades** section at the top of the page automatically finds the best 3 trade setups right now.
 
 ### How Recommendations Work
 
-1. The system analyses ALL 27 coins at both 1H and 2H timeframes simultaneously
+1. The system analyses ALL 30 coins at both 1H and 2H timeframes simultaneously
 2. It only keeps coins where **both 1H and 2H agree on direction** (e.g. both say LONG)
 3. It adjusts strength based on BTC's direction (if BTC is bullish, correlated alts get a small boost)
 4. Options expiry pin pressure is applied
@@ -532,7 +674,7 @@ The **Recommended Trades** section at the top of the page automatically finds th
 
 ---
 
-## 8. Risk Management — The Most Important Section
+## 12. Risk Management — The Most Important Section
 
 > ⚠️ **This section could save your account. Read it carefully.**
 
@@ -575,7 +717,7 @@ When the dashboard says NEUTRAL, it means there is no edge. Trading noise is how
 
 ---
 
-## 9. Common Beginner Mistakes
+## 13. Common Beginner Mistakes
 
 ### ❌ Mistake 1: Trading every signal
 **Wrong:** "It says LONG on 1H, let me buy now!"
@@ -617,7 +759,7 @@ If any answer is NO — **do not take the trade.**
 
 ---
 
-## 10. Glossary
+## 14. Glossary
 
 | Term | Plain English Meaning |
 |---|---|
@@ -652,6 +794,19 @@ If any answer is NO — **do not take the trade.**
 | **MVRV** | Market Value to Realised Value — compares current price to what people paid on average |
 | **Exchange Netflow** | How many coins are moving INTO vs OUT OF exchanges on the blockchain |
 | **SGT** | Singapore Time (UTC+8) — the timezone used for signal slots |
+| **Local trendline** | The auto-drawn solid green/red line hugging the current price leg — drives entries, stops and break triggers |
+| **Macro line** | The grey dashed multi-week trendline — sets the big-picture bias; a fresh break of it = regime change |
+| **Demand Zone** | A green band below price where buyers repeatedly stepped in (clustered swing lows) |
+| **Supply Zone** | A red band above price where sellers repeatedly defended (clustered swing highs) |
+| **Hidden divergence** | Price/RSI disagreement that confirms the TREND CONTINUING (vs regular divergence, which calls a reversal) |
+| **Forming divergence ⏳** | A divergence visible in the newest candles but not yet confirmed by a closed swing — early, reduced weight |
+| **Reversal Radar** | The exhaustion/bottoming gauge — counts contrarian evidence against the current trend |
+| **200 EMA retest** | Price pulling back to the 200 EMA and closing back in the trend direction — classic continuation entry |
+| **🗓️ daily+ context** | Data that moves over days–months (ETF, macro, on-chain); down-weighted and dimmed on 1H/2H |
+| **dTAO / Alpha** | Bittensor's subnet tokens — buying one deposits TAO into that subnet's pool (locks supply) |
+| **Subnet pool flow** | Net TAO entering (+) or leaving (−) Bittensor subnet pools — the "ETF flow" of TAO |
+| **Net swap flow** | TAO bought minus TAO sold in a subnet's AMM pool over 24h — the per-subnet flow source |
+| **Burn & Mint (GoMining)** | GoMining's weekly event: maintenance fees paid in GOMINING are burned; rewards distributed |
 
 ---
 
@@ -659,4 +814,4 @@ If any answer is NO — **do not take the trade.**
 
 ---
 
-**Version:** 2.0 | **Coverage:** 27 coins, 10 timeframes, 30+ indicators
+**Version:** 3.0 | **Coverage:** 30 coins, 10 timeframes, 40+ indicators & structure tools
