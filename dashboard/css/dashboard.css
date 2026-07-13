@@ -1703,6 +1703,12 @@ a:hover { color: var(--gold2); }
 .oi-quad.oiq-neut { color: var(--muted2); background: rgba(255,255,255,.04); border: 1px solid var(--border); }
 .oi-quad-sub { font-size: .58rem; color: var(--muted); margin-top: 3px; line-height: 1.35; }
 
+/* Data-quality chip on the price card */
+.price-dq        { font-size: .62rem; font-weight: 700; margin-top: 8px; padding: 4px 8px;
+                   border-radius: 6px; line-height: 1.35; }
+.price-dq.dq-degraded { color: #fcd34d; background: rgba(251,191,36,.1);  border: 1px solid rgba(251,191,36,.3); }
+.price-dq.dq-invalid  { color: #f87171; background: rgba(239,68,68,.12);  border: 1px solid rgba(239,68,68,.35); }
+
 /* ── GoMining Strategy Advisor ───────────────────────────────────────────── */
 .gomining-card    { padding: 18px 20px; }
 

@@ -112,6 +112,102 @@ TF_INTERVAL = {
 }
 TF_AGG = {"2W": 2, "3W": 3}
 
+# Nominal candle duration in SECONDS per timeframe — used to decide which
+# candle is still forming and to size staleness windows. 1M is the 30.44-day
+# average (real months vary 28–31 days, so alignment checks use the median
+# observed gap, not this nominal value).
+TF_SECONDS = {
+    "1H": 3600, "2H": 7200, "4H": 14400, "8H": 28800, "12H": 43200,
+    "1D": 86400, "1W": 604800, "2W": 1209600, "3W": 1814400, "1M": 2629800,
+}
+
+# Max |live − signal| price gap before we flag the signal price as stale,
+# per timeframe (soft = degraded, hard = invalid). A 1M candle's last close
+# can legitimately sit far from the live price; a 1H one cannot.
+_TF_PRICE_GAP = {
+    "1H": (0.020, 0.060), "2H": (0.025, 0.075), "4H": (0.035, 0.10),
+    "8H": (0.045, 0.13),  "12H": (0.055, 0.16), "1D": (0.070, 0.20),
+    "1W": (0.120, 0.30),  "2W": (0.140, 0.35),  "3W": (0.150, 0.38),
+    "1M": (0.180, 0.45),
+}
+
+
+def _split_closed(candles, interval_s):
+    """Split a candle list into (closed_candles, live_candle).
+    A candle is CLOSED when its open_time + interval ≤ now; the still-forming
+    candle (if any) is returned separately. Falls back to dropping the last
+    candle if a clock skew would otherwise empty the closed set."""
+    if not candles:
+        return [], None
+    now_ms = int(time.time() * 1000)
+    dur_ms = int(interval_s * 1000)
+    closed = [c for c in candles if int(c["timestamp"]) + dur_ms <= now_ms]
+    last = candles[-1]
+    live = last if int(last["timestamp"]) + dur_ms > now_ms else None
+    if not closed:                       # never leave the pipeline empty
+        closed = candles[:-1] if len(candles) > 1 else candles
+        live = candles[-1] if len(candles) > 1 else None
+    return closed, live
+
+
+def _assess_data_quality(timeframe, spot_source, closed_spot, live_price, signal_price):
+    """Return (level, reasons, extras) where level ∈ good|degraded|invalid.
+    Gates whether a signal is trustworthy enough to publish as a trade.
+    extras carries signal_candle_closed_at (ms) and data_age_seconds."""
+    reasons, level = [], "good"
+    interval_s = TF_SECONDS.get(timeframe, 3600)
+
+    def _worse(lvl):
+        nonlocal level
+        order = {"good": 0, "degraded": 1, "invalid": 2}
+        if order[lvl] > order[level]:
+            level = lvl
+
+    # 1) Synthetic / demo data is never tradeable
+    if spot_source == "demo" or not closed_spot:
+        reasons.append("demo/synthetic data — not tradeable" if spot_source == "demo"
+                       else "no closed candles")
+        return "invalid", reasons, {"signal_candle_closed_at": None, "data_age_seconds": None}
+
+    # 2) Enough history to compute indicators reliably
+    n = len(closed_spot)
+    if n < 30:
+        _worse("invalid"); reasons.append(f"insufficient history ({n} closed candles)")
+    elif n < 60:
+        _worse("degraded"); reasons.append(f"thin history ({n} closed candles)")
+
+    # 3) Staleness — how old is the freshest closed candle's CLOSE
+    close_ms = int(closed_spot[-1]["timestamp"]) + int(interval_s * 1000)
+    age_s = max(0, int(time.time()) - close_ms // 1000)
+    if age_s > 3 * interval_s:
+        _worse("invalid"); reasons.append(f"stale data — {age_s // 60}m old (>3 candles)")
+    elif age_s > int(1.5 * interval_s):
+        _worse("degraded"); reasons.append(f"data {age_s // 60}m old (>1.5 candles)")
+
+    # 4) Timestamp alignment — a missing candle in the middle corrupts indicators.
+    #    Compare against the MEDIAN observed gap (robust to month-length variance).
+    ts = [int(c["timestamp"]) for c in closed_spot[-12:]]
+    gaps = [ts[i] - ts[i - 1] for i in range(1, len(ts))]
+    if gaps:
+        gaps_sorted = sorted(gaps)
+        med = gaps_sorted[len(gaps_sorted) // 2] or interval_s * 1000
+        anomalies = sum(1 for g in gaps if abs(g - med) / med > 0.15)
+        if any(g > med * 1.8 for g in gaps):
+            _worse("invalid"); reasons.append("missing candle(s) — irregular timestamps")
+        elif anomalies >= 2:
+            _worse("degraded"); reasons.append("irregular candle spacing")
+
+    # 5) Live price vs the price the signal was computed on
+    if live_price and signal_price and signal_price > 0:
+        gap = abs(live_price - signal_price) / signal_price
+        soft, hard = _TF_PRICE_GAP.get(timeframe, (0.05, 0.15))
+        if gap > hard:
+            _worse("invalid"); reasons.append(f"live price {gap*100:.1f}% from signal price")
+        elif gap > soft:
+            _worse("degraded"); reasons.append(f"live price {gap*100:.1f}% from signal price")
+
+    return level, reasons, {"signal_candle_closed_at": close_ms, "data_age_seconds": age_s}
+
 # Candle limits per timeframe — more candles for shorter bars so the chart
 # covers enough history to be useful.
 # ≥220 on 1H–1D so the EMA200 (needs 200 closes to seed) is actually computed
@@ -453,6 +549,18 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         spot    = client.aggregate_candles(spot, n)
         futures = client.aggregate_candles(futures, n)
 
+    # ── Closed-candle separation (repaint elimination) ────────────────────────
+    # ALL signal-producing features are computed from CLOSED candles only. The
+    # still-forming candle repaints (its high/low/close change every tick), so
+    # feeding it to indicators makes signals flicker and back-tests lie. We keep
+    # the live candle aside purely for display and freshness checks.
+    _interval_s   = TF_SECONDS.get(timeframe, 3600)
+    _spot_full    = spot
+    spot, live_candle = _split_closed(spot, _interval_s)
+    futures, _live_fut = _split_closed(futures, _interval_s)
+    live_price  = (live_candle or (_spot_full[-1] if _spot_full else None) or {}).get("close")
+    signal_price = spot[-1]["close"] if spot else None
+
     # Use CoinGlass for richer derivatives data when API key is configured
     if cg_client.enabled:
         funding = cg_client.get_funding_rate(bs) or client.get_funding_rate(bs)
@@ -739,7 +847,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     analysis = {
         "symbol":       symbol,
         "timeframe":    timeframe,
-        "candles":      spot[-60:],
+        "candles":      spot[-60:],           # CLOSED candles — signals/structure
+        "live_candle":  live_candle,          # forming candle — display only
+        "live_price":   live_price,           # latest (possibly unfinished) price
+        "signal_price": signal_price,         # last CLOSED close — signals computed on this
         "rsi":          current_rsi,
         "rsi_slope":    rsi_slope,
         "price_roc":    price_roc,
@@ -800,6 +911,16 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "generated_at":           int(time.time() * 1000),
     }
     analysis["signal"] = generate_signal(analysis)
+
+    # ── Data-integrity assessment (gates whether this is tradeable) ───────────
+    _dq_level, _dq_reasons, _dq_extra = _assess_data_quality(
+        timeframe, spot_source, spot, live_price, signal_price)
+    analysis["signal_candle_closed_at"] = _dq_extra["signal_candle_closed_at"]
+    analysis["data_age_seconds"]        = _dq_extra["data_age_seconds"]
+    analysis["data_quality"]            = _dq_level
+    analysis["data_quality_reasons"]    = _dq_reasons
+    # Tradeable only when data is clean enough to trust as an execution signal.
+    analysis["tradeable"] = _dq_level != "invalid"
 
     # BTC market context for altcoins — same TF direction check so the analysis
     # view shows the same BTC bias that the recommendation engine uses for scoring.
@@ -1312,6 +1433,11 @@ def _compute_recommendations() -> dict:
                     "sig":           sig,
                     "rsi":           data.get("rsi"),
                     "current_price": sig.get("current_price"),
+                    "live_price":    data.get("live_price"),
+                    "signal_price":  data.get("signal_price"),
+                    "data_quality":  data.get("data_quality", "good"),
+                    "dq_reasons":    data.get("data_quality_reasons", []),
+                    "tradeable":     data.get("tradeable", True),
                 }
             except Exception:
                 pass
@@ -1351,6 +1477,13 @@ def _compute_recommendations() -> dict:
         h1 = tfs.get("1H")
         h2 = tfs.get("2H")
         if not (h1 and h2):
+            continue
+
+        # ── Data-integrity gate — never publish a trade on bad/stale data ─────
+        # A recommendation is an execution call, so both timeframes must be
+        # clean (demo, stale, misaligned, missing candles, or live price too
+        # far from the signal price all disqualify it — see _assess_data_quality).
+        if not h1.get("tradeable", True) or not h2.get("tradeable", True):
             continue
 
         # Both timeframes must agree — this IS the confirmation filter
@@ -1397,12 +1530,13 @@ def _compute_recommendations() -> dict:
         # Entry/SL/TP from the 2H signal
         sig = h2["sig"]
 
-        # Skip if entry is >25% from current price (stale/mock data)
-        _entry_p = sig.get("current_price") or sig.get("entry")
-        _live_p  = h2.get("current_price") or _entry_p
-        if _entry_p and _live_p and _live_p > 0:
-            if abs(_entry_p - _live_p) / _live_p > 0.25:
-                continue
+        # Live price vs the price the signal was computed on. The per-analysis
+        # data-quality gate already invalidates a >20% 2H gap; this is a final
+        # belt-and-suspenders + gives the card a live-price to show.
+        _sig_p  = h2.get("signal_price") or sig.get("current_price") or sig.get("entry")
+        _live_p = h2.get("live_price") or _sig_p
+        if _sig_p and _live_p and _live_p > 0 and abs(_sig_p - _live_p) / _live_p > 0.25:
+            continue
 
         # Minimum conviction — skip noise
         if strength < 32:
@@ -1450,6 +1584,9 @@ def _compute_recommendations() -> dict:
             "vol_tier_label":   sig.get("vol_tier_label"),
             "rsi":              h2.get("rsi"),
             "current_price":    h2.get("current_price"),
+            "live_price":       h2.get("live_price"),
+            "signal_price":     h2.get("signal_price"),
+            "data_quality":     "degraded" if "degraded" in (h1.get("data_quality"), h2.get("data_quality")) else "good",
             "reasons":          sig.get("reasons", [])[:3],
             "exhaustion_alert": None,
             "exhaustion_by_tf": None,

@@ -312,13 +312,21 @@ function applyHtfContext(tf) {
 function renderPrice(a) {
   const c = a.candles;
   if (!c?.length) return;
-  const last = c[c.length - 1];
-  const prev = c.length > 1 ? c[c.length - 2] : last;
-  const chg = (last.close - prev.close) / prev.close * 100;
+  // a.candles is CLOSED candles only now; the live (forming) candle ships
+  // separately. Display the live price when available, falling back to the
+  // last closed close for older cached payloads.
+  const closedLast = c[c.length - 1];
+  const closedPrev = c.length > 1 ? c[c.length - 2] : closedLast;
+  const last   = a.live_candle || closedLast;                 // for H/L/Vol
+  const livePx = (a.live_price != null) ? a.live_price : closedLast.close;
+  // % change of the current bar: vs last closed if a candle is forming,
+  // else last closed vs the previous closed candle.
+  const base = (a.live_candle ? closedLast.close : closedPrev.close) || livePx;
+  const chg = base ? (livePx - base) / base * 100 : 0;
   const up = chg >= 0;
 
   document.getElementById('priceSymbol').textContent = `${a.symbol}/USDT`;
-  document.getElementById('priceValue').textContent = fmtPrice(last.close);
+  document.getElementById('priceValue').textContent = fmtPrice(livePx);
   const chgEl = document.getElementById('priceChange');
   chgEl.textContent = `${up ? '▲' : '▼'} ${pct(chg)}`;
   chgEl.className = `price-change ${up ? 'up' : 'dn'}`;
@@ -335,6 +343,23 @@ function renderPrice(a) {
   document.getElementById('priceHigh').textContent = `H: ${fmtPrice(last.high)}`;
   document.getElementById('priceLow').textContent  = `L: ${fmtPrice(last.low)}`;
   document.getElementById('priceVol').textContent  = `Vol: ${fmtK(last.volume)}`;
+
+  // Data-quality chip — signals are computed on the last CLOSED candle. Warn
+  // when the data isn't clean enough to trade on.
+  const dqEl = document.getElementById('priceDataQuality');
+  if (dqEl) {
+    const dq = a.data_quality || 'good';
+    const rs = (a.data_quality_reasons || []).join(' · ');
+    if (dq === 'good') {
+      dqEl.style.display = 'none';
+    } else {
+      dqEl.style.display = '';
+      dqEl.className = `price-dq ${dq === 'invalid' ? 'dq-invalid' : 'dq-degraded'}`;
+      dqEl.textContent = dq === 'invalid' ? `⛔ Not tradeable — ${rs}` : `⚠️ Degraded data — ${rs}`;
+      dqEl.title = 'Signals are computed on the last closed candle. ' +
+        (a.signal_price != null ? `Signal price ${fmtPrice(a.signal_price)}.` : '');
+    }
+  }
 }
 
 /* ─── Signal panel ────────────────────────────────────────────────────────── */
@@ -686,7 +711,11 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     priceFormat: { type: 'price', precision: prec, minMove },
   });
 
-  const data = candles.map(c => ({
+  // candles = CLOSED candles (structure/overlays are computed from these);
+  // append the live forming candle so the chart still shows current price.
+  const _live = S.analysis && S.analysis.live_candle;
+  const _drawCandles = (_live && _live.timestamp) ? candles.concat([_live]) : candles;
+  const data = _drawCandles.map(c => ({
     time: Math.floor(c.timestamp / 1000),
     open: c.open, high: c.high, low: c.low, close: c.close,
   }));
