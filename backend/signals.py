@@ -1488,6 +1488,27 @@ def generate_signal(analysis: Dict) -> Dict:
         for _i in range(_mine_bear0, len(bear_reasons)):
             bear_reasons[_i] += _cyc_note
 
+    # ── Reversal Radar — scored rollup (confluence-of-reversal bonus) ──────────
+    # Each radar component (RSI extreme, divergence, squeeze fuel, funding…)
+    # already scores individually; this rollup adds a MODEST extra weight when
+    # MANY independent reversal signs fire at once — the same principle as the
+    # multi-group amplifier. Elevated = ±4, High = ±8, always AGAINST the
+    # exhausted trend (topping subtracts, bottoming adds).
+    _rr = _reversal_radar(analysis, cycle_ok=(timeframe not in ("1H", "2H")))
+    if _rr.get("level") in ("elevated", "high") and _rr.get("mode"):
+        _rr_pts    = 8 if _rr["level"] == "high" else 4
+        _rr_labels = ", ".join(s["label"] for s in _rr.get("signals", [])[:4])
+        if _rr["mode"] == "top":
+            score -= _rr_pts; g['sentiment'] -= _rr_pts
+            bear_reasons.append(
+                f"🛑 Reversal Radar {_rr['level'].upper()} (−{_rr_pts}) — {_rr['count']}/{_rr['applicable']} "
+                f"topping signals ({_rr_labels}); uptrend exhaustion / pullback risk rising")
+        else:
+            score += _rr_pts; g['sentiment'] += _rr_pts
+            bull_reasons.append(
+                f"🟢 Reversal Radar {_rr['level'].upper()} (+{_rr_pts}) — {_rr['count']}/{_rr['applicable']} "
+                f"bottoming signals ({_rr_labels}); downtrend may be washing out, watch for reversal")
+
     # ── Confluence Engine ─────────────────────────────────────────────────────────
     # Analyzes cross-group relationships to dynamically adjust the final score.
     # Groups: TREND | MOMENTUM | FLOW | SENTIMENT | PATTERN
@@ -2244,21 +2265,8 @@ def generate_signal(analysis: Dict) -> Dict:
         _bear_flip_names if direction == "SHORT" else []
     )
 
-    # ── Reversal Radar — surface exhaustion / bottoming into confluence ────────
-    # Independent of trade direction: warns when a trend the engine is following
-    # is running out of fuel (topping in an uptrend, bottoming in a downtrend).
-    _rr = _reversal_radar(analysis, cycle_ok=(timeframe not in ("1H", "2H")))
-    if _rr.get("level") in ("elevated", "high") and _rr.get("mode"):
-        _rr_labels = ", ".join(s["label"] for s in _rr.get("signals", [])[:4])
-        if _rr["mode"] == "top":
-            bear_reasons.append(
-                f"🛑 Reversal Radar {_rr['level'].upper()} — {_rr['count']}/{_rr['applicable']} "
-                f"topping signals ({_rr_labels}); uptrend exhaustion / pullback risk rising")
-        else:
-            bull_reasons.append(
-                f"🟢 Reversal Radar {_rr['level'].upper()} — {_rr['count']}/{_rr['applicable']} "
-                f"bottoming signals ({_rr_labels}); downtrend may be washing out, watch for reversal")
-
+    # (Reversal Radar is computed & scored earlier, before the confluence
+    # engine — _rr is attached to the return dict below.)
     return {
         "direction": direction,
         "score": score,
