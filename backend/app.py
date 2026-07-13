@@ -1402,13 +1402,81 @@ def api_dashboard():
     return jsonify(results)
 
 
+def _rec_quality(cand: dict, htf_dir: str) -> tuple:
+    """
+    Composite trade-quality score for recommendation ranking (Phase 3).
+
+    A recommendation is an execution call, so we rank on *trade quality*, not
+    raw signal strength alone. Strength answers "how much confluence?"; quality
+    answers "is this a good trade to actually take right now?" — which folds in
+    reward/risk, higher-timeframe agreement, and whether the setup is fighting
+    an active reversal or running on exhausted momentum.
+
+    Returns (score, factors) where factors is a list of human-readable
+    adjustments for transparency on the card.
+    """
+    base   = cand["strength"]
+    d      = cand["direction"]
+    factors = []
+    score  = float(base)
+
+    # ── Reward/risk — the single most important execution filter ─────────
+    rr = cand.get("rr_ratio")
+    if rr is not None:
+        try:
+            rr = float(rr)
+            if rr >= 3.0:
+                score += 10; factors.append(f"R/R {rr:.1f} (+10)")
+            elif rr >= 2.0:
+                score += 5;  factors.append(f"R/R {rr:.1f} (+5)")
+            elif rr < 1.3:
+                score -= 12; factors.append(f"R/R {rr:.1f} weak (−12)")
+        except (TypeError, ValueError):
+            pass
+
+    # ── Higher-timeframe (4H) agreement ─────────────────────────────────
+    if htf_dir and htf_dir != "NEUTRAL":
+        if htf_dir == d:
+            score += 8;  factors.append("4H agrees (+8)")
+        else:
+            score -= 10; factors.append("4H opposes (−10)")
+
+    # ── Reversal radar fighting the trade ───────────────────────────────
+    # If we're LONG but a strong bearish reversal is firing (or SHORT into a
+    # bullish reversal), the trade is swimming upstream — penalise it.
+    rev_lvl = str(cand.get("reversal_against") or "").lower()
+    if rev_lvl == "high":
+        score -= 15; factors.append("reversal-against high (−15)")
+    elif rev_lvl == "elevated":
+        score -= 8;  factors.append("reversal-against elevated (−8)")
+
+    # ── Exhausted momentum ──────────────────────────────────────────────
+    if cand.get("h2_exhausted"):
+        score -= 6; factors.append("2H exhausted (−6)")
+
+    # ── Fresh reversal flips on the primary TF (fuel for the move) ──────
+    if (cand.get("h2_reversal_count") or 0) >= 2:
+        score += 4; factors.append("fresh 2H flips (+4)")
+
+    # ── Data quality ────────────────────────────────────────────────────
+    if cand.get("data_quality") == "degraded":
+        score -= 6; factors.append("degraded data (−6)")
+
+    return round(max(0.0, score), 1), factors
+
+
 def _compute_recommendations() -> dict:
     """
-    Simple best-signal engine:
-    - Analyze all tokens at 1H and 2H
+    Best-signal engine (Phase 3 — composite quality ranking):
+    - Analyze all tokens at 1H, 2H and 4H
     - Pick tokens where 1H and 2H agree on direction (= confirmed momentum)
     - Use BTC 2H signal directly for correlation adjustment (not a multi-TF consensus)
-    - Rank by combined strength, pick top 3
+    - Rank by a composite trade-quality score (adjusted strength + R/R + 4H
+      agreement − reversal-against − exhaustion − degraded-data), not raw
+      strength alone — see _rec_quality
+    - Drop trades with R/R < 1.3 (downside too large for the upside)
+    - Diversify the top-3 by BTC correlation so we don't publish three
+      high-correlation same-direction bets that all lose together
     - Entry/SL/TP come from the 2H signal (primary trading timeframe)
     """
     now = datetime.now(timezone.utc)
@@ -1421,7 +1489,7 @@ def _compute_recommendations() -> dict:
     # Use get_analysis (cached) so rec engine sees the same data as the analysis view.
     with ThreadPoolExecutor(max_workers=20) as ex:
         fmap = {ex.submit(get_analysis, sym, tf): (sym, tf)
-                for sym in all_syms for tf in ("1H", "2H")}
+                for sym in all_syms for tf in ("1H", "2H", "4H")}
         for future in as_completed(fmap):
             sym, tf = fmap[future]
             try:
@@ -1438,6 +1506,7 @@ def _compute_recommendations() -> dict:
                     "data_quality":  data.get("data_quality", "good"),
                     "dq_reasons":    data.get("data_quality_reasons", []),
                     "tradeable":     data.get("tradeable", True),
+                    "reversal_radar": data.get("reversal_radar") or {},
                 }
             except Exception:
                 pass
@@ -1476,8 +1545,14 @@ def _compute_recommendations() -> dict:
 
         h1 = tfs.get("1H")
         h2 = tfs.get("2H")
+        h4 = tfs.get("4H") or {}
         if not (h1 and h2):
             continue
+
+        # 4H higher-timeframe direction (HTF confirmation) — used by the
+        # composite quality score, not as a hard filter (a clean 1H·2H setup
+        # is still tradeable when 4H is neutral, just scored a touch lower).
+        htf_4h_dir = h4.get("direction", "NEUTRAL") if h4.get("tradeable", True) else "NEUTRAL"
 
         # ── Data-integrity gate — never publish a trade on bad/stale data ─────
         # A recommendation is an execution call, so both timeframes must be
@@ -1520,12 +1595,23 @@ def _compute_recommendations() -> dict:
             else:
                 strength = min(100, max(0, round(strength - abs(opts_adj) * 0.5, 1)))
 
-        # Metadata only — exhaustion and reversal are shown in the per-TF analysis
-        # view, not used to adjust rec ranking (recs are ranked purely on 1H+2H strength)
         h1_exh = h1["sig"].get("exhaustion_flag", False)
         h2_exh = h2["sig"].get("exhaustion_flag", False)
         h1_rev = h1["sig"].get("reversal_count", 0)
         h2_rev = h2["sig"].get("reversal_count", 0)
+
+        # Reversal radar fighting the trade: a 'top' radar opposes a LONG, a
+        # 'bottom' radar opposes a SHORT. Take the strongest read across 2H/4H.
+        _rev_against = None
+        _lvl_rank = {"low": 0, "building": 1, "elevated": 2, "high": 3}
+        for _rr_src in (h2.get("reversal_radar") or {}, h4.get("reversal_radar") or {}):
+            _mode = _rr_src.get("mode")
+            _lvl  = _rr_src.get("level")
+            _opposes = (direction == "LONG" and _mode == "top") or \
+                       (direction == "SHORT" and _mode == "bottom")
+            if _opposes and _lvl in _lvl_rank:
+                if _rev_against is None or _lvl_rank[_lvl] > _lvl_rank[_rev_against]:
+                    _rev_against = _lvl
 
         # Entry/SL/TP from the 2H signal
         sig = h2["sig"]
@@ -1542,7 +1628,16 @@ def _compute_recommendations() -> dict:
         if strength < 32:
             continue
 
-        candidates.append({
+        # ── Reward/risk minimum — never publish a trade whose downside is
+        # bigger than a third of its upside (R/R < 1.3 is not worth the risk).
+        _rr = sig.get("rr_ratio")
+        try:
+            if _rr is not None and float(_rr) < 1.3:
+                continue
+        except (TypeError, ValueError):
+            pass
+
+        cand = {
             "symbol":           sym,
             "timeframe":        "2H",
             "view_tf":          "2H",
@@ -1590,27 +1685,49 @@ def _compute_recommendations() -> dict:
             "reasons":          sig.get("reasons", [])[:3],
             "exhaustion_alert": None,
             "exhaustion_by_tf": None,
-        })
+            "htf_4h_dir":       htf_4h_dir,
+            "reversal_against": _rev_against,
+        }
 
-    # Sort by strength — best signal first
-    candidates.sort(key=lambda x: x["strength"], reverse=True)
+        # ── Composite trade-quality score (Phase 3 ranking key) ──────────
+        _q, _qf = _rec_quality(cand, htf_4h_dir)
+        cand["quality_score"]   = _q
+        cand["quality_factors"] = _qf
+        candidates.append(cand)
 
-    # Pick top 3: try to include both directions if possible
-    top = candidates[:2]
-    if len(candidates) > 2:
-        picked_syms = {c["symbol"] for c in top}
-        if len(top) == 2 and top[0]["direction"] == top[1]["direction"]:
-            opposite = "SHORT" if top[0]["direction"] == "LONG" else "LONG"
-            opp_list = [c for c in candidates if c["direction"] == opposite
-                        and c["symbol"] not in picked_syms]
-            pick3 = opp_list[0] if opp_list else next(
-                (c for c in candidates if c["symbol"] not in picked_syms), None)
-        else:
-            pick3 = next((c for c in candidates if c["symbol"] not in picked_syms), None)
-        if pick3:
-            top.append(pick3)
-    elif len(top) < 2:
-        top = candidates[:3]
+    # ── Rank by composite trade-quality, best trade first ───────────────
+    # (was: pure adjusted-strength. Quality folds in R/R, HTF agreement,
+    #  reversal-against, exhaustion and data quality — see _rec_quality.)
+    candidates.sort(key=lambda x: (x.get("quality_score", x["strength"]), x["strength"]),
+                    reverse=True)
+
+    # ── Correlation-aware diversification ────────────────────────────────
+    # Publishing three high-correlation ALTs in the same direction is one bet
+    # in a trench-coat: if BTC turns, all three lose together. Fill the top-3
+    # greedily by quality, but skip a candidate that would be the third+
+    # same-direction pick highly correlated (BTC-corr ≥ 0.7) with those already
+    # chosen — unless we'd otherwise run out of candidates.
+    HIGH_CORR = 0.7
+    top: list = []
+    deferred: list = []
+    for c in candidates:
+        if len(top) >= 3:
+            break
+        same_dir_corr = [t for t in top
+                         if t["direction"] == c["direction"]
+                         and (t.get("btc_corr") or 0) >= HIGH_CORR
+                         and (c.get("btc_corr") or 0) >= HIGH_CORR]
+        if len(same_dir_corr) >= 2:
+            deferred.append(c)   # would be a 3rd correlated same-direction bet
+            continue
+        top.append(c)
+
+    # Backfill from deferred (still ranked by quality) if we came up short
+    if len(top) < 3:
+        for c in deferred:
+            if len(top) >= 3:
+                break
+            top.append(c)
 
     intraday_recs = top[:3]
 
