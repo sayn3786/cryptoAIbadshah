@@ -239,13 +239,10 @@ class CoinGlassClient:
             if not series:
                 return None
 
-            recent = [s["cvd"] for s in series[-5:]]
-            pct    = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9)
-            trend  = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
-
+            from indicators import cvd_trend
             return {
                 "current": round(cvd, 2),
-                "trend":   trend,
+                "trend":   cvd_trend(series),
                 "series":  series[-30:],
                 "label":   "futures_aggregated",
                 "source":  "coinglass",

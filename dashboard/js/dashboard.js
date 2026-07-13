@@ -1998,6 +1998,13 @@ function renderCVDPanel(id, cvd, series, valId, trendId) {
   const isFlat = !cvd.series?.some(d => Math.abs(Number(d.cvd || 0)) > 0);
   el.textContent = isFlat ? 'Estimated' : Number(cvd.current).toLocaleString('en-US', { maximumFractionDigits: 2 });
   el.style.color = cvd.trend === 'bullish' ? 'var(--bull)' : cvd.trend === 'bearish' ? 'var(--bear)' : 'var(--neutral)';
+  // The big number is the CUMULATIVE total over the visible window (its sign
+  // depends on where the window starts); the badge/colour reflect the RECENT
+  // flow — surface that recent net so a negative total with a green "bullish"
+  // badge isn't confusing.
+  const d5 = (cvd.series || []).slice(-5).reduce((a, d) => a + Number(d.delta || 0), 0);
+  el.title = `Cumulative net taker flow over the visible window — the sign depends on the window start.\n` +
+             `Badge = direction of the RECENT flow (last 5 candles: ${d5 >= 0 ? '+' : ''}${d5.toLocaleString('en-US', { maximumFractionDigits: 0 })}).`;
 
   // Show how many exchanges contributed to the aggregated spot CVD
   if (id === 'spot' && cvd.label === 'spot_aggregated') {

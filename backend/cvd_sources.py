@@ -3,6 +3,7 @@ import os
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
+from indicators import cvd_trend
 from typing import Optional, Dict, List
 
 from indicators import calculate_cvd
@@ -144,9 +145,7 @@ def _cvd_usd_from_klines(candles: list, label: str) -> Optional[Dict]:
                            "delta": round(delta, 2)})
         if not series:
             return None
-        recent = [s["cvd"] for s in series[-5:]]
-        pct    = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9) if len(recent) >= 2 else 0
-        trend  = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
+        trend = cvd_trend(series)
         return {"current": round(cvd, 2), "trend": trend,
                 "series": series[-30:], "label": label, "usd": True}
     except Exception:
@@ -269,9 +268,7 @@ def _okx_taker_cvd(symbol: str, inst_type: str, interval: str, label: str) -> Op
             delta = buy - sell
             cvd  += delta
             series.append({"timestamp": ts, "cvd": round(cvd, 4), "delta": round(delta, 4)})
-        recent = [s["cvd"] for s in series[-5:]]
-        pct    = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9)
-        trend  = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
+        trend = cvd_trend(series)
         return {"current": round(cvd, 2), "trend": trend,
                 "series": series[-30:], "label": label}
     except Exception:
@@ -552,9 +549,7 @@ def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int) -> Optiona
         return None
 
     current = agg_series[-1]["cvd"]
-    recent  = [p["cvd"] for p in agg_series[-5:]]
-    pct     = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9) if len(recent) >= 2 else 0
-    trend   = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
+    trend   = cvd_trend(agg_series)
 
     return {
         "current": round(current, 2),
@@ -617,9 +612,7 @@ def fetch_aggregated_futures_cvd(symbol: str, interval: str, limit: int) -> Opti
         return None
 
     current = agg_series[-1]["cvd"]
-    recent  = [p["cvd"] for p in agg_series[-5:]]
-    pct     = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9) if len(recent) >= 2 else 0
-    trend   = "bullish" if pct > 0.01 else "bearish" if pct < -0.01 else "neutral"
+    trend   = cvd_trend(agg_series)
 
     return {
         "current":   round(current, 2),

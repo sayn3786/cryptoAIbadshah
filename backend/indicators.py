@@ -31,6 +31,27 @@ def calculate_rsi_series(closes: List[float], period: int = 14) -> List[Optional
     return result
 
 
+def cvd_trend(series: List[Dict]) -> str:
+    """CVD trend from the FLOW RATIO of the last 5 candles:
+    net delta ÷ gross |delta|, in −1..+1.
+
+    The old formula divided the recent move by the CUMULATIVE anchor
+    |series[-5].cvd| — but the cumulative total depends on the arbitrary
+    window start, so a huge running total (e.g. −1.98B) muted genuinely large
+    recent buying into 'neutral', while a near-zero total amplified dust into
+    false 'bullish'. Flow ratio is unit-free and window-start-free: ±0.15
+    means at least a 57.5/42.5 buy-vs-sell split of recent turnover.
+    Needs ≥4 deltas — a 1–2 point series can't establish a trend."""
+    deltas = [float(s.get("delta") or 0.0) for s in (series or [])[-5:]]
+    if len(deltas) < 4:
+        return "neutral"
+    gross = sum(abs(d) for d in deltas)
+    if gross <= 1e-12:
+        return "neutral"
+    r = sum(deltas) / gross
+    return "bullish" if r > 0.15 else "bearish" if r < -0.15 else "neutral"
+
+
 def calculate_cvd(candles: List[Dict], label: str = "spot") -> Dict:
     cvd = 0.0
     series = []
@@ -58,16 +79,8 @@ def calculate_cvd(candles: List[Dict], label: str = "spot") -> Dict:
             {"timestamp": c["timestamp"], "cvd": round(cvd, 4), "delta": round(delta, 4)}
         )
 
-    trend = "neutral"
-    if len(series) >= 5:
-        recent = [s["cvd"] for s in series[-5:]]
-        pct = (recent[-1] - recent[0]) / (abs(recent[0]) + 1e-9)
-        if pct > 0.01:
-            trend = "bullish"
-        elif pct < -0.01:
-            trend = "bearish"
-
-    return {"current": round(cvd, 2), "trend": trend, "series": series[-30:], "label": label}
+    return {"current": round(cvd, 2), "trend": cvd_trend(series),
+            "series": series[-30:], "label": label}
 
 
 def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) -> Dict:
