@@ -267,6 +267,7 @@ a:hover { color: var(--gold2); }
 /* short line segment for diagonal-line legend items (trendlines) */
 .legend-line { width: 18px; height: 0; border-top: 3px solid var(--muted); flex-shrink: 0; }
 .legend-line.dashed { border-top-style: dashed; border-top-width: 2px; }
+.legend-hint { font-size: .65rem; opacity: .7; font-style: italic; }
 /* Viewport-based height: scales with the screen instead of a fixed 380px —
    ~55% of the viewport on desktop/laptop, clamped so it never gets absurd.
    svh (small viewport height) keeps mobile browsers' URL bar from causing

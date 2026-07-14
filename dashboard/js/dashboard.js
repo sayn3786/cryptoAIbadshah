@@ -259,7 +259,7 @@ function renderAll(a) {
   renderOiRotation(a.regime, a.symbol);
   renderLiquidations(a.liquidations);
   renderMarketCap(a.market_cap);
-  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines);
+  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels);
   renderRSIChart(a.rsi_series);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
@@ -682,7 +682,7 @@ function renderMarketCap(mcap) {
   rankEl.textContent = 'Live · CoinGecko';
 }
 
-function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol, trendline, srZones, emaLines) {
+function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol, trendline, srZones, emaLines, htfLevels) {
   if (!candles?.length || !S.candleSeries) return;
 
   // Clear FVG + swing/realized price lines and wave markers from the previous token/TF.
@@ -786,6 +786,27 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: swingHigh, color: '#94a3b899', lineWidth: 1, lineStyle: 3, title: 'Swing High' }));
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: swingLow,  color: '#94a3b899', lineWidth: 1, lineStyle: 3, title: 'Swing Low' }));
   }
+
+  // ── Higher-timeframe swing levels ─────────────────────────────────────────
+  // The 1D / 1W / 1M swing high & low projected onto this (lower) chart — the
+  // structural levels that actually turn price. Colour-coded per anchor TF,
+  // drawn as dashed horizontal lines with the price on the axis. Only levels
+  // within a sane band of the visible range are drawn so a far-away monthly
+  // swing can't stretch the price axis and flatten the candles.
+  const _HTF_COL = { '1D': '#38bdf8', '1W': '#fb7185', '1M': '#c084fc' };
+  const _lastPx = unique.length ? unique[unique.length - 1].close : 0;
+  (htfLevels || []).forEach(lv => {
+    const col = _HTF_COL[lv.tf] || '#94a3b8';
+    [['high', lv.high, '▲'], ['low', lv.low, '▼']].forEach(([kind, price, arrow]) => {
+      if (!price || !_lastPx) return;
+      // skip levels more than ~60% away from price (would distort the axis)
+      if (Math.abs(price - _lastPx) / _lastPx > 0.6) return;
+      S.overlayPriceLines.push(S.candleSeries.createPriceLine({
+        price, color: col, lineWidth: 1, lineStyle: 2,
+        title: `${lv.tf} ${arrow}`, axisLabelVisible: true,
+      }));
+    });
+  });
 
   // Realized Price — BTC only, historically the strongest support/floor level.
   const rp = btcMining?.realized_price || btcMining?.mvrv?.realized_price;

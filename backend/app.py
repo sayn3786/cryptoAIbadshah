@@ -8,7 +8,7 @@ import requests as _requests
 sys.path.insert(0, os.path.dirname(__file__))
 from btc_onchain import get_btc_mining_signals, get_gomining_strategy, get_lth_accumulation_proxy
 from options import get_options_expiry_data
-from typing import Dict, List
+from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -533,6 +533,79 @@ def _vol_regime(candles: list):
         return None
 
 
+# ── Higher-timeframe swing levels ─────────────────────────────────────────────
+# Traders read a low-timeframe chart against the structure set by the higher
+# timeframes: the 1D / 1W / 1M swing highs and lows are the levels that actually
+# turn price. We project the most recent CONFIRMED swing high & low of each
+# strictly-higher anchor TF onto the current chart as horizontal reference lines.
+_HTF_ANCHORS   = ["1D", "1W", "1M"]
+_TF_ORDER      = ["1H", "2H", "4H", "8H", "12H", "1D", "1W", "2W", "3W", "1M"]
+_htf_cache: dict = {}
+_htf_cache_lock  = _threading.Lock()
+
+
+def _htf_anchor_tfs(timeframe: str) -> list:
+    """Which anchor TFs (1D/1W/1M) sit strictly above `timeframe`.
+    2H/4H/8H/12H → 1D,1W,1M · 1D → 1W,1M · 1W/2W/3W → 1M · 1M → none."""
+    try:
+        cur = _TF_ORDER.index(timeframe)
+    except ValueError:
+        return []
+    return [a for a in _HTF_ANCHORS if _TF_ORDER.index(a) > cur]
+
+
+def _htf_swings(symbol: str, htf: str) -> Optional[dict]:
+    """Most recent confirmed swing high & low on a higher timeframe.
+    Fetches only candles (not a full analysis) and is cached on the same 30-min
+    window as the analysis cache, so every lower TF of a symbol shares one fetch."""
+    now  = datetime.now(timezone.utc)
+    half = (now.minute // 30) * 30
+    key  = f"htf1_{symbol}_{htf}_{now.strftime('%Y%m%d%H')}{half:02d}"
+    with _htf_cache_lock:
+        e = _htf_cache.get((symbol, htf))
+        if e and e.get("key") == key:
+            return e["data"]
+
+    data = None
+    try:
+        bs       = SYMBOLS[symbol]
+        interval = TF_INTERVAL.get(htf, "1d")
+        raw      = client.get_spot_klines(bs, interval, min(TF_LIMIT.get(htf, 150), 150))
+        if htf in TF_AGG:
+            raw = client.aggregate_candles(raw, TF_AGG[htf])
+        closed, _live = _split_closed(raw, TF_SECONDS.get(htf, 86400))
+        if closed and len(closed) >= 8:
+            ph, pl = find_pivots(closed, window=2)
+            tail   = closed[-12:]
+            hi_p   = ph[-1] if ph else None
+            lo_p   = pl[-1] if pl else None
+            hi     = hi_p["price"] if hi_p else max(c["high"] for c in tail)
+            lo     = lo_p["price"] if lo_p else min(c["low"]  for c in tail)
+            data = {
+                "tf":       htf,
+                "high":     round(hi, 8),
+                "low":      round(lo, 8),
+                "high_ts":  hi_p["timestamp"] if hi_p else None,
+                "low_ts":   lo_p["timestamp"] if lo_p else None,
+            }
+    except Exception:
+        data = None
+
+    with _htf_cache_lock:
+        _htf_cache[(symbol, htf)] = {"key": key, "data": data}
+    return data
+
+
+def _collect_htf_levels(symbol: str, timeframe: str) -> list:
+    """Swing high/low levels for every anchor TF above `timeframe` (parallel)."""
+    tfs = _htf_anchor_tfs(timeframe)
+    if not tfs:
+        return []
+    with ThreadPoolExecutor(max_workers=len(tfs)) as ex:
+        out = list(ex.map(lambda h: _htf_swings(symbol, h), tfs))
+    return [s for s in out if s]
+
+
 # ── Core analysis ─────────────────────────────────────────────────────────────
 def build_analysis(symbol: str, timeframe: str) -> dict:
     bs       = SYMBOLS[symbol]
@@ -868,6 +941,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "acc_setup":    acc_setup,
         "trendline":    trendline,
         "sr_zones":     sr_zones,
+        "htf_levels":   _collect_htf_levels(symbol, timeframe),
         "engulfing":    engulfing,
         "flags":        flags,
         "elliott_wave": elliott,
