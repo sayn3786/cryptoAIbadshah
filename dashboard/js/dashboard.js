@@ -4371,9 +4371,13 @@ async function loadCalendar() {
     const evs = data.events || [];
     if (!evs.length) { el.style.display = 'none'; return; }
     el.innerHTML = evs.slice(0, 4).map(e => {
-      const soon = e.days_away <= 2;
-      const when = e.days_away === 0 ? 'TODAY' : e.days_away === 1 ? 'tomorrow' : `in ${e.days_away}d`;
-      return `<span class="ctx-pill cal ${soon ? 'cal-soon' : ''}" title="${e.date}">⏳ ${e.name} — ${when}</span>`;
+      const soon = e.days_away <= 2 && !e.released;
+      const when = e.released ? 'released today'
+                 : e.days_away === 0 ? 'TODAY'
+                 : e.days_away === 1 ? 'tomorrow'
+                 : `in ${e.days_away}d`;
+      const icon = e.released ? '✅' : '⏳';
+      return `<span class="ctx-pill cal ${soon ? 'cal-soon' : ''}" title="${e.date}">${icon} ${e.name} — ${when}</span>`;
     }).join('');
     el.style.display = '';
   } catch (_) { el.style.display = 'none'; }

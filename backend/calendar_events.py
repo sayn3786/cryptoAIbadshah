@@ -25,6 +25,43 @@ CPI_2026 = [
 ]
 
 
+# Scheduled release time in US-Eastern clock time (hour, minute). CPI & NFP drop
+# at 8:30 ET; the FOMC statement at 2:00 PM ET. Used to tell a still-PENDING
+# release from one that has ALREADY printed today — before that moment it's a
+# forward-looking risk ("cooler print likely"), after it the actual number is
+# already in the macro data and the prediction must be dropped.
+_RELEASE_ET = {
+    "CPI Release":        (8, 30),
+    "Non-Farm Payrolls":  (8, 30),
+    "FOMC Rate Decision": (14, 0),
+}
+
+
+def _eastern_utc_offset(dt: datetime) -> int:
+    """US-Eastern UTC offset for `dt`: -4 (EDT) 2nd Sun Mar → 1st Sun Nov, else
+    -5 (EST). Avoids a tz database dependency."""
+    year = dt.year
+    mar = datetime(year, 3, 1, tzinfo=timezone.utc)
+    mar += timedelta(days=(6 - mar.weekday()) % 7)   # 1st Sunday of March
+    dst_start = mar + timedelta(days=7)              # 2nd Sunday of March
+    nov = datetime(year, 11, 1, tzinfo=timezone.utc)
+    nov += timedelta(days=(6 - nov.weekday()) % 7)   # 1st Sunday of November
+    return -4 if dst_start <= dt < nov else -5
+
+
+def _release_dt_utc(name: str, date_str: str) -> Optional[datetime]:
+    """UTC datetime a release actually prints, or None if the time is unknown."""
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    hm = _RELEASE_ET.get(name)
+    if not hm:
+        return None
+    d = d.replace(hour=hm[0], minute=hm[1])
+    return d - timedelta(hours=_eastern_utc_offset(d))   # ET clock → real UTC
+
+
 def _first_friday(year: int, month: int) -> datetime:
     d = datetime(year, month, 1, tzinfo=timezone.utc)
     while d.weekday() != 4:  # Friday
@@ -63,17 +100,25 @@ def get_upcoming_events(horizon_days: int = 21) -> List[Dict]:
             continue
         days = (dt - today).days
         if 0 <= days <= horizon_days:
-            out.append({"name": name, "date": ds, "days_away": days, "impact": impact})
+            # A same-day release whose scheduled print time has passed is no
+            # longer pending — the actual number is already out (and flows
+            # through the macro-data indicators instead).
+            rel = _release_dt_utc(name, ds)
+            released = bool(days == 0 and rel and now >= rel)
+            out.append({"name": name, "date": ds, "days_away": days,
+                        "impact": impact, "released": released})
     out.sort(key=lambda e: e["days_away"])
     return out
 
 
 def get_event_risk() -> Optional[Dict]:
     """
-    The nearest high-impact event if it's within the 2-day risk window.
+    The nearest high-impact event still PENDING within the 2-day risk window.
     Pros de-risk into these releases — volatility spikes and stops get hunted.
+    An event whose scheduled release time has already passed is skipped: its
+    outcome is known, so a forward-looking "likely print" discount would be wrong.
     """
-    events = get_upcoming_events(horizon_days=2)
+    events = [e for e in get_upcoming_events(horizon_days=2) if not e.get("released")]
     if not events:
         return None
     e = events[0]
