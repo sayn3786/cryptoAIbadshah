@@ -247,6 +247,7 @@ class CoinGlassClient:
                 "series":  series[-30:],
                 "label":   "futures_aggregated",
                 "source":  "coinglass",
+                "unit":    "usd",   # requested with currency=USD → genuinely USD
             }
         except Exception:
             return None

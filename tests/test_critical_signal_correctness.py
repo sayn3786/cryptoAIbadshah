@@ -60,9 +60,13 @@ def bullish_analysis(with_options=False, options_pts=10):
         "macd": {"histogram": 0.5, "cross": "bullish"},
     }
     if with_options:
-        a["options_expiry"] = {"bias": {"bias": "bullish",
-                                        "signal_pts": options_pts,
-                                        "in_window": True}}
+        # PRODUCTION shape from get_options_expiry_data(): signal_pts at the ROOT,
+        # bias nested (carrying in_window). Reproducing this exactly is what makes
+        # the options test a real regression guard.
+        a["options_expiry"] = {
+            "signal_pts": options_pts,
+            "bias": {"bias": "bullish", "in_window": True},
+        }
     return a
 
 
@@ -187,6 +191,43 @@ def test_options_metadata_present_when_not_in_window():
     assert sig["options_application_stage"] == "signal"
 
 
+def test_options_signal_pts_read_from_root_not_bias():
+    # Regression for the production-shape bug: signal_pts lives at the ROOT of
+    # options_expiry, NOT inside bias. Reading it from bias yields 0 and silently
+    # drops all options pressure.
+    prod = generate_signal(bullish_analysis(with_options=True, options_pts=10))
+    assert prod["options_applied"] is True
+    assert prod["options_adjustment"] == 10
+    # a payload with signal_pts wrongly nested inside bias must NOT be picked up
+    a = bullish_analysis(with_options=False)
+    a["options_expiry"] = {"bias": {"bias": "bullish", "signal_pts": 10,
+                                    "in_window": True}}
+    wrong = generate_signal(a)
+    assert wrong["options_applied"] is False
+    assert wrong["options_adjustment"] == 0
+
+
+# ── P2: dominance intensifier is a bonus only (never subtracts) ───────────────
+def _score_for_spot_ratio(spot_ratio):
+    a = bullish_analysis(with_options=False)
+    a["cvd_divergence"] = {
+        "type": "spot_dominated_up", "signal": "bullish",
+        "spot_ratio": spot_ratio, "futures_ratio": round(1 / spot_ratio, 3),
+        "dominance": "spot", "dominance_class": "spot_dominated",
+    }
+    return generate_signal(a)["score"]
+
+
+def test_dominance_intensifier_never_subtracts():
+    # spot_ratio ~4 corresponds to the 80% share threshold; pre-fix this made the
+    # intensifier negative (round((4-10)*0.1) = -1), weakening a dominant read.
+    # Clamped to >=0, a low-but-dominant ratio must not score LOWER than a higher
+    # ratio (both should land on the same clamped-at-0 bonus, not go negative).
+    low = _score_for_spot_ratio(4.0)     # would be base-1 pre-fix
+    mid = _score_for_spot_ratio(10.0)    # extra == 0 both pre and post
+    assert low == mid, "low dominant ratio must not be penalised vs a higher one"
+
+
 # ── 4. CVD dominance from aligned USD flow ────────────────────────────────────
 def test_cvd_spot_dominant_aligned_flow():
     candles = make_candles(10)
@@ -273,6 +314,29 @@ def test_cvd_live_bar_excluded_from_dominance():
     # the 9e9 forming-bar delta must be excluded → still spot-dominated, small gross
     assert d["aligned_candles"] == 10
     assert d["spot_gross_usd"] < 5000   # would be ~9e9 if the live bar leaked in
+
+
+def test_usd_cvd_sources_declare_their_unit():
+    # P1: single-OKX and CoinGlass results are genuinely USD and must declare it,
+    # otherwise dominance degrades to "unknown" whenever they are the source.
+    import inspect
+    import cvd_sources
+    assert '"unit": "usd"' in inspect.getsource(cvd_sources._okx_taker_cvd)
+    assert '"unit"' in inspect.getsource(cvd_sources.fetch_aggregated_spot_cvd)
+    assert '"unit"' in inspect.getsource(cvd_sources.fetch_aggregated_futures_cvd)
+    coinglass = pytest.importorskip("coinglass")
+    assert '"unit"' in inspect.getsource(coinglass.CoinGlassClient.get_aggregated_cvd)
+
+
+def test_okx_shaped_usd_cvd_yields_dominance_not_unknown():
+    # Two USD-tagged series (as OKX/CoinGlass now emit) must produce a real
+    # dominance read rather than "unknown".
+    candles = make_candles(10)
+    spot = make_cvd([100, 120, 90, 110, 130, 100, 95, 105, 115, 100], unit="usd")
+    fut = make_cvd([5, -4, 6, -3, 4, -5, 3, -2, 5, -4], unit="usd")
+    d = compute_cvd_dominance(spot, fut, candles)
+    assert d["dominance_data_quality"] == "ok"
+    assert d["dominance"] != "unknown"
 
 
 def test_detect_cvd_divergence_unknown_units_falls_back_to_confirmed():

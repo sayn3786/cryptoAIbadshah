@@ -433,11 +433,15 @@ def generate_signal(analysis: Dict) -> Dict:
         pts = _CVD_BASE[div_type]
         # Magnitude intensifier: extreme ratios push slightly beyond the base (cap ±5)
         # Makes scoring dynamic — a 200× ratio is meaningfully different from 55×
+        # Magnitude intensifier is a BONUS only — clamp to [0, 5] so it can never
+        # subtract. With flow-share dominance the ratio at the threshold is ~4×
+        # (80% share), well below the old 10×/50× offsets, which would otherwise
+        # make `extra` negative and weaken a genuinely dominant read.
         if "spot_dominated" in div_type:
-            extra = min(5, round((spot_ratio - 10) * 0.1))
+            extra = max(0, min(5, round((spot_ratio - 10) * 0.1)))
             pts = pts + extra if pts > 0 else pts - extra
         elif "futures_dominated" in div_type:
-            extra = min(5, round((fut_ratio - 50) * 0.02))
+            extra = max(0, min(5, round((fut_ratio - 50) * 0.02)))
             pts = pts + extra if pts > 0 else pts - extra
         score += pts; g['flow'] += pts
         side, tmpl = _CVD_REASON[div_type]
@@ -1841,9 +1845,13 @@ def generate_signal(analysis: Dict) -> Dict:
     # This is the SINGLE place options-expiry pressure adjusts strength. The
     # recommendation engine must NOT re-apply it — it only surfaces the metadata
     # recorded below (options_application_stage == "signal").
+    # get_options_expiry_data() returns signal_pts at the ROOT and nests the
+    # bias dict (which carries in_window) one level down. Reading signal_pts from
+    # inside `bias` always yielded 0, so options pressure was silently dropped
+    # with real production data.
     _opts        = analysis.get("options_expiry") or {}
     _opts_bias   = (_opts.get("bias") or {})
-    _opts_pts    = int(_opts_bias.get("signal_pts") or 0)   # -20 to +20
+    _opts_pts    = int(_opts.get("signal_pts") or 0)        # -20 to +20 (root level)
     _opts_in_win = _opts_bias.get("in_window", False)
     opts_adj             = 0     # signed strength delta actually applied
     _options_applied     = False

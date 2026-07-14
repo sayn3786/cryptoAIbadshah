@@ -289,8 +289,12 @@ def _okx_taker_cvd(symbol: str, inst_type: str, interval: str, label: str) -> Op
             cvd  += delta
             series.append({"timestamp": ts, "cvd": round(cvd, 4), "delta": round(delta, 4)})
         trend = cvd_trend(_closed_series(series))
+        # OKX rubik/stat/taker-volume returns USD-denominated taker flow for both
+        # SPOT and CONTRACTS (this is why the aggregators sum OKX directly with the
+        # price-normalised Binance/MEXC series). Tag it so single-OKX results can
+        # still yield a dominance read instead of degrading to "unknown".
         return {"current": round(cvd, 2), "trend": trend,
-                "series": series[-30:], "label": label}
+                "series": series[-30:], "label": label, "unit": "usd"}
     except Exception:
         return None
 
