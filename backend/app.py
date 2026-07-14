@@ -1748,17 +1748,15 @@ def _compute_recommendations() -> dict:
             btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
             strength = max(0, round(strength + btc_adj, 1))
 
-        # Options expiry pin pressure: scale by BTC correlation so high-corr ALTs
-        # are more affected by BTC pinning than low-corr assets (e.g. XAUT)
-        opts_adj = 0
-        if _opts_in_win and _opts_pts != 0:
-            opts_adj  = round(_opts_pts * corr_factor, 1)
-            # Only apply if it amplifies the current signal direction
-            # (don't let options bias flip a strong opposite signal)
-            if (opts_adj > 0 and direction == "LONG") or (opts_adj < 0 and direction == "SHORT"):
-                strength = min(100, max(0, round(strength + abs(opts_adj), 1)))
-            else:
-                strength = min(100, max(0, round(strength - abs(opts_adj) * 0.5, 1)))
+        # Options-expiry pressure is applied EXACTLY ONCE — inside generate_signal
+        # (options_application_stage == "signal"), so h2["strength"] already
+        # includes it. The rec engine previously re-applied it here, double-
+        # counting the adjustment. Now we only surface the signal's recorded value
+        # as metadata and do NOT touch strength.
+        _sig_opts    = h2["sig"]
+        opts_adj     = _sig_opts.get("options_adjustment", 0)
+        opts_applied = _sig_opts.get("options_applied", False)
+        opts_stage   = _sig_opts.get("options_application_stage", "signal")
 
         h1_exh = h1["sig"].get("exhaustion_flag", False)
         h2_exh = h2["sig"].get("exhaustion_flag", False)
@@ -1821,6 +1819,9 @@ def _compute_recommendations() -> dict:
             "opts_in_window":   _opts_in_win,
             "opts_bias":        _opts_bias,
             "opts_summary":     _opts_summary,
+            "options_adjustment":        opts_adj,
+            "options_applied":           opts_applied,
+            "options_application_stage": opts_stage,
             "h1_exhausted":      h1_exh,
             "h2_exhausted":      h2_exh,
             "h1_reversal_count": h1_rev,

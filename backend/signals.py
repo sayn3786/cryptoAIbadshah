@@ -1825,20 +1825,27 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Options expiry pin pressure ───────────────────────────────────────────
     # Only applied when inside the pinning window and direction is not NEUTRAL.
     # Amplifies strength when options align with signal; reduces when they oppose.
+    # This is the SINGLE place options-expiry pressure adjusts strength. The
+    # recommendation engine must NOT re-apply it — it only surfaces the metadata
+    # recorded below (options_application_stage == "signal").
     _opts        = analysis.get("options_expiry") or {}
     _opts_bias   = (_opts.get("bias") or {})
     _opts_pts    = int(_opts_bias.get("signal_pts") or 0)   # -20 to +20
     _opts_in_win = _opts_bias.get("in_window", False)
-    opts_adj     = 0
+    opts_adj             = 0     # signed strength delta actually applied
+    _options_applied     = False
     if _opts_in_win and _opts_pts != 0 and direction != "NEUTRAL":
-        opts_adj = abs(_opts_pts)
+        mag = abs(_opts_pts)
         if (_opts_pts > 0 and direction == "LONG") or (_opts_pts < 0 and direction == "SHORT"):
-            strength = min(100, strength + opts_adj)
-            bull_reasons.append(f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{opts_adj} pts)")
+            opts_adj = mag
+            strength = min(100, strength + mag)
+            bull_reasons.append(f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{mag} pts)")
         else:
-            strength = max(0, strength - round(opts_adj * 0.5))
-            bear_reasons.append(f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, -{round(opts_adj*0.5)} pts)")
-        g['sentiment'] += opts_adj if direction == "LONG" else -opts_adj
+            opts_adj = -round(mag * 0.5)
+            strength = max(0, strength + opts_adj)
+            bear_reasons.append(f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, {opts_adj} pts)")
+        g['sentiment'] += mag if direction == "LONG" else -mag
+        _options_applied = True
 
     # Strength tiers (strength = score / 220 * 100):
     # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size
@@ -2315,6 +2322,13 @@ def generate_signal(analysis: Dict) -> Dict:
         "reversal_count":     reversal_count,
         "flipped_indicators": flipped_indicators,
         "reversal_radar":     _rr,
+        # Options-expiry adjustment metadata — applied EXACTLY ONCE here. The rec
+        # engine reads these instead of re-applying the pressure.
+        "options_adjustment":        opts_adj,          # signed strength delta applied
+        "options_bias":              _opts_bias.get("bias", "neutral"),
+        "options_in_window":         bool(_opts_in_win),
+        "options_applied":           _options_applied,
+        "options_application_stage": "signal",
         "choch":           choch     if choch.get("signal")     != "none" else None,
         "liq_grab":        liq_grab  if liq_grab.get("signal")  != "none" else None,
         "acc_setup":       acc_setup if acc_setup.get("signal") != "none" else None,
