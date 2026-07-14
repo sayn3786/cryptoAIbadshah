@@ -738,7 +738,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
 
     # Aggregated spot CVD: sums real taker buy/sell deltas from Binance+OKX+MEXC
     # in parallel. Falls back to single-exchange estimate only if all three fail.
-    spot_cvd = fetch_aggregated_spot_cvd(bs, interval, limit) or calculate_cvd(spot, "spot")
+    # price_map lets the aggregator convert base-coin sources (OKX spot) to USD
+    # by timestamp before summing, so the total stays in one unit.
+    _cvd_price_map = {int(c["timestamp"]): c["close"] for c in spot if c.get("close")}
+    spot_cvd = (fetch_aggregated_spot_cvd(bs, interval, limit, price_map=_cvd_price_map)
+                or calculate_cvd(spot, "spot"))
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
     # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
     fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None

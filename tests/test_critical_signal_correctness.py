@@ -316,21 +316,48 @@ def test_cvd_live_bar_excluded_from_dominance():
     assert d["spot_gross_usd"] < 5000   # would be ~9e9 if the live bar leaked in
 
 
-def test_usd_cvd_sources_declare_their_unit():
-    # P1: single-OKX and CoinGlass results are genuinely USD and must declare it,
-    # otherwise dominance degrades to "unknown" whenever they are the source.
+def test_okx_spot_tagged_base_futures_tagged_usd():
+    # P0 (2nd review): OKX SPOT taker-volume is BASE COIN; CONTRACTS is USD
+    # notional. The unit must be chosen by instrument type, not hardcoded USD.
     import inspect
     import cvd_sources
-    assert '"unit": "usd"' in inspect.getsource(cvd_sources._okx_taker_cvd)
-    assert '"unit"' in inspect.getsource(cvd_sources.fetch_aggregated_spot_cvd)
-    assert '"unit"' in inspect.getsource(cvd_sources.fetch_aggregated_futures_cvd)
+    src = inspect.getsource(cvd_sources._okx_taker_cvd)
+    assert 'unit = "base" if inst_type == "SPOT" else "usd"' in src
     coinglass = pytest.importorskip("coinglass")
     assert '"unit"' in inspect.getsource(coinglass.CoinGlassClient.get_aggregated_cvd)
 
 
+def test_aggregator_converts_base_source_to_usd_via_price():
+    # A base-coin source (OKX spot) must be converted to USD by candle price
+    # BEFORE summing with USD sources — never mixed in raw.
+    import cvd_sources
+    ts = [1_000_000 + i * 3_600_000 for i in range(5)]
+    price_map = {t: 100.0 for t in ts}
+    base_src = {"unit": "base",
+                "series": [{"timestamp": t, "delta": 2.0} for t in ts]}   # 2 coins
+    usd_src = {"unit": "usd",
+               "series": [{"timestamp": t, "delta": 50.0} for t in ts]}   # $50
+    series = cvd_sources._aggregate_usd_series([base_src, usd_src], 100, price_map)
+    # each bar: 2 coins × $100 (converted) + $50 = $250, NOT 2 + 50 = 52
+    assert series[0]["delta"] == 250.0
+
+
+def test_aggregator_skips_base_source_when_no_price_available():
+    # Without a price for a timestamp, a base delta is skipped (never summed as if
+    # it were USD) — no unit mixing.
+    import cvd_sources
+    ts = [1_000_000 + i * 3_600_000 for i in range(5)]
+    base_src = {"unit": "base",
+                "series": [{"timestamp": t, "delta": 2.0} for t in ts]}
+    usd_src = {"unit": "usd",
+               "series": [{"timestamp": t, "delta": 50.0} for t in ts]}
+    series = cvd_sources._aggregate_usd_series([base_src, usd_src], 100, price_map=None)
+    assert series[0]["delta"] == 50.0   # only the USD source counted
+
+
 def test_okx_shaped_usd_cvd_yields_dominance_not_unknown():
-    # Two USD-tagged series (as OKX/CoinGlass now emit) must produce a real
-    # dominance read rather than "unknown".
+    # Two USD-tagged series (as CoinGlass / OKX-contracts / the USD aggregate emit)
+    # must produce a real dominance read rather than "unknown".
     candles = make_candles(10)
     spot = make_cvd([100, 120, 90, 110, 130, 100, 95, 105, 115, 100], unit="usd")
     fut = make_cvd([5, -4, 6, -3, 4, -5, 3, -2, 5, -4], unit="usd")

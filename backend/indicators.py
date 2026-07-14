@@ -84,7 +84,12 @@ def compute_cvd_dominance(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
         out["dominance_data_quality"] = "zero_flow"
         return out
 
-    # Freshness: newest aligned bar must be near the latest closed candle.
+    # Freshness here means "is the CVD in step with the CANDLES?" — the newest
+    # aligned bar must be near the latest closed candle, catching a CVD feed that
+    # lags the price feed. ABSOLUTE staleness (candles themselves being old) is
+    # owned by the analysis-level data-quality gate (_assess_data_quality →
+    # tradeable), which runs on the same closed candles; duplicating a wall-clock
+    # check here would also make this pure function non-deterministic.
     gaps = [common[i] - common[i - 1] for i in range(1, len(common))]
     med  = sorted(gaps)[len(gaps) // 2] if gaps else 0
     newest_close = max(price)
