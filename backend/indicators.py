@@ -1,5 +1,122 @@
 """Technical indicators — pure Python, no numpy dependency."""
+import time
 from typing import List, Dict, Optional, Tuple
+
+# ── CVD dominance configuration ───────────────────────────────────────────────
+# Dominance (who is really driving the move: spot buyers/sellers or leveraged
+# futures) must be judged from ALIGNED RECENT USD-NOTIONAL FLOW, never from the
+# raw cumulative CVD totals — those totals depend on an arbitrary window start,
+# different per exchange/timestamp/coverage, so comparing them is meaningless.
+CVD_DOM_LOOKBACK      = 10      # recent bars over which flow dominance is measured
+CVD_DOM_MIN_ALIGNED   = 4       # need at least this many spot/fut-aligned bars
+CVD_DOM_MIN_COVERAGE  = 0.5     # aligned / expected bars must clear this
+CVD_DOM_MAX_STALE_GAPS = 2      # newest aligned bar within N median gaps of latest close
+# futures_share = futures_gross / (spot_gross + futures_gross), in 0..1
+CVD_FUT_DOMINANT_SHARE = 0.80   # >= → futures-dominated
+CVD_FUT_HEAVY_SHARE    = 0.65   # >= → futures-heavy
+CVD_SPOT_HEAVY_SHARE   = 0.35   # <= → spot-heavy
+CVD_SPOT_DOMINANT_SHARE = 0.20  # <= → spot-dominated
+
+
+def _cvd_unit(cvd: Dict) -> str:
+    """Declared flow unit of a CVD payload: 'usd', 'base', or 'unknown'."""
+    u = cvd.get("unit")
+    if u in ("usd", "base"):
+        return u
+    if cvd.get("usd") is True:
+        return "usd"
+    return "unknown"
+
+
+def compute_cvd_dominance(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) -> Dict:
+    """Classify spot-vs-futures dominance from aligned recent USD-notional flow.
+
+    Uses CLOSED candles only (the caller passes closed candles; aligning to their
+    timestamps drops any still-forming CVD bar). Requires known, compatible units,
+    enough aligned bars, sufficient coverage, fresh data and nonzero gross flow —
+    otherwise dominance is 'unknown' and NO strong-dominance scoring is applied.
+    The arbitrary cumulative CVD starting total is never used."""
+    out = {
+        "dominance": "unknown", "dominance_simple": "unknown",
+        "futures_share": None, "spot_net_usd": None, "futures_net_usd": None,
+        "spot_gross_usd": None, "futures_gross_usd": None,
+        "spot_flow_ratio": None, "futures_flow_ratio": None,
+        "futures_ratio": None, "spot_ratio": None,
+        "aligned_candles": 0, "coverage_ratio": 0.0, "freshness_seconds": None,
+        "dominance_data_quality": "insufficient",
+    }
+    if not spot_cvd or not fut_cvd or not candles:
+        return out
+
+    su, fu = _cvd_unit(spot_cvd), _cvd_unit(fut_cvd)
+    if su == "unknown" or fu == "unknown":
+        out["dominance_data_quality"] = "unknown_units"
+        return out
+
+    price = {int(c["timestamp"]): c.get("close") for c in candles if c.get("close")}
+    sd = {int(p["timestamp"]): float(p.get("delta") or 0.0)
+          for p in (spot_cvd.get("series") or [])}
+    fd = {int(p["timestamp"]): float(p.get("delta") or 0.0)
+          for p in (fut_cvd.get("series") or [])}
+    common = sorted(set(price) & set(sd) & set(fd))[-CVD_DOM_LOOKBACK:]
+    out["aligned_candles"] = len(common)
+    expected = min(CVD_DOM_LOOKBACK, len(price))
+    out["coverage_ratio"] = round(len(common) / max(1, expected), 3)
+
+    if len(common) < CVD_DOM_MIN_ALIGNED:
+        out["dominance_data_quality"] = "insufficient_aligned"
+        return out
+    if out["coverage_ratio"] < CVD_DOM_MIN_COVERAGE:
+        out["dominance_data_quality"] = "insufficient_coverage"
+        return out
+
+    def _usd(delta, ts, unit):
+        return delta if unit == "usd" else delta * price[ts]
+
+    s_net = s_gross = f_net = f_gross = 0.0
+    for ts in common:
+        sv, fv = _usd(sd[ts], ts, su), _usd(fd[ts], ts, fu)
+        s_net += sv; s_gross += abs(sv)
+        f_net += fv; f_gross += abs(fv)
+
+    total_gross = s_gross + f_gross
+    if total_gross <= 0:
+        out["dominance_data_quality"] = "zero_flow"
+        return out
+
+    # Freshness: newest aligned bar must be near the latest closed candle.
+    gaps = [common[i] - common[i - 1] for i in range(1, len(common))]
+    med  = sorted(gaps)[len(gaps) // 2] if gaps else 0
+    newest_close = max(price)
+    out["freshness_seconds"] = round((time.time() * 1000 - common[-1]) / 1000)
+    if med > 0 and (newest_close - common[-1]) > CVD_DOM_MAX_STALE_GAPS * med:
+        out["dominance_data_quality"] = "stale"
+        return out
+
+    fut_share = f_gross / total_gross
+    if fut_share >= CVD_FUT_DOMINANT_SHARE:
+        dom, simple = "futures_dominated", "futures"
+    elif fut_share >= CVD_FUT_HEAVY_SHARE:
+        dom, simple = "futures_heavy", "futures"
+    elif fut_share <= CVD_SPOT_DOMINANT_SHARE:
+        dom, simple = "spot_dominated", "spot"
+    elif fut_share <= CVD_SPOT_HEAVY_SHARE:
+        dom, simple = "spot_heavy", "spot"
+    else:
+        dom, simple = "balanced", "balanced"
+
+    out.update({
+        "dominance": dom, "dominance_simple": simple,
+        "futures_share": round(fut_share, 3),
+        "spot_net_usd": round(s_net, 2), "futures_net_usd": round(f_net, 2),
+        "spot_gross_usd": round(s_gross, 2), "futures_gross_usd": round(f_gross, 2),
+        "spot_flow_ratio": round(s_net / s_gross, 3) if s_gross > 0 else 0.0,
+        "futures_flow_ratio": round(f_net / f_gross, 3) if f_gross > 0 else 0.0,
+        "futures_ratio": round(f_gross / max(s_gross, 1e-9), 1),
+        "spot_ratio": round(s_gross / max(f_gross, 1e-9), 1),
+        "dominance_data_quality": "ok",
+    })
+    return out
 
 
 def calculate_rsi_series(closes: List[float], period: int = 14) -> List[Optional[float]]:
@@ -80,7 +197,7 @@ def calculate_cvd(candles: List[Dict], label: str = "spot") -> Dict:
         )
 
     return {"current": round(cvd, 2), "trend": cvd_trend(series),
-            "series": series[-30:], "label": label}
+            "series": series[-30:], "label": label, "unit": "base"}
 
 
 def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) -> Dict:
@@ -110,33 +227,36 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
     spot_trend = spot_cvd.get("trend", "neutral")
     fut_trend  = fut_cvd.get("trend",  "neutral")
 
-    # Magnitude ratio: how much larger is futures CVD vs spot CVD (in absolute terms)?
-    # Futures markets are naturally larger, but anything beyond ~10x signals speculative dominance.
-    # Spot dominance (spot >> futures) = organic conviction; futures dominance = speculative.
-    spot_abs    = abs(spot_cvd.get("current", 0) or 0)
-    fut_abs     = abs(fut_cvd.get("current",  0) or 0)
-    futures_ratio = round(fut_abs  / max(spot_abs, 1), 1)
-    spot_ratio    = round(spot_abs / max(fut_abs,  1), 1)
-
-    if futures_ratio > 50:
-        dominance = "futures"
-        dom_label = f"futures-dominated ({futures_ratio:.0f}× larger than spot)"
-    elif futures_ratio > 10:
-        dominance = "futures"
-        dom_label = f"futures-heavy ({futures_ratio:.0f}× vs spot)"
-    elif spot_ratio > 10:
-        dominance = "spot"
-        dom_label = f"spot-dominated ({spot_ratio:.0f}× larger than futures)"
-    elif spot_ratio > 2:
-        dominance = "spot"
-        dom_label = f"spot-heavy ({spot_ratio:.1f}× vs futures)"
-    else:
-        dominance = "balanced"
-        dom_label = f"balanced ({futures_ratio:.1f}× futures/spot)"
+    # Dominance from ALIGNED RECENT USD FLOW (never the cumulative CVD totals,
+    # whose arbitrary window-start makes cross-series comparison meaningless).
+    # When units are unknown/incompatible, data is thin/stale, or flow is zero,
+    # dom_class == "unknown"/"balanced" and NO strong-dominance branch fires.
+    _dom       = compute_cvd_dominance(spot_cvd, fut_cvd, candles)
+    dom_class  = _dom["dominance"]               # futures_dominated | futures_heavy | spot_dominated | spot_heavy | balanced | unknown
+    dominance  = _dom["dominance_simple"]        # futures | spot | balanced | unknown  (backward-compat)
+    futures_ratio = _dom["futures_ratio"]
+    spot_ratio    = _dom["spot_ratio"]
+    _fr = futures_ratio if futures_ratio is not None else 0
+    _sr = spot_ratio    if spot_ratio    is not None else 0
+    dom_label = {
+        "futures_dominated": f"futures-dominated ({_fr:.0f}× vs spot)",
+        "futures_heavy":     f"futures-heavy ({_fr:.0f}× vs spot)",
+        "spot_dominated":    f"spot-dominated ({_sr:.0f}× vs futures)",
+        "spot_heavy":        f"spot-heavy ({_sr:.1f}× vs futures)",
+        "balanced":          "balanced spot/futures flow",
+        "unknown":           f"dominance unknown ({_dom['dominance_data_quality']})",
+    }.get(dom_class, "balanced spot/futures flow")
 
     def _result(type_, label, detail, signal):
-        return {"type": type_, "label": label, "detail": detail, "signal": signal,
-                "futures_ratio": futures_ratio, "spot_ratio": spot_ratio, "dominance": dominance}
+        r = {"type": type_, "label": label, "detail": detail, "signal": signal,
+             "futures_ratio": futures_ratio, "spot_ratio": spot_ratio,
+             "dominance": dominance, "dominance_class": dom_class}
+        # surface the aligned-flow diagnostics without breaking existing fields
+        for k in ("futures_share", "spot_net_usd", "futures_net_usd",
+                  "spot_gross_usd", "futures_gross_usd", "aligned_candles",
+                  "coverage_ratio", "freshness_seconds", "dominance_data_quality"):
+            r[k] = _dom[k]
+        return r
 
     if price_trend == "up":
         if spot_trend == "bearish" and fut_trend == "bullish":
@@ -152,19 +272,19 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                 "bullish",
             )
         if spot_trend == "bullish" and fut_trend == "bullish":
-            if dominance == "futures" and futures_ratio > 50:
+            if dom_class == "futures_dominated":
                 return _result(
                     "futures_dominated_up", "Futures-dominated rally",
                     f"Both CVDs rising but futures ({dom_label}) — move is overwhelmingly speculative leverage, not organic. Elevated reversal risk.",
                     "bearish",
                 )
-            if dominance == "spot" and spot_ratio > 10:
+            if dom_class == "spot_dominated":
                 return _result(
                     "spot_dominated_up", "Spot-dominated rally",
                     f"Both CVDs rising but spot is {dom_label} — overwhelmingly organic buying with minimal leverage. Highest-conviction bullish signal.",
                     "bullish",
                 )
-            if dominance == "spot" and spot_ratio > 2:
+            if dom_class == "spot_heavy":
                 return _result(
                     "spot_heavy_up", "Spot-driven confirmed rally",
                     f"Both CVDs rising and spot is {dom_label} — real buyers leading, futures confirming. Strong organic conviction.",
@@ -190,25 +310,25 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                 "bearish",
             )
         if spot_trend == "bearish" and fut_trend == "bearish":
-            if dominance == "futures" and futures_ratio > 50:
+            if dom_class == "futures_dominated":
                 return _result(
                     "futures_dominated_down", "Futures-dominated selloff",
                     f"Both CVDs falling but futures is {dom_label} — selling is overwhelmingly speculative shorts, not real holder distribution. Short squeeze risk elevated.",
                     "neutral",   # downgraded from bearish — unreliable organic signal
                 )
-            if dominance == "futures" and futures_ratio > 10:
+            if dom_class == "futures_heavy":
                 return _result(
                     "futures_heavy_down", "Futures-heavy selloff",
                     f"Both CVDs falling but futures is {dom_label} — speculative selling heavier than organic. Some squeeze risk.",
                     "bearish",   # still bearish but lower conviction
                 )
-            if dominance == "spot" and spot_ratio > 10:
+            if dom_class == "spot_dominated":
                 return _result(
                     "spot_dominated_down", "Spot-dominated selloff",
                     f"Both CVDs falling but spot is {dom_label} — overwhelmingly real holder distribution with minimal leverage. Highest-conviction bearish signal.",
                     "bearish",
                 )
-            if dominance == "spot" and spot_ratio > 2:
+            if dom_class == "spot_heavy":
                 return _result(
                     "spot_heavy_down", "Spot-driven confirmed selloff",
                     f"Both CVDs falling and spot is {dom_label} — real sellers leading, futures confirming. Strong organic distribution.",

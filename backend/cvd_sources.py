@@ -167,7 +167,7 @@ def _cvd_usd_from_klines(candles: list, label: str) -> Optional[Dict]:
             return None
         trend = cvd_trend(_closed_series(series))
         return {"current": round(cvd, 2), "trend": trend,
-                "series": series[-30:], "label": label, "usd": True}
+                "series": series[-30:], "label": label, "usd": True, "unit": "usd"}
     except Exception:
         return None
 
@@ -578,6 +578,7 @@ def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int) -> Optiona
         "label":   "spot_aggregated",
         "source":  "aggregated",
         "n_sources": len(results),
+        "unit":    "usd",   # every source normalised to USD before summing
     }
 
 
@@ -641,6 +642,7 @@ def fetch_aggregated_futures_cvd(symbol: str, interval: str, limit: int) -> Opti
         "label":     "futures_aggregated",
         "source":    "aggregated",
         "n_sources": len(results),
+        "unit":      "usd",   # every source normalised to USD before summing
     }
 
 
