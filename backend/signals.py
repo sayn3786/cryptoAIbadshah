@@ -1,6 +1,19 @@
 from typing import Dict, List
 
 
+def _recent_closed_extremes(candles: List[Dict], n: int = 5):
+    """Swing (high, low) over the last `n` CLOSED candles.
+
+    `candles` here is already closed-only (build_analysis removed the forming
+    bar), so candles[-1] is the NEWEST COMPLETED candle and must be part of the
+    anchor — hence candles[-n:], NOT candles[-(n+1):-1]. Returns (None, None)
+    when there are no candles."""
+    recent = candles[-n:] if candles else []
+    if not recent:
+        return None, None
+    return (max(c["high"] for c in recent), min(c["low"] for c in recent))
+
+
 # ── Market-cap volatility tier ────────────────────────────────────────────────
 # Smaller caps move more per candle — BTC rarely does 5% in 1H but HYPE can.
 # We scale the ATR cap (not the SL multiplier) so stops are sized to each
@@ -1994,14 +2007,8 @@ def generate_signal(analysis: Dict) -> Dict:
         _bb        = analysis.get("bollinger") or {}
         bb_upper   = _bb.get("upper")
         bb_lower   = _bb.get("lower")
-        # Last 5 closed candles. analysis["candles"] is already closed-only (the
-        # forming bar was removed in build_analysis), so candles[-1] is the NEWEST
-        # COMPLETED candle and belongs in the swing anchor. The old candles[-6:-1]
-        # dropped it — an off-by-one that stale-anchored the swing high/low one
-        # bar in the past.
-        _closed    = candles[-5:]
-        swing_high = max((c["high"] for c in _closed), default=None) if _closed else None
-        swing_low  = min((c["low"]  for c in _closed), default=None) if _closed else None
+        # Swing anchors from the last 5 CLOSED candles (see _recent_closed_extremes).
+        swing_high, swing_low = _recent_closed_extremes(candles, 5)
 
         _st      = analysis.get("supertrend") or {}
         st_price = _st.get("value")
