@@ -1987,8 +1987,12 @@ def generate_signal(analysis: Dict) -> Dict:
         _bb        = analysis.get("bollinger") or {}
         bb_upper   = _bb.get("upper")
         bb_lower   = _bb.get("lower")
-        # Last 5 closed candles (skip live candle at index -1)
-        _closed    = candles[-6:-1] if len(candles) >= 6 else candles[:-1]
+        # Last 5 closed candles. analysis["candles"] is already closed-only (the
+        # forming bar was removed in build_analysis), so candles[-1] is the NEWEST
+        # COMPLETED candle and belongs in the swing anchor. The old candles[-6:-1]
+        # dropped it — an off-by-one that stale-anchored the swing high/low one
+        # bar in the past.
+        _closed    = candles[-5:]
         swing_high = max((c["high"] for c in _closed), default=None) if _closed else None
         swing_low  = min((c["low"]  for c in _closed), default=None) if _closed else None
 

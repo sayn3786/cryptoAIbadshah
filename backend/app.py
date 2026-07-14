@@ -729,9 +729,12 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     price_roc = round((closes[-1] - closes[-5]) / closes[-5] * 100, 2) if len(closes) >= 5 and closes[-5] != 0 else None
     # Candle direction: +1 bullish / -1 bearish for last N CLOSED candles.
     # Count varies by TF — lower TFs are noisier so we require more candles.
-    # Skip spot[-1] — the live candle hasn't closed yet, its direction can flip.
+    # `spot` is ALREADY closed candles here (the forming bar was removed by
+    # _split_closed above), so spot[-1] is the NEWEST COMPLETED candle and must be
+    # included. The old slice spot[-(1+n):-1] dropped it — an off-by-one that
+    # ignored the most recent closed bar's direction.
     _n_dir = _TF_CANDLE_N.get(timeframe, 4)
-    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-(1 + _n_dir):-1]] if len(spot) >= 1 + _n_dir else []
+    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-_n_dir:]] if len(spot) >= _n_dir else []
 
     # Aggregated spot CVD: sums real taker buy/sell deltas from Binance+OKX+MEXC
     # in parallel. Falls back to single-exchange estimate only if all three fail.
