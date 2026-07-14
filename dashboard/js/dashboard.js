@@ -799,8 +799,10 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     const col = _HTF_COL[lv.tf] || '#94a3b8';
     [['high', lv.high, '▲'], ['low', lv.low, '▼']].forEach(([kind, price, arrow]) => {
       if (!price || !_lastPx) return;
-      // skip levels more than ~60% away from price (would distort the axis)
-      if (Math.abs(price - _lastPx) / _lastPx > 0.6) return;
+      // skip levels too far from price — a distant monthly high/low forces the
+      // price axis to stretch to it and flattens the candles. 45% keeps nearby
+      // structural levels while dropping far-away macro extremes.
+      if (Math.abs(price - _lastPx) / _lastPx > 0.45) return;
       S.overlayPriceLines.push(S.candleSeries.createPriceLine({
         price, color: col, lineWidth: 1, lineStyle: 2,
         title: `${lv.tf} ${arrow}`, axisLabelVisible: true,

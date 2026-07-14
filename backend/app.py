@@ -536,10 +536,20 @@ def _vol_regime(candles: list):
 # ── Higher-timeframe swing levels ─────────────────────────────────────────────
 # Traders read a low-timeframe chart against the structure set by the higher
 # timeframes: the 1D / 1W / 1M swing highs and lows are the levels that actually
-# turn price. We project the most recent CONFIRMED swing high & low of each
-# strictly-higher anchor TF onto the current chart as horizontal reference lines.
+# turn price. We project each strictly-higher anchor TF's swing high & low onto
+# the current chart as horizontal reference lines.
+#
+# All three anchors are derived from ONE deep DAILY series (not three separate
+# weekly/monthly fetches). This matters: separate fetches can land on different
+# sources (e.g. 1W from OKX, 1M from CoinGecko) whose prices don't line up, which
+# produced impossible readings like a monthly low ABOVE the weekly low. Windowing
+# a single daily series over calendar-nested lookbacks guarantees both source
+# consistency AND correct nesting (1M range ⊇ 1W range ⊇ 1D range), because the
+# min/max over a longer window can only widen the range.
 _HTF_ANCHORS   = ["1D", "1W", "1M"]
 _TF_ORDER      = ["1H", "2H", "4H", "8H", "12H", "1D", "1W", "2W", "3W", "1M"]
+# Lookback in DAILY candles per anchor — nested calendar spans (~1mo / ~5mo / ~1yr)
+_HTF_LOOKBACK  = {"1D": 30, "1W": 140, "1M": 365}
 _htf_cache: dict = {}
 _htf_cache_lock  = _threading.Lock()
 
@@ -554,56 +564,62 @@ def _htf_anchor_tfs(timeframe: str) -> list:
     return [a for a in _HTF_ANCHORS if _TF_ORDER.index(a) > cur]
 
 
-def _htf_swings(symbol: str, htf: str) -> Optional[dict]:
-    """Most recent confirmed swing high & low on a higher timeframe.
-    Fetches only candles (not a full analysis) and is cached on the same 30-min
-    window as the analysis cache, so every lower TF of a symbol shares one fetch."""
+def _daily_history(symbol: str) -> Optional[list]:
+    """Deep CLOSED daily candles for a symbol, cached 30 min. Shared by every
+    timeframe's HTF-level computation. Returns None on demo/synthetic data so we
+    never project fake levels onto a real chart."""
     now  = datetime.now(timezone.utc)
     half = (now.minute // 30) * 30
-    key  = f"htf1_{symbol}_{htf}_{now.strftime('%Y%m%d%H')}{half:02d}"
+    key  = f"htfd1_{symbol}_{now.strftime('%Y%m%d%H')}{half:02d}"
     with _htf_cache_lock:
-        e = _htf_cache.get((symbol, htf))
+        e = _htf_cache.get(("_daily", symbol))
         if e and e.get("key") == key:
             return e["data"]
 
     data = None
-    try:
-        bs       = SYMBOLS[symbol]
-        interval = TF_INTERVAL.get(htf, "1d")
-        raw      = client.get_spot_klines(bs, interval, min(TF_LIMIT.get(htf, 150), 150))
-        if htf in TF_AGG:
-            raw = client.aggregate_candles(raw, TF_AGG[htf])
-        closed, _live = _split_closed(raw, TF_SECONDS.get(htf, 86400))
-        if closed and len(closed) >= 8:
-            ph, pl = find_pivots(closed, window=2)
-            tail   = closed[-12:]
-            hi_p   = ph[-1] if ph else None
-            lo_p   = pl[-1] if pl else None
-            hi     = hi_p["price"] if hi_p else max(c["high"] for c in tail)
-            lo     = lo_p["price"] if lo_p else min(c["low"]  for c in tail)
-            data = {
-                "tf":       htf,
-                "high":     round(hi, 8),
-                "low":      round(lo, 8),
-                "high_ts":  hi_p["timestamp"] if hi_p else None,
-                "low_ts":   lo_p["timestamp"] if lo_p else None,
-            }
+    _saved_src = client.data_source          # don't let this fetch clobber the
+    try:                                     # caller's captured data_source
+        bs = SYMBOLS[symbol]
+        raw = client.get_spot_klines(bs, "1d", 365)
+        src = client.data_source
+        closed, _live = _split_closed(raw, 86400)
+        if src != "demo" and closed and len(closed) >= 20:
+            data = closed
     except Exception:
         data = None
+    finally:
+        client.data_source = _saved_src
 
     with _htf_cache_lock:
-        _htf_cache[(symbol, htf)] = {"key": key, "data": data}
+        _htf_cache[("_daily", symbol)] = {"key": key, "data": data}
     return data
 
 
 def _collect_htf_levels(symbol: str, timeframe: str) -> list:
-    """Swing high/low levels for every anchor TF above `timeframe` (parallel)."""
+    """Swing high/low of every anchor TF above `timeframe`, derived from one
+    daily series so the levels are source-consistent and correctly nested."""
     tfs = _htf_anchor_tfs(timeframe)
     if not tfs:
         return []
-    with ThreadPoolExecutor(max_workers=len(tfs)) as ex:
-        out = list(ex.map(lambda h: _htf_swings(symbol, h), tfs))
-    return [s for s in out if s]
+    daily = _daily_history(symbol)
+    if not daily:
+        return []
+    out = []
+    for tf in tfs:
+        lb  = min(_HTF_LOOKBACK.get(tf, 140), len(daily))
+        win = daily[-lb:]
+        if not win:
+            continue
+        hi_c = max(win, key=lambda c: c["high"])
+        lo_c = min(win, key=lambda c: c["low"])
+        out.append({
+            "tf":      tf,
+            "high":    round(hi_c["high"], 8),
+            "low":     round(lo_c["low"], 8),
+            "high_ts": hi_c["timestamp"],
+            "low_ts":  lo_c["timestamp"],
+        })
+    return out
 
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
