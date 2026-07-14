@@ -860,68 +860,60 @@ class BinanceClient:
         # Cap the minimum by the requested limit — a caller asking for 5 candles
         # can never satisfy ">= 26", which would reject every real source and
         # fall through to the last-resort/demo data.
-        _min_candles = min(3 if use_weekly_fallbacks else 26, max(1, limit))
+        _floor = min(3 if use_weekly_fallbacks else 26, max(1, limit))
 
-        def _ok(r):
-            return bool(r) and len(r) >= _min_candles
+        # "Rich" = enough history to stop searching immediately. For weekly/monthly
+        # some exchanges return only a few recent bars (OKX's /market/candles gives
+        # a thin weekly window for some instruments) while others carry the full
+        # multi-year history. Accepting the FIRST source that clears the low floor
+        # would lock us onto that thin window and hide the deeper data — so for
+        # weekly/monthly we keep the RICHEST result across sources instead of the
+        # first that merely clears the floor. Intraday keeps the original
+        # first-good-source behaviour (_rich == floor).
+        _rich = min(60, max(1, limit)) if use_weekly_fallbacks else _floor
+
+        _best_r: Optional[List[Dict]] = None
+        _best_src: Optional[str] = None
+
+        def _blen(r):
+            return len(r) if r else 0
+
+        def _consider(r, name):
+            """Track the richest result; return True when it's rich enough to stop."""
+            nonlocal _best_r, _best_src
+            if _blen(r) > _blen(_best_r):
+                _best_r, _best_src = r, name
+            return _blen(r) >= _rich
 
         # Always try each source in order — never skip based on shared state
-        result = self._binance_klines(symbol, interval, limit)
-        if _ok(result):
-            self.data_source = "binance"
-            return result
-
-        result = self._okx_candles(symbol, interval, limit)
-        if _ok(result):
-            self.data_source = "okx"
-            return result
-
-        result = self._bybit_candles(symbol, interval, limit)
-        if _ok(result):
-            self.data_source = "bybit"
-            return result
-
-        result = self._kucoin_candles(symbol, interval, limit)
-        if _ok(result):
-            self.data_source = "kucoin"
-            return result
-
-        result = self._mexc_candles(symbol, interval, limit)
-        if _ok(result):
-            self.data_source = "mexc"
-            return result
-
-        result = self._htx_candles(symbol, interval, limit)
-        if _ok(result):
-            self.data_source = "htx"
-            return result
-
-        result = self._lbank_candles(symbol, interval, limit)
-        if _ok(result):
-            self.data_source = "lbank"
-            return result
+        for _fn, _name in (
+            (self._binance_klines, "binance"),
+            (self._okx_candles,    "okx"),
+            (self._bybit_candles,  "bybit"),
+            (self._kucoin_candles, "kucoin"),
+            (self._mexc_candles,   "mexc"),
+            (self._htx_candles,    "htx"),
+            (self._lbank_candles,  "lbank"),
+        ):
+            try:
+                _r = _fn(symbol, interval, limit)
+            except Exception:
+                _r = None
+            if _consider(_r, _name):
+                self.data_source = _name
+                return _best_r[-limit:]
 
         if use_weekly_fallbacks:
-            result = self._kucoin_weekly_candles(symbol, limit)
-            if _ok(result):
-                self.data_source = "kucoin"
-                return result
-
-            result = self._gate_weekly_candles(symbol, limit)
-            if _ok(result):
-                self.data_source = "gateio"
-                return result
-
-            result = self._cg_monthly_candles(symbol, limit) if is_monthly \
-                     else self._cg_weekly_candles(symbol, limit)
-            if _ok(result):
-                self.data_source = "coingecko"
-                return result
-
-            result = self._kraken_weekly_candles(symbol, limit)
-            if _ok(result):
-                self.data_source = "kraken"
-                return result
+            for _r, _name in (
+                (self._kucoin_weekly_candles(symbol, limit), "kucoin"),
+                (self._gate_weekly_candles(symbol, limit),   "gateio"),
+                ((self._cg_monthly_candles(symbol, limit) if is_monthly
+                  else self._cg_weekly_candles(symbol, limit)), "coingecko"),
+                (self._kraken_weekly_candles(symbol, limit), "kraken"),
+            ):
+                if _consider(_r, _name):
+                    self.data_source = _name
+                    return _best_r[-limit:]
         else:
             # For intraday: try the single next-larger interval on each exchange.
             # Stops at one step up (2H→4H, 4H→8H, etc.) to keep latency bounded —
@@ -930,23 +922,30 @@ class BinanceClient:
             next_iv  = _NEXT_IV.get(interval.lower())
             if next_iv:
                 result = self._binance_klines(symbol, next_iv, limit)
-                if _ok(result):
+                if _consider(result, "binance"):
                     self.data_source = "binance"
-                    return result
+                    return _best_r[-limit:]
                 result = self._okx_candles(symbol, next_iv, limit)
-                if _ok(result):
+                if _consider(result, "okx"):
                     self.data_source = "okx"
-                    return result
+                    return _best_r[-limit:]
                 result = self._bybit_candles(symbol, next_iv, limit)
-                if _ok(result):
+                if _consider(result, "bybit"):
                     self.data_source = "bybit"
-                    return result
+                    return _best_r[-limit:]
 
             # Last intraday resort: CoinGecko daily aggregated
             result = self._cg_daily_as_candles(symbol, interval, limit)
-            if _ok(result):
+            if _consider(result, "coingecko"):
                 self.data_source = "coingecko"
-                return result
+                return _best_r[-limit:]
+
+        # Nothing was "rich", but a thin real result still beats synthetic data
+        # (e.g. a genuinely young token with only a handful of weekly bars). Return
+        # the deepest history we found as long as it clears the absolute floor.
+        if _blen(_best_r) >= _floor:
+            self.data_source = _best_src
+            return _best_r[-limit:]
 
         self.data_source = "demo"
         from mock_data import mock_spot_klines
