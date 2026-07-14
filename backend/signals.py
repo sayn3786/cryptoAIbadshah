@@ -1,6 +1,19 @@
 from typing import Dict, List
 
 
+def _recent_closed_extremes(candles: List[Dict], n: int = 5):
+    """Swing (high, low) over the last `n` CLOSED candles.
+
+    `candles` here is already closed-only (build_analysis removed the forming
+    bar), so candles[-1] is the NEWEST COMPLETED candle and must be part of the
+    anchor — hence candles[-n:], NOT candles[-(n+1):-1]. Returns (None, None)
+    when there are no candles."""
+    recent = candles[-n:] if candles else []
+    if not recent:
+        return None, None
+    return (max(c["high"] for c in recent), min(c["low"] for c in recent))
+
+
 # ── Market-cap volatility tier ────────────────────────────────────────────────
 # Smaller caps move more per candle — BTC rarely does 5% in 1H but HYPE can.
 # We scale the ATR cap (not the SL multiplier) so stops are sized to each
@@ -420,11 +433,15 @@ def generate_signal(analysis: Dict) -> Dict:
         pts = _CVD_BASE[div_type]
         # Magnitude intensifier: extreme ratios push slightly beyond the base (cap ±5)
         # Makes scoring dynamic — a 200× ratio is meaningfully different from 55×
+        # Magnitude intensifier is a BONUS only — clamp to [0, 5] so it can never
+        # subtract. With flow-share dominance the ratio at the threshold is ~4×
+        # (80% share), well below the old 10×/50× offsets, which would otherwise
+        # make `extra` negative and weaken a genuinely dominant read.
         if "spot_dominated" in div_type:
-            extra = min(5, round((spot_ratio - 10) * 0.1))
+            extra = max(0, min(5, round((spot_ratio - 10) * 0.1)))
             pts = pts + extra if pts > 0 else pts - extra
         elif "futures_dominated" in div_type:
-            extra = min(5, round((fut_ratio - 50) * 0.02))
+            extra = max(0, min(5, round((fut_ratio - 50) * 0.02)))
             pts = pts + extra if pts > 0 else pts - extra
         score += pts; g['flow'] += pts
         side, tmpl = _CVD_REASON[div_type]
@@ -1825,20 +1842,31 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Options expiry pin pressure ───────────────────────────────────────────
     # Only applied when inside the pinning window and direction is not NEUTRAL.
     # Amplifies strength when options align with signal; reduces when they oppose.
+    # This is the SINGLE place options-expiry pressure adjusts strength. The
+    # recommendation engine must NOT re-apply it — it only surfaces the metadata
+    # recorded below (options_application_stage == "signal").
+    # get_options_expiry_data() returns signal_pts at the ROOT and nests the
+    # bias dict (which carries in_window) one level down. Reading signal_pts from
+    # inside `bias` always yielded 0, so options pressure was silently dropped
+    # with real production data.
     _opts        = analysis.get("options_expiry") or {}
     _opts_bias   = (_opts.get("bias") or {})
-    _opts_pts    = int(_opts_bias.get("signal_pts") or 0)   # -20 to +20
+    _opts_pts    = int(_opts.get("signal_pts") or 0)        # -20 to +20 (root level)
     _opts_in_win = _opts_bias.get("in_window", False)
-    opts_adj     = 0
+    opts_adj             = 0     # signed strength delta actually applied
+    _options_applied     = False
     if _opts_in_win and _opts_pts != 0 and direction != "NEUTRAL":
-        opts_adj = abs(_opts_pts)
+        mag = abs(_opts_pts)
         if (_opts_pts > 0 and direction == "LONG") or (_opts_pts < 0 and direction == "SHORT"):
-            strength = min(100, strength + opts_adj)
-            bull_reasons.append(f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{opts_adj} pts)")
+            opts_adj = mag
+            strength = min(100, strength + mag)
+            bull_reasons.append(f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{mag} pts)")
         else:
-            strength = max(0, strength - round(opts_adj * 0.5))
-            bear_reasons.append(f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, -{round(opts_adj*0.5)} pts)")
-        g['sentiment'] += opts_adj if direction == "LONG" else -opts_adj
+            opts_adj = -round(mag * 0.5)
+            strength = max(0, strength + opts_adj)
+            bear_reasons.append(f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, {opts_adj} pts)")
+        g['sentiment'] += mag if direction == "LONG" else -mag
+        _options_applied = True
 
     # Strength tiers (strength = score / 220 * 100):
     # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size
@@ -1987,10 +2015,8 @@ def generate_signal(analysis: Dict) -> Dict:
         _bb        = analysis.get("bollinger") or {}
         bb_upper   = _bb.get("upper")
         bb_lower   = _bb.get("lower")
-        # Last 5 closed candles (skip live candle at index -1)
-        _closed    = candles[-6:-1] if len(candles) >= 6 else candles[:-1]
-        swing_high = max((c["high"] for c in _closed), default=None) if _closed else None
-        swing_low  = min((c["low"]  for c in _closed), default=None) if _closed else None
+        # Swing anchors from the last 5 CLOSED candles (see _recent_closed_extremes).
+        swing_high, swing_low = _recent_closed_extremes(candles, 5)
 
         _st      = analysis.get("supertrend") or {}
         st_price = _st.get("value")
@@ -2311,6 +2337,13 @@ def generate_signal(analysis: Dict) -> Dict:
         "reversal_count":     reversal_count,
         "flipped_indicators": flipped_indicators,
         "reversal_radar":     _rr,
+        # Options-expiry adjustment metadata — applied EXACTLY ONCE here. The rec
+        # engine reads these instead of re-applying the pressure.
+        "options_adjustment":        opts_adj,          # signed strength delta applied
+        "options_bias":              _opts_bias.get("bias", "neutral"),
+        "options_in_window":         bool(_opts_in_win),
+        "options_applied":           _options_applied,
+        "options_application_stage": "signal",
         "choch":           choch     if choch.get("signal")     != "none" else None,
         "liq_grab":        liq_grab  if liq_grab.get("signal")  != "none" else None,
         "acc_setup":       acc_setup if acc_setup.get("signal") != "none" else None,

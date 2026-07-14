@@ -167,7 +167,7 @@ def _cvd_usd_from_klines(candles: list, label: str) -> Optional[Dict]:
             return None
         trend = cvd_trend(_closed_series(series))
         return {"current": round(cvd, 2), "trend": trend,
-                "series": series[-30:], "label": label, "usd": True}
+                "series": series[-30:], "label": label, "usd": True, "unit": "usd"}
     except Exception:
         return None
 
@@ -289,8 +289,14 @@ def _okx_taker_cvd(symbol: str, inst_type: str, interval: str, label: str) -> Op
             cvd  += delta
             series.append({"timestamp": ts, "cvd": round(cvd, 4), "delta": round(delta, 4)})
         trend = cvd_trend(_closed_series(series))
+        # OKX rubik/stat/taker-volume unit differs by instrument type:
+        #   SPOT      → BASE COIN volume   (e.g. BTC ~3.6k)
+        #   CONTRACTS → USD notional       (e.g. BTC ~3.7B)
+        # Tag truthfully so the aggregator can convert base→USD (via candle price)
+        # before summing, instead of mixing base-coin flow into a USD total.
+        unit = "base" if inst_type == "SPOT" else "usd"
         return {"current": round(cvd, 2), "trend": trend,
-                "series": series[-30:], "label": label}
+                "series": series[-30:], "label": label, "unit": unit}
     except Exception:
         return None
 
@@ -522,12 +528,65 @@ def fetch_coinglass_cvd(symbol: str, cg_client, interval: str = "4h") -> Optiona
 #   KuCoin, Gate.io, LBank, CoinGecko, CoinMarketCap
 #   → futures requests from these return None
 
-def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+def _aggregate_usd_series(results: list, limit: int, price_map=None) -> list:
+    """Sum per-source delta series into ONE USD-denominated series.
+
+    Each source declares its unit ('usd' or 'base'). USD deltas are summed as-is;
+    base-coin deltas are converted to USD via price_map[timestamp] BEFORE summing
+    (this is what keeps OKX spot's base-coin flow from polluting a USD total). A
+    base delta with no matching price is skipped rather than mixed in."""
+    delta_map: Dict[int, float] = {}
+    for r in results:
+        unit = r.get("unit", "usd")
+        for pt in r.get("series", []):
+            ts = int(pt["timestamp"])
+            d = float(pt.get("delta") or 0.0)
+            if unit == "usd":
+                delta_map[ts] = delta_map.get(ts, 0.0) + d
+            elif unit == "base" and price_map and ts in price_map:
+                delta_map[ts] = delta_map.get(ts, 0.0) + d * price_map[ts]
+            # base delta without a price → cannot convert → skip (never mix units)
+    cumulative, series = 0.0, []
+    for ts in sorted(delta_map):
+        cumulative += delta_map[ts]
+        series.append({"timestamp": ts, "cvd": round(cumulative, 2),
+                       "delta": round(delta_map[ts], 2)})
+    return series[-limit:]
+
+
+def _finish_aggregate(results, limit, label, price_map):
+    """Build a USD aggregate; fall back to the deepest raw source (keeping its own
+    declared unit) if nothing could be USD-normalised, so CVD trend/current still
+    display and dominance can convert downstream via candle prices."""
+    if not results:
+        return None
+    agg_series = _aggregate_usd_series(results, limit, price_map)
+    if agg_series:
+        return {
+            "current":   agg_series[-1]["cvd"],
+            "trend":     cvd_trend(_closed_series(agg_series)),
+            "series":    agg_series,
+            "label":     label,
+            "source":    "aggregated",
+            "n_sources": len(results),
+            "unit":      "usd",
+        }
+    # nothing convertible to USD (e.g. only a base source and no price map)
+    best = max(results, key=lambda r: len(r.get("series") or []))
+    best = dict(best)
+    best["label"], best["source"], best["n_sources"] = label, "aggregated", 1
+    best.setdefault("unit", "base")
+    return best
+
+
+def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int,
+                              price_map=None) -> Optional[Dict]:
     """
     Aggregate spot CVD across Binance, OKX, and MEXC in USD terms.
-    Binance/MEXC klines give taker volume in base coins — multiplied by close
-    price to normalise to USD. OKX taker-volume endpoint already returns USD.
-    All three fetched in parallel; deltas aligned by timestamp and summed.
+    Binance/MEXC klines give taker volume in base coins already multiplied by
+    close price (USD). OKX SPOT taker-volume is BASE COIN and is converted to USD
+    via price_map before summing (see _aggregate_usd_series). Fetched in parallel;
+    deltas aligned by timestamp.
     """
     real_taker_fns = [_fetch_binance_spot_cvd_usd, fetch_okx_spot_cvd, _fetch_mexc_spot_cvd_usd]
 
@@ -542,54 +601,17 @@ def fetch_aggregated_spot_cvd(symbol: str, interval: str, limit: int) -> Optiona
             except Exception:
                 pass
 
-    if not results:
-        return None
-
-    if len(results) == 1:
-        r = results[0]
-        r["label"] = "spot_aggregated"
-        return r
-
-    # Sum deltas at each timestamp across all exchange series
-    delta_map: Dict[int, float] = {}
-    for r in results:
-        for pt in r["series"]:
-            ts = int(pt["timestamp"])
-            delta_map[ts] = delta_map.get(ts, 0.0) + float(pt.get("delta") or 0.0)
-
-    cumulative = 0.0
-    agg_series = []
-    for ts in sorted(delta_map.keys()):
-        cumulative += delta_map[ts]
-        agg_series.append({"timestamp": ts, "cvd": round(cumulative, 2),
-                           "delta": round(delta_map[ts], 2)})
-    agg_series = agg_series[-limit:]
-
-    if not agg_series:
-        return None
-
-    current = agg_series[-1]["cvd"]
-    trend   = cvd_trend(_closed_series(agg_series))
-
-    return {
-        "current": round(current, 2),
-        "trend":   trend,
-        "series":  agg_series,
-        "label":   "spot_aggregated",
-        "source":  "aggregated",
-        "n_sources": len(results),
-    }
+    return _finish_aggregate(results, limit, "spot_aggregated", price_map)
 
 
-def fetch_aggregated_futures_cvd(symbol: str, interval: str, limit: int) -> Optional[Dict]:
+def fetch_aggregated_futures_cvd(symbol: str, interval: str, limit: int,
+                                 price_map=None) -> Optional[Dict]:
     """
     Aggregate perpetual/futures CVD across Binance and OKX in USD terms.
-    Binance futures klines give taker volume in base coins — normalised to USD
-    via close price. OKX CONTRACTS taker-volume already returns USD.
-    MEXC futures is excluded here: its vol is in contracts, not coins, which
-    would mix units (the same bug fixed for spot CVD). Both fetched in parallel;
-    deltas aligned by timestamp and summed. Lets alts like TAO show real
-    futures CVD without a paid CoinGlass key.
+    Binance futures klines give USD taker volume; OKX CONTRACTS taker-volume is
+    USD notional. MEXC futures is excluded (contracts, not coins). Any base-unit
+    source would be converted via price_map, but both futures sources are already
+    USD so no conversion is needed. Fetched in parallel; aligned by timestamp.
     """
     real_taker_fns = [_fetch_binance_futures_cvd_usd, fetch_okx_futures_cvd]
 
@@ -604,44 +626,7 @@ def fetch_aggregated_futures_cvd(symbol: str, interval: str, limit: int) -> Opti
             except Exception:
                 pass
 
-    if not results:
-        return None
-
-    if len(results) == 1:
-        r = results[0]
-        r["label"] = "futures_aggregated"
-        r["source"] = "aggregated"
-        r["n_sources"] = 1
-        return r
-
-    delta_map: Dict[int, float] = {}
-    for r in results:
-        for pt in r["series"]:
-            ts = int(pt["timestamp"])
-            delta_map[ts] = delta_map.get(ts, 0.0) + float(pt.get("delta") or 0.0)
-
-    cumulative = 0.0
-    agg_series = []
-    for ts in sorted(delta_map.keys()):
-        cumulative += delta_map[ts]
-        agg_series.append({"timestamp": ts, "cvd": round(cumulative, 2),
-                           "delta": round(delta_map[ts], 2)})
-    agg_series = agg_series[-limit:]
-
-    if not agg_series:
-        return None
-
-    current = agg_series[-1]["cvd"]
-    trend   = cvd_trend(_closed_series(agg_series))
-
-    return {
-        "current":   round(current, 2),
-        "trend":     trend,
-        "series":    agg_series,
-        "label":     "futures_aggregated",
-        "source":    "aggregated",
-        "n_sources": len(results),
-    }
+    return _finish_aggregate(results, limit, "futures_aggregated", price_map)
 
 
 _SPOT_DISPATCH = {

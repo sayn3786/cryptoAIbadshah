@@ -98,9 +98,12 @@ def build_price_analysis(candles: List[Dict], timeframe: str, symbol: str) -> Di
     price_roc = round((closes[-1] - closes[-5]) / closes[-5] * 100, 2) \
         if len(closes) >= 5 and closes[-5] != 0 else None
 
+    # `candles` is the already-closed slice up to the signal bar, so candles[-1]
+    # is the newest COMPLETED candle and must be included — mirror production
+    # (app.build_analysis), which uses spot[-n:] not spot[-(1+n):-1].
     _n_dir = _TF_CANDLE_N.get(timeframe, 4)
-    candle_dirs = ([1 if c["close"] > c["open"] else -1 for c in candles[-(1 + _n_dir):-1]]
-                   if len(candles) >= 1 + _n_dir else [])
+    candle_dirs = ([1 if c["close"] > c["open"] else -1 for c in candles[-_n_dir:]]
+                   if len(candles) >= _n_dir else [])
 
     ph, pl = find_pivots(candles, window=2)
     fvgs = detect_fvg(candles)

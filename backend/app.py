@@ -729,13 +729,20 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     price_roc = round((closes[-1] - closes[-5]) / closes[-5] * 100, 2) if len(closes) >= 5 and closes[-5] != 0 else None
     # Candle direction: +1 bullish / -1 bearish for last N CLOSED candles.
     # Count varies by TF — lower TFs are noisier so we require more candles.
-    # Skip spot[-1] — the live candle hasn't closed yet, its direction can flip.
+    # `spot` is ALREADY closed candles here (the forming bar was removed by
+    # _split_closed above), so spot[-1] is the NEWEST COMPLETED candle and must be
+    # included. The old slice spot[-(1+n):-1] dropped it — an off-by-one that
+    # ignored the most recent closed bar's direction.
     _n_dir = _TF_CANDLE_N.get(timeframe, 4)
-    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-(1 + _n_dir):-1]] if len(spot) >= 1 + _n_dir else []
+    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-_n_dir:]] if len(spot) >= _n_dir else []
 
     # Aggregated spot CVD: sums real taker buy/sell deltas from Binance+OKX+MEXC
     # in parallel. Falls back to single-exchange estimate only if all three fail.
-    spot_cvd = fetch_aggregated_spot_cvd(bs, interval, limit) or calculate_cvd(spot, "spot")
+    # price_map lets the aggregator convert base-coin sources (OKX spot) to USD
+    # by timestamp before summing, so the total stays in one unit.
+    _cvd_price_map = {int(c["timestamp"]): c["close"] for c in spot if c.get("close")}
+    spot_cvd = (fetch_aggregated_spot_cvd(bs, interval, limit, price_map=_cvd_price_map)
+                or calculate_cvd(spot, "spot"))
     # Only compute futures CVD when we have real perp candles — if get_futures_klines
     # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
     fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None
@@ -1664,7 +1671,11 @@ def _compute_recommendations() -> dict:
                     "data_quality":  data.get("data_quality", "good"),
                     "dq_reasons":    data.get("data_quality_reasons", []),
                     "tradeable":     data.get("tradeable", True),
-                    "reversal_radar": data.get("reversal_radar") or {},
+                    # Reversal Radar is returned INSIDE the signal dict
+                    # (generate_signal -> "reversal_radar"), not at the analysis
+                    # root. Reading data.get("reversal_radar") always yielded {},
+                    # so the reversal-against penalty in _rec_quality never fired.
+                    "reversal_radar": sig.get("reversal_radar") or {},
                 }
             except Exception:
                 pass
@@ -1741,17 +1752,15 @@ def _compute_recommendations() -> dict:
             btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
             strength = max(0, round(strength + btc_adj, 1))
 
-        # Options expiry pin pressure: scale by BTC correlation so high-corr ALTs
-        # are more affected by BTC pinning than low-corr assets (e.g. XAUT)
-        opts_adj = 0
-        if _opts_in_win and _opts_pts != 0:
-            opts_adj  = round(_opts_pts * corr_factor, 1)
-            # Only apply if it amplifies the current signal direction
-            # (don't let options bias flip a strong opposite signal)
-            if (opts_adj > 0 and direction == "LONG") or (opts_adj < 0 and direction == "SHORT"):
-                strength = min(100, max(0, round(strength + abs(opts_adj), 1)))
-            else:
-                strength = min(100, max(0, round(strength - abs(opts_adj) * 0.5, 1)))
+        # Options-expiry pressure is applied EXACTLY ONCE — inside generate_signal
+        # (options_application_stage == "signal"), so h2["strength"] already
+        # includes it. The rec engine previously re-applied it here, double-
+        # counting the adjustment. Now we only surface the signal's recorded value
+        # as metadata and do NOT touch strength.
+        _sig_opts    = h2["sig"]
+        opts_adj     = _sig_opts.get("options_adjustment", 0)
+        opts_applied = _sig_opts.get("options_applied", False)
+        opts_stage   = _sig_opts.get("options_application_stage", "signal")
 
         h1_exh = h1["sig"].get("exhaustion_flag", False)
         h2_exh = h2["sig"].get("exhaustion_flag", False)
@@ -1814,6 +1823,9 @@ def _compute_recommendations() -> dict:
             "opts_in_window":   _opts_in_win,
             "opts_bias":        _opts_bias,
             "opts_summary":     _opts_summary,
+            "options_adjustment":        opts_adj,
+            "options_applied":           opts_applied,
+            "options_application_stage": opts_stage,
             "h1_exhausted":      h1_exh,
             "h2_exhausted":      h2_exh,
             "h1_reversal_count": h1_rev,
