@@ -1664,7 +1664,11 @@ def _compute_recommendations() -> dict:
                     "data_quality":  data.get("data_quality", "good"),
                     "dq_reasons":    data.get("data_quality_reasons", []),
                     "tradeable":     data.get("tradeable", True),
-                    "reversal_radar": data.get("reversal_radar") or {},
+                    # Reversal Radar is returned INSIDE the signal dict
+                    # (generate_signal -> "reversal_radar"), not at the analysis
+                    # root. Reading data.get("reversal_radar") always yielded {},
+                    # so the reversal-against penalty in _rec_quality never fired.
+                    "reversal_radar": sig.get("reversal_radar") or {},
                 }
             except Exception:
                 pass
