@@ -357,8 +357,52 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
 # ── Release scheduling ────────────────────────────────────────────────────────
 # The card date (`as_of`) is the DATA PERIOD, not the release day. To show "next
 # update" and to decide whether a release is close enough to move intraday price,
-# we need actual release dates. For the high-impact, hard-scheduled series we use
-# the published calendars; the rest get a cadence-based estimate (shown with ~).
+# we need actual release dates. High-impact series use published calendars; the
+# rest use their standard release RULE (weekday-of-month), which is exact for some
+# (Philly = 3rd Thu, Sentiment prelim = 2nd Fri) and a close approximation for a
+# couple (Empire ≈ 15th business day, GDP advance ≈ last Thu of quarter month).
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int):
+    """datetime of the nth <weekday> (Mon=0..Sun=6) in year-month, or None."""
+    first = datetime(year, month, 1, tzinfo=timezone.utc)
+    day = 1 + (weekday - first.weekday()) % 7 + (n - 1) * 7
+    try:
+        return datetime(year, month, day, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _months_around(now: datetime, span: int = 3):
+    """Yield (year, month) for span months either side of now."""
+    for k in range(-span, span + 1):
+        m0 = now.month - 1 + k
+        yield now.year + m0 // 12, m0 % 12 + 1
+
+
+def _rule_release_dates(key: str, now: datetime):
+    """Release dates from each series' standard release rule, spanning now±3mo."""
+    out = []
+    if key == "sentiment":                         # UMich prelim ≈ 2nd Friday
+        for y, m in _months_around(now):
+            d = _nth_weekday(y, m, 4, 2)
+            if d: out.append(d)
+    elif key == "philly_fed":                      # Philly Fed ≈ 3rd Thursday
+        for y, m in _months_around(now):
+            d = _nth_weekday(y, m, 3, 3)
+            if d: out.append(d)
+    elif key == "empire_fed":                      # Empire State ≈ 15th (→ next business day)
+        for y, m in _months_around(now):
+            d = datetime(y, m, 15, tzinfo=timezone.utc)
+            while d.weekday() >= 5:
+                d += timedelta(days=1)
+            out.append(d)
+    elif key == "gdp":                             # BEA advance ≈ last Thu of Jan/Apr/Jul/Oct
+        for y, m in _months_around(now, span=6):
+            if m in (1, 4, 7, 10):
+                d = _nth_weekday(y, m, 3, 5) or _nth_weekday(y, m, 3, 4)
+                if d: out.append(d)
+    return [d.strftime("%Y-%m-%d") for d in out] or None
+
 
 def _sched_release_dates(key: str, now: datetime):
     """Published release-date list for hard-scheduled series, else None."""
@@ -378,6 +422,7 @@ def _sched_release_dates(key: str, now: datetime):
         base = now.replace(hour=0, minute=0, second=0, microsecond=0)
         this_thu = base + timedelta(days=(3 - base.weekday()) % 7)   # Thursday = 3
         return [(this_thu + timedelta(days=7 * k)).strftime("%Y-%m-%d") for k in range(-3, 4)]
+    return _rule_release_dates(key, now)
     return None
 
 
