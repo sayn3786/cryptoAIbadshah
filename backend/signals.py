@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 def _recent_closed_extremes(candles: List[Dict], n: int = 5):
@@ -237,6 +237,79 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
     return {"mode": mode, "applicable": applicable, "count": count,
             "pct": round(pct, 2), "level": level, "signals": signals,
             "verdict": verdict}
+
+
+def _squeeze_priming(analysis: Dict) -> Optional[Dict]:
+    """Funding-vs-CVD divergence read — tells a squeeze that's SET UP from one
+    that's PRIMED.
+
+    CVD (taker aggressor flow) and funding (perp-vs-spot basis / who's paying)
+    are different meters. Heavy futures selling with rising OI means shorts are
+    *crowding in* — but the squeeze only becomes dangerous once funding flips so
+    the crowded side is actually *paying to hold*:
+
+      SHORT squeeze  price↓ + futures CVD selling + OI rising (shorts building)
+        · building → funding still flat/positive (shorts crowding but not paying)
+        · primed   → funding NEGATIVE (shorts now paying longs) → snap-back fuel
+
+      LONG squeeze   price↑ + futures CVD buying + OI rising (longs building)
+        · building → funding not yet hot
+        · primed   → funding HOT positive (longs paying up) → flush fuel
+
+    Returns a structured read (mode/state/funding/leverage_only/note/bonus) or
+    None when the funding/flow/OI picture isn't a squeeze setup. The score bonus
+    is deliberately small — funding, CVD and OI are each scored on their own
+    elsewhere; this only rewards the specific three-way ALIGNMENT that primes a
+    squeeze, and flags the building state with no extra points (heads-up only)."""
+    fr    = (analysis.get("funding_rate") or {}).get("current")
+    fcvd  = (analysis.get("futures_cvd") or {}).get("trend")   # bullish|bearish|neutral
+    scvd  = (analysis.get("spot_cvd") or {}).get("trend")
+    oi    = analysis.get("open_interest") or {}
+    quad  = oi.get("quadrant")
+    candles = analysis.get("candles") or []
+    if fr is None or len(candles) < 5:
+        return None
+
+    last, ref = candles[-1]["close"], candles[-5]["close"]
+    price_dir = "up" if last > ref else "down" if last < ref else "flat"
+    # "leverage-only" = futures are driving the move but spot isn't confirming →
+    # the move is speculative and MORE squeeze-prone (real holders aren't acting).
+    fr_s = f"{fr:.4f}%"
+
+    if fcvd == "bearish" and price_dir == "down" and quad == "shorts_building" and fr <= 0.01:
+        primed = fr < -0.003
+        leverage_only = scvd != "bearish"
+        if primed:
+            note = (f"🎯 Short-squeeze PRIMED — futures still selling and open interest "
+                    f"rising, yet funding has flipped negative ({fr_s}): shorts are now "
+                    f"paying to stay short, i.e. crowded AND paying. Snap-back fuel is set"
+                    f"{' (leverage-only selloff, spot not confirming)' if leverage_only else ''}.")
+        else:
+            note = (f"👀 Short-squeeze setting up (not primed) — shorts crowding in "
+                    f"(OI↑, futures selling) but funding is still flat/positive ({fr_s}), "
+                    f"so shorts aren't paying yet. Watch for funding to turn negative — "
+                    f"that's the primed trigger.")
+        return {"mode": "short_squeeze", "state": "primed" if primed else "building",
+                "funding": fr, "leverage_only": leverage_only,
+                "note": note, "bonus": 6 if primed else 0}
+
+    if fcvd == "bullish" and price_dir == "up" and quad == "longs_building" and fr >= -0.01:
+        primed = fr > 0.03
+        leverage_only = scvd != "bullish"
+        if primed:
+            note = (f"🎯 Long-squeeze PRIMED — futures still buying and open interest "
+                    f"rising, and funding is now hot ({fr_s}): longs are paying up, i.e. "
+                    f"crowded AND paying. Flush fuel is set"
+                    f"{' (leverage-only rally, spot not confirming)' if leverage_only else ''}.")
+        else:
+            note = (f"👀 Long-squeeze setting up (not primed) — longs crowding in "
+                    f"(OI↑, futures buying) but funding isn't hot yet ({fr_s}). Watch for "
+                    f"funding to spike positive — that's the primed trigger.")
+        return {"mode": "long_squeeze", "state": "primed" if primed else "building",
+                "funding": fr, "leverage_only": leverage_only,
+                "note": note, "bonus": -6 if primed else 0}
+
+    return None
 
 
 def generate_signal(analysis: Dict) -> Dict:
@@ -548,6 +621,18 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(
             f"⛽ Long-squeeze risk — OI +{oi_change:.1f}% into the rally with hot funding: "
             f"crowded leveraged longs are flush fuel on any dip")
+
+    # ── Squeeze priming (funding ↔ CVD divergence) ────────────────────────────
+    # Upgrades the raw OI-squeeze read: a squeeze only becomes actionable once
+    # funding confirms the crowded side is PAYING. "Primed" earns a small
+    # contrarian bonus; "building" is a heads-up only (its components are already
+    # scored above). See _squeeze_priming.
+    _sqp = _squeeze_priming(analysis)
+    if _sqp:
+        _p = _sqp["bonus"]
+        if _p:
+            score += _p; g['flow'] += _p
+        (bull_reasons if _sqp["mode"] == "short_squeeze" else bear_reasons).append(_sqp["note"])
 
     # ── Fair Value Gaps ───────────────────────────────────────────────────────
     # ICT concept — price tends to return to fill gaps ~70% of the time.
@@ -2349,6 +2434,7 @@ def generate_signal(analysis: Dict) -> Dict:
         "reversal_count":     reversal_count,
         "flipped_indicators": flipped_indicators,
         "reversal_radar":     _rr,
+        "squeeze_priming":    _sqp,
         # Options-expiry adjustment metadata — applied EXACTLY ONCE here. The rec
         # engine reads these instead of re-applying the pressure.
         "options_adjustment":        opts_adj,          # signed strength delta applied

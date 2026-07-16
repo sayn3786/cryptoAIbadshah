@@ -448,6 +448,30 @@ function renderSignal(s) {
     }
   }
 
+  // Squeeze priming — funding ↔ CVD divergence (set up vs primed)
+  const sqEl = document.getElementById('signalSqueeze');
+  if (sqEl) {
+    const sq = s.squeeze_priming;
+    if (sq && sq.mode) {
+      const isShort = sq.mode === 'short_squeeze';
+      const primed  = sq.state === 'primed';
+      const dirTxt  = isShort ? 'SHORT squeeze' : 'LONG squeeze';
+      const arrow   = isShort ? '↑ bounce risk' : '↓ flush risk';
+      const state   = primed ? 'PRIMED' : 'building';
+      const fr      = sq.funding != null ? `funding ${Number(sq.funding).toFixed(4)}%` : '';
+      const lev     = sq.leverage_only ? ' · leverage-only' : '';
+      sqEl.className = `squeeze-chip ${primed ? 'sq-primed' : 'sq-building'} ${isShort ? 'sq-short' : 'sq-long'}`;
+      sqEl.innerHTML =
+        `<div class="sq-head"><span class="sq-title">${primed ? '🎯' : '👀'} ${dirTxt} — ${state}</span>` +
+        `<span class="sq-dir">${arrow}</span></div>` +
+        `<div class="sq-sub">${fr}${lev}${primed ? ' — crowded side is paying' : ' — watch funding to confirm'}</div>`;
+      sqEl.style.display = '';
+    } else {
+      sqEl.innerHTML = '';
+      sqEl.style.display = 'none';
+    }
+  }
+
   // SMC structure: Acc+EQL/EQH+FVG setup + CHoCH + Liquidity Grab
   const smcEl = document.getElementById('signalSMC');
   if (smcEl) {
