@@ -24,6 +24,14 @@ CPI_2026 = [
     "2026-09-11", "2026-10-13", "2026-11-10", "2026-12-10",
 ]
 
+# US Census Advance Monthly Retail Sales schedule (8:30 ET, mid-month, covers the
+# prior month). Update yearly from census.gov/economic-indicators.
+RETAIL_2026 = [
+    "2026-01-16", "2026-02-17", "2026-03-16", "2026-04-16",
+    "2026-05-15", "2026-06-16", "2026-07-16", "2026-08-14",
+    "2026-09-16", "2026-10-16", "2026-11-17", "2026-12-16",
+]
+
 
 # Scheduled release time in US-Eastern clock time (hour, minute). CPI & NFP drop
 # at 8:30 ET; the FOMC statement at 2:00 PM ET. Used to tell a still-PENDING

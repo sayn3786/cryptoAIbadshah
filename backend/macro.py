@@ -370,6 +370,8 @@ def _sched_release_dates(key: str, now: datetime):
             return cal._nfp_dates(now)
         if key == "fed_funds":                     # the market-moving fed event
             return list(cal.FOMC_2026)
+        if key == "retail_sales":                  # Census advance retail sales
+            return list(cal.RETAIL_2026)
     except Exception:
         pass
     if key == "jobless_claims":                    # weekly, released Thursdays 8:30 ET
