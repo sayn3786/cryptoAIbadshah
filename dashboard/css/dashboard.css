@@ -160,6 +160,15 @@ a:hover { color: var(--gold2); }
   letter-spacing: 1px; color: var(--muted); margin-bottom: 12px;
   display: flex; align-items: center; gap: 8px;
 }
+.btn-copy-post {
+  margin-left: auto; font: inherit; font-size: .62rem; font-weight: 600;
+  text-transform: none; letter-spacing: 0; cursor: pointer;
+  color: var(--muted2, #94a3b8); background: rgba(148,163,184,.10);
+  border: 1px solid var(--border, #1e2d44); border-radius: 7px;
+  padding: 4px 9px; white-space: nowrap; transition: background .15s, color .15s;
+}
+.btn-copy-post:hover { background: rgba(148,163,184,.20); color: var(--text, #e2e8f0); }
+.btn-copy-post:active { transform: translateY(1px); }
 
 /* ─── Row 1: Hero ────────────────────────────────────────────────────────────── */
 .row-hero {

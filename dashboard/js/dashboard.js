@@ -2913,6 +2913,111 @@ function renderConfluence(s) {
   bearEl.innerHTML = build(s.bearish_reasons, 'No bearish confluence');
 }
 
+/* ─── Copy signal as a blog/post write-up ─────────────────────────────────────
+ * Turns the terse confluence factors into clean, full-sentence prose the user
+ * can paste straight into a blog or post. Cosmetic-only: strips the dashboard's
+ * arrows/emoji/abbreviations and adds authored framing — it never changes the
+ * underlying signal.                                                            */
+function _cleanFactor(t) {
+  let s = String(t || '').trim();
+  // strip decorative emoji/symbols anywhere in the line
+  s = s.replace(/[⚡🗓️▲▼⚖️🔄🌡️⏳✅🟢🔴📋💤🎯]/g, ' ');
+  // drop a leading symbol / bullet
+  s = s.replace(/^[^A-Za-z0-9$(]+/, '').trim();
+  // numeric arrow (e.g. +49→+48) reads as "to"; causal arrows as a connector
+  s = s.replace(/([+\-]?\d[\d,.]*)\s*→\s*([+\-]?\d)/g, '$1 to $2');
+  s = s.replace(/\s*→\s*/g, ', which points to ');
+  // em/en dash used as "subject — explanation" → a colon on the first, comma after
+  s = s.replace(/\s+[—–]\s+/, ': ').replace(/\s+[—–]\s+/g, ', ');
+  // expand the common shorthand
+  const abbr = [
+    [/\bFVGs?\b/g, 'fair-value gap'], [/\bHTF\b/g, 'higher-timeframe'],
+    [/\bliq\.\s*/gi, 'liquidity '], [/\bL\/S\b/g, 'long/short'],
+    [/\bOI\b/g, 'open interest'], [/\bavg\b/gi, 'average'],
+    [/\bpct\b/gi, 'percent'], [/\bmkt\b/gi, 'market'],
+  ];
+  abbr.forEach(([re, rep]) => { s = s.replace(re, rep); });
+  s = s.replace(/\s{2,}/g, ' ').trim();
+  if (s) s = s.charAt(0).toUpperCase() + s.slice(1);
+  if (s && !/[.!?]$/.test(s)) s += '.';
+  return s;
+}
+
+function buildSignalPost() {
+  const a = S.analysis;
+  const s = a && a.signal;
+  if (!s) return '';
+  const sym = (a.symbol || S.symbol || '').toUpperCase();
+  const tf  = a.timeframe || S.timeframe || '';
+  const dir = (s.direction || 'NEUTRAL').toUpperCase();
+  const dirWord = dir === 'LONG' ? 'Bullish' : dir === 'SHORT' ? 'Bearish' : 'Neutral';
+  const strength = s.strength != null ? `${s.strength}/100` : '—';
+  const tier = s.tier ? ` (${s.tier})` : '';
+
+  const bull = (s.bullish_reasons || []).map(_cleanFactor).filter(Boolean);
+  const bear = (s.bearish_reasons || []).map(_cleanFactor).filter(Boolean);
+
+  const L = [];
+  L.push(`${sym}/USDT — ${dirWord} setup (${tf})`);
+  L.push(`Signal strength: ${strength}${tier}.`);
+  L.push('');
+
+  if (dir === 'NEUTRAL') {
+    L.push('The read is currently neutral — supporting and opposing factors roughly balance, so there is no high-conviction trade here yet.');
+    L.push('');
+  }
+
+  if (bull.length) {
+    L.push(dir === 'SHORT' ? 'Counter-signals (bullish):' : 'What is supporting the move:');
+    bull.forEach(r => L.push(`• ${r}`));
+    L.push('');
+  }
+  if (bear.length) {
+    L.push(dir === 'SHORT' ? 'What is driving the move lower:' : 'Risks and counter-signals:');
+    bear.forEach(r => L.push(`• ${r}`));
+    L.push('');
+  }
+
+  // Trade plan
+  const money = v => v != null ? `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 8 })}` : '—';
+  if (dir !== 'NEUTRAL' && (s.entry != null || (s.tp_targets || []).length)) {
+    L.push('Trade plan:');
+    if (s.entry != null) L.push(`• Entry: ${money(s.entry)}`);
+    if (s.sl != null)    L.push(`• Stop loss: ${money(s.sl)}${s.sl_pct != null ? ` (${s.sl_pct > 0 ? '' : ''}${s.sl_pct}% risk)` : ''}`);
+    (s.tp_targets || []).forEach((tp, i) => L.push(`• Target ${i + 1}: ${money(tp)}`));
+    if (s.rr_ratio != null)  L.push(`• Reward/risk: ${s.rr_ratio}`);
+    if (s.leverage)          L.push(`• Suggested leverage: ${s.leverage}`);
+    L.push('');
+  }
+
+  L.push('Not financial advice — always do your own research and manage risk.');
+  return L.join('\n');
+}
+
+async function copySignalPost() {
+  const btn = document.getElementById('copyPostBtn');
+  const text = buildSignalPost();
+  if (!text) { if (btn) btn.textContent = 'No signal yet'; return; }
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch (_) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (_) { ok = false; }
+  }
+  if (btn) {
+    const original = '📋 Copy for post';
+    btn.textContent = ok ? '✅ Copied!' : '⚠️ Copy failed';
+    setTimeout(() => { btn.textContent = original; }, 1800);
+  }
+}
+
 /* ─── X Posts — Signal Confluence ────────────────────────────────────────── */
 async function generateXPosts() {
   const btn     = document.getElementById('generateBtn');
