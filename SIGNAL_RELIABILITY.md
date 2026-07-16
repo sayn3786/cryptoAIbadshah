@@ -2,7 +2,7 @@
 
 This document tracks the reliability-engineering effort on branch
 `improve/signal-reliability`. The objective was to improve the **reliability,
-honesty, risk management, and testability** of the CryptoSTARS trading signals —
+honesty, risk management, and testability** of the CryptoMonk trading signals —
 *without* adding indicators unless evidence shows independent predictive value.
 
 The work is intentionally kept on its own branch, **not merged to `main`**,

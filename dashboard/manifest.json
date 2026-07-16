@@ -1,6 +1,6 @@
 {
-  "name": "CryptoBadshah",
-  "short_name": "CryptoBadshah",
+  "name": "CryptoMonk",
+  "short_name": "CryptoMonk",
   "description": "AI-powered crypto market intelligence dashboard",
   "start_url": "/dashboard/",
   "scope": "/",

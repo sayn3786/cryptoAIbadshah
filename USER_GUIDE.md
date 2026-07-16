@@ -1,4 +1,4 @@
-# CryptoSTARS — Complete User Guide
+# CryptoMonk — Complete User Guide
 
 > **For beginners and experienced traders alike.**
 > No jargon. No assumptions. Everything explained from scratch.
@@ -7,7 +7,7 @@
 
 ## Table of Contents
 
-1. [What is CryptoSTARS?](#1-what-is-cryptostars)
+1. [What is CryptoMonk?](#1-what-is-cryptomonk)
 2. [The Big Picture — How It Works](#2-the-big-picture--how-it-works)
 3. [Getting Around the Dashboard](#3-getting-around-the-dashboard)
 4. [Step-by-Step: How to Use It](#4-step-by-step-how-to-use-it)
@@ -24,12 +24,12 @@
 
 ---
 
-## 1. What is CryptoSTARS?
+## 1. What is CryptoMonk?
 
-CryptoSTARS is an **AI-powered crypto market analysis dashboard**. It watches 30 cryptocurrencies across multiple exchanges, runs 30+ technical indicators, and gives you a clear **BUY / SELL / WAIT** signal with an exact entry price, stop loss, and profit targets.
+CryptoMonk is an **AI-powered crypto market analysis dashboard**. It watches 30 cryptocurrencies across multiple exchanges, runs 30+ technical indicators, and gives you a clear **BUY / SELL / WAIT** signal with an exact entry price, stop loss, and profit targets.
 
 **Think of it like this:**
-Imagine hiring 5 experienced traders to each look at the same chart, then they vote and tell you their combined conclusion. That is what CryptoSTARS does — automatically, in seconds, across all your favourite coins.
+Imagine hiring 5 experienced traders to each look at the same chart, then they vote and tell you their combined conclusion. That is what CryptoMonk does — automatically, in seconds, across all your favourite coins.
 
 **What it is NOT:**
 - It is not a trading bot (it does not place trades for you)
@@ -117,7 +117,7 @@ Step 4: Signal Output
 
 ### Detailed Walkthrough (Example: BTC on 4H)
 
-**Scenario:** You open CryptoSTARS, select BTC, and choose 4H timeframe.
+**Scenario:** You open CryptoMonk, select BTC, and choose 4H timeframe.
 
 **You see:**
 - Signal: **LONG** | Strength: **68/100** | Tier: **Strong**
@@ -203,7 +203,7 @@ The confluence list can show many bullish lines yet the signal stays NEUTRAL. Th
 - RSI above 70 = coin is very stretched up → potential pullback DOWN
 - RSI 30–70 = no clear extreme, wait for other signals
 
-**How CryptoSTARS uses it:** Only extreme readings score points. Middle readings are ignored because they're too noisy.
+**How CryptoMonk uses it:** Only extreme readings score points. Middle readings are ignored because they're too noisy.
 
 ---
 
@@ -288,7 +288,7 @@ The confluence list can show many bullish lines yet the signal stays NEUTRAL. Th
 | **Hidden Bullish** | Higher Low | Lower Low | Uptrend CONTINUES — buy-the-dip signal |
 | **Hidden Bearish** | Lower High | Higher High | Downtrend CONTINUES — sell-the-bounce signal |
 
-**Key insight:** Regular divergence calls a *reversal*; hidden divergence confirms the *trend continuing*. Two analysts can look at the same chart and one says "bullish divergence" (reading the lows) while another says "hidden bearish" (reading the highs) — both can be technically present. In a downtrend, the trend-aligned hidden bearish is usually the higher-probability read. CryptoSTARS detects all four, reports the one on the most recent swing, and warns you when an opposing divergence coexists ("mixed structure — wait for confirmation").
+**Key insight:** Regular divergence calls a *reversal*; hidden divergence confirms the *trend continuing*. Two analysts can look at the same chart and one says "bullish divergence" (reading the lows) while another says "hidden bearish" (reading the highs) — both can be technically present. In a downtrend, the trend-aligned hidden bearish is usually the higher-probability read. CryptoMonk detects all four, reports the one on the most recent swing, and warns you when an opposing divergence coexists ("mixed structure — wait for confirmation").
 
 **⏳ Forming divergence:** a divergence needs a confirmed swing point, which takes a few closed candles — on the WEEKLY that can mean weeks of lag. When the newest candles show a divergence shaping up but not yet confirmed, the card shows it as **"forming ⏳"** with reduced weight. This is exactly when analysts on X call it early — you see it too, honestly labelled as unconfirmed.
 
@@ -314,7 +314,7 @@ The confluence list can show many bullish lines yet the signal stays NEUTRAL. Th
 ---
 
 #### Order Book — Bid/Ask Walls
-**What it is:** The real-time list of all buy and sell orders sitting at different prices. CryptoSTARS aggregates this from 6 exchanges simultaneously (like Bookmap).
+**What it is:** The real-time list of all buy and sell orders sitting at different prices. CryptoMonk aggregates this from 6 exchanges simultaneously (like Bookmap).
 
 **Simple rule:**
 - Large **BID wall** (buy orders) below current price = strong support — price unlikely to fall through it easily
@@ -430,7 +430,7 @@ Price jumped from $50,000 to $52,000 so fast that it never traded between $50,50
 **Simple rule:**
 - Green candle engulfs a red candle = **bullish engulfing** → buyers just took over from sellers
 - Red candle engulfs a green candle = **bearish engulfing** → sellers just took over from buyers
-- CryptoSTARS only checks the **most recent closed candle** (so the signal is fresh, not stale)
+- CryptoMonk only checks the **most recent closed candle** (so the signal is fresh, not stale)
 
 ---
 
@@ -810,7 +810,7 @@ If any answer is NO — **do not take the trade.**
 
 ---
 
-*CryptoSTARS is a decision-support tool. All signals are based on technical analysis and historical patterns. Markets are unpredictable. Always do your own research, never invest more than you can afford to lose, and consider consulting a financial advisor before trading.*
+*CryptoMonk is a decision-support tool. All signals are based on technical analysis and historical patterns. Markets are unpredictable. Always do your own research, never invest more than you can afford to lose, and consider consulting a financial advisor before trading.*
 
 ---
 

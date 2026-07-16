@@ -7,7 +7,7 @@ from typing import Dict
 CLAUDE_URL   = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL = "claude-opus-4-7"
 
-SYSTEM_PROMPT = """You are CryptoSTARS — a sharp, data-driven crypto analyst posting on X (Twitter).
+SYSTEM_PROMPT = """You are CryptoMonk — a sharp, data-driven crypto analyst posting on X (Twitter).
 Your analysis is concise, punchy, and educational for a trading audience.
 Each tweet in the thread must be ≤ 280 characters. Use emojis strategically.
 Explain the WHY behind every signal, reference specific price levels, and always emphasise risk management.
@@ -121,7 +121,7 @@ Keep every individual tweet ≤ 280 characters.
  4/ leverage and risk guide, 5/ HTF confluence, 6/ main bullish/bearish reasons, 7/ trade plan)
 
 ## CLOSING TWEET
-(final tweet — call to action, follow @CryptoSTARS, not financial advice disclaimer)
+(final tweet — call to action, follow @CryptoMonk, not financial advice disclaimer)
 
 ## HASHTAGS
 (8-12 relevant hashtags on one line)
@@ -161,7 +161,7 @@ def _fallback(symbol: str, timeframe: str, analysis: Dict, error: str = "") -> D
     tp1 = f"{_fmt(tps[0])} (+{tp_pcts[0]}%)" if tps else "N/A"
     tp2 = f"{_fmt(tps[1])}" if len(tps) > 1 else "N/A"
 
-    hook = f"{dir_icon} {symbol} {timeframe} — {direction} signal at {_fmt(price)} | Strength: {strength}/100 🔥 Thread below 👇 #CryptoSTARS"
+    hook = f"{dir_icon} {symbol} {timeframe} — {direction} signal at {_fmt(price)} | Strength: {strength}/100 🔥 Thread below 👇 #CryptoMonk"
 
     thread = f"""1/ 📊 Market setup: {symbol}/USDT trading at {_fmt(price)} on the {timeframe} close. Signal: {direction} ({strength}/100).
 
@@ -181,8 +181,8 @@ Risk max 1-2% of account per trade. Size = (Account × Risk%) ÷ |Entry − SL|
 5/ ⚠️ Bearish factors:
 {chr(10).join('• ' + r for r in (signal.get('bearish_reasons') or ['None'])[:3])}"""
 
-    closing = "Follow @CryptoSTARS for daily setups 🌟 Not financial advice — always DYOR and manage your risk. #Crypto #Trading"
-    hashtags = f"#{symbol} #Crypto #CryptoTrading #CryptoSTARS #{direction} #TechnicalAnalysis #DeFi #Altcoins"
+    closing = "Follow @CryptoMonk for daily setups 🌟 Not financial advice — always DYOR and manage your risk. #Crypto #Trading"
+    hashtags = f"#{symbol} #Crypto #CryptoTrading #CryptoMonk #{direction} #TechnicalAnalysis #DeFi #Altcoins"
 
     return {
         "hook":         hook,

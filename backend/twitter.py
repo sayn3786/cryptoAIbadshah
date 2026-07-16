@@ -231,7 +231,7 @@ def build_btc_eth_post(btc_analysis: Dict, eth_analysis: Dict) -> str:
     lines += [
         "",
         "⚠️ Not financial advice. Always manage risk — max 1-2% per trade.",
-        "#CryptoSTARS #Bitcoin #Ethereum #BTC #ETH #CryptoSignals #TradingSignals",
+        "#CryptoMonk #Bitcoin #Ethereum #BTC #ETH #CryptoSignals #TradingSignals",
     ]
     return "\n".join(lines)
 
@@ -268,7 +268,7 @@ def build_alts_post(analyses: Dict[str, Dict]) -> str:
         lines.append("")
     lines += [
         "⚠️ Not financial advice. Always manage risk — max 1-2% per trade.",
-        "#CryptoSTARS #TAO #LINK #HYPE #ZEC #ONDO #Altcoins #CryptoSignals",
+        "#CryptoMonk #TAO #LINK #HYPE #ZEC #ONDO #Altcoins #CryptoSignals",
     ]
     return "\n".join(lines)
 
@@ -310,7 +310,7 @@ def build_signal_tweet(sym: str, analysis: Dict) -> str:
     if top_reasons:
         lines += ["", f"→ {top_reasons[0]}"]
 
-    lines += ["", f"#Crypto #{sym} #CryptoSTARS #TradingSignals"]
+    lines += ["", f"#Crypto #{sym} #CryptoMonk #TradingSignals"]
 
     tweet = "\n".join(lines)
     # Trim to 280 if needed
@@ -334,7 +334,7 @@ def build_thread(btc_analysis: Dict, eth_analysis: Dict) -> List[str]:
         f"{b_ico} #BTC: {btc_d} ({btc_s.get('strength', 0)}/100)\n"
         f"{e_ico} #ETH: {eth_d} ({eth_s.get('strength', 0)}/100)\n\n"
         f"Full breakdown 👇\n\n"
-        f"#CryptoSTARS #CryptoSignals #Bitcoin #Ethereum"
+        f"#CryptoMonk #CryptoSignals #Bitcoin #Ethereum"
     )
 
     return [

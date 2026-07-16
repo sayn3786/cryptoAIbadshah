@@ -1,4 +1,4 @@
-# CryptoSTARS — Indicator Reference
+# CryptoMonk — Indicator Reference
 
 Every indicator used in `generate_signal()`, their scoring points, group membership,
 and how they integrate with each other to produce a final direction + strength.

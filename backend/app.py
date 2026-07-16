@@ -1,4 +1,4 @@
-"""CryptoSTARS — Flask backend, pure Python, works on Python 3.15+"""
+"""CryptoMonk — Flask backend, pure Python, works on Python 3.15+"""
 import os
 import sys
 import json
@@ -1095,7 +1095,7 @@ def api_connectivity():
     ]
 
     def _test(name, url, purpose):
-        hdrs = {"User-Agent": "CryptoSTARS/1.0"}
+        hdrs = {"User-Agent": "CryptoMonk/1.0"}
         lc_key = os.getenv("LUNARCRUSH_API_KEY", "")
         if name == "LunarCrush" and lc_key:
             hdrs["Authorization"] = f"Bearer {lc_key}"
@@ -2377,7 +2377,7 @@ def serve_home():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     print(f"\n{'='*48}")
-    print(f"  CryptoSTARS AI — http://localhost:{port}")
+    print(f"  CryptoMonk AI — http://localhost:{port}")
     print(f"  Dashboard → http://localhost:{port}/dashboard/")
     print(f"{'='*48}\n")
 

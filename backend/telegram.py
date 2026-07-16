@@ -59,7 +59,7 @@ def build_rec_message(recs_data: Dict) -> str:
             btc_str = fb_str
 
     lines = [
-        f"🌟 *CryptoSTARS Daily Trades* — {date_label}",
+        f"🌟 *CryptoMonk Daily Trades* — {date_label}",
         f"⏰ Valid until {valid_fmt}",
         "",
         f"{'🟢' if btc_dir == 'LONG' else '🔴' if btc_dir == 'SHORT' else '⚪'} *BTC Signal: {btc_dir} ({btc_str}/100)*{btc_note}",
@@ -128,7 +128,7 @@ def build_rec_message(recs_data: Dict) -> str:
     lines += [
         "",
         "⚠️ _Not financial advice. Always manage risk — max 1-2% per trade._",
-        "🌟 @CryptoSTARS1560",
+        "🌟 @CryptoMonk1560",
     ]
     return "\n".join(lines)
 
