@@ -913,8 +913,14 @@ def generate_signal(analysis: Dict) -> Dict:
     macro_summary = macro.get("summary") or {}
     macro_events  = macro.get("events") or []
     macro_net = macro_summary.get("net_pts", 0) or 0
+    # A scheduled release within ±1 day (about to print or just printed) DOES move
+    # 1H/2H/4H price, so in that window macro is applied at FULL weight instead of
+    # the usual daily-context down-scaling (_cyc). Outside the window it stays a
+    # faint intraday tilt.
+    _macro_intraday = bool(macro_summary.get("intraday_active"))
     if macro_events and macro_net:
-        macro_pts = _cyc(max(-18, min(18, int(round(macro_net * 0.4)))))
+        _raw_macro = max(-18, min(18, int(round(macro_net * 0.4))))
+        macro_pts  = _raw_macro if _macro_intraday else _cyc(_raw_macro)
         if macro_pts:
             score += macro_pts; g['sentiment'] += macro_pts
             # Name the biggest drivers (up to 3 by absolute impact points)
@@ -924,13 +930,19 @@ def generate_signal(analysis: Dict) -> Dict:
             )[:3]
             names = ", ".join(f"{d['label'].split(' (')[0]} {d['impact']}" for d in drivers)
             bias  = macro_summary.get("bias", "mixed")
+            if _macro_intraday:
+                _imm = macro_summary.get("intraday_drivers") or []
+                _imm_name = _imm[0]["label"].split(" (")[0] if _imm else "macro release"
+                _win_note = f" ⚡[{_imm_name} within ±1 day — full weight on {timeframe}]"
+            else:
+                _win_note = _cyc_note
             if macro_pts > 0:
                 bull_reasons.append(
-                    f"Macro tailwind ({bias.upper()}): {names} — adds strength until next release{_cyc_note}"
+                    f"Macro tailwind ({bias.upper()}): {names} — adds strength until next release{_win_note}"
                 )
             else:
                 bear_reasons.append(
-                    f"Macro headwind ({bias.upper()}): {names} — drops strength until next release{_cyc_note}"
+                    f"Macro headwind ({bias.upper()}): {names} — drops strength until next release{_win_note}"
                 )
 
     # ── Traditional markets backdrop (DXY / SPX / 10Y) ────────────────────────

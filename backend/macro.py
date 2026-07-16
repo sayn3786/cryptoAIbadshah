@@ -354,6 +354,84 @@ def _compute(ind: dict, series: List[tuple]) -> Optional[Dict]:
     }
 
 
+# ── Release scheduling ────────────────────────────────────────────────────────
+# The card date (`as_of`) is the DATA PERIOD, not the release day. To show "next
+# update" and to decide whether a release is close enough to move intraday price,
+# we need actual release dates. For the high-impact, hard-scheduled series we use
+# the published calendars; the rest get a cadence-based estimate (shown with ~).
+
+def _sched_release_dates(key: str, now: datetime):
+    """Published release-date list for hard-scheduled series, else None."""
+    try:
+        import calendar_events as cal
+        if key in ("cpi", "core_cpi", "ppi"):      # PPI prints within a day of CPI
+            return list(cal.CPI_2026)
+        if key in ("nfp", "unemployment"):         # both land on NFP Friday
+            return cal._nfp_dates(now)
+        if key == "fed_funds":                     # the market-moving fed event
+            return list(cal.FOMC_2026)
+    except Exception:
+        pass
+    if key == "jobless_claims":                    # weekly, released Thursdays 8:30 ET
+        base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        this_thu = base + timedelta(days=(3 - base.weekday()) % 7)   # Thursday = 3
+        return [(this_thu + timedelta(days=7 * k)).strftime("%Y-%m-%d") for k in range(-3, 4)]
+    return None
+
+
+def _estimate_next_release(cadence: str, as_of: str, now: datetime) -> Optional[str]:
+    """Rough next-release date from cadence + last data period (for unscheduled series)."""
+    try:
+        base = datetime.strptime(str(as_of)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except Exception:
+        base = now
+    step = {"Weekly": 7, "Daily": 1, "Quarterly": 91}.get(cadence, 31)  # Monthly default
+    nxt = base + timedelta(days=step)
+    while nxt < now:
+        nxt += timedelta(days=step)
+    return nxt.strftime("%Y-%m-%d")
+
+
+def _release_window(key: str, now: datetime):
+    """(last_release, next_release) datetimes for a scheduled series, else (None, None)."""
+    dates = _sched_release_dates(key, now)
+    if not dates:
+        return None, None
+    parsed = sorted(
+        datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc) for d in dates)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    past = [d for d in parsed if d <= today]
+    future = [d for d in parsed if d > today]
+    return (past[-1] if past else None, future[0] if future else None)
+
+
+def _annotate_release(e: dict, now: datetime):
+    """Add next_release / days_to_next / scheduled / imminent to an event in place.
+    'imminent' = a SCHEDULED release within ±1 day (about to print or just printed) —
+    the window where a macro number actually moves 1H/2H/4H price."""
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    last, nxt = _release_window(e["key"], now)
+    if last or nxt:
+        e["scheduled"] = True
+        e["next_release"] = nxt.strftime("%Y-%m-%d") if nxt else None
+        e["days_to_next"] = (nxt - today).days if nxt else None
+        days_since = (today - last).days if last else None
+        e["days_since_release"] = days_since
+        e["imminent"] = bool(
+            (e["days_to_next"] is not None and 0 <= e["days_to_next"] <= 1) or
+            (days_since is not None and 0 <= days_since <= 1))
+    else:
+        e["scheduled"] = False
+        est = _estimate_next_release(e["cadence"], e.get("as_of"), now)
+        e["next_release"] = est
+        try:
+            e["days_to_next"] = (datetime.strptime(est, "%Y-%m-%d").replace(tzinfo=timezone.utc) - today).days
+        except Exception:
+            e["days_to_next"] = None
+        e["days_since_release"] = None
+        e["imminent"] = False   # estimates are too rough to justify an intraday impact
+
+
 def get_macro_events() -> Optional[Dict]:
     """
     Fetch all indicators in parallel, compute current-vs-previous and impact.
@@ -407,6 +485,13 @@ def get_macro_events() -> Optional[Dict]:
     order = {ind["key"]: i for i, ind in enumerate(INDICATORS)}
     events.sort(key=lambda e: order.get(e["key"], 99))
 
+    # Annotate each event with its next release date + whether it's within the
+    # ±1-day intraday-impact window.
+    _now = datetime.now(timezone.utc)
+    for e in events:
+        _annotate_release(e, _now)
+    imminent = [e for e in events if e.get("imminent") and e["impact"] in ("bullish", "bearish")]
+
     bull = sum(1 for e in events if e["impact"] == "bullish")
     bear = sum(1 for e in events if e["impact"] == "bearish")
     net_pts = sum(e["signal_pts"] for e in events)
@@ -421,6 +506,16 @@ def get_macro_events() -> Optional[Dict]:
             "bearish_count": bear,
             "net_pts":       net_pts,
             "bias":          bias,
+            # A scheduled release within ±1 day genuinely moves intraday price, so
+            # the signal engine applies macro at full weight on 1H/2H/4H when set.
+            "intraday_active":  bool(imminent),
+            "intraday_net_pts": sum(e["signal_pts"] for e in imminent),
+            "intraday_drivers": [
+                {"label": e["label"], "impact": e["impact"],
+                 "days_to_next": e.get("days_to_next"),
+                 "days_since_release": e.get("days_since_release"),
+                 "next_release": e.get("next_release")}
+                for e in imminent],
         },
         "source": "FRED (Federal Reserve Economic Data)",
     }

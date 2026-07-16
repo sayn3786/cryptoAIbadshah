@@ -4488,13 +4488,36 @@ function renderMacro(data) {
   const s = data.summary || {};
   if (subEl) {
     const biasCls = s.bias === 'risk-on' ? 'bull' : s.bias === 'risk-off' ? 'bear' : '';
+    let intraday = '';
+    if (s.intraday_active && (s.intraday_drivers || []).length) {
+      const d = s.intraday_drivers[0];
+      const when = d.days_to_next != null && d.days_to_next >= 0
+        ? (d.days_to_next <= 0 ? 'due now' : d.days_to_next === 1 ? 'in 1 day' : `in ${d.days_to_next} days`)
+        : (d.days_since_release != null ? `${d.days_since_release}d ago` : 'soon');
+      intraday = ` · <span class="macro-intraday-flag">⚡ ${d.label.split(' (')[0]} ${when} — impacting intraday</span>`;
+    }
     subEl.innerHTML = `Net macro bias: <span class="${biasCls}">${(s.bias || 'mixed').toUpperCase()}</span> ` +
-      `· ${s.bullish_count || 0} bullish / ${s.bearish_count || 0} bearish · ${data.source || 'FRED'}`;
+      `· ${s.bullish_count || 0} bullish / ${s.bearish_count || 0} bearish · ${data.source || 'FRED'}${intraday}`;
   }
 
   const impactCls = i => i === 'bullish' ? 'macro-bull' : i === 'bearish' ? 'macro-bear' : 'macro-neu';
   const impactIcon = i => i === 'bullish' ? '▲' : i === 'bearish' ? '▼' : '—';
   const arrow = d => d === 'up' ? '↑' : d === 'down' ? '↓' : '→';
+
+  // Next-release line: exact date for scheduled series, ~estimate otherwise.
+  const nextStr = e => {
+    if (!e.next_release) return '';
+    const d = e.days_to_next;
+    let rel = '';
+    if (d != null) {
+      rel = d <= 0 ? 'due now' : d === 1 ? 'in 1 day' : `in ${d} days`;
+    }
+    const tilde = e.scheduled ? '' : '~';
+    return `Next: ${tilde}${e.next_release}${rel ? ` (${rel})` : ''}`;
+  };
+  const immBadge = e => e.imminent
+    ? `<span class="macro-imminent" title="A scheduled release is within ±1 day — it moves price even on 1H/2H/4H, so it is weighted on intraday charts">⚡ within ±1 day</span>`
+    : '';
 
   const fmtVal = (v, unit) => {
     if (v == null) return '—';
@@ -4506,9 +4529,9 @@ function renderMacro(data) {
   };
 
   grid.innerHTML = data.events.map(e => `
-    <div class="macro-item ${impactCls(e.impact)}">
+    <div class="macro-item ${impactCls(e.impact)}${e.imminent ? ' macro-item-imminent' : ''}">
       <div class="macro-top">
-        <span class="macro-label">${e.label}${e.inflection && e.fresh ? ' <span class="macro-flip" title="This release flipped direction vs the prior one — possible regime change">🔄 TURN</span>' : ''}</span>
+        <span class="macro-label">${e.label}${e.inflection && e.fresh ? ' <span class="macro-flip" title="This release flipped direction vs the prior one — possible regime change">🔄 TURN</span>' : ''}${immBadge(e)}</span>
         <span class="macro-cadence">${e.cadence}</span>
       </div>
       <div class="macro-vals">
@@ -4517,8 +4540,9 @@ function renderMacro(data) {
       </div>
       <div class="macro-impact">
         <span class="macro-badge ${impactCls(e.impact)}">${impactIcon(e.impact)} ${e.impact}</span>
-        <span class="macro-asof">${e.as_of || ''}</span>
+        <span class="macro-asof">${e.as_of ? `as of ${e.as_of}` : ''}</span>
       </div>
+      <div class="macro-next">${nextStr(e)}</div>
       <div class="macro-reason">${e.reason || ''}</div>
     </div>
   `).join('');
