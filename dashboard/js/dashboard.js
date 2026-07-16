@@ -1262,13 +1262,21 @@ function renderBtcMiningCard(mining, symbol) {
   const months = mining.halving_months_since != null ? `${mining.halving_months_since} mo` : '—';
   const daysUntil = mining.halving_days_until != null ? `${mining.halving_days_until.toLocaleString()} days` : '—';
 
-  const prof = mining.profitability_ratio;
+  const prof = mining.profitability_ratio;         // vs efficient break-even
+  const profAvg = mining.profitability_ratio_avg;  // vs blended-fleet break-even
   let profCls = '', profLabel = '—';
   if (prof != null) {
     if (prof >= 2.0)       { profCls = 'bull'; profLabel = `${prof}× (Very profitable)`; }
     else if (prof >= 1.3)  { profCls = 'bull'; profLabel = `${prof}× (Profitable)`; }
     else if (prof < 1.05)  { profCls = 'bear'; profLabel = `${prof}× (Near break-even!)`; }
     else                   { profCls = '';      profLabel = `${prof}×`; }
+    // Show the blended-fleet ratio too — a sub-1× avg fleet explains miner
+    // sell pressure even while efficient rigs stay above water.
+    if (profAvg != null) {
+      profLabel += profAvg < 1.0
+        ? ` · avg fleet ${profAvg}× (underwater)`
+        : ` · avg fleet ${profAvg}×`;
+    }
   }
 
   const diff        = mining.difficulty_change;
@@ -1294,7 +1302,14 @@ function renderBtcMiningCard(mining, symbol) {
   const diffBlocksStr   = diffBlocks != null ? `${diffBlocks.toLocaleString()} blocks remaining` : '';
 
   const be = mining.break_even_usd;
-  const beStr = be != null ? `$${be.toLocaleString()}` : '—';
+  const beAvg = mining.break_even_average_usd;
+  // Break-even is efficiency-sensitive → show a range: efficient rigs (floor)
+  // through the blended fleet. Falls back to the single value if avg is absent.
+  const beStr = be != null
+    ? (beAvg != null
+        ? `$${be.toLocaleString()} (efficient) → $${beAvg.toLocaleString()} (avg fleet)`
+        : `$${be.toLocaleString()}`)
+    : '—';
 
   const rev = mining.miner_revenue_usd;
   const revStr = rev != null ? `$${(rev / 1e6).toFixed(1)}M / day` : '—';

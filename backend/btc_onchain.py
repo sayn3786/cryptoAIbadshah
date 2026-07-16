@@ -33,7 +33,12 @@ def _get(url: str, key: str, ttl: int = _CACHE_TTL):
 HALVING_4_DATE    = datetime(2024, 4, 20, tzinfo=timezone.utc)
 HALVING_5_DATE    = datetime(2028, 4, 20, tzinfo=timezone.utc)   # ~estimate
 DAILY_BTC_MINED   = 144 * 3.125          # blocks/day × block reward = 450 BTC
-EFFICIENCY_J_TH   = 21.0                 # J/TH  — modern ASIC (Antminer S21 avg)
+# Break-even is an efficiency-sensitive cost model, so we report a RANGE:
+#   efficient = best-in-class rigs on cheap industrial power (the optimistic floor)
+#   average   = blended global fleet (older S19-class gear mixed with S21)
+EFFICIENCY_J_TH            = 21.0         # kept for back-compat = efficient tier
+EFFICIENCY_EFFICIENT_J_TH = 21.0         # J/TH — Antminer S21-class (top tier)
+EFFICIENCY_AVERAGE_J_TH   = 28.0         # J/TH — blended fleet (S19/S19XP/S21 mix)
 ELECTRICITY_KWH   = 0.06                 # USD/kWh — industrial miner average
 
 
@@ -88,15 +93,24 @@ def _halving_phase(now: datetime) -> dict:
     }
 
 
-def _break_even(hash_rate_hs: float) -> float | None:
-    """Estimate USD break-even mining cost per BTC from current network hash rate (H/s)."""
+def _break_even(hash_rate_hs: float, efficiency_j_th: float = EFFICIENCY_EFFICIENT_J_TH) -> float | None:
+    """Estimate USD break-even mining cost per BTC from current network hash rate
+    (H/s) at a given rig efficiency (J/TH). Break-even scales linearly with
+    efficiency, so a less-efficient fleet breaks even at a higher price."""
     if not hash_rate_hs or hash_rate_hs <= 0:
         return None
-    hash_rate_ths = hash_rate_hs / 1e12           # H/s → TH/s
-    power_w       = hash_rate_ths * EFFICIENCY_J_TH  # TH/s × J/TH = W
+    hash_rate_ths = hash_rate_hs / 1e12                 # H/s → TH/s
+    power_w       = hash_rate_ths * efficiency_j_th     # TH/s × J/TH = W
     daily_kwh     = (power_w / 1_000) * 24
     daily_cost    = daily_kwh * ELECTRICITY_KWH
     return round(daily_cost / DAILY_BTC_MINED, 0)
+
+
+def _break_even_range(hash_rate_hs: float):
+    """(efficient, average) USD break-even per BTC — the optimistic floor (top-tier
+    rigs) and the blended-fleet estimate."""
+    return (_break_even(hash_rate_hs, EFFICIENCY_EFFICIENT_J_TH),
+            _break_even(hash_rate_hs, EFFICIENCY_AVERAGE_J_TH))
 
 
 def _mvrv_signal(score: float) -> dict:
@@ -317,9 +331,12 @@ def get_btc_mining_signals() -> dict:
         "halving_days_until": None,
         "halving_months_since": None,
         "difficulty_change":        None,
-        "break_even_usd":           None,
+        "break_even_usd":           None,   # = efficient tier (back-compat)
+        "break_even_efficient_usd": None,
+        "break_even_average_usd":   None,
         "miner_revenue_usd":        None,
-        "profitability_ratio":      None,
+        "profitability_ratio":      None,   # vs efficient break-even (back-compat)
+        "profitability_ratio_avg":  None,   # vs average-fleet break-even
         "reward_per_th_btc":        None,
         "reward_per_th_usd":        None,
         "reward_per_th_after_adj":  None,
@@ -358,8 +375,10 @@ def get_btc_mining_signals() -> dict:
             # sats: 776 vs 957 EH/s). currentHashrate matches pool payouts.
             cur_hs = hr_data.get("currentHashrate")
             latest_hs = cur_hs if (cur_hs and cur_hs > 0) else rates[-1]
-            be = _break_even(latest_hs)
-            result["break_even_usd"] = be
+            be_eff, be_avg = _break_even_range(latest_hs)
+            result["break_even_usd"]           = be_eff   # back-compat = efficient
+            result["break_even_efficient_usd"] = be_eff
+            result["break_even_average_usd"]   = be_avg
             # Reward per TH/day = total daily BTC / network hashrate in TH
             if latest_hs > 0:
                 reward_btc = DAILY_BTC_MINED / (latest_hs / 1e12)
@@ -405,6 +424,8 @@ def get_btc_mining_signals() -> dict:
         result["btc_price_usd"] = round(btc_price, 0)
         if result["break_even_usd"]:
             result["profitability_ratio"] = round(btc_price / result["break_even_usd"], 2)
+        if result["break_even_average_usd"]:
+            result["profitability_ratio_avg"] = round(btc_price / result["break_even_average_usd"], 2)
         if result["reward_per_th_btc"]:
             result["reward_per_th_usd"] = round(result["reward_per_th_btc"] * btc_price, 6)
         # Revenue fallback: subsidy-only estimate (450 BTC/day × price) if API missed it
@@ -617,7 +638,8 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
     halv_phase  = m.get("halving_phase") or "mid"
     diff_last   = m.get("difficulty_last_change") or 0
     diff_next   = m.get("difficulty_change") or 0
-    breakeven   = m.get("break_even_usd") or 65_000
+    breakeven   = m.get("break_even_usd") or 65_000            # efficient-tier floor
+    breakeven_avg = m.get("break_even_average_usd")            # blended fleet
     btc_price   = m.get("btc_price_usd") or 60_000
     rw_btc      = m.get("reward_per_th_btc") or 0
     reward_sats = round(rw_btc * 1e8, 2) if rw_btc else None
@@ -1045,7 +1067,9 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
     # ── Watch For ──────────────────────────────────────────────────────────────
     watch = []
     if phase == "accumulate":
-        watch.append(f"BTC price breaking above ${breakeven:,.0f} (miner break-even) — signals profitability returning")
+        _be_note = (f"${breakeven:,.0f} (efficient) → ${breakeven_avg:,.0f} (avg fleet)"
+                    if breakeven_avg else f"${breakeven:,.0f}")
+        watch.append(f"BTC price breaking above {_be_note} miner break-even — efficient miners profit first, average fleet needs the upper bound")
         watch.append("Hash Ribbon turning bullish (30d MA crossing above 60d MA) — best GOMINING token buy signal")
     elif phase == "hold":
         watch.append("Hash Ribbon turning to 'buy' signal — switch to compound phase, start buying GOMINING tokens")
