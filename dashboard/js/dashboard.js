@@ -2767,11 +2767,12 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     if (f.confirmed && flagC.length >= 2) {
       const up = f.breakout_dir === 'up';
       const n  = flagC.length - 1;
-      // Start the breakout from the channel rail the price broke through, so the
-      // arrow leaves the same line the eye sees on the chart.
+      // Start the breakout from the flag boundary it broke through (flag_high for
+      // an up-break, flag_low for a down-break) — that's exactly where the clipped
+      // rail ends, so the arrow leaves the same point the eye sees on the chart.
       const edge = up
-        ? (upLine ? upLine(n) : +f.flag_high)
-        : (loLine ? loLine(n) : +f.flag_low);
+        ? (f.flag_high != null ? +f.flag_high : (upLine ? upLine(n) : 0))
+        : (f.flag_low  != null ? +f.flag_low  : (loLine ? loLine(n) : 0));
       // Project into empty space to the RIGHT of the last candle so the descent
       // has room to actually reach the target level instead of clipping the edge.
       const tgtT = flagC[n].time + Math.max(projBars, 3) * interval;
