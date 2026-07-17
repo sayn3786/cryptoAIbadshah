@@ -2517,6 +2517,13 @@ function renderFlags(flags, candles) {
   }
   badge.textContent = flags.length;
   const p = (v, d = 4) => Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
+  // Chart only the single BEST flag (dominant wins, else highest strength) — one
+  // clear chart instead of one per flag.
+  let bestIdx = 0, bestScore = -1;
+  flags.forEach((f, i) => {
+    const s = (f.dominant ? 1e4 : 0) + (f.strength || 0);
+    if (s > bestScore) { bestScore = s; bestIdx = i; }
+  });
   el.innerHTML = flags.map((f, idx) => {
     const cls        = f.direction === 'bullish' ? 'bull' : 'bear';
     const domCls     = f.dominant ? ' dominant' : '';
@@ -2558,21 +2565,23 @@ function renderFlags(flags, candles) {
       <div class="flag-target">Target: <span>$${p(f.target)}</span>
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
       </div>
-      <div class="flag-chart" id="flagChart_${idx}"></div>
+      ${idx === bestIdx ? `<div class="flag-chart-cap">📊 ${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag · strongest pattern</div>
+      <div class="flag-chart" id="flagChart_${idx}"></div>` : ''}
     </div>`;
   }).join('');
 
-  // Build a real candlestick chart with the flag overlay for each flag.
-  renderFlagCharts(flags, candles);
+  // One clear candlestick chart for the best flag only.
+  renderFlagCharts([flags[bestIdx]], candles, [bestIdx]);
 }
 
-// Candlestick chart per flag: the token's actual candles over the pole→flag
-// window, with the pole line, the flag channel, and the target overlaid.
-function renderFlagCharts(flags, candles) {
+// One clear candlestick chart for the best flag: the token's actual candles over
+// the pole→flag window, with the pole line, the flag channel, and labelled price
+// lines for the target and the flag zone. `idxList[k]` is the DOM container index
+// for `flagList[k]`.
+function renderFlagCharts(flagList, candles, idxList) {
   if (!candles?.length || !window.LightweightCharts) {
-    // graceful fallback — the schematic SVG if charts aren't available
-    flags.forEach((f, i) => {
-      const el = document.getElementById(`flagChart_${i}`);
+    flagList.forEach((f, k) => {
+      const el = document.getElementById(`flagChart_${idxList[k]}`);
       if (el) el.innerHTML = flagSvg(f);
     });
     return;
@@ -2580,11 +2589,12 @@ function renderFlagCharts(flags, candles) {
   const rows = candles
     .map(c => ({ time: Math.floor(c.timestamp / 1000), open: +c.open, high: +c.high, low: +c.low, close: +c.close }))
     .sort((a, b) => a.time - b.time)
-    .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);   // strictly ascending
+    .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
   const interval = rows.length > 1 ? (rows[1].time - rows[0].time) : 604800;
+  const money = v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: v < 1 ? 5 : 2 });
 
-  flags.forEach((f, i) => {
-    const el = document.getElementById(`flagChart_${i}`);
+  flagList.forEach((f, k) => {
+    const el = document.getElementById(`flagChart_${idxList[k]}`);
     if (!el) return;
     const isBull = f.direction === 'bullish';
     const col    = isBull ? '#22c55e' : '#ef4444';
@@ -2593,22 +2603,22 @@ function renderFlagCharts(flags, candles) {
     const flagEnd   = Math.floor((f.flag_end_ts || 0) / 1000);
     const flagStart = flagEnd - bars * interval;
 
-    // Candle window: a couple of bars before the pole through the latest candle.
     const startT = (poleStart || rows[0].time) - 2 * interval;
     const win = rows.filter(c => c.time >= startT);
     if (win.length < 3) { el.innerHTML = flagSvg(f); return; }
 
     const chart = LightweightCharts.createChart(el, {
       ...CHART_OPTS,
-      layout: { ...CHART_OPTS.layout, fontSize: 10 },
+      layout: { ...CHART_OPTS.layout, fontSize: 11 },
       width: el.clientWidth || 320,
-      height: 210,
+      height: 260,
       handleScroll: false, handleScale: false,
-      rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true },
+      rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true, scaleMargins: { top: 0.12, bottom: 0.12 } },
     });
     const cs = chart.addCandlestickSeries({
       upColor: '#10b981', downColor: '#ef4444', borderUpColor: '#10b981',
       borderDownColor: '#ef4444', wickUpColor: '#10b981', wickDownColor: '#ef4444',
+      priceFormat: { type: 'price', precision: f.target < 1 ? 5 : 2, minMove: f.target < 1 ? 0.00001 : 0.01 },
     });
     cs.setData(win);
 
@@ -2618,24 +2628,31 @@ function renderFlagCharts(flags, candles) {
     const fhE = f.flag_high * (1 + slope * bars);
     const flE = f.flag_low  * (1 + slope * bars);
 
-    // pole (solid) — impulse move
+    // pole (solid, thick) with start/peak markers
     if (poleStart && f.pole_start_price && f.pole_end_price) {
       chart.addLineSeries({ ...ov, color: col, lineWidth: 3 })
         .setData([{ time: poleStart, value: +f.pole_start_price },
                   { time: Math.max(poleStart + interval, flagStart), value: +f.pole_end_price }]);
+      cs.setMarkers([
+        { time: poleStart, position: 'belowBar', color: col, shape: 'arrowUp', text: 'pole' },
+      ]);
     }
     // flag channel (dashed) — upper & lower bounds
     if (f.flag_high && f.flag_low && flagEnd) {
-      chart.addLineSeries({ ...ov, color: col, lineWidth: 1, lineStyle: 2 })
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
         .setData([{ time: flagStart, value: +f.flag_high }, { time: flagEnd, value: +fhE }]);
-      chart.addLineSeries({ ...ov, color: col, lineWidth: 1, lineStyle: 2 })
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
         .setData([{ time: flagStart, value: +f.flag_low }, { time: flagEnd, value: +flE }]);
     }
-    // target — horizontal price line with a label
-    if (f.target) {
-      cs.createPriceLine({ price: +f.target, color: col, lineWidth: 1, lineStyle: 2,
-        axisLabelVisible: true, title: `🎯 target` });
-    }
+    // labelled horizontal price lines — target + flag zone (prices on the axis).
+    // These DO drive autoscale, so the target is always brought into view.
+    cs.createPriceLine({ price: +f.target, color: col, lineWidth: 2, lineStyle: 0,
+      axisLabelVisible: true, title: `🎯 ${money(f.target)}` });
+    cs.createPriceLine({ price: +f.flag_high, color: '#94a3b8aa', lineWidth: 1, lineStyle: 3,
+      axisLabelVisible: true, title: `zone hi` });
+    cs.createPriceLine({ price: +f.flag_low, color: '#94a3b8aa', lineWidth: 1, lineStyle: 3,
+      axisLabelVisible: true, title: `zone lo` });
+
     chart.timeScale().fitContent();
     S.flagCharts.push(chart);
   });
