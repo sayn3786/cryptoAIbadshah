@@ -264,7 +264,7 @@ function renderAll(a) {
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
   renderFVGTable(a.fvgs);
-  renderFlags(a.flags);
+  renderFlags(a.flags, a.candles);
   renderEngulfing(a.engulfing, a.timeframe);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
@@ -2504,9 +2504,12 @@ function flagSvg(f) {
   </svg>`;
 }
 
-function renderFlags(flags) {
+function renderFlags(flags, candles) {
   const el    = document.getElementById('flagList');
   const badge = document.getElementById('flagCount');
+  // tear down any charts from the previous render (avoid leaks)
+  (S.flagCharts || []).forEach(c => { try { c.remove(); } catch (_) {} });
+  S.flagCharts = [];
   if (!flags?.length) {
     el.innerHTML = '<p class="empty">No flag patterns detected</p>';
     badge.textContent = '0';
@@ -2514,7 +2517,7 @@ function renderFlags(flags) {
   }
   badge.textContent = flags.length;
   const p = (v, d = 4) => Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
-  el.innerHTML = flags.map(f => {
+  el.innerHTML = flags.map((f, idx) => {
     const cls        = f.direction === 'bullish' ? 'bull' : 'bear';
     const domCls     = f.dominant ? ' dominant' : '';
     const isBull     = f.direction === 'bullish';
@@ -2555,9 +2558,87 @@ function renderFlags(flags) {
       <div class="flag-target">Target: <span>$${p(f.target)}</span>
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
       </div>
-      ${flagSvg(f)}
+      <div class="flag-chart" id="flagChart_${idx}"></div>
     </div>`;
   }).join('');
+
+  // Build a real candlestick chart with the flag overlay for each flag.
+  renderFlagCharts(flags, candles);
+}
+
+// Candlestick chart per flag: the token's actual candles over the pole→flag
+// window, with the pole line, the flag channel, and the target overlaid.
+function renderFlagCharts(flags, candles) {
+  if (!candles?.length || !window.LightweightCharts) {
+    // graceful fallback — the schematic SVG if charts aren't available
+    flags.forEach((f, i) => {
+      const el = document.getElementById(`flagChart_${i}`);
+      if (el) el.innerHTML = flagSvg(f);
+    });
+    return;
+  }
+  const rows = candles
+    .map(c => ({ time: Math.floor(c.timestamp / 1000), open: +c.open, high: +c.high, low: +c.low, close: +c.close }))
+    .sort((a, b) => a.time - b.time)
+    .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);   // strictly ascending
+  const interval = rows.length > 1 ? (rows[1].time - rows[0].time) : 604800;
+
+  flags.forEach((f, i) => {
+    const el = document.getElementById(`flagChart_${i}`);
+    if (!el) return;
+    const isBull = f.direction === 'bullish';
+    const col    = isBull ? '#22c55e' : '#ef4444';
+    const bars   = Math.max(1, f.consolidation_bars || 6);
+    const poleStart = Math.floor((f.pole_start_ts || 0) / 1000);
+    const flagEnd   = Math.floor((f.flag_end_ts || 0) / 1000);
+    const flagStart = flagEnd - bars * interval;
+
+    // Candle window: a couple of bars before the pole through the latest candle.
+    const startT = (poleStart || rows[0].time) - 2 * interval;
+    const win = rows.filter(c => c.time >= startT);
+    if (win.length < 3) { el.innerHTML = flagSvg(f); return; }
+
+    const chart = LightweightCharts.createChart(el, {
+      ...CHART_OPTS,
+      layout: { ...CHART_OPTS.layout, fontSize: 10 },
+      width: el.clientWidth || 320,
+      height: 210,
+      handleScroll: false, handleScale: false,
+      rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true },
+    });
+    const cs = chart.addCandlestickSeries({
+      upColor: '#10b981', downColor: '#ef4444', borderUpColor: '#10b981',
+      borderDownColor: '#ef4444', wickUpColor: '#10b981', wickDownColor: '#ef4444',
+    });
+    cs.setData(win);
+
+    const ov = { priceLineVisible: false, lastValueVisible: false,
+                 crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+    const slope = (f.slope_pct_per_bar || 0) / 100;
+    const fhE = f.flag_high * (1 + slope * bars);
+    const flE = f.flag_low  * (1 + slope * bars);
+
+    // pole (solid) — impulse move
+    if (poleStart && f.pole_start_price && f.pole_end_price) {
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 3 })
+        .setData([{ time: poleStart, value: +f.pole_start_price },
+                  { time: Math.max(poleStart + interval, flagStart), value: +f.pole_end_price }]);
+    }
+    // flag channel (dashed) — upper & lower bounds
+    if (f.flag_high && f.flag_low && flagEnd) {
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 1, lineStyle: 2 })
+        .setData([{ time: flagStart, value: +f.flag_high }, { time: flagEnd, value: +fhE }]);
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 1, lineStyle: 2 })
+        .setData([{ time: flagStart, value: +f.flag_low }, { time: flagEnd, value: +flE }]);
+    }
+    // target — horizontal price line with a label
+    if (f.target) {
+      cs.createPriceLine({ price: +f.target, color: col, lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: `🎯 target` });
+    }
+    chart.timeScale().fitContent();
+    S.flagCharts.push(chart);
+  });
 }
 
 /* ─── My Trades ───────────────────────────────────────────────────────────── */

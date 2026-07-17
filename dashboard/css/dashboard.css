@@ -388,7 +388,13 @@ a:hover { color: var(--gold2); }
 .flag-stat span { color: var(--text); font-weight: 600; }
 .flag-target { font-size: .72rem; font-family: var(--mono); }
 .flag-target span { color: var(--gold); font-weight: 600; }
-/* Flag pattern diagram (pole → channel → breakout target) */
+/* Flag pattern chart (candles + pole/channel/target overlay) */
+.flag-chart {
+  width: 100%; height: 210px; margin-top: 8px;
+  border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border, #1e2d44);
+}
+/* SVG fallback (when the chart lib/candles aren't available) */
 .flag-svg {
   width: 100%; height: 118px; margin-top: 8px; display: block;
   background: rgba(148,163,184,.05); border-radius: 8px;
