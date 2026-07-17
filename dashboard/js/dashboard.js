@@ -2649,7 +2649,11 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       layout: { ...CHART_OPTS.layout, fontSize: 11 },
       width: el.clientWidth || 320,
       height: 380,
-      handleScroll: false, handleScale: false,
+      // Let the user pan/zoom this chart (drag to move, pinch/wheel to zoom,
+      // drag the price axis to scale vertically). It still opens fitted to the
+      // pattern via fitContent() below.
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+      handleScale:  { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
       rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true, scaleMargins: { top: 0.12, bottom: 0.12 } },
     });
     const cs = chart.addCandlestickSeries({
