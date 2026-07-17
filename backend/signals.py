@@ -2391,6 +2391,27 @@ def generate_signal(analysis: Dict) -> Dict:
                 (bull_reasons if direction == "LONG" else bear_reasons).append(
                     f"🎯 TP2 anchored to the opposing {_lbl} (~${_wall:,.4f}, {_rmult:.1f}R) "
                     f"— trading to real structure, not just ATR")
+            elif tp_targets and tp_targets[0] and abs(sl - entry) > 0:
+                # No wall cleared the TP2 gate — common for a coin in free-fall at
+                # new lows (nothing overhead for the SL, nothing below to target).
+                # But if the NEAREST real support/resistance sits between ~0.4R and
+                # the ATR TP1, put TP1 on it so the first (50%) exit is a real level
+                # instead of an ATR number projected past it. TP2/TP3 stay ATR.
+                _risk = abs(sl - entry)
+                _sgn  = 1 if direction == "LONG" else -1
+                _minr = 0.4 if timeframe in ("1D", "1W", "2W", "3W", "1M") else 0.6
+                _tp1d = abs(tp_targets[0] - entry)
+                _near = [d for d in sorted(_sgn * (lv - entry) for lv in _tp_levels
+                                           if lv and _sgn * (lv - entry) > 0)
+                         if _minr * _risk <= d <= _tp1d * 1.05]
+                if _near:
+                    _d1 = min(_near)
+                    _lvl = round(entry + _sgn * _d1 * 0.97, 8)
+                    tp_targets = [_lvl] + list(tp_targets[1:])
+                    (bull_reasons if direction == "LONG" else bear_reasons).append(
+                        f"🎯 TP1 set to the nearest support/resistance (~${entry + _sgn * _d1:,.6f}, "
+                        f"{_d1 / _risk:.1f}R) — real first target; deeper TPs are ATR projections "
+                        f"(no further structure in range)")
 
         if sl and sl != entry and tp_targets and tp_targets[0] is not None:
             rr_ratio = round(abs((tp_targets[1] or tp_targets[0]) - entry) / abs(sl - entry), 2)
