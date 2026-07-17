@@ -2611,7 +2611,7 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       ...CHART_OPTS,
       layout: { ...CHART_OPTS.layout, fontSize: 11 },
       width: el.clientWidth || 320,
-      height: 260,
+      height: 380,
       handleScroll: false, handleScale: false,
       rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true, scaleMargins: { top: 0.12, bottom: 0.12 } },
     });
