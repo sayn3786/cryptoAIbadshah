@@ -2602,6 +2602,52 @@ function renderFlags(flags, candles, signal) {
   renderFlagCharts([flags[bestIdx]], candles, [bestIdx], overlaySignal);
 }
 
+// Series primitive (lightweight-charts v4) that shades the flag chart: a
+// translucent fill for the channel band (the quad between the two rails) and
+// translucent horizontal risk/reward zones (Entry→Target green, Entry→Stop red).
+// Drawn on top with low alpha so it tints the candles without hiding them.
+class FlagShade {
+  constructor(chart, series, data) { this._chart = chart; this._series = series; this._data = data; }
+  updateAllViews() {}
+  paneViews() {
+    const self = this;
+    return [{
+      zOrder: () => 'top',
+      renderer: () => ({
+        draw: (target) => {
+          target.useMediaCoordinateSpace((scope) => {
+            const ctx = scope.context;
+            const W   = scope.mediaSize.width;
+            const px  = p => self._series.priceToCoordinate(p);
+            const tx  = t => self._chart.timeScale().timeToCoordinate(t);
+            // full-width horizontal zones (risk / reward)
+            (self._data.zones || []).forEach(z => {
+              const y1 = px(z.p1), y2 = px(z.p2);
+              if (y1 == null || y2 == null) return;
+              ctx.fillStyle = z.color;
+              ctx.fillRect(0, Math.min(y1, y2), W, Math.abs(y2 - y1));
+            });
+            // channel band: quad between the up-rail and lo-rail endpoints
+            const b = self._data.band;
+            if (b) {
+              const pts = [b.up[0], b.up[1], b.lo[1], b.lo[0]]
+                .map(p => ({ x: tx(p.time), y: px(p.value) }));
+              if (pts.every(p => p.x != null && p.y != null)) {
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                ctx.closePath();
+                ctx.fillStyle = b.color;
+                ctx.fill();
+              }
+            }
+          });
+        },
+      }),
+    }];
+  }
+}
+
 // One clear candlestick chart for the best flag: the token's actual candles over
 // the pole→flag window, with the pole line, the flag channel, and labelled price
 // lines for the target and the flag zone. `idxList[k]` is the DOM container index
@@ -2626,6 +2672,8 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     if (!el) return;
     const isBull = f.direction === 'bullish';
     const col    = isBull ? '#22c55e' : '#ef4444';
+    let   bandData = null;            // channel-band geometry for the FlagShade primitive
+    const zones    = [];             // risk/reward horizontal shading
     const bars   = Math.max(1, f.consolidation_bars || 6);
     const poleStart = Math.floor((f.pole_start_ts || 0) / 1000);
     const flagEnd   = Math.floor((f.flag_end_ts || 0) / 1000);
@@ -2723,8 +2771,11 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
         { time: flagC[0].time, value: line(0) },
         { time: lastT,         value: line(endIdx) },
       ];
-      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(rail(upLine));
-      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(rail(loLine));
+      const upRail = rail(upLine), loRail = rail(loLine);
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(upRail);
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(loRail);
+      bandData = { up: upRail, lo: loRail,
+        color: isBull ? 'rgba(34,197,94,.09)' : 'rgba(239,68,68,.09)' };
     }
 
     // Flag ZONE boundaries — the actual highest high / lowest low the flag traded
@@ -2778,7 +2829,17 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       if (signal.sl) {
         cs.createPriceLine({ price: +signal.sl, color: '#ef4444', lineWidth: 1, lineStyle: 2,
           axisLabelVisible: true, title: 'Stop' });
+        zones.push({ p1: +signal.entry, p2: +signal.sl, color: 'rgba(239,68,68,.08)' });  // risk
       }
+      if (f.target != null) {
+        zones.push({ p1: +signal.entry, p2: +f.target, color: 'rgba(34,197,94,.08)' });   // reward
+      }
+    }
+
+    // Shade the channel band + risk/reward zones over the candles.
+    if (bandData || zones.length) {
+      try { cs.attachPrimitive(new FlagShade(chart, cs, { band: bandData, zones })); }
+      catch (_) { /* older lib without primitives — lines/zones just won't shade */ }
     }
 
     chart.timeScale().fitContent();
