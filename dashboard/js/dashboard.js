@@ -2517,19 +2517,33 @@ function renderFlags(flags, candles, signal) {
   }
   badge.textContent = flags.length;
   const p = (v, d = 4) => Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
-  // Chart only ONE flag: the one that matches the trade DIRECTION first (so a
-  // short trade shows the bearish flag, not a confusing bullish one), then
-  // dominant, then highest strength. Falls back to strongest if none matches.
+  // Chart only ONE flag: the most RECENT / still-live pattern (never a stale one
+  // that already played out months ago), then direction-aligned with the trade,
+  // then dominant, then strength. A live pattern near current price always beats
+  // a resolved historical one — even if the historical one matches direction.
   const wantDir = signal?.direction === 'LONG' ? 'bullish'
                 : signal?.direction === 'SHORT' ? 'bearish' : null;
-  let bestIdx = 0, bestScore = -1;
+  const cts    = (candles || []).map(c => +c.timestamp).filter(Boolean).sort((a, b) => a - b);
+  const lastTs = cts.length ? cts[cts.length - 1] : 0;
+  const barMs  = cts.length > 1 ? (cts[1] - cts[0]) : 6048e5;
+  const ageBars = f => { const e = f.flag_end_ts || f.pole_start_ts || lastTs; return barMs ? (lastTs - e) / barMs : 0; };
+  const isFresh = f => f.is_active || ageBars(f) <= (f.consolidation_bars || 6) + 3;
+  let bestIdx = 0, bestScore = -Infinity;
   flags.forEach((f, i) => {
-    let s = (f.dominant ? 1e4 : 0) + (f.strength || 0);
-    if (wantDir && f.direction === wantDir) s += 1e6;   // direction match dominates
+    let s = (f.dominant ? 1e3 : 0) + (f.strength || 0);
+    if (wantDir && f.direction === wantDir) s += 1e4;   // direction alignment
+    if (isFresh(f)) s += 1e6;                           // a LIVE pattern beats any stale one
+    else s -= ageBars(f);                               // among stale, prefer least old
     if (s > bestScore) { bestScore = s; bestIdx = i; }
   });
-  const bestAligned = wantDir && flags[bestIdx].direction === wantDir;
-  const bestNote = bestAligned ? `aligned with the ${signal.direction} signal` : 'strongest pattern';
+  const best        = flags[bestIdx];
+  const bestFresh   = isFresh(best);
+  const bestAligned = wantDir && best.direction === wantDir;
+  const bestNote = !bestFresh
+    ? '⚠ older pattern — already resolved'
+    : bestAligned
+      ? `aligned with the ${signal.direction} signal`
+      : (wantDir ? `active pattern · note: your signal is ${signal.direction}` : 'strongest active pattern');
   el.innerHTML = flags.map((f, idx) => {
     const cls        = f.direction === 'bullish' ? 'bull' : 'bear';
     const domCls     = f.dominant ? ' dominant' : '';
@@ -2609,9 +2623,18 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     const flagEnd   = Math.floor((f.flag_end_ts || 0) / 1000);
     const flagStart = flagEnd - bars * interval;
 
-    const startT = (poleStart || rows[0].time) - 2 * interval;
-    const win = rows.filter(c => c.time >= startT);
+    // Zoom TIGHTLY to the pattern: a bar before the pole through a few bars past
+    // the flag/breakout — never the whole history (which buries a stale pattern
+    // under months of unrelated candles). projBars leaves room for the breakout.
+    const lastRowT = rows[rows.length - 1].time;
+    const projBars = Math.max(3, Math.round((f.consolidation_bars || 6) * 0.6));
+    const startT = (poleStart || rows[0].time) - 1 * interval;
+    const endT   = Math.min(lastRowT, (flagEnd || lastRowT) + projBars * interval);
+    const win = rows.filter(c => c.time >= startT && c.time <= endT);
     if (win.length < 3) { el.innerHTML = flagSvg(f); return; }
+    // Entry/Stop belong to the CURRENT candle — only overlay them if this window
+    // actually reaches the present, else they'd float disconnected from an old flag.
+    const showsCurrent = endT >= lastRowT - interval;
 
     const chart = LightweightCharts.createChart(el, {
       ...CHART_OPTS,
@@ -2677,16 +2700,18 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       const edge = up
         ? Math.max(fit(flagC.map((c, i) => ({ x: i, y: c.high })))(n), +f.flag_high)
         : Math.min(fit(flagC.map((c, i) => ({ x: i, y: c.low })))(n), +f.flag_low);
-      const lastT = win[win.length - 1].time;
-      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagC[n].time, value: edge },
-                  { time: lastT + 3 * interval, value: +f.target }]);
+      const tgtT = Math.min(endT, flagC[n].time + projBars * interval);
+      if (tgtT > flagC[n].time) {
+        chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
+          .setData([{ time: flagC[n].time, value: edge },
+                    { time: tgtT, value: +f.target }]);
+      }
     }
 
     // Trade levels from the actual signal — Entry (gold) + Stop (red), labelled.
     // Overlaid so the flag chart doubles as the trade plan. Drive autoscale so
     // both are always visible.
-    if (signal && signal.entry) {
+    if (showsCurrent && signal && signal.entry) {
       cs.createPriceLine({ price: +signal.entry, color: '#eab308', lineWidth: 1, lineStyle: 2,
         axisLabelVisible: true, title: 'Entry' });
       if (signal.sl) {
