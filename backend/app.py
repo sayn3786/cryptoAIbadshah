@@ -37,7 +37,7 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
-from signals import generate_signal
+from signals import generate_signal, _swing_levels
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs
 from twitter import post_daily_signals as _post_twitter_signals
@@ -940,10 +940,20 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         candles_4w=_daily_candles,
     ) if symbol == "BTC" else get_options_expiry_data()  # calendar-only for ALTs
 
+    # Deep swing pivots over the full fetched history (window=3 = chunkier, more
+    # significant swings than the intraday-grade window=2 the signal uses on the
+    # 60-candle view). These give higher-timeframe TP targets real far structure.
+    _deep_swing_highs, _deep_swing_lows = _swing_levels(spot, window=3)
+
     analysis = {
         "symbol":       symbol,
         "timeframe":    timeframe,
         "candles":      spot[-60:],           # CLOSED candles — signals/structure
+        # Deep swing pivots over the FULL fetched history (up to TF_LIMIT candles,
+        # e.g. ~3 yrs on 1W / ~8 yrs on 1M) — the far structure a swing trader
+        # targets, which the 60-candle signal window can't see. Feeds TP snapping.
+        "deep_swing_highs": _deep_swing_highs,
+        "deep_swing_lows":  _deep_swing_lows,
         "live_candle":  live_candle,          # forming candle — display only
         "live_price":   live_price,           # latest (possibly unfinished) price
         "signal_price": signal_price,         # last CLOSED close — signals computed on this

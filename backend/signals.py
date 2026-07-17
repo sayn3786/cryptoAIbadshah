@@ -2351,12 +2351,19 @@ def generate_signal(analysis: Dict) -> Dict:
             # swing is far too shallow). Pivot lows below feed SHORT targets,
             # pivot highs above feed LONG targets.
             _piv_h, _piv_l = _swing_levels(candles, window=2)
+            # Deep pivots span the FULL fetched history (built in app.build_analysis
+            # from up to TF_LIMIT candles), so weekly/monthly targets can reach far
+            # prior swings the 60-candle window can't see.
+            _deep_h = analysis.get("deep_swing_highs") or []
+            _deep_l = analysis.get("deep_swing_lows") or []
             if direction == "LONG":
                 _tp_levels = ([_sup_bot, _sup_top, _tl_res, swing_high, _macro_v]
-                              + [h for h in _piv_h if h > entry])
+                              + [h for h in _piv_h if h > entry]
+                              + [h for h in _deep_h if h > entry])
             else:
                 _tp_levels = ([_dem_top, _dem_bot, _tl_sup, swing_low, _macro_v]
-                              + [l for l in _piv_l if 0 < l < entry])
+                              + [l for l in _piv_l if 0 < l < entry]
+                              + [l for l in _deep_l if 0 < l < entry])
             _snap = _snap_tp_to_structure(direction, entry, sl, timeframe,
                                           _tp_levels, _max_tp3_abs)
             if _snap:
