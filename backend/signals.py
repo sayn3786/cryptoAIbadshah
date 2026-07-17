@@ -14,6 +14,25 @@ def _recent_closed_extremes(candles: List[Dict], n: int = 5):
     return (max(c["high"] for c in recent), min(c["low"] for c in recent))
 
 
+def _swing_levels(candles: List[Dict], window: int = 2):
+    """All confirmed pivot highs & lows over the candle window — the REAL prior
+    swing levels a trader targets. Returns (pivot_highs, pivot_lows). Used to
+    enrich TP structure candidates so higher-timeframe targets land on visible
+    swings instead of the last-5-candle extreme only."""
+    n = len(candles)
+    if n < window * 2 + 1:
+        return [], []
+    hi = [c["high"] for c in candles]
+    lo = [c["low"] for c in candles]
+    ph, pl = [], []
+    for i in range(window, n - window):
+        if all(hi[i] >= hi[i - j] and hi[i] >= hi[i + j] for j in range(1, window + 1)):
+            ph.append(hi[i])
+        if all(lo[i] <= lo[i - j] and lo[i] <= lo[i + j] for j in range(1, window + 1)):
+            pl.append(lo[i])
+    return ph, pl
+
+
 def _snap_tp_to_structure(direction: str, entry: float, sl: float, timeframe: str,
                           levels: list, max_tp3_abs: float):
     """Anchor TP1/TP2/TP3 to REAL opposing structure (supply/demand zones,
@@ -2327,9 +2346,17 @@ def generate_signal(analysis: Dict) -> Dict:
             # TPs onto them when a qualifying wall is in range — see
             # _snap_tp_to_structure. Falls back to the tuned ATR/RR targets above.
             _macro_v = ((analysis.get("trendline") or {}).get("macro") or {}).get("current_value")
-            _tp_levels = ([_sup_bot, _sup_top, _tl_res, swing_high, _macro_v]
-                          if direction == "LONG"
-                          else [_dem_top, _dem_bot, _tl_sup, swing_low, _macro_v])
+            # Prior swing pivots across the WHOLE window — the levels a swing
+            # trader actually targets (critical on 1W/1M where the last-5-candle
+            # swing is far too shallow). Pivot lows below feed SHORT targets,
+            # pivot highs above feed LONG targets.
+            _piv_h, _piv_l = _swing_levels(candles, window=2)
+            if direction == "LONG":
+                _tp_levels = ([_sup_bot, _sup_top, _tl_res, swing_high, _macro_v]
+                              + [h for h in _piv_h if h > entry])
+            else:
+                _tp_levels = ([_dem_top, _dem_bot, _tl_sup, swing_low, _macro_v]
+                              + [l for l in _piv_l if 0 < l < entry])
             _snap = _snap_tp_to_structure(direction, entry, sl, timeframe,
                                           _tp_levels, _max_tp3_abs)
             if _snap:
