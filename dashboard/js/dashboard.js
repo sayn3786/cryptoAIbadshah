@@ -2685,14 +2685,28 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       const b = (sy - m * sx) / n;
       return x => m * x + b;
     };
-    if (flagC.length >= 3) {
-      const upF = fit(flagC.map((c, i) => ({ x: i, y: c.high })));
-      const loF = fit(flagC.map((c, i) => ({ x: i, y: c.low })));
+    // Build a PARALLEL regression channel that ENVELOPES the candles: one shared
+    // slope (fit through the bar midpoints = the channel's drift), then offset the
+    // two rails so the upper touches the highest high and the lower touches the
+    // lowest low. A plain best-fit line through highs/lows runs through the middle
+    // of the points, leaving ~half the candles poking out on each side — this
+    // instead bounds every candle inside the channel.
+    let upLine = null, loLine = null;
+    if (flagC.length >= 2) {
+      const midFit = fit(flagC.map((c, i) => ({ x: i, y: (c.high + c.low) / 2 })));
+      const slope  = midFit(1) - midFit(0);
+      let upB = -Infinity, loB = Infinity;
+      flagC.forEach((c, i) => {
+        upB = Math.max(upB, c.high - slope * i);
+        loB = Math.min(loB, c.low  - slope * i);
+      });
+      upLine = i => slope * i + upB;
+      loLine = i => slope * i + loB;
       const n = flagC.length - 1;
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagC[0].time, value: upF(0) }, { time: flagC[n].time, value: upF(n) }]);
+        .setData([{ time: flagC[0].time, value: upLine(0) }, { time: flagC[n].time, value: upLine(n) }]);
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagC[0].time, value: loF(0) }, { time: flagC[n].time, value: loF(n) }]);
+        .setData([{ time: flagC[0].time, value: loLine(0) }, { time: flagC[n].time, value: loLine(n) }]);
     }
 
     // target — labelled horizontal line. A createPriceLine alone does NOT stretch
@@ -2712,9 +2726,11 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     if (f.confirmed && flagC.length >= 2) {
       const up = f.breakout_dir === 'up';
       const n  = flagC.length - 1;
+      // Start the breakout from the channel rail the price broke through, so the
+      // arrow leaves the same line the eye sees on the chart.
       const edge = up
-        ? Math.max(fit(flagC.map((c, i) => ({ x: i, y: c.high })))(n), +f.flag_high)
-        : Math.min(fit(flagC.map((c, i) => ({ x: i, y: c.low })))(n), +f.flag_low);
+        ? (upLine ? upLine(n) : +f.flag_high)
+        : (loLine ? loLine(n) : +f.flag_low);
       // Project into empty space to the RIGHT of the last candle so the descent
       // has room to actually reach the target level instead of clipping the edge.
       const tgtT = flagC[n].time + Math.max(projBars, 3) * interval;
