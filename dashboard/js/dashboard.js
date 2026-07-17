@@ -2713,28 +2713,27 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       const lastT     = win[win.length - 1].time;
       const extraBars = interval ? Math.max(0, Math.round((lastT - flagC[n].time) / interval)) : 0;
       const endIdx    = n + extraBars;
-      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagC[0].time, value: upLine(0) }, { time: lastT, value: upLine(endIdx) }]);
-      // Lower rail: follow the slope down only until it reaches the actual flag
-      // low, then run FLAT at flag_low to the current candle — never project
-      // below the real floor (price never traded there; flag_low is the break level).
-      const floorVal = f.flag_low != null ? +f.flag_low : -Infinity;
-      const endVal   = loLine(endIdx);
-      let loData;
-      if (slope < 0 && endVal < floorVal && isFinite(floorVal)) {
-        // Straight rail down the slope until it reaches the flag-low floor, then
-        // straight and flat at flag_low to the current candle — never below.
-        const iCross = (floorVal - loB) / slope;                 // index where loLine == flag_low
-        const tCross = flagC[0].time + Math.max(0, iCross) * interval;
-        loData = [
-          { time: flagC[0].time, value: loLine(0) },
-          { time: Math.round(tCross), value: floorVal },
-          { time: lastT,          value: floorVal },
-        ];
-      } else {
-        loData = [{ time: flagC[0].time, value: loLine(0) }, { time: lastT, value: endVal }];
-      }
-      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(loData);
+      // Draw each straight rail CLAMPED to the flag zone: the upper rail never runs
+      // above flag_high and the lower rail never runs below flag_low. Where the
+      // sloped line crosses the bound we insert the crossing point, so it renders
+      // as a straight slope meeting a straight flat segment (no curve, one corner).
+      const rail = (line, bound, kind) => {           // kind 'ceil' (min) | 'floor' (max)
+        const clamp = v => kind === 'ceil' ? Math.min(v, bound) : Math.max(v, bound);
+        const pts = [{ time: flagC[0].time, value: clamp(line(0)) }];
+        if (isFinite(bound) && slope !== 0) {
+          const iC = (bound - line(0)) / slope;       // index where line == bound
+          const tC = Math.round(flagC[0].time + iC * interval);
+          if (iC > 0 && iC < endIdx && tC > flagC[0].time && tC < lastT) {
+            pts.push({ time: tC, value: bound });
+          }
+        }
+        pts.push({ time: lastT, value: clamp(line(endIdx)) });
+        return pts;
+      };
+      const ceilVal  = f.flag_high != null ? +f.flag_high : Infinity;
+      const floorVal = f.flag_low  != null ? +f.flag_low  : -Infinity;
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(rail(upLine, ceilVal,  'ceil'));
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(rail(loLine, floorVal, 'floor'));
     }
 
     // Flag ZONE boundaries — the actual highest high / lowest low the flag traded
