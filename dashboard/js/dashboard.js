@@ -2469,6 +2469,41 @@ function renderTradeManagement(a) {
 }
 
 /* ─── Flag Patterns ───────────────────────────────────────────────────────── */
+// Inline SVG schematic of a flag pattern: pole → descending/ascending channel →
+// breakout projection to target, drawn to real price proportions.
+function flagSvg(f) {
+  const W = 320, H = 130, pad = 14;
+  const isBull = f.direction === 'bullish';
+  const bars   = Math.max(1, f.consolidation_bars || 6);
+  const slope  = (f.slope_pct_per_bar || 0) / 100;
+  const ps = f.pole_start_price, pe = f.pole_end_price;
+  const fh = f.flag_high, fl = f.flag_low, tg = f.target;
+  if ([ps, pe, fh, fl, tg].some(v => v == null || v <= 0)) return '';
+  const fhE = fh * (1 + slope * bars);   // channel bounds at flag end
+  const flE = fl * (1 + slope * bars);
+  const all = [ps, pe, fh, fl, tg, fhE, flE];
+  const lo = Math.min(...all), hi = Math.max(...all), rng = (hi - lo) || 1;
+  const y = v => pad + (H - 2 * pad) * (1 - (v - lo) / rng);
+  const xP0 = pad, xPE = W * 0.30, xFE = W * 0.66, xT = W - pad - 2;
+  const col = isBull ? '#22c55e' : '#ef4444';
+  const dim = isBull ? 'rgba(34,197,94,.55)' : 'rgba(239,68,68,.55)';
+  const brk = isBull ? y(fhE) : y(flE);      // breakout point
+  const money = v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: v < 1 ? 5 : 2 });
+  const confirmed = f.confirmed;
+  return `<svg viewBox="0 0 ${W} ${H}" class="flag-svg" preserveAspectRatio="none" role="img" aria-label="flag pattern">
+    <polygon points="${xPE},${y(fh)} ${xFE},${y(fhE)} ${xFE},${y(flE)} ${xPE},${y(fl)}" fill="${dim}" opacity=".12"/>
+    <line x1="${xPE}" y1="${y(tg)}" x2="${xT}" y2="${y(tg)}" stroke="${col}" stroke-width="1" opacity=".35" stroke-dasharray="1 4"/>
+    <line x1="${xP0}" y1="${y(ps)}" x2="${xPE}" y2="${y(pe)}" stroke="${col}" stroke-width="2.6"/>
+    <line x1="${xPE}" y1="${y(fh)}" x2="${xFE}" y2="${y(fhE)}" stroke="${dim}" stroke-width="1.6" stroke-dasharray="5 3"/>
+    <line x1="${xPE}" y1="${y(fl)}" x2="${xFE}" y2="${y(flE)}" stroke="${dim}" stroke-width="1.6" stroke-dasharray="5 3"/>
+    <line x1="${xFE}" y1="${brk}" x2="${xT}" y2="${y(tg)}" stroke="${col}" stroke-width="${confirmed ? 2.4 : 1.8}" ${confirmed ? '' : 'stroke-dasharray="2 3"'}/>
+    <circle cx="${xFE}" cy="${brk}" r="3" fill="${col}"/>
+    <text x="${xT}" y="${y(tg) + (isBull ? -4 : 11)}" fill="${col}" font-size="10" font-weight="600" text-anchor="end">🎯 ${money(tg)}</text>
+    <text x="${xP0}" y="${H - 3}" fill="var(--muted2,#94a3b8)" font-size="8.5">pole ${isBull ? '+' : ''}${f.pole_pct}%</text>
+    <text x="${(xPE + xFE) / 2}" y="${H - 3}" fill="var(--muted2,#94a3b8)" font-size="8.5" text-anchor="middle">flag ${bars} bars</text>
+  </svg>`;
+}
+
 function renderFlags(flags) {
   const el    = document.getElementById('flagList');
   const badge = document.getElementById('flagCount');
@@ -2520,6 +2555,7 @@ function renderFlags(flags) {
       <div class="flag-target">Target: <span>$${p(f.target)}</span>
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
       </div>
+      ${flagSvg(f)}
     </div>`;
   }).join('');
 }

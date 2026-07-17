@@ -388,6 +388,12 @@ a:hover { color: var(--gold2); }
 .flag-stat span { color: var(--text); font-weight: 600; }
 .flag-target { font-size: .72rem; font-family: var(--mono); }
 .flag-target span { color: var(--gold); font-weight: 600; }
+/* Flag pattern diagram (pole → channel → breakout target) */
+.flag-svg {
+  width: 100%; height: 118px; margin-top: 8px; display: block;
+  background: rgba(148,163,184,.05); border-radius: 8px;
+  border: 1px solid var(--border, #1e2d44);
+}
 
 /* ─── My Trades ─────────────────────────────────────────────────────────────── */
 .my-trades-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
