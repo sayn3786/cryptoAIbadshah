@@ -2517,13 +2517,19 @@ function renderFlags(flags, candles, signal) {
   }
   badge.textContent = flags.length;
   const p = (v, d = 4) => Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
-  // Chart only the single BEST flag (dominant wins, else highest strength) — one
-  // clear chart instead of one per flag.
+  // Chart only ONE flag: the one that matches the trade DIRECTION first (so a
+  // short trade shows the bearish flag, not a confusing bullish one), then
+  // dominant, then highest strength. Falls back to strongest if none matches.
+  const wantDir = signal?.direction === 'LONG' ? 'bullish'
+                : signal?.direction === 'SHORT' ? 'bearish' : null;
   let bestIdx = 0, bestScore = -1;
   flags.forEach((f, i) => {
-    const s = (f.dominant ? 1e4 : 0) + (f.strength || 0);
+    let s = (f.dominant ? 1e4 : 0) + (f.strength || 0);
+    if (wantDir && f.direction === wantDir) s += 1e6;   // direction match dominates
     if (s > bestScore) { bestScore = s; bestIdx = i; }
   });
+  const bestAligned = wantDir && flags[bestIdx].direction === wantDir;
+  const bestNote = bestAligned ? `aligned with the ${signal.direction} signal` : 'strongest pattern';
   el.innerHTML = flags.map((f, idx) => {
     const cls        = f.direction === 'bullish' ? 'bull' : 'bear';
     const domCls     = f.dominant ? ' dominant' : '';
@@ -2565,7 +2571,7 @@ function renderFlags(flags, candles, signal) {
       <div class="flag-target">Target: <span>$${p(f.target)}</span>
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
       </div>
-      ${idx === bestIdx ? `<div class="flag-chart-cap">📊 ${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag · strongest pattern</div>
+      ${idx === bestIdx ? `<div class="flag-chart-cap">📊 ${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag · ${bestNote}</div>
       <div class="flag-chart" id="flagChart_${idx}"></div>` : ''}
     </div>`;
   }).join('');
