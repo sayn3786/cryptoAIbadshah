@@ -2687,9 +2687,16 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
         .setData([{ time: flagC[0].time, value: loF(0) }, { time: flagC[n].time, value: loF(n) }]);
     }
 
-    // target — labelled horizontal line (drives autoscale so it's always in view)
+    // target — labelled horizontal line. A createPriceLine alone does NOT stretch
+    // the price scale here, so a far-away measured-move target (e.g. a 1W pole
+    // projecting ~40% below price) falls off the bottom. Add an invisible anchor
+    // series AT the target so the y-range always expands to include it.
     cs.createPriceLine({ price: +f.target, color: col, lineWidth: 2, lineStyle: 0,
       axisLabelVisible: true, title: '🎯 Target' });
+    chart.addLineSeries({ color: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false,
+      lastValueVisible: false, crosshairMarkerVisible: false })
+      .setData([{ time: win[0].time, value: +f.target },
+                { time: win[win.length - 1].time, value: +f.target }]);
 
     // Breakout projection: a dashed arrow-line from the flag's breakout edge to
     // the target, drawn only once the flag is CONFIRMED (an idealised path, not a
@@ -2700,12 +2707,12 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       const edge = up
         ? Math.max(fit(flagC.map((c, i) => ({ x: i, y: c.high })))(n), +f.flag_high)
         : Math.min(fit(flagC.map((c, i) => ({ x: i, y: c.low })))(n), +f.flag_low);
-      const tgtT = Math.min(endT, flagC[n].time + projBars * interval);
-      if (tgtT > flagC[n].time) {
-        chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-          .setData([{ time: flagC[n].time, value: edge },
-                    { time: tgtT, value: +f.target }]);
-      }
+      // Project into empty space to the RIGHT of the last candle so the descent
+      // has room to actually reach the target level instead of clipping the edge.
+      const tgtT = flagC[n].time + Math.max(projBars, 3) * interval;
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
+        .setData([{ time: flagC[n].time, value: edge },
+                  { time: tgtT, value: +f.target }]);
     }
 
     // Trade levels from the actual signal — Entry (gold) + Stop (red), labelled.
