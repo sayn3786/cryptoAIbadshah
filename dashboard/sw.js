@@ -6,7 +6,7 @@
    - Google Fonts      → Cache-first
 */
 
-const CACHE  = 'cryptobadshah-v45';
+const CACHE  = 'cryptobadshah-v46';
 const STATIC = [
   '/dashboard/manifest.json',
   '/dashboard/icons/icon-192.png',

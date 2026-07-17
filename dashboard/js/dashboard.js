@@ -2510,17 +2510,7 @@ function renderFlags(flags, candles, signal) {
   // tear down any charts from the previous render (avoid leaks)
   (S.flagCharts || []).forEach(c => { try { c.remove(); } catch (_) {} });
   S.flagCharts = [];
-  if (!flags?.length) {
-    el.innerHTML = '<p class="empty">No flag patterns detected</p>';
-    badge.textContent = '0';
-    return;
-  }
-  badge.textContent = flags.length;
   const p = (v, d = 4) => Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
-  // Chart only ONE flag: the most RECENT / still-live pattern (never a stale one
-  // that already played out months ago), then direction-aligned with the trade,
-  // then dominant, then strength. A live pattern near current price always beats
-  // a resolved historical one — even if the historical one matches direction.
   const wantDir = signal?.direction === 'LONG' ? 'bullish'
                 : signal?.direction === 'SHORT' ? 'bearish' : null;
   const cts    = (candles || []).map(c => +c.timestamp).filter(Boolean).sort((a, b) => a - b);
@@ -2528,22 +2518,30 @@ function renderFlags(flags, candles, signal) {
   const barMs  = cts.length > 1 ? (cts[1] - cts[0]) : 6048e5;
   const ageBars = f => { const e = f.flag_end_ts || f.pole_start_ts || lastTs; return barMs ? (lastTs - e) / barMs : 0; };
   const isFresh = f => f.is_active || ageBars(f) <= (f.consolidation_bars || 6) + 3;
+
+  // Only show LIVE flags — hide resolved / stale patterns that already played out
+  // months ago (they were only useful as history and clutter the card otherwise).
+  const flagsAll = flags || [];
+  flags = flagsAll.filter(isFresh);
+  badge.textContent = flags.length;
+  if (!flags.length) {
+    const hadStale = flagsAll.length > 0;
+    el.innerHTML = `<p class="empty">${hadStale ? 'No active flag patterns (older ones already resolved)' : 'No flag patterns detected'}</p>`;
+    return;
+  }
+  // Chart only ONE flag: the direction-aligned one first (so a short shows the
+  // bearish flag), then dominant, then strength. All candidates are already live.
   let bestIdx = 0, bestScore = -Infinity;
   flags.forEach((f, i) => {
     let s = (f.dominant ? 1e3 : 0) + (f.strength || 0);
     if (wantDir && f.direction === wantDir) s += 1e4;   // direction alignment
-    if (isFresh(f)) s += 1e6;                           // a LIVE pattern beats any stale one
-    else s -= ageBars(f);                               // among stale, prefer least old
     if (s > bestScore) { bestScore = s; bestIdx = i; }
   });
   const best        = flags[bestIdx];
-  const bestFresh   = isFresh(best);
   const bestAligned = wantDir && best.direction === wantDir;
-  const bestNote = !bestFresh
-    ? '⚠ older pattern — already resolved'
-    : bestAligned
-      ? `aligned with the ${signal.direction} signal`
-      : (wantDir ? `active pattern · note: your signal is ${signal.direction}` : 'strongest active pattern');
+  const bestNote = bestAligned
+    ? `aligned with the ${signal.direction} signal`
+    : (wantDir ? `active pattern · note: your signal is ${signal.direction}` : 'strongest active pattern');
   el.innerHTML = flags.map((f, idx) => {
     const cls        = f.direction === 'bullish' ? 'bull' : 'bear';
     const domCls     = f.dominant ? ' dominant' : '';
