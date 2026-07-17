@@ -264,7 +264,7 @@ function renderAll(a) {
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
   renderFVGTable(a.fvgs);
-  renderFlags(a.flags, a.candles);
+  renderFlags(a.flags, a.candles, a.signal);
   renderEngulfing(a.engulfing, a.timeframe);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
@@ -2504,7 +2504,7 @@ function flagSvg(f) {
   </svg>`;
 }
 
-function renderFlags(flags, candles) {
+function renderFlags(flags, candles, signal) {
   const el    = document.getElementById('flagList');
   const badge = document.getElementById('flagCount');
   // tear down any charts from the previous render (avoid leaks)
@@ -2571,14 +2571,14 @@ function renderFlags(flags, candles) {
   }).join('');
 
   // One clear candlestick chart for the best flag only.
-  renderFlagCharts([flags[bestIdx]], candles, [bestIdx]);
+  renderFlagCharts([flags[bestIdx]], candles, [bestIdx], signal);
 }
 
 // One clear candlestick chart for the best flag: the token's actual candles over
 // the pole→flag window, with the pole line, the flag channel, and labelled price
 // lines for the target and the flag zone. `idxList[k]` is the DOM container index
 // for `flagList[k]`.
-function renderFlagCharts(flagList, candles, idxList) {
+function renderFlagCharts(flagList, candles, idxList, signal) {
   if (!candles?.length || !window.LightweightCharts) {
     flagList.forEach((f, k) => {
       const el = document.getElementById(`flagChart_${idxList[k]}`);
@@ -2659,6 +2659,33 @@ function renderFlagCharts(flagList, candles, idxList) {
     // target — labelled horizontal line (drives autoscale so it's always in view)
     cs.createPriceLine({ price: +f.target, color: col, lineWidth: 2, lineStyle: 0,
       axisLabelVisible: true, title: '🎯 Target' });
+
+    // Breakout projection: a dashed arrow-line from the flag's breakout edge to
+    // the target, drawn only once the flag is CONFIRMED (an idealised path, not a
+    // claim price will go there). Extends a few bars past the last candle.
+    if (f.confirmed && flagC.length >= 2) {
+      const up = f.breakout_dir === 'up';
+      const n  = flagC.length - 1;
+      const edge = up
+        ? Math.max(fit(flagC.map((c, i) => ({ x: i, y: c.high })))(n), +f.flag_high)
+        : Math.min(fit(flagC.map((c, i) => ({ x: i, y: c.low })))(n), +f.flag_low);
+      const lastT = win[win.length - 1].time;
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
+        .setData([{ time: flagC[n].time, value: edge },
+                  { time: lastT + 3 * interval, value: +f.target }]);
+    }
+
+    // Trade levels from the actual signal — Entry (gold) + Stop (red), labelled.
+    // Overlaid so the flag chart doubles as the trade plan. Drive autoscale so
+    // both are always visible.
+    if (signal && signal.entry) {
+      cs.createPriceLine({ price: +signal.entry, color: '#eab308', lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: 'Entry' });
+      if (signal.sl) {
+        cs.createPriceLine({ price: +signal.sl, color: '#ef4444', lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: 'Stop' });
+      }
+    }
 
     chart.timeScale().fitContent();
     S.flagCharts.push(chart);
