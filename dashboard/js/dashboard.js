@@ -2636,7 +2636,9 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       chart.addLineSeries({ ...ov, color: col, lineWidth: 3 })
         .setData([{ time: poleStart, value: +f.pole_start_price },
                   { time: Math.max(poleStart + interval, flagStart), value: +f.pole_end_price }]);
-      cs.setMarkers([{ time: poleStart, position: 'belowBar', color: col, shape: 'arrowUp', text: 'pole' }]);
+      cs.setMarkers([{ time: poleStart,
+        position: isBull ? 'belowBar' : 'aboveBar',
+        color: col, shape: isBull ? 'arrowUp' : 'arrowDown', text: 'pole' }]);
     }
 
     // Flag channel FITTED to the actual consolidation candles (least-squares on
