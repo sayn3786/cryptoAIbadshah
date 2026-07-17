@@ -50,7 +50,9 @@ def _snap_tp_to_structure(direction: str, entry: float, sl: float, timeframe: st
     if risk <= 0 or entry <= 0:
         return None
     htf   = timeframe in ("1D", "1W", "2W", "3W", "1M")
-    rmin  = 1.2 if htf else 1.4                 # min reward (R) for the TP2 wall
+    rmin  = 1.0 if htf else 1.4                 # min reward (R) for the TP2 wall
+    # (HTF: a real prior swing at ~1R beats an ATR number past it — prefer
+    #  trading to visible structure even when the R is modest.)
     reach = max_tp3_abs * (1.35 if htf else 1.05)
     sgn   = 1 if direction == "LONG" else -1
     # distances toward target — positive, same-direction only (≥0.3% away)
@@ -2159,9 +2161,25 @@ def generate_signal(analysis: Dict) -> Dict:
         eff_atr = min(atr, max_atr_abs, _max_sl_abs / max(sl_m, 1.5))
 
         # Technical levels for entry and SL anchoring
-        # Widen entry search to 2% so nearby levels are actually found
-        ENTRY_LIMIT   = 0.020   # max 2% from current price for limit entry
-        SL_ANCHOR_MAX = 0.07    # search for SL anchor up to 7% from entry
+        # Entry-limit and SL-anchor search windows SCALE with timeframe: structure
+        # on a weekly/monthly chart sits far further from price than on 1H, so a
+        # fixed 7% window meant HTF stops almost never found the real swing and
+        # fell back to a huge ATR stop (blowing up R/R and pushing TP targets off
+        # structure). Wider on HTF lets the SL anchor to the actual invalidation.
+        _TF_ENTRY_LIMIT = {"1H": 0.020, "2H": 0.020, "4H": 0.025, "8H": 0.030,
+                           "12H": 0.030, "1D": 0.035, "1W": 0.045, "2W": 0.050,
+                           "3W": 0.050, "1M": 0.060}
+        _TF_SL_ANCHOR   = {"1H": 0.05, "2H": 0.06, "4H": 0.08, "8H": 0.10,
+                           "12H": 0.12, "1D": 0.15, "1W": 0.20, "2W": 0.24,
+                           "3W": 0.26, "1M": 0.30}
+        # SL cushion beyond the anchor, as a fraction of ATR — bigger on HTF so a
+        # structure stop isn't wicked out by one large weekly/monthly candle.
+        _TF_SL_BUF      = {"1H": 0.20, "2H": 0.20, "4H": 0.30, "8H": 0.30,
+                           "12H": 0.35, "1D": 0.45, "1W": 0.60, "2W": 0.65,
+                           "3W": 0.65, "1M": 0.70}
+        ENTRY_LIMIT   = _TF_ENTRY_LIMIT.get(timeframe, 0.020)
+        SL_ANCHOR_MAX = _TF_SL_ANCHOR.get(timeframe, 0.07)
+        _sl_buf_mult  = _TF_SL_BUF.get(timeframe, 0.20)
 
         _ema_t     = analysis.get("ema_trend") or {}
         ema21_val  = _ema_t.get("ema21")
@@ -2224,7 +2242,7 @@ def generate_signal(analysis: Dict) -> Dict:
 
             if _sl_anchors:
                 _anchor  = max(_sl_anchors)
-                _buf     = min(eff_atr * 0.4, entry * 0.004)
+                _buf     = max(entry * 0.004, eff_atr * _sl_buf_mult)
                 sl_dist  = (entry - _anchor) + _buf
             else:
                 sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
@@ -2257,7 +2275,7 @@ def generate_signal(analysis: Dict) -> Dict:
 
             if _sl_anchors:
                 _anchor  = min(_sl_anchors)   # closest (lowest) resistance above entry
-                _buf     = min(eff_atr * 0.4, entry * 0.004)
+                _buf     = max(entry * 0.004, eff_atr * _sl_buf_mult)
                 sl_dist  = (_anchor - entry) + _buf
             else:
                 sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
