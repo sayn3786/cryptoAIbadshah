@@ -14,6 +14,43 @@ def _recent_closed_extremes(candles: List[Dict], n: int = 5):
     return (max(c["high"] for c in recent), min(c["low"] for c in recent))
 
 
+def _snap_tp_to_structure(direction: str, entry: float, sl: float, timeframe: str,
+                          levels: list, max_tp3_abs: float):
+    """Anchor TP1/TP2/TP3 to REAL opposing structure (supply/demand zones,
+    trend-lines, swings, macro line) instead of pure ATR/RR multiples.
+
+    `levels` = candidate opposing-structure prices in the trade's target
+    direction. Picks the nearest wall that offers at least a minimum reward
+    (R-multiple of the SL distance) as TP2; snaps TP1 to a closer wall and TP3 to
+    a further one when present, else spaces them around TP2. On higher timeframes
+    the reward gate is looser and the reach wider so weekly TPs land on visible
+    structure rather than falling back to ATR. TP walls are front-run ~3% so the
+    order fills just before the exact level. Returns (tp_targets, wall_price,
+    r_multiple) or None to keep the ATR/RR targets."""
+    risk = abs(sl - entry)
+    if risk <= 0 or entry <= 0:
+        return None
+    htf   = timeframe in ("1D", "1W", "2W", "3W", "1M")
+    rmin  = 1.2 if htf else 1.4                 # min reward (R) for the TP2 wall
+    reach = max_tp3_abs * (1.35 if htf else 1.05)
+    sgn   = 1 if direction == "LONG" else -1
+    # distances toward target — positive, same-direction only (≥0.3% away)
+    dists = sorted({round(sgn * (lv - entry), 8) for lv in levels
+                    if lv and sgn * (lv - entry) > entry * 0.003})
+    q = [d for d in dists if rmin * risk <= d <= reach]
+    if not q:
+        return None
+    d2 = min(q)                                 # nearest wall clearing the R gate
+    t1 = [d for d in dists if 0.5 * risk <= d <= d2 * 0.85]
+    d1 = min(t1) if t1 else d2 * 0.55           # closer wall, else partway
+    t3 = [d for d in dists if d2 * 1.12 <= d <= reach]
+    d3 = max(t3) if t3 else min(d2 * 1.45, reach)   # further wall, else extension
+    tp = [round(entry + sgn * d1 * 0.97, 8),    # front-run the walls a touch
+          round(entry + sgn * d2 * 0.97, 8),
+          round(entry + sgn * d3, 8)]
+    return tp, entry + sgn * d2, d2 / risk
+
+
 # ── Market-cap volatility tier ────────────────────────────────────────────────
 # Smaller caps move more per candle — BTC rarely does 5% in 1H but HYPE can.
 # We scale the ATR cap (not the SL multiplier) so stops are sized to each
@@ -2285,29 +2322,23 @@ def generate_signal(analysis: Dict) -> Dict:
         # to real structure instead of pure ATR multiples. Otherwise the tuned
         # ATR/RR targets above stand unchanged.
         if sl and tp_targets and tp_targets[0] and entry:
-            _risk = abs(sl - entry)
-            if direction == "LONG":
-                _cands = [lv for lv in [_sup_bot, _tl_res] if lv and lv > entry * 1.005]
-                _opp = min(_cands) if _cands else None
-                _main = _opp - abs(_opp - entry) * 0.05 if _opp else None
-            else:  # SHORT
-                _cands = [lv for lv in [_dem_top, _tl_sup] if lv and lv < entry * 0.995]
-                _opp = max(_cands) if _cands else None
-                _main = _opp + abs(entry - _opp) * 0.05 if _opp else None
-
-            if _main and _risk > 0:
-                _d = abs(_main - entry)
-                if _d >= _risk * 1.4 and _d <= _max_tp3_abs * 1.05:
-                    _sgn = 1 if direction == "LONG" else -1
-                    tp_targets = [
-                        round(entry + _sgn * _d * 0.55, 8),   # TP1 — partway to the wall
-                        round(entry + _sgn * _d,        8),   # TP2 — the opposing zone/line
-                        round(entry + _sgn * _d * 1.45, 8),   # TP3 — break-through extension
-                    ]
-                    _lbl = ("supply zone / resistance line" if direction == "LONG"
-                            else "demand zone / support line")
-                    (bull_reasons if direction == "LONG" else bear_reasons).append(
-                        f"🎯 TP2 anchored to the opposing {_lbl} (~${_main:,.4f}) — trading to real structure, not just ATR")
+            # Pull EVERY opposing-structure level (zones both edges, trend-line,
+            # recent swing, and the macro line for far HTF targets) and snap the
+            # TPs onto them when a qualifying wall is in range — see
+            # _snap_tp_to_structure. Falls back to the tuned ATR/RR targets above.
+            _macro_v = ((analysis.get("trendline") or {}).get("macro") or {}).get("current_value")
+            _tp_levels = ([_sup_bot, _sup_top, _tl_res, swing_high, _macro_v]
+                          if direction == "LONG"
+                          else [_dem_top, _dem_bot, _tl_sup, swing_low, _macro_v])
+            _snap = _snap_tp_to_structure(direction, entry, sl, timeframe,
+                                          _tp_levels, _max_tp3_abs)
+            if _snap:
+                tp_targets, _wall, _rmult = _snap
+                _lbl = ("supply zone / resistance line" if direction == "LONG"
+                        else "demand zone / support line")
+                (bull_reasons if direction == "LONG" else bear_reasons).append(
+                    f"🎯 TP2 anchored to the opposing {_lbl} (~${_wall:,.4f}, {_rmult:.1f}R) "
+                    f"— trading to real structure, not just ATR")
 
         if sl and sl != entry and tp_targets and tp_targets[0] is not None:
             rr_ratio = round(abs((tp_targets[1] or tp_targets[0]) - entry) / abs(sl - entry), 2)
