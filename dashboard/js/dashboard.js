@@ -2707,10 +2707,16 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       upLine = i => slope * i + upB;
       loLine = i => slope * i + loB;
       const n = flagC.length - 1;
+      // Extend both rails forward along their slope to the current candle so the
+      // channel reaches the live price on the right instead of stopping at the
+      // end of the consolidation.
+      const lastT     = win[win.length - 1].time;
+      const extraBars = interval ? Math.max(0, Math.round((lastT - flagC[n].time) / interval)) : 0;
+      const endIdx    = n + extraBars;
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagC[0].time, value: upLine(0) }, { time: flagC[n].time, value: upLine(n) }]);
+        .setData([{ time: flagC[0].time, value: upLine(0) }, { time: lastT, value: upLine(endIdx) }]);
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagC[0].time, value: loLine(0) }, { time: flagC[n].time, value: loLine(n) }]);
+        .setData([{ time: flagC[0].time, value: loLine(0) }, { time: lastT, value: loLine(endIdx) }]);
     }
 
     // Flag ZONE boundaries — the actual highest high / lowest low the flag traded
