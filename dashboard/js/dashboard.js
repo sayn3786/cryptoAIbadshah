@@ -2624,34 +2624,41 @@ function renderFlagCharts(flagList, candles, idxList) {
 
     const ov = { priceLineVisible: false, lastValueVisible: false,
                  crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
-    const slope = (f.slope_pct_per_bar || 0) / 100;
-    const fhE = f.flag_high * (1 + slope * bars);
-    const flE = f.flag_low  * (1 + slope * bars);
 
-    // pole (solid, thick) with start/peak markers
+    // pole (solid, thick) with a start marker
     if (poleStart && f.pole_start_price && f.pole_end_price) {
       chart.addLineSeries({ ...ov, color: col, lineWidth: 3 })
         .setData([{ time: poleStart, value: +f.pole_start_price },
                   { time: Math.max(poleStart + interval, flagStart), value: +f.pole_end_price }]);
-      cs.setMarkers([
-        { time: poleStart, position: 'belowBar', color: col, shape: 'arrowUp', text: 'pole' },
-      ]);
+      cs.setMarkers([{ time: poleStart, position: 'belowBar', color: col, shape: 'arrowUp', text: 'pole' }]);
     }
-    // flag channel (dashed) — upper & lower bounds
-    if (f.flag_high && f.flag_low && flagEnd) {
+
+    // Flag channel FITTED to the actual consolidation candles (least-squares on
+    // the highs for the upper line, the lows for the lower line) so it hugs price
+    // instead of the flag's absolute extremes diverging into empty space.
+    const flagC = win.filter(c => c.time >= flagStart && c.time <= flagEnd);
+    const fit = (pts) => {           // pts: [{x, y}] → returns x => y
+      const n = pts.length; if (!n) return () => 0;
+      let sx = 0, sy = 0, sxx = 0, sxy = 0;
+      pts.forEach(p => { sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; });
+      const den = n * sxx - sx * sx;
+      const m = den ? (n * sxy - sx * sy) / den : 0;
+      const b = (sy - m * sx) / n;
+      return x => m * x + b;
+    };
+    if (flagC.length >= 3) {
+      const upF = fit(flagC.map((c, i) => ({ x: i, y: c.high })));
+      const loF = fit(flagC.map((c, i) => ({ x: i, y: c.low })));
+      const n = flagC.length - 1;
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagStart, value: +f.flag_high }, { time: flagEnd, value: +fhE }]);
+        .setData([{ time: flagC[0].time, value: upF(0) }, { time: flagC[n].time, value: upF(n) }]);
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagStart, value: +f.flag_low }, { time: flagEnd, value: +flE }]);
+        .setData([{ time: flagC[0].time, value: loF(0) }, { time: flagC[n].time, value: loF(n) }]);
     }
-    // labelled horizontal price lines — target + flag zone (prices on the axis).
-    // These DO drive autoscale, so the target is always brought into view.
+
+    // target — labelled horizontal line (drives autoscale so it's always in view)
     cs.createPriceLine({ price: +f.target, color: col, lineWidth: 2, lineStyle: 0,
-      axisLabelVisible: true, title: `🎯 ${money(f.target)}` });
-    cs.createPriceLine({ price: +f.flag_high, color: '#94a3b8aa', lineWidth: 1, lineStyle: 3,
-      axisLabelVisible: true, title: `zone hi` });
-    cs.createPriceLine({ price: +f.flag_low, color: '#94a3b8aa', lineWidth: 1, lineStyle: 3,
-      axisLabelVisible: true, title: `zone lo` });
+      axisLabelVisible: true, title: '🎯 Target' });
 
     chart.timeScale().fitContent();
     S.flagCharts.push(chart);
