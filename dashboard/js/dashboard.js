@@ -2715,8 +2715,24 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       const endIdx    = n + extraBars;
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
         .setData([{ time: flagC[0].time, value: upLine(0) }, { time: lastT, value: upLine(endIdx) }]);
-      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: flagC[0].time, value: loLine(0) }, { time: lastT, value: loLine(endIdx) }]);
+      // Lower rail: follow the slope down only until it reaches the actual flag
+      // low, then run FLAT at flag_low to the current candle — never project
+      // below the real floor (price never traded there; flag_low is the break level).
+      const floorVal = f.flag_low != null ? +f.flag_low : -Infinity;
+      const endVal   = loLine(endIdx);
+      let loData;
+      if (slope < 0 && endVal < floorVal) {
+        const iCross = (floorVal - loB) / slope;                 // index where loLine == flag_low
+        const tCross = flagC[0].time + Math.max(0, iCross) * interval;
+        loData = [
+          { time: flagC[0].time, value: loLine(0) },
+          { time: tCross,        value: floorVal },
+          { time: lastT,         value: floorVal },
+        ];
+      } else {
+        loData = [{ time: flagC[0].time, value: loLine(0) }, { time: lastT, value: endVal }];
+      }
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(loData);
     }
 
     // Flag ZONE boundaries — the actual highest high / lowest low the flag traded
