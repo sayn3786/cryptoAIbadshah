@@ -2542,6 +2542,11 @@ function renderFlags(flags, candles, signal) {
   const bestNote = bestAligned
     ? `aligned with the ${signal.direction} signal`
     : (wantDir ? `active pattern · note: your signal is ${signal.direction}` : 'strongest active pattern');
+  // When the live flag DISAGREES with the trade signal, show both and explain the
+  // conflict rather than hiding one side — the market is genuinely mixed here.
+  const conflictNote = (wantDir && !bestAligned && signal)
+    ? `<div class="flag-conflict">⚠ <b>Mixed signal.</b> The flag structure is <b>${best.direction}</b> (target $${p(best.target)} ${best.direction === 'bullish' ? 'up' : 'down'}), but the current trade signal is <b>${signal.direction}</b> — usually from lower-timeframe weakness. They disagree, so treat the flag as <b>unconfirmed</b>: wait for a decisive ${best.direction === 'bullish' ? 'breakout <b>above</b> the channel to confirm the flag' : 'breakdown <b>below</b> the channel to confirm the flag'}, or a ${signal.direction === 'LONG' ? 'hold above' : 'close below'} the flag zone to confirm the ${signal.direction}.</div>`
+    : '';
   el.innerHTML = flags.map((f, idx) => {
     const cls        = f.direction === 'bullish' ? 'bull' : 'bear';
     const domCls     = f.dominant ? ' dominant' : '';
@@ -2584,6 +2589,7 @@ function renderFlags(flags, candles, signal) {
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
       </div>
       ${idx === bestIdx ? `<div class="flag-chart-cap">📊 ${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag · ${bestNote}</div>
+      ${conflictNote}
       <div class="flag-chart" id="flagChart_${idx}"></div>` : ''}
     </div>`;
   }).join('');
