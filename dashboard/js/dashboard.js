@@ -2713,17 +2713,15 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       const lastT     = win[win.length - 1].time;
       const extraBars = interval ? Math.max(0, Math.round((lastT - flagC[n].time) / interval)) : 0;
       const endIdx    = n + extraBars;
-      // Each rail is ONE straight line spanning the flag start → the current
-      // candle. The endpoints are clamped into the flag zone [flag_low, flag_high];
-      // because a straight line between two in-zone points stays in-zone, the rail
-      // reaches current price without ever running above flag_high / below flag_low
-      // (no corner, no clipping short of the live candle).
-      const ceilVal  = f.flag_high != null ? +f.flag_high : Infinity;
-      const floorVal = f.flag_low  != null ? +f.flag_low  : -Infinity;
-      const clampV = v => Math.min(ceilVal, Math.max(floorVal, v));
+      // Textbook flag channel: two STRICTLY PARALLEL straight rails (one shared
+      // slope), each an envelope over the consolidation highs/lows, extended to
+      // the current candle. They are NOT clamped to the flag zone — a parallel
+      // sloped channel anchored to the swing highs/lows will naturally sit a hair
+      // outside the flat flag_high/flag_low lines at the ends, which is correct.
+      // The dotted flag_high/flag_low lines remain the actual break levels.
       const rail = (line) => [
-        { time: flagC[0].time, value: clampV(line(0)) },
-        { time: lastT,         value: clampV(line(endIdx)) },
+        { time: flagC[0].time, value: line(0) },
+        { time: lastT,         value: line(endIdx) },
       ];
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(rail(upLine));
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(rail(loLine));
