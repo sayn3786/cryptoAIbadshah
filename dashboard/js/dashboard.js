@@ -2722,18 +2722,15 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       const endVal   = loLine(endIdx);
       let loData;
       if (slope < 0 && endVal < floorVal && isFinite(floorVal)) {
-        // Smoothly EASE the rail into the flag-low floor instead of a hard corner:
-        // a softplus blend rounds the bend where the sloped rail meets the flat
-        // floor, sampled densely so it renders as a curve — and never dips below.
-        const k    = Math.max(1e-9, (loLine(0) - floorVal) * 0.12);
-        const soft = x => { const z = x / k; return z > 30 ? x : k * Math.log1p(Math.exp(z)); };
-        const N    = Math.max(8, Math.ceil(endIdx * 4));
-        loData = [];
-        for (let j = 0; j <= N; j++) {
-          const i = endIdx * j / N;
-          loData.push({ time: Math.round(flagC[0].time + i * interval),
-                        value: floorVal + soft(loLine(i) - floorVal) });
-        }
+        // Straight rail down the slope until it reaches the flag-low floor, then
+        // straight and flat at flag_low to the current candle — never below.
+        const iCross = (floorVal - loB) / slope;                 // index where loLine == flag_low
+        const tCross = flagC[0].time + Math.max(0, iCross) * interval;
+        loData = [
+          { time: flagC[0].time, value: loLine(0) },
+          { time: Math.round(tCross), value: floorVal },
+          { time: lastT,          value: floorVal },
+        ];
       } else {
         loData = [{ time: flagC[0].time, value: loLine(0) }, { time: lastT, value: endVal }];
       }
