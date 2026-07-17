@@ -2709,6 +2709,17 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
         .setData([{ time: flagC[0].time, value: loLine(0) }, { time: flagC[n].time, value: loLine(n) }]);
     }
 
+    // Flag ZONE boundaries — the actual highest high / lowest low the flag traded
+    // to (flat horizontal levels). These, NOT the sloping channel rails, are what
+    // the pattern's validity is judged against: for a bullish flag a decisive
+    // close below flag_low (≈ its value × 0.97) invalidates it. Drawn as muted
+    // dotted lines so it's clear where the real break level sits vs. the projected
+    // channel, which extrapolates past the price that was actually reached.
+    if (f.flag_low)  cs.createPriceLine({ price: +f.flag_low,  color: 'rgba(148,163,184,.55)',
+      lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'Flag low' });
+    if (f.flag_high) cs.createPriceLine({ price: +f.flag_high, color: 'rgba(148,163,184,.55)',
+      lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'Flag high' });
+
     // target — labelled horizontal line. A createPriceLine alone does NOT stretch
     // the price scale here, so a far-away measured-move target (e.g. a 1W pole
     // projecting ~40% below price) falls off the bottom. Add an invisible anchor
