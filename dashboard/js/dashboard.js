@@ -2588,8 +2588,12 @@ function renderFlags(flags, candles, signal) {
     </div>`;
   }).join('');
 
-  // One clear candlestick chart for the best flag only.
-  renderFlagCharts([flags[bestIdx]], candles, [bestIdx], signal);
+  // One clear candlestick chart for the best flag only. Overlay the trade's
+  // Entry/Stop ONLY when the flag AGREES with the trade direction — a bullish
+  // flag (target up) with a short's Stop/Entry (levels down) on the same chart
+  // is contradictory, so drop them when they disagree.
+  const overlaySignal = (!wantDir || bestAligned) ? signal : null;
+  renderFlagCharts([flags[bestIdx]], candles, [bestIdx], overlaySignal);
 }
 
 // One clear candlestick chart for the best flag: the token's actual candles over
