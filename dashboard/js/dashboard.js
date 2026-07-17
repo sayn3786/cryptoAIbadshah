@@ -2713,28 +2713,18 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       const lastT     = win[win.length - 1].time;
       const extraBars = interval ? Math.max(0, Math.round((lastT - flagC[n].time) / interval)) : 0;
       const endIdx    = n + extraBars;
-      // Each rail is ONE straight line (no corner, no flat segment). To keep it
-      // from leaving the flag zone we simply CLIP the segment to the band
-      // [flag_low, flag_high]: the line is drawn only over the span where it sits
-      // inside the zone, so it stops exactly at flag_high / flag_low instead of
-      // running past it.
+      // Each rail is ONE straight line spanning the flag start → the current
+      // candle. The endpoints are clamped into the flag zone [flag_low, flag_high];
+      // because a straight line between two in-zone points stays in-zone, the rail
+      // reaches current price without ever running above flag_high / below flag_low
+      // (no corner, no clipping short of the live candle).
       const ceilVal  = f.flag_high != null ? +f.flag_high : Infinity;
       const floorVal = f.flag_low  != null ? +f.flag_low  : -Infinity;
-      const rail = (line) => {
-        let iStart = 0, iEnd = endIdx;
-        if (slope !== 0) {                              // clip i-range to where floor ≤ line ≤ ceil
-          const iAtCeil  = (ceilVal  - line(0)) / slope;
-          const iAtFloor = (floorVal - line(0)) / slope;
-          iStart = Math.max(iStart, Math.min(iAtCeil, iAtFloor));
-          iEnd   = Math.min(iEnd,   Math.max(iAtCeil, iAtFloor));
-        }
-        if (!(iEnd > iStart)) { iStart = 0; iEnd = endIdx; }   // fallback: full span
-        const clampV = v => Math.min(ceilVal, Math.max(floorVal, v));
-        return [
-          { time: Math.round(flagC[0].time + iStart * interval), value: clampV(line(iStart)) },
-          { time: Math.round(flagC[0].time + iEnd   * interval), value: clampV(line(iEnd)) },
-        ];
-      };
+      const clampV = v => Math.min(ceilVal, Math.max(floorVal, v));
+      const rail = (line) => [
+        { time: flagC[0].time, value: clampV(line(0)) },
+        { time: lastT,         value: clampV(line(endIdx)) },
+      ];
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(rail(upLine));
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(rail(loLine));
     }
