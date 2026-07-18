@@ -2539,9 +2539,17 @@ function renderFlags(flags, candles, signal) {
   });
   const best        = flags[bestIdx];
   const bestAligned = wantDir && best.direction === wantDir;
-  const bestNote = bestAligned
+  // Lifecycle status (from the backend's chronological breakout resolution):
+  // confirmed = the breakout candle closed beyond the boundary and is marked on
+  // the chart; forming = still consolidating, and it scores ZERO signal points
+  // until it breaks — so say what to watch for.
+  const bestStatus = best.confirmed
+    ? '✅ breakout confirmed'
+    : `⏳ forming — awaiting a close ${best.direction === 'bullish' ? 'above' : 'below'} $${p(best.direction === 'bullish' ? best.flag_high : best.flag_low)}`;
+  const bestNote = (bestAligned
     ? `aligned with the ${signal.direction} signal`
-    : (wantDir ? `active pattern · note: your signal is ${signal.direction}` : 'strongest active pattern');
+    : (wantDir ? `active pattern · note: your signal is ${signal.direction}` : 'strongest active pattern'))
+    + ` · ${bestStatus}`;
   // When the live flag DISAGREES with the trade signal, show both and explain the
   // conflict rather than hiding one side — the market is genuinely mixed here.
   const conflictNote = (wantDir && !bestAligned && signal)
@@ -2714,14 +2722,30 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     const ov = { priceLineVisible: false, lastValueVisible: false,
                  crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
 
+    // Markers accumulate here — setMarkers() REPLACES the whole set, so pole and
+    // breakout markers must go through one call (sorted by time) at the end.
+    const markers = [];
+
     // pole (solid, thick) with a start marker
     if (poleStart && f.pole_start_price && f.pole_end_price) {
       chart.addLineSeries({ ...ov, color: col, lineWidth: 3 })
         .setData([{ time: poleStart, value: +f.pole_start_price },
                   { time: Math.max(poleStart + interval, flagStart), value: +f.pole_end_price }]);
-      cs.setMarkers([{ time: poleStart,
+      markers.push({ time: poleStart,
         position: isBull ? 'belowBar' : 'aboveBar',
-        color: col, shape: isBull ? 'arrowUp' : 'arrowDown', text: 'pole' }]);
+        color: col, shape: isBull ? 'arrowUp' : 'arrowDown', text: 'pole' });
+    }
+
+    // Breakout marker — the backend now reports the exact candle whose close
+    // broke the flag boundary (breakout_ts). Flag it on the chart so the eye
+    // lands on WHERE the pattern triggered, not just the projection line.
+    const breakoutT = f.breakout_ts ? Math.floor(f.breakout_ts / 1000) : null;
+    if (f.confirmed && breakoutT && win.some(c => c.time === breakoutT)) {
+      const up = f.breakout_dir === 'up';
+      markers.push({ time: breakoutT,
+        position: up ? 'belowBar' : 'aboveBar',
+        color: up ? '#10b981' : '#ef4444',
+        shape: up ? 'arrowUp' : 'arrowDown', text: 'breakout' });
     }
 
     // Flag channel FITTED to the actual consolidation candles (least-squares on
@@ -2841,6 +2865,8 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       try { cs.attachPrimitive(new FlagShade(chart, cs, { band: bandData, zones })); }
       catch (_) { /* older lib without primitives — lines/zones just won't shade */ }
     }
+
+    if (markers.length) cs.setMarkers(markers.sort((a, b) => a.time - b.time));
 
     chart.timeScale().fitContent();
     S.flagCharts.push(chart);
