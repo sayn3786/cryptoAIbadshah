@@ -26,10 +26,12 @@ MAX_CONSOLIDATION_BARS   = 20
 RETRACE_MIN              = 0.15   # flag must retrace 15–62% of the pole height
 RETRACE_MAX              = 0.62   # (single source of truth for the docstring too)
 # Channel geometry — slope as a percentage of mid-price per bar:
-NEUTRAL_SLOPE_PCT        = 0.10   # |slope| ≤ this ⇒ "neutral" channel   (0.10 %/bar)
-MAX_WITH_TREND_SLOPE_PCT = 2.0    # reject a channel sloping WITH the pole faster than
-                                  # this — a strongly ascending bull flag or strongly
-                                  # descending bear flag is a wedge, not a flag (%/bar)
+NEUTRAL_SLOPE_PCT        = 0.10   # neutral band half-width (0.10 %/bar). A flag must
+                                  # slope NEUTRAL or COUNTER-TREND: a bull flag's slope
+                                  # must be ≤ +NEUTRAL_SLOPE_PCT and a bear flag's ≥
+                                  # −NEUTRAL_SLOPE_PCT. There is NO separate with-trend
+                                  # tolerance — this band already absorbs ordinary noise,
+                                  # so any with-trend drift beyond it is a wedge, not a flag.
 PARALLEL_TOL_PCT         = 3.0    # upper vs lower rail slope may differ by ≤ this (%/bar)
 FLAG_MAX_VOL_FRAC        = 1.0    # flag avg bar-range must not EXCEED the pole's
                                   # (volatility must contract into the consolidation)
@@ -40,6 +42,33 @@ MIN_POLE_DIR_FRAC        = 0.5    # ≥ this fraction of pole candles close in p
 FLAG_ACTIVE_BUFFER       = 0.03   # 3% wick buffer for the is_active proximity check
 FLAG_RECENT_BARS         = 3      # flag must end within this many bars of the last close
 MAX_FLAGS_RETURNED       = 6
+
+
+def _flag_selection_rank(flag: Dict) -> Tuple[int, float]:
+    """Deterministic ranking key for choosing between competing flags.
+
+    LIFECYCLE takes precedence over raw strength so a (weaker) ACTIVE CONFIRMED
+    flag is never discarded in favour of a stronger FORMING one — that would
+    silently delete the only flag the signal engine actually scores (forming
+    flags earn zero points). Strength is only the tie-breaker WITHIN the same
+    lifecycle tier.
+
+        active confirmed → 2   (a real, tradeable breakout)
+        active forming   → 1   (in play, display-only until it breaks out)
+        inactive         → 0   (stale / resolved)
+
+    Deliberately reads only ``confirmed`` and ``is_active`` (not ``status``) so
+    it stays compatible with older flag objects that predate the lifecycle
+    metadata. Used identically by both dedup stages (``detect_flags`` per pole
+    start, ``pick_dominant_flags`` per direction×timeframe).
+    """
+    if flag.get("confirmed") and flag.get("is_active"):
+        lifecycle = 2
+    elif flag.get("is_active"):
+        lifecycle = 1
+    else:
+        lifecycle = 0
+    return lifecycle, float(flag.get("strength", 0) or 0)
 
 
 def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
@@ -66,9 +95,11 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
               directional-candle proportion) so a choppy net move is not a pole.
       Flag  — a consolidation channel (MIN…MAX_CONSOLIDATION_BARS bars) that
               retraces RETRACE_MIN…RETRACE_MAX of the pole, with contracting
-              volatility and reasonably parallel rails sloping neutral or
-              counter-trend (a bull flag is neutral/descending, a bear flag
-              neutral/ascending).
+              volatility and reasonably parallel rails sloping NEUTRAL or
+              COUNTER-TREND only. This is enforced strictly against
+              NEUTRAL_SLOPE_PCT (no separate with-trend tolerance): a bull flag's
+              slope must be ≤ +NEUTRAL_SLOPE_PCT (neutral/descending) and a bear
+              flag's ≥ −NEUTRAL_SLOPE_PCT (neutral/ascending).
 
     The consolidation is grown one bar at a time and STOPS as soon as a candle
     closes outside the running channel — that candle is the first post-flag
@@ -87,8 +118,10 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
 
     Target projection is scaled by timeframe (4H→38% … 1W+→100%).
     Strength = pole_pct × (1 – retrace_fraction) × recency_bonus × tf_weight.
-    The highest-strength flag per unique pole start is returned (max
-    MAX_FLAGS_RETURNED total).
+    The BEST flag per unique pole start is returned, ranked by
+    ``_flag_selection_rank`` (active-confirmed > active-forming > inactive, then
+    strength) so a confirmed breakout is never discarded in favour of a stronger
+    forming sibling. Max MAX_FLAGS_RETURNED total.
     """
     # CLOSED-CANDLE CONTRACT (see docstring): do NOT slice candles[:-1] here.
     closed = candles
@@ -200,11 +233,14 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             else:
                 flag_slope = "neutral"
 
-            # A bull flag must be neutral/descending; a bear flag neutral/ascending.
-            # Reject a channel sloping strongly WITH the pole (a wedge, not a flag).
-            if is_bull and slope_pct_per_bar > MAX_WITH_TREND_SLOPE_PCT:
+            # A flag consolidates NEUTRAL or COUNTER-TREND — enforce that exactly
+            # (matches the docstring, no separate with-trend tolerance): a bull
+            # flag's slope must be ≤ +NEUTRAL_SLOPE_PCT (neutral or descending) and
+            # a bear flag's ≥ −NEUTRAL_SLOPE_PCT (neutral or ascending). A channel
+            # drifting WITH the pole beyond the neutral band is a wedge, not a flag.
+            if is_bull and slope_pct_per_bar > NEUTRAL_SLOPE_PCT:
                 continue
-            if (not is_bull) and slope_pct_per_bar < -MAX_WITH_TREND_SLOPE_PCT:
+            if (not is_bull) and slope_pct_per_bar < -NEUTRAL_SLOPE_PCT:
                 continue
             # Rails must be reasonably parallel.
             if abs(h_slope_pct - l_slope_pct) > PARALLEL_TOL_PCT:
@@ -305,14 +341,18 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 "invalidation_reason": invalidation_reason,
             })
 
-    # Deduplicate by pole start — keep strongest per unique pole origin
+    # Deduplicate by pole start — keep the BEST per unique pole origin by
+    # lifecycle-then-strength, so an active confirmed flag is never dropped in
+    # favour of a stronger forming sibling from the same pole. Rank also drives
+    # the final ordering/truncation so a confirmed flag can't be pushed out of
+    # the top MAX_FLAGS_RETURNED by stronger forming flags from other poles.
     seen: Dict[int, Dict] = {}
     for f in candidates:
         key = f["pole_start_ts"]
-        if key not in seen or f["strength"] > seen[key]["strength"]:
+        if key not in seen or _flag_selection_rank(f) > _flag_selection_rank(seen[key]):
             seen[key] = f
 
-    result = sorted(seen.values(), key=lambda f: f["strength"], reverse=True)
+    result = sorted(seen.values(), key=_flag_selection_rank, reverse=True)
     return result[:MAX_FLAGS_RETURNED]
 
 
@@ -325,11 +365,16 @@ def pick_dominant_flags(all_flags: List[Dict]) -> List[Dict]:
     if not all_flags:
         return []
 
-    # ── Deduplicate: keep strongest per (direction, timeframe) ───────────────
+    # ── Deduplicate: keep the BEST per (direction, timeframe) ────────────────
+    # Rank by lifecycle THEN strength (same helper as detect_flags) so a weaker
+    # active confirmed flag beats a stronger forming one — otherwise the confirmed
+    # trade signal would vanish (forming flags score zero). Two confirmed flags
+    # still resolve by strength; with no confirmed flag the strongest active
+    # forming flag survives for dashboard display.
     best: Dict[tuple, Dict] = {}
     for f in all_flags:
         key = (f["direction"], f["timeframe"])
-        if key not in best or f["strength"] > best[key]["strength"]:
+        if key not in best or _flag_selection_rank(f) > _flag_selection_rank(best[key]):
             best[key] = f
     deduped = list(best.values())
 
