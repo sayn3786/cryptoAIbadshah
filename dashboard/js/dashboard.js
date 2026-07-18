@@ -2696,7 +2696,7 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
       ...CHART_OPTS,
       layout: { ...CHART_OPTS.layout, fontSize: 11 },
       width: el.clientWidth || 320,
-      height: 380,
+      height: 440,
       // Let the user pan/zoom this chart (drag to move, pinch/wheel to zoom,
       // drag the price axis to scale vertically). It still opens fitted to the
       // pattern via fitContent() below.
