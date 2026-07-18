@@ -358,9 +358,16 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
 
 def pick_dominant_flags(all_flags: List[Dict]) -> List[Dict]:
     """
-    From multi-timeframe flags, keep only the STRONGEST flag per
-    (direction × timeframe) pair, pick the dominant direction at the highest
-    tf_weight tier, then return sorted by (tf_weight × strength).
+    From multi-timeframe flags, keep only the BEST flag per
+    (direction × timeframe) pair (lifecycle rank, then strength), then pick the
+    dominant direction at the highest tf_weight tier of a LIFECYCLE-AWARE pool:
+    active confirmed flags when any exist, else active (forming) flags, else the
+    deduped set. Forming flags score zero, so they never decide dominance when a
+    confirmed flag exists — otherwise a display-only pattern could demote a
+    confirmed flag from its dominant 20-pt base to the secondary 10.
+    Returns flags sorted by (tf_weight × strength); `dominant` is True only for
+    pool members at the pool's max tf_weight matching the winning direction
+    (equal bull/bear strength ties resolve bullish).
     """
     if not all_flags:
         return []
@@ -378,16 +385,32 @@ def pick_dominant_flags(all_flags: List[Dict]) -> List[Dict]:
             best[key] = f
     deduped = list(best.values())
 
-    # ── Dominant direction at the highest tf_weight tier ─────────────────────
-    max_weight = max(f["tf_weight"] for f in deduped)
-    top_tier   = [f for f in deduped if f["tf_weight"] == max_weight]
+    # ── Dominant direction from a LIFECYCLE-AWARE pool ───────────────────────
+    # Dominance decides which flag gets the 20-pt base vs the 10-pt secondary in
+    # the signal engine. Forming flags score ZERO, so they must not influence
+    # that split: a stronger forming flag must never steal `dominant` from a
+    # confirmed flag (which would silently halve the confirmed flag's points).
+    # So dominance is computed from active CONFIRMED flags when any exist; else
+    # from active flags (forming — display-only, still zero points); else from
+    # the deduped set (a safe deterministic fallback when nothing is active).
+    confirmed_active = [f for f in deduped if f.get("confirmed") and f.get("is_active")]
+    active_flags     = [f for f in deduped if f.get("is_active")]
+    dominance_pool   = confirmed_active or active_flags or deduped
+
+    max_weight = max(f["tf_weight"] for f in dominance_pool)
+    top_tier   = [f for f in dominance_pool if f["tf_weight"] == max_weight]
 
     bull_score = sum(f["strength"] for f in top_tier if f["direction"] == "bullish")
     bear_score = sum(f["strength"] for f in top_tier if f["direction"] == "bearish")
-    dominant   = "bullish" if bull_score >= bear_score else "bearish"
+    dominant   = "bullish" if bull_score >= bear_score else "bearish"   # tie → bullish
 
+    pool_ids = {id(f) for f in dominance_pool}
     for f in deduped:
-        f["dominant"] = (f["tf_weight"] == max_weight and f["direction"] == dominant)
+        f["dominant"] = False
+    for f in deduped:
+        f["dominant"] = (id(f) in pool_ids
+                         and f["tf_weight"] == max_weight
+                         and f["direction"] == dominant)
 
     return sorted(deduped, key=lambda f: f["tf_weight"] * f["strength"], reverse=True)
 
