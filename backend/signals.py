@@ -784,28 +784,36 @@ def generate_signal(analysis: Dict) -> Dict:
     # Counter-trend discount: a bull flag in a strong bear trend (or vice versa)
     # is likely a relief rally / dead-cat bounce, not a genuine breakout.
     # When raw trend bucket ≥25 pts in one direction, opposing flag is cut 70%.
+    # Only CONFIRMED flags earn directional trading points. A forming/unconfirmed
+    # flag is display-only (still returned in analysis["flags"] for the dashboard)
+    # and contributes ZERO to `score` and g['pattern'] — a pattern that has not
+    # yet broken out is a heads-up, not a confirmed signal. The counter-trend
+    # discount therefore applies to confirmed flags only.
     scored_dirs: set = set()
     for f in flags:
         if not f.get("is_active"):
             continue
+        if not f.get("confirmed"):
+            continue                       # forming flag → no directional points
         d = f["direction"]
         if d in scored_dirs:
             continue
         scored_dirs.add(d)
         base = 20 if f.get("dominant") else 10
+        prefix = "Dominant confirmed" if f.get("dominant") else "Confirmed"
         if d == "bullish":
             # Discount if strong bearish trend context
             if t_bear >= 25:
                 pts = max(1, round(base * 0.30))
                 bull_reasons.append(
-                    f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag on {f['timeframe']} "
+                    f"{prefix} bullish flag on {f['timeframe']} "
                     f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f}) "
                     f"[counter-trend discount: +{pts} vs base +{base}]"
                 )
             else:
                 pts = base
                 bull_reasons.append(
-                    f"{'Dominant b' if f.get('dominant') else 'B'}ullish flag on {f['timeframe']} "
+                    f"{prefix} bullish flag on {f['timeframe']} "
                     f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f})"
                 )
             score += pts; g['pattern'] += pts
@@ -814,14 +822,14 @@ def generate_signal(analysis: Dict) -> Dict:
             if t_bull >= 25:
                 pts = max(1, round(base * 0.30))
                 bear_reasons.append(
-                    f"{'Dominant b' if f.get('dominant') else 'B'}earish flag on {f['timeframe']} "
+                    f"{prefix} bearish flag on {f['timeframe']} "
                     f"({f['pole_pct']}% pole, target ${f['target']:,.4f}) "
                     f"[counter-trend discount: -{pts} vs base -{base}]"
                 )
             else:
                 pts = base
                 bear_reasons.append(
-                    f"{'Dominant b' if f.get('dominant') else 'B'}earish flag on {f['timeframe']} "
+                    f"{prefix} bearish flag on {f['timeframe']} "
                     f"({f['pole_pct']}% pole, target ${f['target']:,.4f})"
                 )
             score -= pts; g['pattern'] -= pts
