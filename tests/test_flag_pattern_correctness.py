@@ -123,7 +123,8 @@ def _bear_flags(flags):
 def _mk_flag(direction="bullish", timeframe="1W", strength=10.0,
              confirmed=False, is_active=True, tf_weight=1.0):
     return {"direction": direction, "timeframe": timeframe, "strength": strength,
-            "confirmed": confirmed, "is_active": is_active, "tf_weight": tf_weight}
+            "confirmed": confirmed, "is_active": is_active, "tf_weight": tf_weight,
+            "pole_pct": 10.0, "target": 150.0}   # needed by scoring reason strings
 
 
 # ── A. newest closed candle can confirm a breakout ──────────────────────────────
@@ -414,3 +415,114 @@ def test_pick_dominant_inactive_cannot_replace_active():
               if f["direction"] == "bullish" and f["timeframe"] == "1W"]
     assert len(picked) == 1
     assert picked[0]["is_active"] and picked[0]["strength"] == 5.0
+
+
+# ── R4. dominance pool: forming flags must not decide `dominant` ────────────────
+def _by_dir(flags, direction):
+    return [f for f in flags if f["direction"] == direction]
+
+
+def test_dominance_confirmed_beats_stronger_forming_cross_direction():
+    # Same TF: weak confirmed BULL vs strong forming BEAR. The forming bear must
+    # not take dominance (it scores zero) — the confirmed bull is dominant and
+    # earns the 20-pt base in generate_signal, exactly once.
+    conf_bull = _mk_flag("bullish", strength=10.0, confirmed=True)
+    form_bear = _mk_flag("bearish", strength=50.0, confirmed=False)
+    out = pick_dominant_flags([conf_bull, form_bear])
+    bull = _by_dir(out, "bullish")[0]
+    bear = _by_dir(out, "bearish")[0]
+    assert bull["dominant"] is True, "confirmed bull must be dominant"
+    assert bear["dominant"] is False, "forming bear must not be dominant"
+
+    # scoring: the dominant designation gives the confirmed bull the 20-pt BASE
+    # (vs 10 secondary), exactly once. The engine's downstream lone-group damping
+    # (−15%) scales the final score uniformly, so assert the base by comparing
+    # the SAME analysis with dominance stripped: 20×0.85=17 vs 10×0.85≈8.
+    base = generate_signal(_neutral_analysis(flags=[]))
+    sig = generate_signal(_neutral_analysis(flags=out))
+    stripped = [dict(f, dominant=False) for f in out]
+    sig_secondary = generate_signal(_neutral_analysis(flags=stripped))
+    assert base["score"] == 0
+    assert sig["score"] == 17, "dominant 20-pt base after uniform -15% damping"
+    assert sig_secondary["score"] == 8, "secondary 10-pt base after same damping"
+    assert sig["score"] > sig_secondary["score"] > base["score"]
+    hits = [r for r in sig["bullish_reasons"] if "confirmed bullish flag" in r.lower()]
+    assert len(hits) == 1 and "dominant" in hits[0].lower()
+
+
+def test_dominance_higher_tf_forming_does_not_demote_confirmed():
+    # Confirmed flag on a LOWER timeframe vs a stronger forming flag on a HIGHER
+    # timeframe. Confirmed flags exist → only they form the dominance pool, so
+    # the low-TF confirmed flag stays dominant.
+    conf_low = _mk_flag("bullish", timeframe="1D", strength=8.0,
+                        confirmed=True, tf_weight=0.75)
+    form_high = _mk_flag("bearish", timeframe="1W", strength=60.0,
+                         confirmed=False, tf_weight=1.0)
+    out = pick_dominant_flags([conf_low, form_high])
+    assert _by_dir(out, "bullish")[0]["dominant"] is True
+    assert _by_dir(out, "bearish")[0]["dominant"] is False
+
+
+def test_dominance_multiple_confirmed_highest_tier_and_strength():
+    # Only confirmed flags participate; the highest tf_weight confirmed tier
+    # decides, and strength picks the direction inside that tier.
+    conf_low_bull  = _mk_flag("bullish", timeframe="1D", strength=90.0,
+                              confirmed=True, tf_weight=0.75)
+    conf_high_bull = _mk_flag("bullish", timeframe="1W", strength=10.0,
+                              confirmed=True, tf_weight=1.0)
+    conf_high_bear = _mk_flag("bearish", timeframe="1W", strength=30.0,
+                              confirmed=True, tf_weight=1.0)
+    form_high_bull = _mk_flag("bullish", timeframe="2W", strength=500.0,
+                              confirmed=False, tf_weight=1.2)   # must be ignored
+    out = pick_dominant_flags([conf_low_bull, conf_high_bull,
+                               conf_high_bear, form_high_bull])
+    by = {(f["direction"], f["timeframe"]): f for f in out}
+    # bear wins the confirmed 1W tier (30 > 10); the huge 2W forming flag is
+    # excluded from the pool entirely
+    assert by[("bearish", "1W")]["dominant"] is True
+    assert by[("bullish", "1W")]["dominant"] is False
+    assert by[("bullish", "1D")]["dominant"] is False, "lower confirmed tier"
+    assert by[("bullish", "2W")]["dominant"] is False, "forming never dominant here"
+
+
+def test_dominance_forming_only_fallback_display_but_zero_points():
+    # No confirmed flags → forming flags may take `dominant` for the dashboard,
+    # but they still contribute zero points in generate_signal.
+    form_bull = _mk_flag("bullish", strength=40.0, confirmed=False)
+    form_bear = _mk_flag("bearish", strength=10.0, confirmed=False)
+    out = pick_dominant_flags([form_bull, form_bear])
+    assert _by_dir(out, "bullish")[0]["dominant"] is True
+    assert _by_dir(out, "bearish")[0]["dominant"] is False
+
+    base = generate_signal(_neutral_analysis(flags=[]))
+    sig = generate_signal(_neutral_analysis(flags=out))
+    assert sig["score"] == base["score"], "forming flags add zero points"
+    assert not any("flag" in r.lower() for r in sig["bullish_reasons"])
+
+
+def test_dominance_all_inactive_deterministic_no_crash():
+    # Inactive flags must not override active ones; and when EVERYTHING is
+    # inactive the fallback still assigns dominance deterministically.
+    inact_bull = _mk_flag("bullish", strength=20.0, confirmed=True, is_active=False)
+    inact_bear = _mk_flag("bearish", strength=5.0, confirmed=True, is_active=False)
+    out = pick_dominant_flags([inact_bull, inact_bear])
+    assert _by_dir(out, "bullish")[0]["dominant"] is True   # strength 20 > 5
+    assert _by_dir(out, "bearish")[0]["dominant"] is False
+
+    # an active forming flag beats inactive flags for the dominance pool
+    active_form_bear = _mk_flag("bearish", timeframe="1D", strength=1.0,
+                                confirmed=False, is_active=True, tf_weight=0.75)
+    out2 = pick_dominant_flags([inact_bull, active_form_bear])
+    by2 = {(f["direction"], f["timeframe"]): f for f in out2}
+    assert by2[("bearish", "1D")]["dominant"] is True, \
+        "active forming flag forms the pool ahead of inactive flags"
+    assert by2[("bullish", "1W")]["dominant"] is False
+
+
+def test_dominance_tie_resolves_bullish():
+    # Equal bull/bear strength within the eligible highest-weight tier → bullish.
+    conf_bull = _mk_flag("bullish", strength=25.0, confirmed=True)
+    conf_bear = _mk_flag("bearish", strength=25.0, confirmed=True)
+    out = pick_dominant_flags([conf_bull, conf_bear])
+    assert _by_dir(out, "bullish")[0]["dominant"] is True
+    assert _by_dir(out, "bearish")[0]["dominant"] is False
