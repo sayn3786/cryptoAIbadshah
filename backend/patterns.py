@@ -14,31 +14,89 @@ def _line_slope(values: list) -> float:
 
 
 # ── Flag pattern detection ─────────────────────────────────────────────────────
+#
+# All tunable thresholds live here as NAMED constants (units documented inline)
+# rather than scattered magic numbers, so the geometry can be reviewed in one
+# place. "%/bar" means a percentage of the channel mid-price per candle.
+MIN_CANDLES_FOR_FLAGS    = 10     # need enough history to find a pole + flag
+POLE_MIN_BARS            = 2      # a pole spans POLE_MIN_BARS…POLE_MAX_BARS candles
+POLE_MAX_BARS            = 8
+MIN_CONSOLIDATION_BARS   = 3      # flag consolidation length bounds (candles)
+MAX_CONSOLIDATION_BARS   = 20
+RETRACE_MIN              = 0.15   # flag must retrace 15–62% of the pole height
+RETRACE_MAX              = 0.62   # (single source of truth for the docstring too)
+# Channel geometry — slope as a percentage of mid-price per bar:
+NEUTRAL_SLOPE_PCT        = 0.10   # |slope| ≤ this ⇒ "neutral" channel   (0.10 %/bar)
+MAX_WITH_TREND_SLOPE_PCT = 2.0    # reject a channel sloping WITH the pole faster than
+                                  # this — a strongly ascending bull flag or strongly
+                                  # descending bear flag is a wedge, not a flag (%/bar)
+PARALLEL_TOL_PCT         = 3.0    # upper vs lower rail slope may differ by ≤ this (%/bar)
+FLAG_MAX_VOL_FRAC        = 1.0    # flag avg bar-range must not EXCEED the pole's
+                                  # (volatility must contract into the consolidation)
+# Pole impulse quality — dimensionless fractions in [0, 1]:
+MIN_POLE_EFFICIENCY      = 0.5    # net move ÷ summed bar path (1.0 = perfectly straight)
+MIN_POLE_DIR_FRAC        = 0.5    # ≥ this fraction of pole candles close in pole direction
+# Activity / lifecycle:
+FLAG_ACTIVE_BUFFER       = 0.03   # 3% wick buffer for the is_active proximity check
+FLAG_RECENT_BARS         = 3      # flag must end within this many bars of the last close
+MAX_FLAGS_RETURNED       = 6
+
 
 def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                  min_pole_pct: float = 4.0) -> List[Dict]:
     """
     Detect bullish and bearish flag patterns in a candle list.
 
+    CLOSED-CANDLE CONTRACT
+    ----------------------
+    `candles` MUST already contain ONLY fully closed candles. The still-forming
+    candle is removed by the UPSTREAM caller — in production by
+    ``app.build_analysis`` (via ``_split_closed``) and in the backtest by
+    ``backtest.build_price_analysis`` (which slices up to the signal bar). This
+    function therefore does NOT drop ``candles[-1]``: ``closed[-1]`` is the
+    newest COMPLETED candle and is used for the pole, the flag, the chronological
+    breakout scan, and as the current price. (An earlier version sliced
+    ``candles[:-1]`` internally, which discarded the newest completed candle and
+    could hide a breakout that closed on that bar.)
+
     A flag has two parts:
-      Pole  — a sharp directional move (≥ min_pole_pct%) over 2-8 bars,
-              starting within the most-recent 50% of candles.
-      Flag  — a consolidation channel (3-20 bars) that retraces 15-62% of the pole.
+      Pole  — a sharp, IMPULSIVE directional move (≥ ``min_pole_pct`` %) over
+              POLE_MIN_BARS…POLE_MAX_BARS bars, starting in the most-recent 50%
+              of candles, and passing an impulse-quality check (efficiency +
+              directional-candle proportion) so a choppy net move is not a pole.
+      Flag  — a consolidation channel (MIN…MAX_CONSOLIDATION_BARS bars) that
+              retraces RETRACE_MIN…RETRACE_MAX of the pole, with contracting
+              volatility and reasonably parallel rails sloping neutral or
+              counter-trend (a bull flag is neutral/descending, a bear flag
+              neutral/ascending).
 
-    Target projection is scaled by timeframe so shorter TFs don't inherit
-    multi-month pole distances (4H→38%, up to 1W+→100%).
+    The consolidation is grown one bar at a time and STOPS as soon as a candle
+    closes outside the running channel — that candle is the first post-flag
+    candle and is never swallowed into the flag. The breakout is then resolved
+    CHRONOLOGICALLY: the first post-flag candle to close beyond a boundary
+    decides the outcome and scanning stops there, so a failed pattern can never
+    become "confirmed" because price later recovers.
 
+    Lifecycle metadata (additive):
+      status              : "forming" | "confirmed" | "invalidated"
+      confirmed           : bool
+      breakout_dir        : "up" | "down" | None
+      breakout_ts         : timestamp | None
+      invalidation_reason : str | None
+    Invalidated flags are never returned as active candidates.
+
+    Target projection is scaled by timeframe (4H→38% … 1W+→100%).
     Strength = pole_pct × (1 – retrace_fraction) × recency_bonus × tf_weight.
-    The highest-strength flag per unique pole start is returned (max 6 total).
+    The highest-strength flag per unique pole start is returned (max
+    MAX_FLAGS_RETURNED total).
     """
-    # Only work with fully closed candles — the last candle is still forming and
-    # must never be used for pole, flag, or post-flag confirmation logic.
-    closed = candles[:-1]
+    # CLOSED-CANDLE CONTRACT (see docstring): do NOT slice candles[:-1] here.
+    closed = candles
     n = len(closed)
-    if n < 10:
+    if n < MIN_CANDLES_FOR_FLAGS:
         return []
 
-    current_price = candles[-1]["close"]  # live price for proximity checks
+    current_price = closed[-1]["close"]  # newest CLOSED candle = current price
 
     # How much of the pole height to project for the target, per TF.
     # Shorter TFs use Fibonacci fractions so the target stays in a realistic range.
@@ -53,151 +111,199 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
     # history poles (e.g. a 60% rally from 18 months ago) appearing on short TFs.
     earliest_pole_start = n // 2
 
-    for ps in range(earliest_pole_start, n - 4):       # pole start index
-        for pe in range(ps + 2, min(ps + 9, n)):        # pole end (exclusive)
-            pole_open  = closed[ps]["open"]
-            pole_close = closed[pe - 1]["close"]
+    for ps in range(earliest_pole_start, n - 4):                      # pole start index
+        for pe in range(ps + POLE_MIN_BARS, min(ps + POLE_MAX_BARS + 1, n)):  # pole end (excl)
+            pole_bars  = closed[ps:pe]
+            pole_open  = pole_bars[0]["open"]
+            pole_close = pole_bars[-1]["close"]
             pole_move  = (pole_close - pole_open) / (pole_open + 1e-12)
 
             if abs(pole_move) * 100 < min_pole_pct:
                 continue
 
-            pole_high   = max(c["high"] for c in closed[ps:pe])
-            pole_low    = min(c["low"]  for c in closed[ps:pe])
+            pole_high   = max(c["high"] for c in pole_bars)
+            pole_low    = min(c["low"]  for c in pole_bars)
             pole_height = pole_high - pole_low
             if pole_height < 1e-12:
                 continue
 
-            is_bull   = pole_move > 0
-            remaining = closed[pe:]
-            if len(remaining) < 3:
+            is_bull = pole_move > 0
+
+            # ── Pole impulse quality ─────────────────────────────────────────
+            # (1) Directional efficiency = |net move| ÷ summed bar-to-bar path.
+            #     A clean straight impulse ≈ 1.0; an oscillatory move that merely
+            #     nets the same % is much lower and is rejected.
+            path = abs(pole_bars[0]["close"] - pole_open)
+            for i in range(1, len(pole_bars)):
+                path += abs(pole_bars[i]["close"] - pole_bars[i - 1]["close"])
+            efficiency = abs(pole_close - pole_open) / (path + 1e-12)
+            if efficiency < MIN_POLE_EFFICIENCY:
+                continue
+            # (2) Proportion of candles closing in the pole direction.
+            dir_sign = 1 if is_bull else -1
+            same_dir = sum(1 for c in pole_bars
+                           if (1 if c["close"] >= c["open"] else -1) == dir_sign)
+            if same_dir / len(pole_bars) < MIN_POLE_DIR_FRAC:
                 continue
 
-            best: Optional[Dict] = None
-            best_strength = 0.0
+            pole_avg_range = sum(c["high"] - c["low"] for c in pole_bars) / len(pole_bars)
 
-            for fl in range(3, min(21, len(remaining) + 1)):  # flag length
-                flag = remaining[:fl]
-                fh   = max(c["high"] for c in flag)
-                fl_  = min(c["low"]  for c in flag)
+            remaining = closed[pe:]
+            if len(remaining) < MIN_CONSOLIDATION_BARS:
+                continue
 
-                if is_bull:
-                    retrace = (pole_close - fl_) / pole_height
+            # ── Build ONE consolidation window (requirement: never absorb a
+            #    breakout). Start with the minimum, then extend bar-by-bar only
+            #    while the next candle CLOSES inside the running channel. The
+            #    first candle that closes outside stops the growth and becomes
+            #    the first post-flag candle. Capped at MAX_CONSOLIDATION_BARS.
+            flag = list(remaining[:MIN_CONSOLIDATION_BARS])
+            fh   = max(c["high"] for c in flag)
+            fl_  = min(c["low"]  for c in flag)
+            k = MIN_CONSOLIDATION_BARS
+            while k < len(remaining) and len(flag) < MAX_CONSOLIDATION_BARS:
+                nxt = remaining[k]
+                if fl_ <= nxt["close"] <= fh:
+                    flag.append(nxt)
+                    fh = max(fh, nxt["high"])
+                    fl_ = min(fl_, nxt["low"])
+                    k += 1
                 else:
-                    retrace = (fh - pole_close) / pole_height
+                    break
+            fl = len(flag)                       # consolidation_bars
 
-                if not (0.10 <= retrace <= 0.65):
-                    continue
+            # ── Retrace of the pole ──────────────────────────────────────────
+            if is_bull:
+                retrace = (pole_close - fl_) / pole_height
+            else:
+                retrace = (fh - pole_close) / pole_height
+            if not (RETRACE_MIN <= retrace <= RETRACE_MAX):
+                continue
 
-                # Recency bonus: patterns ending closer to the last candle score higher
-                recency = 1.0 + (pe + fl) / n * 0.5
+            # ── Channel geometry ─────────────────────────────────────────────
+            flag_highs = [c["high"] for c in flag]
+            flag_lows  = [c["low"]  for c in flag]
+            h_slope    = _line_slope(flag_highs)
+            l_slope    = _line_slope(flag_lows)
+            mid_slope  = (h_slope + l_slope) / 2.0
+            mid_price  = (fh + fl_) / 2.0
+            if mid_price <= 0:
+                continue
+            slope_pct_per_bar = mid_slope / mid_price * 100.0
+            h_slope_pct       = h_slope / mid_price * 100.0
+            l_slope_pct       = l_slope / mid_price * 100.0
 
-                direction = "bullish" if is_bull else "bearish"
-                pole_pct  = round(abs(pole_move) * 100, 2)
+            if slope_pct_per_bar > NEUTRAL_SLOPE_PCT:
+                flag_slope = "ascending"
+            elif slope_pct_per_bar < -NEUTRAL_SLOPE_PCT:
+                flag_slope = "descending"
+            else:
+                flag_slope = "neutral"
 
-                proj = pole_height * proj_frac
-                if is_bull:
-                    raw_target = fh + proj
-                    target = round(min(raw_target, current_price * 2.0), 8)
-                else:
-                    raw_target = fl_ - proj
-                    target = round(max(raw_target, current_price * 0.20, pole_low * 0.5), 8)
+            # A bull flag must be neutral/descending; a bear flag neutral/ascending.
+            # Reject a channel sloping strongly WITH the pole (a wedge, not a flag).
+            if is_bull and slope_pct_per_bar > MAX_WITH_TREND_SLOPE_PCT:
+                continue
+            if (not is_bull) and slope_pct_per_bar < -MAX_WITH_TREND_SLOPE_PCT:
+                continue
+            # Rails must be reasonably parallel.
+            if abs(h_slope_pct - l_slope_pct) > PARALLEL_TOL_PCT:
+                continue
+            # Volatility must contract into the flag relative to the pole.
+            flag_avg_range = sum(c["high"] - c["low"] for c in flag) / len(flag)
+            if flag_avg_range > pole_avg_range * FLAG_MAX_VOL_FRAC:
+                continue
 
-                # ── Channel slope classification ──────────────────────────
-                flag_highs = [c["high"] for c in flag]
-                flag_lows  = [c["low"]  for c in flag]
-                h_slope    = _line_slope(flag_highs)
-                l_slope    = _line_slope(flag_lows)
-                mid_slope  = (h_slope + l_slope) / 2.0
-                mid_price  = (fh + fl_) / 2.0
-                thresh     = mid_price * 0.001
-                if mid_slope > thresh:
-                    flag_slope = "ascending"
-                elif mid_slope < -thresh:
-                    flag_slope = "descending"
-                else:
-                    flag_slope = "neutral"
-                slope_pct_per_bar = round(mid_slope / mid_price * 100, 4) if mid_price > 0 else 0.0
+            direction = "bullish" if is_bull else "bearish"
+            pole_pct  = round(abs(pole_move) * 100, 2)
 
-                # ── Confirmation: post-flag candle closed beyond flag boundary ──
-                post = closed[pe + fl:]
-                confirmed    = False
-                breakout_dir = None
-                if post:
+            # ── Target projection ────────────────────────────────────────────
+            proj = pole_height * proj_frac
+            if is_bull:
+                target = round(min(fh + proj, current_price * 2.0), 8)
+            else:
+                target = round(max(fl_ - proj, current_price * 0.20, pole_low * 0.5), 8)
+
+            # ── Chronological breakout resolution ────────────────────────────
+            # The FIRST post-flag candle to close beyond a boundary decides the
+            # outcome; scanning stops there so a later recovery cannot resurrect
+            # a failed pattern.
+            post = remaining[fl:]
+            status              = "forming"
+            confirmed           = False
+            breakout_dir        = None
+            breakout_ts         = None
+            invalidation_reason = None
+            for c in post:
+                if c["close"] > fh:
+                    breakout_ts = c["timestamp"]
                     if is_bull:
-                        if any(c["close"] > fh  for c in post):
-                            confirmed = True; breakout_dir = "up"
-                        elif any(c["close"] < fl_ for c in post):
-                            confirmed = True; breakout_dir = "down"
+                        status, confirmed, breakout_dir = "confirmed", True, "up"
                     else:
-                        if any(c["close"] < fl_ for c in post):
-                            confirmed = True; breakout_dir = "down"
-                        elif any(c["close"] > fh  for c in post):
-                            confirmed = True; breakout_dir = "up"
+                        status, breakout_dir = "invalidated", "up"
+                        invalidation_reason = "closed above flag high before bearish breakdown"
+                    break
+                if c["close"] < fl_:
+                    breakout_ts = c["timestamp"]
+                    if is_bull:
+                        status, breakout_dir = "invalidated", "down"
+                        invalidation_reason = "closed below flag low before bullish breakout"
+                    else:
+                        status, confirmed, breakout_dir = "confirmed", True, "down"
+                    break
 
-                # is_active: price must still be INSIDE or just outside the flag zone.
-                # A bullish flag is only relevant while price is above the flag low.
-                # A bearish flag is only relevant while price is below the flag high.
-                # 3% buffer covers minor wicks; >3% means price has genuinely exited
-                # the zone in the wrong direction and the pattern is invalidated.
-                flag_ended_recently = (pe + fl) >= n - 3
-                if is_bull:
-                    # Price must not have crashed more than 3% below flag low
-                    price_near_flag = current_price >= fl_ * 0.97
-                    # Target already hit: price has already reached or exceeded the target
-                    target_hit = current_price >= target
-                else:
-                    # Price must not have surged more than 3% above flag high
-                    price_near_flag = current_price <= fh * 1.03
-                    # Target already hit: price has already reached or gone below the target
-                    target_hit = current_price <= target
-                is_active = flag_ended_recently and price_near_flag and not target_hit
+            # Invalidated patterns are never returned as active candidates.
+            if status == "invalidated":
+                continue
 
-                # Skip invalidated patterns — price has already moved through the
-                # zone in the wrong direction, or has already reached the target.
-                if not price_near_flag or target_hit:
-                    continue
+            # ── Activity / adverse-price / target-hit (existing behaviour) ────
+            # A bullish flag is only relevant while price stays above the flag
+            # low; a bearish flag while price stays below the flag high. The 3%
+            # buffer covers minor wicks; beyond it the zone has been genuinely
+            # exited in the wrong direction and the pattern is invalidated.
+            flag_ended_recently = (pe + fl) >= n - FLAG_RECENT_BARS
+            if is_bull:
+                price_near_flag = current_price >= fl_ * (1.0 - FLAG_ACTIVE_BUFFER)
+                target_hit      = current_price >= target
+            else:
+                price_near_flag = current_price <= fh * (1.0 + FLAG_ACTIVE_BUFFER)
+                target_hit      = current_price <= target
+            if not price_near_flag or target_hit:
+                continue
+            is_active = flag_ended_recently and price_near_flag and not target_hit
 
-                # Also skip a confirmed flag whose breakout went the wrong way:
-                # a bearish flag that broke UP is invalidated; a bullish that broke DOWN too.
-                wrong_breakout = (confirmed and (
-                    (is_bull and breakout_dir == "down") or
-                    (not is_bull and breakout_dir == "up")
-                ))
-                if wrong_breakout:
-                    continue
+            # ── Strength & recency ───────────────────────────────────────────
+            recency  = 1.0 + (pe + fl) / n * 0.5
+            strength = pole_pct * (1.0 - retrace) * recency * tf_weight
 
-                strength = pole_pct * (1.0 - retrace) * recency * tf_weight
-
-                if strength > best_strength:
-                    best_strength = strength
-                    best = {
-                        "direction":          direction,
-                        "timeframe":          tf_label,
-                        "tf_weight":          tf_weight,
-                        "pole_pct":           pole_pct,
-                        "pole_high":          round(pole_high, 8),
-                        "pole_low":           round(pole_low,  8),
-                        "pole_start_price":   round(pole_open,  8),
-                        "pole_end_price":     round(pole_close, 8),
-                        "flag_high":          round(fh,  8),
-                        "flag_low":           round(fl_, 8),
-                        "retrace_pct":        round(retrace * 100, 2),
-                        "target":             target,
-                        "proj_frac":          proj_frac,
-                        "strength":           round(strength, 3),
-                        "consolidation_bars": fl,
-                        "flag_slope":         flag_slope,
-                        "slope_pct_per_bar":  slope_pct_per_bar,
-                        "confirmed":          confirmed,
-                        "breakout_dir":       breakout_dir,
-                        "pole_start_ts":      closed[ps]["timestamp"],
-                        "flag_end_ts":        flag[-1]["timestamp"],
-                        "is_active":          is_active,
-                    }
-
-            if best:
-                candidates.append(best)
+            candidates.append({
+                "direction":          direction,
+                "timeframe":          tf_label,
+                "tf_weight":          tf_weight,
+                "pole_pct":           pole_pct,
+                "pole_high":          round(pole_high, 8),
+                "pole_low":           round(pole_low,  8),
+                "pole_start_price":   round(pole_open,  8),
+                "pole_end_price":     round(pole_close, 8),
+                "flag_high":          round(fh,  8),
+                "flag_low":           round(fl_, 8),
+                "retrace_pct":        round(retrace * 100, 2),
+                "target":             target,
+                "proj_frac":          proj_frac,
+                "strength":           round(strength, 3),
+                "consolidation_bars": fl,
+                "flag_slope":         flag_slope,
+                "slope_pct_per_bar":  round(slope_pct_per_bar, 4),
+                "confirmed":          confirmed,
+                "breakout_dir":       breakout_dir,
+                "pole_start_ts":      pole_bars[0]["timestamp"],
+                "flag_end_ts":        flag[-1]["timestamp"],
+                "is_active":          is_active,
+                # ── additive lifecycle metadata ──
+                "status":             status,
+                "breakout_ts":        breakout_ts,
+                "invalidation_reason": invalidation_reason,
+            })
 
     # Deduplicate by pole start — keep strongest per unique pole origin
     seen: Dict[int, Dict] = {}
@@ -207,7 +313,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             seen[key] = f
 
     result = sorted(seen.values(), key=lambda f: f["strength"], reverse=True)
-    return result[:6]
+    return result[:MAX_FLAGS_RETURNED]
 
 
 def pick_dominant_flags(all_flags: List[Dict]) -> List[Dict]:
