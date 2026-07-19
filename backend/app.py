@@ -2240,7 +2240,10 @@ def api_engulf_alerts():
         try:
             bs     = SYMBOLS[sym]
             candles = client.get_spot_klines(bs, interval, limit)
-            patterns = detect_engulfing(candles, lookback=2)
+            # detect_engulfing expects CLOSED candles only (closed-candle
+            # contract) — strip the still-forming weekly bar here.
+            closed, _live = _split_closed(candles, TF_SECONDS["1W"])
+            patterns = detect_engulfing(closed, lookback=2)
             results = []
             scan_ts   = datetime.now(timezone.utc)
             scan_fmt  = scan_ts.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")

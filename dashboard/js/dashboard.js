@@ -3798,7 +3798,7 @@ function _renderNotifList() {
     const cls    = isBull ? 'bull' : 'bear';
     const icon   = isBull ? '🟢' : '🔴';
     const label  = isBull ? 'Bullish Engulfing' : 'Bearish Engulfing';
-    const when   = a.candles_ago === 1 ? 'current candle' : `${a.candles_ago} candles ago`;
+    const when   = a.candles_ago === 1 ? 'last closed 1W candle' : `${a.candles_ago} closed candles ago`;
     const id     = `engulf_${a.symbol}_${a.timestamp}`;
     const isNew  = !engulfSeen[id];
     items.push({ ts: a.timestamp || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
