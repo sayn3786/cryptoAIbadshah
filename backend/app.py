@@ -280,6 +280,21 @@ def _ema_series(values: List[float], period: int) -> List:
     return out
 
 
+def _rec_reasons(sig: dict, direction: str, limit: int = 3) -> list:
+    """Primary display reasons for a recommendation card.
+
+    generate_signal returns bullish_reasons / bearish_reasons — there is no
+    generic "reasons" field (the old sig.get("reasons") read always yielded
+    an empty list). A LONG card shows its bullish reasons and a SHORT its
+    bearish ones; opposing-side reasons are never shown as primary reasons.
+    """
+    if direction == "LONG":
+        reasons = sig.get("bullish_reasons") or []
+    else:
+        reasons = sig.get("bearish_reasons") or []
+    return reasons[:limit]
+
+
 def _quick_tf_dir(symbol: str, tf: str) -> str:
     """
     Lightweight direction for HTF confluence check.
@@ -1868,7 +1883,7 @@ def _compute_recommendations() -> dict:
             "live_price":       h2.get("live_price"),
             "signal_price":     h2.get("signal_price"),
             "data_quality":     "degraded" if "degraded" in (h1.get("data_quality"), h2.get("data_quality")) else "good",
-            "reasons":          sig.get("reasons", [])[:3],
+            "reasons":          _rec_reasons(sig, direction),
             "exhaustion_alert": None,
             "exhaustion_by_tf": None,
             "htf_4h_dir":       htf_4h_dir,

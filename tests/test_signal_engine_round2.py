@@ -474,6 +474,32 @@ def test_accumulation_range_includes_newest_closed_candle():
     assert acc["high"] == 101.5, "newest closed candle must be inside the window"
 
 
+# ── 8. recommendation reason selection ─────────────────────────────────────────
+def test_recommendation_reasons_match_direction():
+    pytest.importorskip("flask")
+    import app
+
+    # real signals from the strong mirror fixtures
+    long_sig = generate_signal(_confluence_fixture(bull=True))
+    short_sig = generate_signal(_confluence_fixture(bull=False))
+    assert long_sig["direction"] == "LONG" and short_sig["direction"] == "SHORT"
+    # generate_signal has no generic "reasons" field — the old read yielded []
+    assert "reasons" not in long_sig
+
+    long_r = app._rec_reasons(long_sig, "LONG")
+    short_r = app._rec_reasons(short_sig, "SHORT")
+    assert long_r, "LONG card must show reasons (old code always showed none)"
+    assert short_r, "SHORT card must show reasons"
+    assert long_r == long_sig["bullish_reasons"][:3]
+    assert short_r == short_sig["bearish_reasons"][:3]
+    assert len(long_r) <= 3 and len(short_r) <= 3, "display count preserved"
+
+    # opposing-side reasons are never the primary card reasons
+    mixed = {"bullish_reasons": ["bull A"], "bearish_reasons": ["bear A"]}
+    assert app._rec_reasons(mixed, "LONG") == ["bull A"]
+    assert app._rec_reasons(mixed, "SHORT") == ["bear A"]
+
+
 # ── 7. options reason attribution (4-way matrix) ───────────────────────────────
 def _options_fixture(long_side: bool, opts_bullish: bool):
     a = _confluence_fixture(bull=long_side)              # strong LONG / SHORT
