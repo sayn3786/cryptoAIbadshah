@@ -501,6 +501,25 @@ def test_bollinger_breakout_after_squeeze_bullish_and_bearish():
     assert dn["breakout_after_squeeze"] == "bearish", dn
 
 
+def test_bollinger_modest_release_uses_previous_compressed_boundary():
+    # The release closes beyond the PREVIOUS squeezed band but remains inside
+    # the newly-expanded current band. It must still count as a squeeze release.
+    volatile = [100 + (3.0 if i % 2 == 0 else -3.0) for i in range(30)]
+    quiet = [99.9 if i % 2 == 0 else 100.1 for i in range(20)]
+
+    up = calculate_bollinger_bands(_bb_candles(volatile + quiet + [100.21]))
+    assert up["prev_squeeze"] is True
+    assert up["previous_upper"] < 100.21 <= up["upper"], up
+    assert up["breakout"] is None, "ordinary current-band break should remain separate"
+    assert up["breakout_after_squeeze"] == "bullish", up
+
+    dn = calculate_bollinger_bands(_bb_candles(volatile + quiet + [99.79]))
+    assert dn["prev_squeeze"] is True
+    assert dn["previous_lower"] > 99.79 >= dn["lower"], dn
+    assert dn["breakout"] is None
+    assert dn["breakout_after_squeeze"] == "bearish", dn
+
+
 def test_bollinger_ordinary_break_without_prior_squeeze():
     # steadily volatile series ending in a band break — no prior-window squeeze,
     # so it's an ordinary break: breakout set, breakout_after_squeeze None.
@@ -538,6 +557,67 @@ def test_bollinger_scoring_split_squeeze_vs_ordinary():
         "breakout_after_squeeze": "bearish", "pct_b": -0.1,
         "upper": 101, "lower": 99}))["score"]
     assert strong - base == base - strong_b
+
+
+# ── 12. Acc/EQ/FVG direction and equal-level freshness ─────────────────────────
+import patterns as patterns_module                                      # noqa: E402
+
+
+def test_acc_setup_uses_bullish_fvg_below_range(monkeypatch):
+    acc = {"detected": True, "high": 101.0, "low": 99.0, "mid": 100.0}
+    eq = {"eql": {"price": 99.0, "touches": 3, "candles_ago": 0},
+          "eqh": None}
+    monkeypatch.setattr(patterns_module, "detect_accumulation_range",
+                        lambda candles, window=20: acc)
+    monkeypatch.setattr(patterns_module, "detect_equal_levels",
+                        lambda candles, window=20: eq)
+    candles = [{"close": 100.0}]
+    bullish_below = {"type": "bullish", "bottom": 97.5, "top": 98.5,
+                     "filled": False}
+    bearish_below = {"type": "bearish", "bottom": 97.5, "top": 98.5,
+                     "filled": False}
+    inside_bullish = {"type": "bullish", "bottom": 98.5, "top": 99.5,
+                      "filled": False}
+
+    out = patterns_module.detect_acc_eql_fvg_setup(
+        candles, [bearish_below, inside_bullish, bullish_below])
+    assert out["signal"] == "bullish", out
+    assert out["fvg"] is bullish_below
+
+
+def test_acc_setup_uses_bearish_fvg_above_range(monkeypatch):
+    acc = {"detected": True, "high": 101.0, "low": 99.0, "mid": 100.0}
+    eq = {"eql": None,
+          "eqh": {"price": 101.0, "touches": 3, "candles_ago": 0}}
+    monkeypatch.setattr(patterns_module, "detect_accumulation_range",
+                        lambda candles, window=20: acc)
+    monkeypatch.setattr(patterns_module, "detect_equal_levels",
+                        lambda candles, window=20: eq)
+    candles = [{"close": 100.0}]
+    bearish_above = {"type": "bearish", "bottom": 101.5, "top": 102.5,
+                     "filled": False}
+    bullish_above = {"type": "bullish", "bottom": 101.5, "top": 102.5,
+                     "filled": False}
+    inside_bearish = {"type": "bearish", "bottom": 100.5, "top": 101.5,
+                      "filled": False}
+
+    out = patterns_module.detect_acc_eql_fvg_setup(
+        candles, [bullish_above, inside_bearish, bearish_above])
+    assert out["signal"] == "bearish", out
+    assert out["fvg"] is bearish_above
+
+
+def test_equal_level_tie_prefers_most_recent_cluster():
+    candles = []
+    for i in range(10):
+        candles.append({"high": 100.0 + i, "low": 90.0 - i, "close": 95.0})
+    # Two distinct two-touch high clusters. The recent 120 pool must win the
+    # touch-count tie over the stale 110 pool.
+    candles[0]["high"], candles[1]["high"] = 110.0, 110.01
+    candles[7]["high"], candles[9]["high"] = 120.0, 120.01
+    out = patterns_module.detect_equal_levels(candles, window=10, tolerance=0.001)
+    assert out["eqh"]["candles_ago"] == 0, out
+    assert out["eqh"]["price"] == 120.01, out
 
 
 # ── 10. engulfing honors lookback ──────────────────────────────────────────────
