@@ -497,15 +497,22 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"Mild negative price momentum ({price_roc:+.1f}% over 4 candles)")
 
     # ── Last-4-candle direction consistency ───────────────────────────────────
-    # Raw candle direction (close > open = bullish) over the 4 most recently
-    # CLOSED candles (live candle excluded — it hasn't closed yet).
-    # Rewards 3-4 candles aligned in one direction (+6/+12), penalises whipsawing.
-    # Net contribution: ±12 pts max into momentum bucket.
+    # Candle consistency over the 4 most recently CLOSED candles, SYMMETRIC in
+    # bull/bear with dojis neutral (dir 0). The old map keyed on bull_count
+    # alone with `bear_count = 4 - bull_count`, so every doji counted as a
+    # bearish candle — four dojis scored −12 (false SHORT momentum). Now:
+    # 4 aligned → ±12, 3 aligned → ±6, anything else (incl. doji-heavy) → 0.
     candle_dirs = analysis.get("candle_dirs") or []
     if len(candle_dirs) >= 4:
-        bull_count = sum(1 for d in candle_dirs[-4:] if d > 0)
-        bear_count = 4 - bull_count
-        candle_pts = {4: 12, 3: 6, 2: 0, 1: -6, 0: -12}[bull_count]
+        last4 = candle_dirs[-4:]
+        bull_count = sum(1 for d in last4 if d > 0)
+        bear_count = sum(1 for d in last4 if d < 0)
+        if bull_count >= 3:
+            candle_pts = 12 if bull_count == 4 else 6
+        elif bear_count >= 3:
+            candle_pts = -12 if bear_count == 4 else -6
+        else:
+            candle_pts = 0
         score += candle_pts; g['momentum'] += candle_pts
         if candle_pts > 0:
             bull_reasons.append(f"Candle consistency: {bull_count}/4 recent closed candles bullish — sustained buying pressure")

@@ -50,7 +50,7 @@ from indicators import (
     calculate_supertrend, calculate_ichimoku, calculate_bollinger_bands,
     calculate_stoch_rsi, calculate_vwap, calculate_volume_signal,
     calculate_cvd, detect_fvg, detect_engulfing, detect_rsi_divergence,
-    find_pivots,
+    find_pivots, candle_direction,
 )
 from patterns import (
     analyze_elliott_wave, detect_choch, detect_liquidity_grab,
@@ -102,7 +102,8 @@ def build_price_analysis(candles: List[Dict], timeframe: str, symbol: str) -> Di
     # is the newest COMPLETED candle and must be included — mirror production
     # (app.build_analysis), which uses spot[-n:] not spot[-(1+n):-1].
     _n_dir = _TF_CANDLE_N.get(timeframe, 4)
-    candle_dirs = ([1 if c["close"] > c["open"] else -1 for c in candles[-_n_dir:]]
+    # Shared helper (+1/-1/0): a doji is neutral, not bearish — mirrors production.
+    candle_dirs = ([candle_direction(c) for c in candles[-_n_dir:]]
                    if len(candles) >= _n_dir else [])
 
     ph, pl = find_pivots(candles, window=2)

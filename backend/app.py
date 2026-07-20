@@ -33,7 +33,8 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     calculate_macd, calculate_ema_trend, detect_whale_activity,
     calculate_supertrend, calculate_ichimoku,
     calculate_bollinger_bands, detect_rsi_divergence,
-    calculate_vwap, calculate_stoch_rsi, calculate_volume_signal)
+    calculate_vwap, calculate_stoch_rsi, calculate_volume_signal,
+    candle_direction)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
@@ -319,8 +320,11 @@ def _quick_tf_dir(symbol: str, tf: str) -> str:
         recent    = closed[-n:] if len(closed) >= n else closed
         if not recent:
             return "NEUTRAL"
-        bull      = sum(1 for c in recent if c["close"] > c["open"])
-        bear      = len(recent) - bull
+        # Shared helper: dojis are neutral — they no longer inflate the bear
+        # count (old `len(recent) - bull` counted every doji as bearish).
+        _dirs     = [candle_direction(c) for c in recent]
+        bull      = sum(1 for d in _dirs if d > 0)
+        bear      = sum(1 for d in _dirs if d < 0)
         threshold = max(1, round(len(recent) * 0.6))
         if bull >= threshold:
             return "LONG"
@@ -734,7 +738,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # included. The old slice spot[-(1+n):-1] dropped it — an off-by-one that
     # ignored the most recent closed bar's direction.
     _n_dir = _TF_CANDLE_N.get(timeframe, 4)
-    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-_n_dir:]] if len(spot) >= _n_dir else []
+    # Shared helper: +1 / -1 / 0(doji) — a doji is NOT bearish (old `else -1`
+    # classified every doji as a bearish candle → false SHORT momentum).
+    candle_dirs = [candle_direction(c) for c in spot[-_n_dir:]] if len(spot) >= _n_dir else []
 
     # Aggregated spot CVD: sums real taker buy/sell deltas from Binance+OKX+MEXC
     # in parallel. Falls back to single-exchange estimate only if all three fail.

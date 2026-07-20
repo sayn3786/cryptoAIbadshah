@@ -11,6 +11,8 @@ All candles/CVD are synthetic; no live APIs.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 from signals import generate_signal                                     # noqa: E402
@@ -470,6 +472,88 @@ def test_accumulation_range_includes_newest_closed_candle():
     cs[-1]["high"] = 101.5                    # range top set by newest closed bar
     acc = detect_accumulation_range(cs, window=20)
     assert acc["high"] == 101.5, "newest closed candle must be inside the window"
+
+
+# ── 5. doji SHORT bias removed ─────────────────────────────────────────────────
+from indicators import candle_direction, CANDLE_DOJI_TOL                # noqa: E402
+
+
+def _dir_candle(o, c):
+    return {"timestamp": T0, "open": o, "high": max(o, c) + 1, "low": min(o, c) - 1,
+            "close": c, "volume": 10.0}
+
+
+def test_candle_direction_helper():
+    assert candle_direction(_dir_candle(100.0, 101.0)) == 1
+    assert candle_direction(_dir_candle(100.0, 99.0)) == -1
+    assert candle_direction(_dir_candle(100.0, 100.0)) == 0, "exact doji is neutral"
+    # floating-point noise inside the tolerance is neutral in BOTH directions
+    assert candle_direction(_dir_candle(100.0, 100.0 + 100.0 * CANDLE_DOJI_TOL * 0.5)) == 0
+    assert candle_direction(_dir_candle(100.0, 100.0 - 100.0 * CANDLE_DOJI_TOL * 0.5)) == 0
+    # legacy-compat: a degenerate candle can't crash
+    assert candle_direction({"open": 0, "close": 5}) == 0
+
+
+def test_backtest_candle_dirs_use_doji_neutral():
+    candles = mk_candles(30, up=False)
+    candles[-1]["close"] = candles[-1]["open"]           # newest closed = doji
+    a = build_price_analysis(candles, "2H", "TESTX")
+    assert a["candle_dirs"][-1] == 0, "a doji must not be classified bearish"
+
+
+def _consistency_signal(dirs):
+    a = {
+        "symbol": "ETH", "timeframe": "1D", "candles": mk_candles(60, up=True),
+        "rsi": 50, "rsi_slope": 0, "price_roc": 0.1, "candle_dirs": dirs,
+        "ema_trend": {"above": [], "below": [], "aligned": "neutral",
+                      "ema50": 100, "ema21": 100},
+        "supertrend": {"direction": "neutral", "value": 100},
+        "macd": {"histogram": 0.0, "cross": "none"},
+    }
+    return generate_signal(a)["score"]
+
+
+def test_candle_consistency_symmetric_and_doji_neutral():
+    base = _consistency_signal([1, -1, 1, -1])           # mixed → 0 pts
+    assert _consistency_signal([0, 0, 0, 0]) == base, "four dojis score zero"
+    # (final scores pass through the engine's uniform lone-group damping, so we
+    # assert exact bull/bear SYMMETRY and ordering rather than raw magnitudes)
+    up3 = _consistency_signal([1, 1, 1, 0])              # 3 bull + doji → lean bull
+    dn3 = _consistency_signal([-1, -1, -1, 0])           # exact bearish mirror
+    assert up3 - base == base - dn3 > 0, (up3, dn3, base)
+    up4 = _consistency_signal([1, 1, 1, 1])
+    dn4 = _consistency_signal([-1, -1, -1, -1])
+    assert up4 - base == base - dn4 > up3 - base, (up4, dn4, base)
+    # dojis can never increase the bearish count: 2 bear + 2 doji is NOT
+    # "4 bearish" — it stays neutral
+    assert _consistency_signal([-1, -1, 0, 0]) == base
+
+
+def test_quick_tf_dir_fallback_dojis_not_bearish(monkeypatch):
+    pytest.importorskip("flask")
+    import app
+
+    # few candles → EMA branch skipped → candle-majority fallback.
+    # 3 dojis + 1 bull among the recent window: old code counted dojis as
+    # bearish (bear=3 ≥ threshold → SHORT); now they are neutral → NEUTRAL.
+    candles = []
+    p = 100.0
+    for i in range(9):
+        candles.append({"timestamp": T0 + i * STEP, "open": p, "high": p + 1,
+                        "low": p - 1, "close": p, "volume": 10.0})   # dojis
+    candles.append({"timestamp": T0 + 9 * STEP, "open": 100.0, "high": 102,
+                    "low": 99, "close": 101.0, "volume": 10.0})      # 1 bull
+    candles.append({"timestamp": T0 + 10 * STEP, "open": 101.0, "high": 102,
+                    "low": 100, "close": 101.0, "volume": 10.0})     # live (dropped)
+
+    class _Stub:
+        def get_spot_klines(self, bs, interval, limit):
+            return [dict(c) for c in candles]
+        def aggregate_candles(self, cs, n):
+            return cs
+    monkeypatch.setattr(app, "client", _Stub())
+    assert app._quick_tf_dir("BTC", "1D") == "NEUTRAL", \
+        "doji-heavy window must not read as SHORT"
 
 
 def test_choch_exception_confirmation_candle_not_a_pivot():

@@ -17,6 +17,35 @@ CVD_FUT_HEAVY_SHARE    = 0.65   # >= → futures-heavy
 CVD_SPOT_HEAVY_SHARE   = 0.35   # <= → spot-heavy
 CVD_SPOT_DOMINANT_SHARE = 0.20  # <= → spot-dominated
 
+# ── Candle direction ──────────────────────────────────────────────────────────
+# Relative body threshold below which a candle is a DOJI (direction 0):
+# |close − open| / open ≤ this. Keeps exact and floating-point-noise dojis
+# neutral instead of the old `close <= open ⇒ bearish` classification, which
+# silently counted every doji as a bearish candle (false SHORT momentum).
+CANDLE_DOJI_TOL = 1e-4          # 0.01% of the open price
+
+
+def candle_direction(candle: Dict, tol: float = CANDLE_DOJI_TOL) -> int:
+    """Shared pure candle-direction helper.
+
+    +1 — meaningfully bullish body (close above open by more than `tol` rel.)
+    -1 — meaningfully bearish body
+     0 — doji / insignificant body (|close − open| within `tol` of the open)
+
+    Used by production candle_dirs, the backtest, the _quick_tf_dir fallback
+    and candle-consistency scoring so all four agree on what a doji is.
+    """
+    o = candle.get("open") or 0.0
+    c = candle.get("close") or 0.0
+    if o <= 0:
+        return 0
+    body = (c - o) / o
+    if body > tol:
+        return 1
+    if body < -tol:
+        return -1
+    return 0
+
 
 def _cvd_unit(cvd: Dict) -> str:
     """Declared flow unit of a CVD payload: 'usd', 'base', or 'unknown'."""
