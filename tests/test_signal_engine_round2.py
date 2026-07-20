@@ -474,6 +474,58 @@ def test_accumulation_range_includes_newest_closed_candle():
     assert acc["high"] == 101.5, "newest closed candle must be inside the window"
 
 
+# ── 6. VWAP cross detection ────────────────────────────────────────────────────
+from indicators import calculate_vwap                                   # noqa: E402
+
+
+def _vwap_candles(closes, vol=10.0):
+    out = []
+    for i, c in enumerate(closes):
+        out.append({"timestamp": T0 + i * STEP, "open": c, "high": c + 0.2,
+                    "low": c - 0.2, "close": c, "volume": vol})
+    return out
+
+
+def test_vwap_genuine_bullish_cross():
+    # price sits below its VWAP, then the last candle closes decisively above
+    closes = [100.0] * 20 + [99.0] * 5 + [103.0]
+    out = calculate_vwap(_vwap_candles(closes), period=20)
+    assert out["vwap_cross"] == "bullish"
+    assert out["previous_vwap"] is not None
+
+
+def test_vwap_genuine_bearish_cross():
+    closes = [100.0] * 20 + [101.0] * 5 + [97.0]
+    out = calculate_vwap(_vwap_candles(closes), period=20)
+    assert out["vwap_cross"] == "bearish"
+
+
+def test_vwap_drift_across_price_is_not_a_cross():
+    # Price stays ABOVE its contemporaneous VWAP on both bars (no real cross),
+    # but a heavy high-priced final bar JUMPS the current VWAP above the
+    # previous close. The old code (prev_close vs CURRENT vwap) reported this
+    # as a bullish cross: prev_close 100 ≤ vwap_now (~100.8) and close 101 >
+    # vwap_now. Against contemporaneous VWAPs there is no cross.
+    cs = _vwap_candles([99.0] * 18, vol=10.0)
+    n = len(cs)
+    cs.append({"timestamp": T0 + n * STEP, "open": 99.5, "high": 100.2,
+               "low": 99.4, "close": 100.0, "volume": 10.0})   # prev bar
+    cs.append({"timestamp": T0 + (n + 1) * STEP, "open": 100.5, "high": 106.0,
+               "low": 100.4, "close": 101.0, "volume": 200.0})  # vwap-jumping bar
+    out = calculate_vwap(cs, period=20)
+    # sanity: the setup really does straddle — prev close above its own vwap,
+    # while the current vwap sits between prev_close and close
+    assert out["previous_vwap"] < 100.0 < out["vwap"] < 101.0, out
+    assert out["vwap_cross"] is None, \
+        f"VWAP jumping across a price that never crossed its own VWAP: {out}"
+
+
+def test_vwap_mirror_symmetry():
+    up = calculate_vwap(_vwap_candles([100.0] * 20 + [99.0] * 5 + [103.0]), period=20)
+    dn = calculate_vwap(_vwap_candles([100.0] * 20 + [101.0] * 5 + [97.0]), period=20)
+    assert up["vwap_cross"] == "bullish" and dn["vwap_cross"] == "bearish"
+
+
 # ── 5. doji SHORT bias removed ─────────────────────────────────────────────────
 from indicators import candle_direction, CANDLE_DOJI_TOL                # noqa: E402
 

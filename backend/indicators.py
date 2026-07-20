@@ -1237,17 +1237,30 @@ def calculate_vwap(candles: List[Dict], period: int = 50) -> Dict:
     prev_close = candles[-2]["close"] if len(candles) >= 2 else close
     price_vs_vwap = "above" if close > vwap else "below"
 
+    # Cross detection compares each close to its CONTEMPORANEOUS rolling VWAP:
+    # the previous close vs the equivalent window ending one candle earlier.
+    # Comparing prev_close against the CURRENT vwap (old behaviour) reported a
+    # "cross" whenever the VWAP itself drifted across a stationary price.
+    prev_vwap = None
+    prev_w1 = candles[:-1][-period:]
+    prev_vol1 = sum(c["volume"] for c in prev_w1)
+    if prev_vol1 > 0:
+        prev_vwap = sum((c["high"] + c["low"] + c["close"]) / 3 * c["volume"]
+                        for c in prev_w1) / prev_vol1
+
     vwap_cross = None
-    if prev_close <= vwap and close > vwap:
-        vwap_cross = "bullish"
-    elif prev_close >= vwap and close < vwap:
-        vwap_cross = "bearish"
+    if prev_vwap is not None:
+        if prev_close <= prev_vwap and close > vwap:
+            vwap_cross = "bullish"
+        elif prev_close >= prev_vwap and close < vwap:
+            vwap_cross = "bearish"
 
     return {
         "vwap":          round(vwap, 8),
         "slope":         slope,
         "price_vs_vwap": price_vs_vwap,
         "vwap_cross":    vwap_cross,
+        "previous_vwap": round(prev_vwap, 8) if prev_vwap is not None else None,
     }
 
 
