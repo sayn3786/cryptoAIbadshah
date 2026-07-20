@@ -474,6 +474,61 @@ def test_accumulation_range_includes_newest_closed_candle():
     assert acc["high"] == 101.5, "newest closed candle must be inside the window"
 
 
+# ── 10. engulfing honors lookback ──────────────────────────────────────────────
+from indicators import detect_engulfing                                 # noqa: E402
+
+
+def _engulf_series(pairs_back=1, tail=0):
+    """Flat series with a bullish engulfing pair whose engulfing candle sits
+    `pairs_back` closed candles from the end, followed by `tail` small bars."""
+    cs = []
+    p = 100.0
+    for i in range(12):
+        cl = p + (0.05 if i % 2 == 0 else -0.05)
+        cs.append({"timestamp": T0 + i * STEP, "open": p, "high": max(p, cl) + 0.1,
+                   "low": min(p, cl) - 0.1, "close": cl, "volume": 10.0})
+        p = cl
+    n = len(cs)
+    cs.append({"timestamp": T0 + n * STEP, "open": 101.0, "high": 101.2,
+               "low": 99.8, "close": 100.0, "volume": 10.0})          # prev bear
+    cs.append({"timestamp": T0 + (n + 1) * STEP, "open": 99.8, "high": 101.8,
+               "low": 99.6, "close": 101.5, "volume": 10.0})          # engulfing
+    for k in range(tail):
+        cs.append({"timestamp": T0 + (n + 2 + k) * STEP, "open": 101.5,
+                   "high": 101.7, "low": 101.3, "close": 101.6, "volume": 10.0})
+    return cs
+
+
+def test_engulfing_lookback1_newest_only():
+    # engulfing ON the newest closed candle → found with candles_ago=1
+    hit = detect_engulfing(_engulf_series(tail=0), lookback=1)
+    assert any(p["direction"] == "bullish" and p["candles_ago"] == 1 for p in hit)
+    # engulfing one bar back → OUTSIDE lookback=1, but inside lookback=2
+    cs = _engulf_series(tail=1)
+    assert not detect_engulfing(cs, lookback=1), \
+        "lookback=1 must focus on the newest closed candle only"
+    hit2 = detect_engulfing(cs, lookback=2)
+    assert any(p["direction"] == "bullish" and p["candles_ago"] == 2 for p in hit2)
+
+
+def test_engulfing_outside_lookback_not_found():
+    cs = _engulf_series(tail=2)                          # two bars past the pattern
+    assert not detect_engulfing(cs, lookback=2), \
+        "a pattern three pairs back is outside lookback=2"
+
+
+def test_engulfing_never_inspects_forming_candle():
+    # callers strip the forming bar; verify the alert path (raw candles +
+    # _split_closed) matches calling the detector on the closed slice directly.
+    pytest.importorskip("flask")
+    import app
+    cs = _engulf_series(tail=0)
+    closed, _ = app._split_closed(cs, 3600)
+    assert closed[-1]["timestamp"] == cs[-1]["timestamp"]
+    direct = detect_engulfing(closed, lookback=2)
+    assert any(p["candles_ago"] == 1 for p in direct)
+
+
 # ── 9. MACD: signal-line cross vs centerline cross are independent ─────────────
 from indicators import calculate_macd                                   # noqa: E402
 

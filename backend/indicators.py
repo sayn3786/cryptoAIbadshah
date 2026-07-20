@@ -545,11 +545,17 @@ def detect_engulfing(candles: List[Dict], lookback: int = 1) -> List[Dict]:
     CLOSED-CANDLE CONTRACT (same as detect_flags): `candles` MUST already
     contain ONLY fully closed candles — the still-forming candle is removed by
     the upstream caller (app.build_analysis via _split_closed, the engulf-alert
-    scanner, backtest.build_price_analysis). This function checks the NEWEST
-    closed candle (candles[-1]) against its prior candle (candles[-2]). An
-    earlier version sliced candles[:-1] internally; combined with callers that
-    already pass closed candles, that skipped the newest completed candle and
-    reported engulfings one bar late.
+    scanner, backtest.build_price_analysis). An earlier version sliced
+    candles[:-1] internally; combined with callers that already pass closed
+    candles, that skipped the newest completed candle and reported engulfings
+    one bar late.
+
+    `lookback` = how many of the latest completed candle PAIRS are examined
+    (candles_ago=1 is the newest closed candle, 2 the one before it, …).
+    Production signals use lookback=1 (newest candle only); the weekly alert
+    endpoint uses lookback=2 so an engulfing on either of the latest two
+    closed candles is surfaced. The strongest pattern per direction wins
+    (more recent first, then larger body ratio).
     """
     patterns: List[Dict] = []
     closed = candles
@@ -558,8 +564,8 @@ def detect_engulfing(candles: List[Dict], lookback: int = 1) -> List[Dict]:
 
     current_price = closed[-1]["close"]
 
-    # Only check the single most recent closed candle
-    start = len(closed) - 1
+    # Examine the latest `lookback` completed candle pairs
+    start = max(1, len(closed) - max(1, lookback))
     for i in range(start, len(closed)):
         prev = closed[i - 1]
         curr = closed[i]
