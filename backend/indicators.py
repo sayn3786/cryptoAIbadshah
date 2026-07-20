@@ -350,6 +350,20 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
 
 
 def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
+    """Fair Value Gaps with a PERMANENT fill lifecycle.
+
+    CLOSED-CANDLE CONTRACT: `candles` are fully closed candles (forming candle
+    removed upstream).
+
+    `filled` is decided by scanning candles CHRONOLOGICALLY after the 3-candle
+    formation (from the bar after the gap's third candle onward, so the
+    formation cannot fill itself): a bullish gap is permanently filled once a
+    later candle's low trades at/below the gap bottom; a bearish gap once a
+    later candle's high trades at/above the gap top. Once filled it STAYS
+    filled — the old current-price-only check let a historically-filled gap
+    resurrect as "unfilled" whenever price moved back away from it.
+    `filled_at` (additive) carries the filling candle's timestamp.
+    """
     fvgs: List[Dict] = []
     if len(candles) < 3:
         return fvgs
@@ -372,15 +386,22 @@ def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
             gap = (nxt["low"] - prev["high"]) / prev["high"] * 100
             if gap >= min_size_pct:
                 mid = (nxt["low"] + prev["high"]) / 2
+                bottom = prev["high"]
+                filled, filled_at = False, None
+                for c in candles[i + 2:]:          # strictly after the formation
+                    if c["low"] <= bottom:         # traded at/below gap bottom
+                        filled, filled_at = True, c["timestamp"]
+                        break
                 fvgs.append({
                     "type":     "bullish",
                     "gap_type": "bag" if is_bag else "fvg",
                     "top":      round(nxt["low"],  8),
-                    "bottom":   round(prev["high"], 8),
+                    "bottom":   round(bottom, 8),
                     "midpoint": round(mid, 8),
                     "size_pct": round(gap, 4),
                     "timestamp": curr["timestamp"],
-                    "filled":   current_price < prev["high"],
+                    "filled":   filled,
+                    "filled_at": filled_at,
                     "distance_pct": round((current_price - mid) / current_price * 100, 2),
                 })
 
@@ -388,15 +409,22 @@ def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
             gap = (prev["low"] - nxt["high"]) / prev["low"] * 100
             if gap >= min_size_pct:
                 mid = (prev["low"] + nxt["high"]) / 2
+                top = prev["low"]
+                filled, filled_at = False, None
+                for c in candles[i + 2:]:          # strictly after the formation
+                    if c["high"] >= top:           # traded at/above gap top
+                        filled, filled_at = True, c["timestamp"]
+                        break
                 fvgs.append({
                     "type":     "bearish",
                     "gap_type": "bag" if is_bag else "fvg",
-                    "top":      round(prev["low"],  8),
+                    "top":      round(top,  8),
                     "bottom":   round(nxt["high"],  8),
                     "midpoint": round(mid, 8),
                     "size_pct": round(gap, 4),
                     "timestamp": curr["timestamp"],
-                    "filled":   current_price > prev["low"],
+                    "filled":   filled,
+                    "filled_at": filled_at,
                     "distance_pct": round((current_price - mid) / current_price * 100, 2),
                 })
 

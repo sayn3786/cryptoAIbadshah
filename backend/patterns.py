@@ -814,12 +814,16 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
     # Find the most relevant FVG for each direction
     # Bearish FVG = gap below current price (bullish pump target)
     # Bullish FVG = gap above current price (bearish dump target)
+    # Filled gaps are spent — they no longer act as magnets and must not anchor
+    # a pump/dump setup (permanent-fill lifecycle in detect_fvg).
     bear_fvgs = sorted(
-        [f for f in fvgs if f.get("type") == "bearish" and f.get("low", 0) < current_price],
+        [f for f in fvgs if f.get("type") == "bearish" and not f.get("filled")
+         and f.get("low", 0) < current_price],
         key=lambda f: abs(f.get("low", 0) - acc["low"])
     )
     bull_fvgs = sorted(
-        [f for f in fvgs if f.get("type") == "bullish" and f.get("high", 0) > current_price],
+        [f for f in fvgs if f.get("type") == "bullish" and not f.get("filled")
+         and f.get("high", 0) > current_price],
         key=lambda f: abs(f.get("high", 0) - acc["high"])
     )
 

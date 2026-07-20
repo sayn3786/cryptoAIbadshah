@@ -147,3 +147,119 @@ def test_contradiction_mirrors_have_equal_absolute_adjustment():
     b = generate_signal(_contradiction_fixture(trend_bull=True))
     r = generate_signal(_contradiction_fixture(trend_bull=False))
     assert b["score"] == -r["score"], "contradiction mirrors must be symmetric"
+
+
+# ── 2. permanent FVG lifecycle ─────────────────────────────────────────────────
+from indicators import detect_fvg                                       # noqa: E402
+from backtest import build_price_analysis                              # noqa: E402
+
+
+def _ohlc(i, o, h, l, c):
+    return {"timestamp": T0 + i * STEP, "open": o, "high": h, "low": l,
+            "close": c, "volume": 10.0}
+
+
+def _bull_gap_series(post):
+    """Flat lead, then a 3-candle bullish (up) FVG: prev.high=100.5 < nxt.low=103.
+    Gap bottom=100.5, top=103 (2.49% > 1.5% min). `post` = list of (h, l) wick
+    pairs appended after the formation (closes mid-range)."""
+    cs = [_ohlc(i, 100, 100.5, 99.5, 100) for i in range(8)]
+    n = len(cs)
+    cs.append(_ohlc(n,     100, 100.5, 99.5, 100.2))   # prev
+    cs.append(_ohlc(n + 1, 100.4, 104, 100.2, 103.8))  # curr (big impulse)
+    cs.append(_ohlc(n + 2, 103.8, 105, 103.0, 104.5))  # nxt (low 103 > 100.5)
+    for k, (h, l) in enumerate(post):
+        cs.append(_ohlc(n + 3 + k, (h + l) / 2, h, l, (h + l) / 2))
+    return cs
+
+
+def _bear_gap_series(post):
+    """Mirror: bearish (down) FVG: prev.low=99.5 > nxt.high=97. Gap top=99.5."""
+    cs = [_ohlc(i, 100, 100.5, 99.5, 100) for i in range(8)]
+    n = len(cs)
+    cs.append(_ohlc(n,     100, 100.5, 99.5, 99.8))    # prev
+    cs.append(_ohlc(n + 1, 99.6, 99.8, 96.0, 96.2))    # curr
+    cs.append(_ohlc(n + 2, 96.2, 97.0, 95.0, 95.5))    # nxt (high 97 < 99.5)
+    for k, (h, l) in enumerate(post):
+        cs.append(_ohlc(n + 3 + k, (h + l) / 2, h, l, (h + l) / 2))
+    return cs
+
+
+_FORMATION_TS = T0 + 9 * STEP    # `curr` of the crafted 3-candle gap in both builders
+
+
+def _gaps(cs, typ):
+    # select the ORIGINAL crafted gap by its formation timestamp — the post
+    # candles in some fixtures create additional gaps and distance-sorting
+    # reorders the list.
+    return [f for f in detect_fvg(cs)
+            if f["type"] == typ and f["timestamp"] == _FORMATION_TS]
+
+
+def test_fvg_bullish_unfilled():
+    # price stays above the gap bottom (100.5) forever → unfilled
+    cs = _bull_gap_series(post=[(105, 103.5), (106, 104)])
+    g = _gaps(cs, "bullish")
+    assert g and g[0]["filled"] is False and g[0]["filled_at"] is None
+
+
+def test_fvg_bearish_unfilled():
+    cs = _bear_gap_series(post=[(96.5, 95.0), (96.0, 94.5)])
+    g = _gaps(cs, "bearish")
+    assert g and g[0]["filled"] is False and g[0]["filled_at"] is None
+
+
+def test_fvg_bullish_filled_stays_filled_after_recovery():
+    # a later candle trades AT the gap bottom (low 100.5) → filled; price then
+    # rallies far above the gap — it must STAY filled (no resurrection).
+    cs = _bull_gap_series(post=[(104, 100.5), (108, 106), (112, 110)])
+    g = _gaps(cs, "bullish")
+    assert g and g[0]["filled"] is True
+    assert g[0]["filled_at"] == cs[-3]["timestamp"], "filled by the touching candle"
+
+
+def test_fvg_bearish_filled_stays_filled_after_recovery():
+    # later candle wicks to the gap top (high 99.5) → filled; price then dumps
+    # far below — remains filled.
+    cs = _bear_gap_series(post=[(99.5, 96.0), (92, 90), (88, 86)])
+    g = _gaps(cs, "bearish")
+    assert g and g[0]["filled"] is True
+    assert g[0]["filled_at"] == cs[-3]["timestamp"]
+
+
+def test_fvg_formation_candles_do_not_fill_themselves():
+    # Gap formed by the LAST three candles — no post-formation candle exists,
+    # so the gap cannot be filled by its own structure.
+    cs = _bull_gap_series(post=[])
+    g = _gaps(cs, "bullish")
+    assert g and g[0]["filled"] is False and g[0]["filled_at"] is None
+
+
+def test_filled_fvg_contributes_zero_signal_points():
+    a = {
+        "symbol": "ETH", "timeframe": "1D", "candles": mk_candles(60, up=True),
+        "rsi": 50, "rsi_slope": 0, "price_roc": 0.1, "candle_dirs": [1, -1, 1, -1],
+        "ema_trend": {"above": [], "below": [], "aligned": "neutral",
+                      "ema50": 100, "ema21": 100},
+        "supertrend": {"direction": "neutral", "value": 100},
+        "macd": {"histogram": 0.0, "cross": "none"},
+    }
+    base = generate_signal(dict(a, fvgs=[]))
+    cur = a["candles"][-1]["close"]
+    filled_gap = {"type": "bullish", "gap_type": "fvg", "top": cur * 0.99,
+                  "bottom": cur * 0.97, "midpoint": cur * 0.98, "size_pct": 2.0,
+                  "timestamp": T0, "filled": True, "filled_at": T0 + STEP,
+                  "distance_pct": -2.0}
+    with_filled = generate_signal(dict(a, fvgs=[filled_gap]))
+    assert with_filled["score"] == base["score"], "filled gaps must score zero"
+    # sanity: the identical gap UNFILLED does move the score
+    unfilled = dict(filled_gap, filled=False, filled_at=None)
+    with_unfilled = generate_signal(dict(a, fvgs=[unfilled]))
+    assert with_unfilled["score"] != base["score"]
+
+
+def test_fvg_production_backtest_parity():
+    cs = _bull_gap_series(post=[(104, 100.5), (108, 106)])
+    direct = detect_fvg(cs)
+    via_backtest = build_price_analysis(cs, "1D", "TESTX")["fvgs"]
+    assert direct == via_backtest, "identical lifecycle through both paths"
