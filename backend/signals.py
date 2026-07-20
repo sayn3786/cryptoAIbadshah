@@ -497,15 +497,22 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"Mild negative price momentum ({price_roc:+.1f}% over 4 candles)")
 
     # ── Last-4-candle direction consistency ───────────────────────────────────
-    # Raw candle direction (close > open = bullish) over the 4 most recently
-    # CLOSED candles (live candle excluded — it hasn't closed yet).
-    # Rewards 3-4 candles aligned in one direction (+6/+12), penalises whipsawing.
-    # Net contribution: ±12 pts max into momentum bucket.
+    # Candle consistency over the 4 most recently CLOSED candles, SYMMETRIC in
+    # bull/bear with dojis neutral (dir 0). The old map keyed on bull_count
+    # alone with `bear_count = 4 - bull_count`, so every doji counted as a
+    # bearish candle — four dojis scored −12 (false SHORT momentum). Now:
+    # 4 aligned → ±12, 3 aligned → ±6, anything else (incl. doji-heavy) → 0.
     candle_dirs = analysis.get("candle_dirs") or []
     if len(candle_dirs) >= 4:
-        bull_count = sum(1 for d in candle_dirs[-4:] if d > 0)
-        bear_count = 4 - bull_count
-        candle_pts = {4: 12, 3: 6, 2: 0, 1: -6, 0: -12}[bull_count]
+        last4 = candle_dirs[-4:]
+        bull_count = sum(1 for d in last4 if d > 0)
+        bear_count = sum(1 for d in last4 if d < 0)
+        if bull_count >= 3:
+            candle_pts = 12 if bull_count == 4 else 6
+        elif bear_count >= 3:
+            candle_pts = -12 if bear_count == 4 else -6
+        else:
+            candle_pts = 0
         score += candle_pts; g['momentum'] += candle_pts
         if candle_pts > 0:
             bull_reasons.append(f"Candle consistency: {bull_count}/4 recent closed candles bullish — sustained buying pressure")
@@ -529,20 +536,34 @@ def generate_signal(analysis: Dict) -> Dict:
     spot_ratio = cvd_div.get("spot_ratio",    1) or 1
     fut_ratio  = cvd_div.get("futures_ratio", 1) or 1
 
+    # ALIGNED-FLOW LADDER — when price + spot CVD + futures CVD all move
+    # together, direction NEVER inverts with dominance; rising futures share
+    # only reduces conviction, monotonically:
+    #   up:   +35 ≥ +30 ≥ +26 ≥ +14 ≥ +10  (never negative)
+    #   down: −35 ≤ −30 ≤ −26 ≤ −14 ≤ −10  (never positive)
+    # The old table scored futures_dominated_up at −14 (a ~40-pt bullish→bearish
+    # cliff at the 0.80 futures-share boundary vs confirmed_up +26, with
+    # futures_heavy_up silently falling through to +26) and
+    # futures_dominated_down at +10 (bearish→bullish inversion). Squeeze risk
+    # from leverage crowding is expressed via the divergence's squeeze_risk
+    # metadata and a no-points warning reason — never by flipping the score.
+    # futures_led_up / futures_led_down are genuine DISAGREEMENT cases (spot
+    # moving against price) and keep their opposite-direction scores.
     _CVD_BASE = {
-        "spot_dominated_up":     +35,   # spot >10×: pure organic buying
-        "spot_heavy_up":         +30,   # spot 2–10×: real buyers leading
+        "spot_dominated_up":     +35,   # futures share ≤0.20: pure organic buying
+        "spot_heavy_up":         +30,   # futures share ≤0.35: real buyers leading
         "confirmed_up":          +26,   # balanced: both streams confirming
-        "spot_led_up":           +20,   # spot bullish, futures neutral/missing
-        "futures_led_up":        -16,   # futures pump, spot not confirming
-        "futures_dominated_up":  -14,   # futures >50×: leveraged long crowding
-        "futures_dominated_down":+10,   # futures >50×: speculative short pile-on
-        "futures_led_down":      +16,   # futures selling, spot rising — squeeze
-        "futures_heavy_down":    -14,   # futures 10–50×: speculative, lower conviction
-        "spot_led_down":         -20,   # spot selling, futures not following
+        "spot_led_up":           +20,   # spot bullish, futures opposing
+        "futures_heavy_up":      +14,   # futures share ≥0.65: speculative-heavy, reduced conviction
+        "futures_dominated_up":  +10,   # futures share ≥0.80: leveraged crowding, lowest conviction
+        "futures_led_up":        -16,   # futures pump, spot FALLING — disagreement, likely to fade
+        "futures_led_down":      +16,   # futures selling, spot RISING — squeeze
+        "futures_dominated_down":-10,   # futures share ≥0.80: speculative pile-on, lowest conviction
+        "futures_heavy_down":    -14,   # futures share ≥0.65: speculative, lower conviction
+        "spot_led_down":         -20,   # spot selling, futures opposing
         "confirmed_down":        -26,   # balanced: both streams confirming
-        "spot_heavy_down":       -30,   # spot 2–10×: real sellers leading
-        "spot_dominated_down":   -35,   # spot >10×: pure holder distribution
+        "spot_heavy_down":       -30,   # futures share ≤0.35: real sellers leading
+        "spot_dominated_down":   -35,   # futures share ≤0.20: pure holder distribution
     }
     _CVD_REASON = {
         "spot_dominated_up":     ("bull", "Spot-dominated rally — spot CVD {sr:.0f}× futures; overwhelmingly organic buying with minimal leverage, highest-conviction bullish signal"),
@@ -550,8 +571,9 @@ def generate_signal(analysis: Dict) -> Dict:
         "confirmed_up":          ("bull", "Fully confirmed rally — spot and futures CVD rising in sync; balanced organic + speculative buying, strong confluence"),
         "spot_led_up":           ("bull", "Spot-driven rally — spot CVD rising, futures not chasing; genuine demand without leverage build-up, more sustainable"),
         "futures_led_up":        ("bear", "Futures-driven pump — spot CVD falling despite rally; no real spot demand behind the move; leveraged buyers only, likely to fade"),
-        "futures_dominated_up":  ("bear", "Futures-dominated rally — futures CVD {fr:.0f}× spot; speculative leverage crowding with no organic support; elevated long-squeeze risk"),
-        "futures_dominated_down":("bull", "Futures-dominated selloff — futures CVD {fr:.0f}× spot; speculative short pile-on, real holders not selling; high short-squeeze risk"),
+        "futures_heavy_up":      ("bull", "Futures-heavy rally — futures CVD {fr:.0f}× spot; bullish flow but speculative-heavy, reduced conviction"),
+        "futures_dominated_up":  ("bull", "Futures-dominated rally — futures CVD {fr:.0f}× spot; aligned bullish flow but heavily leveraged, lowest conviction"),
+        "futures_dominated_down":("bear", "Futures-dominated selloff — futures CVD {fr:.0f}× spot; aligned bearish flow but speculative pile-on, lowest conviction"),
         "futures_led_down":      ("bull", "Futures-driven selloff — spot CVD rising while futures sell; no real distribution; short-squeeze risk elevated"),
         "futures_heavy_down":    ("bear", "Futures-heavy selloff — futures CVD {fr:.0f}× spot; bearish but mostly speculative, conviction lower than genuine distribution"),
         "spot_led_down":         ("bear", "Spot-driven selloff — spot CVD falling, futures not following; real holders distributing quietly without leverage"),
@@ -571,9 +593,9 @@ def generate_signal(analysis: Dict) -> Dict:
         if "spot_dominated" in div_type:
             extra = max(0, min(5, round((spot_ratio - 10) * 0.1)))
             pts = pts + extra if pts > 0 else pts - extra
-        elif "futures_dominated" in div_type:
-            extra = max(0, min(5, round((fut_ratio - 50) * 0.02)))
-            pts = pts + extra if pts > 0 else pts - extra
+        # (No intensifier for futures_dominated: under the aligned-flow ladder a
+        # HIGHER futures ratio means LOWER conviction, so amplifying the score
+        # with the ratio would break monotonicity as futures share rises.)
         score += pts; g['flow'] += pts
         side, tmpl = _CVD_REASON[div_type]
         reason = tmpl.format(sr=spot_ratio, fr=fut_ratio)
@@ -581,6 +603,14 @@ def generate_signal(analysis: Dict) -> Dict:
             bull_reasons.append(reason)
         else:
             bear_reasons.append(reason)
+        # Squeeze risk from leverage crowding: a WARNING on the opposite side,
+        # zero points — the directional score above already carries the reduced
+        # conviction; flipping the score itself is what created the old cliff.
+        _sq = cvd_div.get("squeeze_risk")
+        if _sq == "long_squeeze_elevated":
+            bear_reasons.append("⚠️ Long-squeeze risk — rally is futures-dominated leverage; crowded longs vulnerable if momentum stalls (warning only, no points)")
+        elif _sq == "short_squeeze_elevated":
+            bull_reasons.append("⚠️ Short-squeeze risk — selloff is futures-dominated leverage; crowded shorts vulnerable to a bounce (warning only, no points)")
     else:
         # No divergence detected — score individual CVD trends as independent signals
         # (lower weight than unified signal since they carry no relational context)
@@ -1385,17 +1415,30 @@ def generate_signal(analysis: Dict) -> Dict:
     bb = analysis.get("bollinger") or {}
     bb_squeeze   = bb.get("squeeze", False)
     bb_breakout  = bb.get("breakout")
+    # "Breakout after squeeze" is judged against the PREVIOUS completed
+    # window's squeeze (the breakout candle expands the bands, un-squeezing the
+    # current window) — the old gate on the CURRENT squeeze mislabelled both.
+    bb_break_sq  = bb.get("breakout_after_squeeze")
     bb_pct_b     = bb.get("pct_b", 0.5)
     bb_upper     = bb.get("upper")
     bb_lower     = bb.get("lower")
+    bb_prev_upper = bb.get("previous_upper")
+    bb_prev_lower = bb.get("previous_lower")
 
     fmt_p = lambda v: f"${v:,.4f}" if v else ""
-    if bb_squeeze and bb_breakout == "bullish":
+    if bb_break_sq == "bullish":
         score += 16; g['pattern'] += 16
-        bull_reasons.append(f"Bollinger squeeze breakout BULLISH — price closed above upper band {fmt_p(bb_upper)} after compression; explosive move signal")
-    elif bb_squeeze and bb_breakout == "bearish":
+        bull_reasons.append(f"Bollinger squeeze breakout BULLISH — price crossed the prior compressed upper band {fmt_p(bb_prev_upper or bb_upper)}; explosive move signal")
+    elif bb_break_sq == "bearish":
         score -= 16; g['pattern'] -= 16
-        bear_reasons.append(f"Bollinger squeeze breakdown BEARISH — price closed below lower band {fmt_p(bb_lower)} after compression; explosive move signal")
+        bear_reasons.append(f"Bollinger squeeze breakdown BEARISH — price crossed the prior compressed lower band {fmt_p(bb_prev_lower or bb_lower)}; explosive move signal")
+    elif bb_breakout == "bullish":
+        # ordinary band break (no prior-window squeeze) — lower existing score
+        score += 10; g['pattern'] += 10
+        bull_reasons.append(f"Price above Bollinger upper band {fmt_p(bb_upper)} — strong bullish momentum")
+    elif bb_breakout == "bearish":
+        score -= 10; g['pattern'] -= 10
+        bear_reasons.append(f"Price below Bollinger lower band {fmt_p(bb_lower)} — strong bearish momentum")
     elif bb_squeeze:
         if bb_pct_b > 0.6:
             score += 5; g['pattern'] += 5
@@ -1403,12 +1446,6 @@ def generate_signal(analysis: Dict) -> Dict:
         elif bb_pct_b < 0.4:
             score -= 5; g['pattern'] -= 5
             bear_reasons.append(f"Bollinger squeeze active — bands compressed, price lower half (%B {bb_pct_b:.2f}); breakdown risk elevated")
-    elif bb_breakout == "bullish":
-        score += 10; g['pattern'] += 10
-        bull_reasons.append(f"Price above Bollinger upper band {fmt_p(bb_upper)} — strong bullish momentum")
-    elif bb_breakout == "bearish":
-        score -= 10; g['pattern'] -= 10
-        bear_reasons.append(f"Price below Bollinger lower band {fmt_p(bb_lower)} — strong bearish momentum")
 
     # SuperTrend — flip scores outside the trend cap (it's a momentum event,
     # not just a trend state), sustained direction goes into the cap bucket
@@ -1732,24 +1769,34 @@ def generate_signal(analysis: Dict) -> Dict:
     combo_pts = 0   # additive bonuses/penalties from specific cross-group combos
 
     # ── Combo 1: Flow confirms Trend (real money behind the move) ─────────────────
+    # Sign comes from the AGREEING GROUPS, never from the running score: bullish
+    # Flow+Trend agreement is always +12 (bearish always −12). Keying off `score`
+    # let bullish agreement strengthen a SHORT whenever other groups had made the
+    # running total negative (and the bearish mirror strengthened LONGs).
     if gdir['flow'] == gdir['trend'] != 'neutral':
         pts = 12
-        combo_pts += pts if score > 0 else -pts
+        agree_bull = gdir['trend'] == 'bull'
+        combo_pts += pts if agree_bull else -pts
         label = "🔗 Flow+Trend confluence — CVD/OI confirms trend direction; real money behind the move"
-        (bull_reasons if score > 0 else bear_reasons).append(label)
+        (bull_reasons if agree_bull else bear_reasons).append(label)
 
     # ── Combo 2: Momentum confirms Trend (healthy trend continuation) ─────────────
     if gdir['momentum'] == gdir['trend'] != 'neutral':
         pts = 8
-        combo_pts += pts if score > 0 else -pts
+        agree_bull = gdir['trend'] == 'bull'
+        combo_pts += pts if agree_bull else -pts
         label = "🔗 Momentum+Trend confluence — MACD/RSI aligned with trend; healthy continuation signal"
-        (bull_reasons if score > 0 else bear_reasons).append(label)
+        (bull_reasons if agree_bull else bear_reasons).append(label)
 
     # ── Combo 3: Flow contradicts Trend (CVD divergence warning) ─────────────────
+    # A contradiction reduces confidence in the TREND direction (pulls the score
+    # back toward zero from the trend's side) — keyed off gdir['trend'], not the
+    # running score, so a bearish trend is never described as an "uptrend".
     if gdir['flow'] not in ('neutral', gdir['trend']) and gdir['trend'] != 'neutral':
         penalty = min(abs(g['flow']), 20)
-        combo_pts += penalty if score < 0 else -penalty   # works against dominant direction
-        if score > 0:
+        trend_bull = gdir['trend'] == 'bull'
+        combo_pts += -penalty if trend_bull else penalty
+        if trend_bull:
             bear_reasons.append(f"⚠️ Flow-Trend divergence — CVD/Volume contradicts uptrend (−{penalty} pts caution); watch for reversal")
         else:
             bull_reasons.append(f"⚠️ Flow-Trend divergence — CVD/Volume contradicts downtrend (−{penalty} pts caution); squeeze risk elevated")
@@ -1757,8 +1804,9 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Combo 4: Momentum diverging from Trend (early exhaustion warning) ─────────
     if gdir['momentum'] not in ('neutral', gdir['trend']) and gdir['trend'] != 'neutral':
         penalty = min(abs(g['momentum']), 12)
-        combo_pts += penalty if score < 0 else -penalty
-        if score > 0:
+        trend_bull = gdir['trend'] == 'bull'
+        combo_pts += -penalty if trend_bull else penalty
+        if trend_bull:
             bear_reasons.append(f"⚠️ Momentum diverging from trend (−{penalty} pts) — MACD/RSI losing alignment; trend exhaustion risk")
         else:
             bull_reasons.append(f"⚠️ Momentum diverging from downtrend (−{penalty} pts) — possible reversal building; monitor closely")
@@ -1808,11 +1856,12 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append("🔗 RSI divergence + MACD cross — dual momentum reversal confirmed; high-quality top signal")
 
     # ── Combo 8: Bollinger squeeze + Volume breakout (coiled spring released) ──────
+    # Gated on breakout_after_squeeze (previous window squeezed) — the stronger
+    # squeeze-release combo only fires for a genuine post-compression break.
     bb_local      = analysis.get("bollinger") or {}
-    bb_squeeze_l  = bb_local.get("squeeze", False)
-    bb_breakout_l = bb_local.get("breakout")
-    bb_bull_break = bb_squeeze_l and bb_breakout_l == 'bullish'
-    bb_bear_break = bb_squeeze_l and bb_breakout_l == 'bearish'
+    bb_break_sq_l = bb_local.get("breakout_after_squeeze")
+    bb_bull_break = bb_break_sq_l == 'bullish'
+    bb_bear_break = bb_break_sq_l == 'bearish'
     if (bb_bull_break and vol_with_trend and score > 0) or (bb_bear_break and vol_with_trend and score < 0):
         pts = 10
         combo_pts += pts if score > 0 else -pts
@@ -2020,15 +2069,27 @@ def generate_signal(analysis: Dict) -> Dict:
     _options_applied     = False
     if _opts_in_win and _opts_pts != 0 and direction != "NEUTRAL":
         mag = abs(_opts_pts)
-        if (_opts_pts > 0 and direction == "LONG") or (_opts_pts < 0 and direction == "SHORT"):
+        aligned = (_opts_pts > 0 and direction == "LONG") or (_opts_pts < 0 and direction == "SHORT")
+        # Reason list follows the OPTIONS pressure direction, not the trade
+        # direction: bullish pressure (+pts) is always a bullish-side reason —
+        # whether it aligns with a LONG or opposes a SHORT — and bearish
+        # pressure (−pts) always a bearish-side reason. (The old code keyed the
+        # list off aligned/opposed, filing bearish pressure aligned with a
+        # SHORT under bullish_reasons and vice versa.)
+        _opts_is_bull = _opts_pts > 0
+        if aligned:
             opts_adj = mag
             strength = min(100, strength + mag)
-            bull_reasons.append(f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{mag} pts)")
+            msg = f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{mag} pts)"
         else:
             opts_adj = -round(mag * 0.5)
             strength = max(0, strength + opts_adj)
-            bear_reasons.append(f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, {opts_adj} pts)")
-        g['sentiment'] += mag if direction == "LONG" else -mag
+            msg = f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, {opts_adj} pts)"
+        (bull_reasons if _opts_is_bull else bear_reasons).append(msg)
+        # Sentiment group carries the SIGNED options pressure — not a magnitude
+        # signed by the trade direction (which credited bearish pressure as
+        # bullish sentiment on LONGs it opposed).
+        g['sentiment'] += _opts_pts
         _options_applied = True
 
     # Strength tiers (strength = score / 220 * 100):

@@ -17,6 +17,35 @@ CVD_FUT_HEAVY_SHARE    = 0.65   # >= → futures-heavy
 CVD_SPOT_HEAVY_SHARE   = 0.35   # <= → spot-heavy
 CVD_SPOT_DOMINANT_SHARE = 0.20  # <= → spot-dominated
 
+# ── Candle direction ──────────────────────────────────────────────────────────
+# Relative body threshold below which a candle is a DOJI (direction 0):
+# |close − open| / open ≤ this. Keeps exact and floating-point-noise dojis
+# neutral instead of the old `close <= open ⇒ bearish` classification, which
+# silently counted every doji as a bearish candle (false SHORT momentum).
+CANDLE_DOJI_TOL = 1e-4          # 0.01% of the open price
+
+
+def candle_direction(candle: Dict, tol: float = CANDLE_DOJI_TOL) -> int:
+    """Shared pure candle-direction helper.
+
+    +1 — meaningfully bullish body (close above open by more than `tol` rel.)
+    -1 — meaningfully bearish body
+     0 — doji / insignificant body (|close − open| within `tol` of the open)
+
+    Used by production candle_dirs, the backtest, the _quick_tf_dir fallback
+    and candle-consistency scoring so all four agree on what a doji is.
+    """
+    o = candle.get("open") or 0.0
+    c = candle.get("close") or 0.0
+    if o <= 0:
+        return 0
+    body = (c - o) / o
+    if body > tol:
+        return 1
+    if body < -tol:
+        return -1
+    return 0
+
 
 def _cvd_unit(cvd: Dict) -> str:
     """Declared flow unit of a CVD payload: 'usd', 'base', or 'unknown'."""
@@ -252,10 +281,11 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
         "unknown":           f"dominance unknown ({_dom['dominance_data_quality']})",
     }.get(dom_class, "balanced spot/futures flow")
 
-    def _result(type_, label, detail, signal):
+    def _result(type_, label, detail, signal, squeeze_risk=None):
         r = {"type": type_, "label": label, "detail": detail, "signal": signal,
              "futures_ratio": futures_ratio, "spot_ratio": spot_ratio,
-             "dominance": dominance, "dominance_class": dom_class}
+             "dominance": dominance, "dominance_class": dom_class,
+             "squeeze_risk": squeeze_risk}
         # surface the aligned-flow diagnostics without breaking existing fields
         for k in ("futures_share", "spot_net_usd", "futures_net_usd",
                   "spot_gross_usd", "futures_gross_usd", "aligned_candles",
@@ -276,12 +306,42 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                 "Price rising with spot CVD confirming — genuine buying pressure. Futures are not chasing, suggesting a healthier, more sustained move.",
                 "bullish",
             )
+        if spot_trend == "bullish" and fut_trend == "neutral":
+            # Explicit branch (was a silent fall-through to generic 'neutral').
+            # Deliberately NOT in the scoring table: the signal engine's
+            # individual-trend fallback prices the spot leg exactly as before.
+            return _result(
+                "spot_only_up", "Spot-led rally, futures flat",
+                "Price rising with spot CVD confirming and futures CVD flat — genuine demand without leverage build-up.",
+                "bullish",
+            )
+        if spot_trend == "neutral" and fut_trend == "bullish":
+            # Explicit informative type; NOT in the scoring table, so the signal
+            # engine's individual-trend fallback prices the futures leg alone.
+            return _result(
+                "futures_only_up", "Futures-led rally, spot flat",
+                "Price rising on futures buying while spot CVD is flat — speculative demand without organic confirmation yet.",
+                "neutral",
+            )
         if spot_trend == "bullish" and fut_trend == "bullish":
+            # ── ALL dominance classes handled explicitly. When price, spot CVD
+            # and futures CVD all rise, the move IS bullish at every dominance
+            # tier — rising futures share only REDUCES conviction (monotonically:
+            # spot_dominated > spot_heavy > balanced > futures_heavy >
+            # futures_dominated), it never inverts the direction. Squeeze risk
+            # from leverage crowding is reported via squeeze_risk metadata, not
+            # by flipping confirmed directional flow to an opposite score.
             if dom_class == "futures_dominated":
                 return _result(
                     "futures_dominated_up", "Futures-dominated rally",
-                    f"Both CVDs rising but futures ({dom_label}) — move is overwhelmingly speculative leverage, not organic. Elevated reversal risk.",
-                    "bearish",
+                    f"Both CVDs rising but futures is {dom_label} — heavily leveraged rally with thin organic support; reduced conviction, elevated long-squeeze risk.",
+                    "bullish", squeeze_risk="long_squeeze_elevated",
+                )
+            if dom_class == "futures_heavy":
+                return _result(
+                    "futures_heavy_up", "Futures-heavy rally",
+                    f"Both CVDs rising but futures is {dom_label} — speculative buying heavier than organic; bullish with lower conviction.",
+                    "bullish", squeeze_risk="long_squeeze_building",
                 )
             if dom_class == "spot_dominated":
                 return _result(
@@ -314,18 +374,34 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                 "Price falling with spot CVD confirming — genuine distribution. Futures are not selling but spot sellers dominate.",
                 "bearish",
             )
+        if spot_trend == "bearish" and fut_trend == "neutral":
+            # Explicit branch (was a silent fall-through); not in the scoring
+            # table — fallback prices the spot leg exactly as before.
+            return _result(
+                "spot_only_down", "Spot-led selloff, futures flat",
+                "Price falling with spot CVD confirming and futures CVD flat — real distribution without speculative pressure.",
+                "bearish",
+            )
+        if spot_trend == "neutral" and fut_trend == "bearish":
+            return _result(
+                "futures_only_down", "Futures-led selloff, spot flat",
+                "Price falling on futures selling while spot CVD is flat — speculative pressure without organic distribution yet.",
+                "neutral",
+            )
         if spot_trend == "bearish" and fut_trend == "bearish":
+            # Mirror of the rising case: all classes explicit, direction never
+            # inverts, conviction decreases monotonically as futures share rises.
             if dom_class == "futures_dominated":
                 return _result(
                     "futures_dominated_down", "Futures-dominated selloff",
-                    f"Both CVDs falling but futures is {dom_label} — selling is overwhelmingly speculative shorts, not real holder distribution. Short squeeze risk elevated.",
-                    "neutral",   # downgraded from bearish — unreliable organic signal
+                    f"Both CVDs falling but futures is {dom_label} — heavily speculative selloff with little real distribution; reduced conviction, elevated short-squeeze risk.",
+                    "bearish", squeeze_risk="short_squeeze_elevated",
                 )
             if dom_class == "futures_heavy":
                 return _result(
                     "futures_heavy_down", "Futures-heavy selloff",
                     f"Both CVDs falling but futures is {dom_label} — speculative selling heavier than organic. Some squeeze risk.",
-                    "bearish",   # still bearish but lower conviction
+                    "bearish", squeeze_risk="short_squeeze_building",
                 )
             if dom_class == "spot_dominated":
                 return _result(
@@ -350,6 +426,20 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
 
 
 def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
+    """Fair Value Gaps with a PERMANENT fill lifecycle.
+
+    CLOSED-CANDLE CONTRACT: `candles` are fully closed candles (forming candle
+    removed upstream).
+
+    `filled` is decided by scanning candles CHRONOLOGICALLY after the 3-candle
+    formation (from the bar after the gap's third candle onward, so the
+    formation cannot fill itself): a bullish gap is permanently filled once a
+    later candle's low trades at/below the gap bottom; a bearish gap once a
+    later candle's high trades at/above the gap top. Once filled it STAYS
+    filled — the old current-price-only check let a historically-filled gap
+    resurrect as "unfilled" whenever price moved back away from it.
+    `filled_at` (additive) carries the filling candle's timestamp.
+    """
     fvgs: List[Dict] = []
     if len(candles) < 3:
         return fvgs
@@ -372,15 +462,22 @@ def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
             gap = (nxt["low"] - prev["high"]) / prev["high"] * 100
             if gap >= min_size_pct:
                 mid = (nxt["low"] + prev["high"]) / 2
+                bottom = prev["high"]
+                filled, filled_at = False, None
+                for c in candles[i + 2:]:          # strictly after the formation
+                    if c["low"] <= bottom:         # traded at/below gap bottom
+                        filled, filled_at = True, c["timestamp"]
+                        break
                 fvgs.append({
                     "type":     "bullish",
                     "gap_type": "bag" if is_bag else "fvg",
                     "top":      round(nxt["low"],  8),
-                    "bottom":   round(prev["high"], 8),
+                    "bottom":   round(bottom, 8),
                     "midpoint": round(mid, 8),
                     "size_pct": round(gap, 4),
                     "timestamp": curr["timestamp"],
-                    "filled":   current_price < prev["high"],
+                    "filled":   filled,
+                    "filled_at": filled_at,
                     "distance_pct": round((current_price - mid) / current_price * 100, 2),
                 })
 
@@ -388,15 +485,22 @@ def detect_fvg(candles: List[Dict], min_size_pct: float = 1.5) -> List[Dict]:
             gap = (prev["low"] - nxt["high"]) / prev["low"] * 100
             if gap >= min_size_pct:
                 mid = (prev["low"] + nxt["high"]) / 2
+                top = prev["low"]
+                filled, filled_at = False, None
+                for c in candles[i + 2:]:          # strictly after the formation
+                    if c["high"] >= top:           # traded at/above gap top
+                        filled, filled_at = True, c["timestamp"]
+                        break
                 fvgs.append({
                     "type":     "bearish",
                     "gap_type": "bag" if is_bag else "fvg",
-                    "top":      round(prev["low"],  8),
+                    "top":      round(top,  8),
                     "bottom":   round(nxt["high"],  8),
                     "midpoint": round(mid, 8),
                     "size_pct": round(gap, 4),
                     "timestamp": curr["timestamp"],
-                    "filled":   current_price > prev["low"],
+                    "filled":   filled,
+                    "filled_at": filled_at,
                     "distance_pct": round((current_price - mid) / current_price * 100, 2),
                 })
 
@@ -441,11 +545,17 @@ def detect_engulfing(candles: List[Dict], lookback: int = 1) -> List[Dict]:
     CLOSED-CANDLE CONTRACT (same as detect_flags): `candles` MUST already
     contain ONLY fully closed candles — the still-forming candle is removed by
     the upstream caller (app.build_analysis via _split_closed, the engulf-alert
-    scanner, backtest.build_price_analysis). This function checks the NEWEST
-    closed candle (candles[-1]) against its prior candle (candles[-2]). An
-    earlier version sliced candles[:-1] internally; combined with callers that
-    already pass closed candles, that skipped the newest completed candle and
-    reported engulfings one bar late.
+    scanner, backtest.build_price_analysis). An earlier version sliced
+    candles[:-1] internally; combined with callers that already pass closed
+    candles, that skipped the newest completed candle and reported engulfings
+    one bar late.
+
+    `lookback` = how many of the latest completed candle PAIRS are examined
+    (candles_ago=1 is the newest closed candle, 2 the one before it, …).
+    Production signals use lookback=1 (newest candle only); the weekly alert
+    endpoint uses lookback=2 so an engulfing on either of the latest two
+    closed candles is surfaced. The strongest pattern per direction wins
+    (more recent first, then larger body ratio).
     """
     patterns: List[Dict] = []
     closed = candles
@@ -454,8 +564,8 @@ def detect_engulfing(candles: List[Dict], lookback: int = 1) -> List[Dict]:
 
     current_price = closed[-1]["close"]
 
-    # Only check the single most recent closed candle
-    start = len(closed) - 1
+    # Examine the latest `lookback` completed candle pairs
+    start = max(1, len(closed) - max(1, lookback))
     for i in range(start, len(closed)):
         prev = closed[i - 1]
         curr = closed[i]
@@ -588,13 +698,16 @@ def calculate_macd(closes: List[float], fast: int = 12, slow: int = 26, signal_p
         elif prev_macd >= prev_sig and cur_macd < cur_sig:
             cross = "bearish"
 
-    # Also detect histogram zero-cross (more bars back)
-    prev_hist = (prev_macd - prev_sig) if prev_macd is not None and prev_sig is not None else None
+    # Centerline cross: the MACD LINE crossing zero. (The old check used the
+    # HISTOGRAM crossing zero — but histogram = MACD − signal, so that is by
+    # definition the same event as the signal-line cross above, duplicated.)
+    # A signal-line cross and a centerline cross are independent events and may
+    # occur on the same candle; scoring stays OR-based so they never double-count.
     zero_cross = None
-    if histogram is not None and prev_hist is not None:
-        if prev_hist <= 0 and histogram > 0:
+    if cur_macd is not None and prev_macd is not None:
+        if prev_macd <= 0 and cur_macd > 0:
             zero_cross = "bullish"
-        elif prev_hist >= 0 and histogram < 0:
+        elif prev_macd >= 0 and cur_macd < 0:
             zero_cross = "bearish"
 
     trend = "neutral"
@@ -685,11 +798,13 @@ def detect_whale_activity(candles: List[Dict], lookback: int = 20,
     Detect candles with abnormally high volume — potential whale entries.
     Checks last detect_window closed candles against a lookback average.
     Direction is determined by taker buy/sell ratio + price action.
-    """
-    if len(candles) < lookback + 2:
-        return []
 
-    closed = candles[:-1]  # exclude current forming candle
+    CLOSED-CANDLE CONTRACT: `candles` MUST already contain only fully closed
+    candles (forming bar removed upstream — app.build_analysis via
+    _split_closed, the whale-alert endpoint, backtest). No internal slicing:
+    candles[-1] is the newest completed candle and IS scanned.
+    """
+    closed = candles
     if len(closed) < lookback + 1:
         return []
 
@@ -943,8 +1058,9 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
     if len(candles) < period:
         return {
             "upper": None, "middle": None, "lower": None,
-            "bandwidth": None, "squeeze": False,
-            "breakout": None, "pct_b": None,
+            "previous_upper": None, "previous_lower": None,
+            "bandwidth": None, "squeeze": False, "prev_squeeze": False,
+            "breakout": None, "breakout_after_squeeze": None, "pct_b": None,
         }
 
     closes = [c["close"] for c in candles]
@@ -969,24 +1085,54 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
 
     squeeze = bool(bw_series and bw < sum(bw_series) / len(bw_series) * 0.85)
 
+    # Previous completed window (ending one candle earlier) — a breakout candle
+    # EXPANDS the bands, so "breakout after squeeze" must be judged against the
+    # PREVIOUS window's squeeze state, not the current one (which the breakout
+    # itself has usually already un-squeezed).
+    prev_squeeze = False
+    previous_upper = previous_lower = None
+    if len(closes) >= period + 1:
+        p_sma, p_sd = _sma_std(closes[:-1][-period:])
+        previous_upper = p_sma + std_dev * p_sd
+        previous_lower = p_sma - std_dev * p_sd
+        prev_bw = (2 * std_dev * p_sd) / p_sma if p_sma > 0 else 0.0
+        prev_hist = bw_series[:-1] or bw_series
+        prev_squeeze = bool(prev_hist and
+                            prev_bw < sum(prev_hist) / len(prev_hist) * 0.85)
+
     # %B: where current price sits within the band (0 = lower, 1 = upper)
     price  = closes[-1]
     pct_b  = (price - lower) / (upper - lower) if (upper - lower) > 0 else 0.5
 
-    # Breakout / breakdown on the last candle
+    # Breakout / breakdown: newest close vs the current bands
     breakout = None
     if price > upper:
         breakout = "bullish"
     elif price < lower:
         breakout = "bearish"
 
+    # A squeeze release is a CROSS of the PREVIOUS compressed boundary. Testing
+    # only against the current band misses modest but valid releases because the
+    # breakout candle itself widens that band.
+    breakout_after_squeeze = None
+    if prev_squeeze and previous_upper is not None and previous_lower is not None:
+        previous_close = closes[-2]
+        if previous_close <= previous_upper and price > previous_upper:
+            breakout_after_squeeze = "bullish"
+        elif previous_close >= previous_lower and price < previous_lower:
+            breakout_after_squeeze = "bearish"
+
     return {
         "upper":     round(upper, 8),
         "middle":    round(sma,   8),
         "lower":     round(lower, 8),
+        "previous_upper": round(previous_upper, 8) if previous_upper is not None else None,
+        "previous_lower": round(previous_lower, 8) if previous_lower is not None else None,
         "bandwidth": round(bw,    6),
         "squeeze":   squeeze,
+        "prev_squeeze": prev_squeeze,
         "breakout":  breakout,
+        "breakout_after_squeeze": breakout_after_squeeze,
         "pct_b":     round(pct_b, 4),
     }
 
@@ -1131,17 +1277,30 @@ def calculate_vwap(candles: List[Dict], period: int = 50) -> Dict:
     prev_close = candles[-2]["close"] if len(candles) >= 2 else close
     price_vs_vwap = "above" if close > vwap else "below"
 
+    # Cross detection compares each close to its CONTEMPORANEOUS rolling VWAP:
+    # the previous close vs the equivalent window ending one candle earlier.
+    # Comparing prev_close against the CURRENT vwap (old behaviour) reported a
+    # "cross" whenever the VWAP itself drifted across a stationary price.
+    prev_vwap = None
+    prev_w1 = candles[:-1][-period:]
+    prev_vol1 = sum(c["volume"] for c in prev_w1)
+    if prev_vol1 > 0:
+        prev_vwap = sum((c["high"] + c["low"] + c["close"]) / 3 * c["volume"]
+                        for c in prev_w1) / prev_vol1
+
     vwap_cross = None
-    if prev_close <= vwap and close > vwap:
-        vwap_cross = "bullish"
-    elif prev_close >= vwap and close < vwap:
-        vwap_cross = "bearish"
+    if prev_vwap is not None:
+        if prev_close <= prev_vwap and close > vwap:
+            vwap_cross = "bullish"
+        elif prev_close >= prev_vwap and close < vwap:
+            vwap_cross = "bearish"
 
     return {
         "vwap":          round(vwap, 8),
         "slope":         slope,
         "price_vs_vwap": price_vs_vwap,
         "vwap_cross":    vwap_cross,
+        "previous_vwap": round(prev_vwap, 8) if prev_vwap is not None else None,
     }
 
 
@@ -1204,17 +1363,27 @@ def calculate_stoch_rsi(closes: List[float], rsi_period: int = 14,
 
 
 def calculate_volume_signal(candles: List[Dict], lookback: int = 20) -> Dict:
-    """Volume confirmation — elevated volume on directional candles."""
+    """Volume confirmation — elevated volume on directional candles.
+
+    CLOSED-CANDLE CONTRACT: `candles` are already fully closed (forming bar
+    removed upstream); candles[-1] is the newest completed candle and IS
+    eligible for volume confirmation. The average baseline is built from the
+    `lookback` bars BEFORE the three candidate candles, so a candidate's own
+    spike can never inflate the threshold it is measured against.
+    """
     if len(candles) < lookback + 2:
         return {"signal": None, "ratio": None, "description": None}
 
-    closed  = candles[:-1]
-    avg_vol = sum(c["volume"] for c in closed[-lookback:]) / lookback
+    closed   = candles
+    baseline = closed[:-3][-lookback:]        # prior bars only — no candidates
+    if not baseline:
+        return {"signal": None, "ratio": None, "description": None}
+    avg_vol = sum(c["volume"] for c in baseline) / len(baseline)
     if avg_vol <= 0:
         return {"signal": None, "ratio": None, "description": None}
 
     best_ratio, best_signal, best_desc = 0.0, None, None
-    for c in reversed(closed[-3:]):
+    for c in reversed(closed[-3:]):           # the actual latest 3 closed candles
         ratio = c["volume"] / avg_vol
         if ratio < 1.3:
             continue
@@ -1233,7 +1402,7 @@ def calculate_volume_signal(candles: List[Dict], lookback: int = 20) -> Dict:
     # Sustained accumulation: 3 recent candles all above-average volume, directionally consistent
     # Catches pre-pump buildup that a single-spike check misses entirely.
     if not best_signal and len(closed) >= 4:
-        recent_3  = closed[-4:-1]
+        recent_3  = closed[-3:]               # the actual latest 3 closed candles
         sus_ratio = sum(c["volume"] for c in recent_3) / (3 * avg_vol)
         if sus_ratio >= 1.35:
             bull_c = sum(1 for c in recent_3 if c["close"] > c["open"])

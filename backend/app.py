@@ -33,7 +33,8 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     calculate_macd, calculate_ema_trend, detect_whale_activity,
     calculate_supertrend, calculate_ichimoku,
     calculate_bollinger_bands, detect_rsi_divergence,
-    calculate_vwap, calculate_stoch_rsi, calculate_volume_signal)
+    calculate_vwap, calculate_stoch_rsi, calculate_volume_signal,
+    candle_direction)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
@@ -279,6 +280,21 @@ def _ema_series(values: List[float], period: int) -> List:
     return out
 
 
+def _rec_reasons(sig: dict, direction: str, limit: int = 3) -> list:
+    """Primary display reasons for a recommendation card.
+
+    generate_signal returns bullish_reasons / bearish_reasons — there is no
+    generic "reasons" field (the old sig.get("reasons") read always yielded
+    an empty list). A LONG card shows its bullish reasons and a SHORT its
+    bearish ones; opposing-side reasons are never shown as primary reasons.
+    """
+    if direction == "LONG":
+        reasons = sig.get("bullish_reasons") or []
+    else:
+        reasons = sig.get("bearish_reasons") or []
+    return reasons[:limit]
+
+
 def _quick_tf_dir(symbol: str, tf: str) -> str:
     """
     Lightweight direction for HTF confluence check.
@@ -319,8 +335,11 @@ def _quick_tf_dir(symbol: str, tf: str) -> str:
         recent    = closed[-n:] if len(closed) >= n else closed
         if not recent:
             return "NEUTRAL"
-        bull      = sum(1 for c in recent if c["close"] > c["open"])
-        bear      = len(recent) - bull
+        # Shared helper: dojis are neutral — they no longer inflate the bear
+        # count (old `len(recent) - bull` counted every doji as bearish).
+        _dirs     = [candle_direction(c) for c in recent]
+        bull      = sum(1 for d in _dirs if d > 0)
+        bear      = sum(1 for d in _dirs if d < 0)
         threshold = max(1, round(len(recent) * 0.6))
         if bull >= threshold:
             return "LONG"
@@ -734,7 +753,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # included. The old slice spot[-(1+n):-1] dropped it — an off-by-one that
     # ignored the most recent closed bar's direction.
     _n_dir = _TF_CANDLE_N.get(timeframe, 4)
-    candle_dirs = [1 if c["close"] > c["open"] else -1 for c in spot[-_n_dir:]] if len(spot) >= _n_dir else []
+    # Shared helper: +1 / -1 / 0(doji) — a doji is NOT bearish (old `else -1`
+    # classified every doji as a bearish candle → false SHORT momentum).
+    candle_dirs = [candle_direction(c) for c in spot[-_n_dir:]] if len(spot) >= _n_dir else []
 
     # Aggregated spot CVD: sums real taker buy/sell deltas from Binance+OKX+MEXC
     # in parallel. Falls back to single-exchange estimate only if all three fail.
@@ -1862,7 +1883,7 @@ def _compute_recommendations() -> dict:
             "live_price":       h2.get("live_price"),
             "signal_price":     h2.get("signal_price"),
             "data_quality":     "degraded" if "degraded" in (h1.get("data_quality"), h2.get("data_quality")) else "good",
-            "reasons":          sig.get("reasons", [])[:3],
+            "reasons":          _rec_reasons(sig, direction),
             "exhaustion_alert": None,
             "exhaustion_by_tf": None,
             "htf_4h_dir":       htf_4h_dir,
@@ -2294,7 +2315,10 @@ def api_whale_alerts():
         try:
             bs      = SYMBOLS[sym]
             candles = client.get_spot_klines(bs, "1h", 60)
-            events  = detect_whale_activity(candles, detect_window=3)
+            # detect_whale_activity expects CLOSED candles only (closed-candle
+            # contract) — strip the still-forming 1H bar here.
+            closed, _live = _split_closed(candles, TF_SECONDS["1H"])
+            events  = detect_whale_activity(closed, detect_window=3)
             SGT     = timezone(timedelta(hours=8))
             result  = []
             for e in events:
