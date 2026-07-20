@@ -1415,17 +1415,28 @@ def generate_signal(analysis: Dict) -> Dict:
     bb = analysis.get("bollinger") or {}
     bb_squeeze   = bb.get("squeeze", False)
     bb_breakout  = bb.get("breakout")
+    # "Breakout after squeeze" is judged against the PREVIOUS completed
+    # window's squeeze (the breakout candle expands the bands, un-squeezing the
+    # current window) — the old gate on the CURRENT squeeze mislabelled both.
+    bb_break_sq  = bb.get("breakout_after_squeeze")
     bb_pct_b     = bb.get("pct_b", 0.5)
     bb_upper     = bb.get("upper")
     bb_lower     = bb.get("lower")
 
     fmt_p = lambda v: f"${v:,.4f}" if v else ""
-    if bb_squeeze and bb_breakout == "bullish":
+    if bb_break_sq == "bullish":
         score += 16; g['pattern'] += 16
         bull_reasons.append(f"Bollinger squeeze breakout BULLISH — price closed above upper band {fmt_p(bb_upper)} after compression; explosive move signal")
-    elif bb_squeeze and bb_breakout == "bearish":
+    elif bb_break_sq == "bearish":
         score -= 16; g['pattern'] -= 16
         bear_reasons.append(f"Bollinger squeeze breakdown BEARISH — price closed below lower band {fmt_p(bb_lower)} after compression; explosive move signal")
+    elif bb_breakout == "bullish":
+        # ordinary band break (no prior-window squeeze) — lower existing score
+        score += 10; g['pattern'] += 10
+        bull_reasons.append(f"Price above Bollinger upper band {fmt_p(bb_upper)} — strong bullish momentum")
+    elif bb_breakout == "bearish":
+        score -= 10; g['pattern'] -= 10
+        bear_reasons.append(f"Price below Bollinger lower band {fmt_p(bb_lower)} — strong bearish momentum")
     elif bb_squeeze:
         if bb_pct_b > 0.6:
             score += 5; g['pattern'] += 5
@@ -1433,12 +1444,6 @@ def generate_signal(analysis: Dict) -> Dict:
         elif bb_pct_b < 0.4:
             score -= 5; g['pattern'] -= 5
             bear_reasons.append(f"Bollinger squeeze active — bands compressed, price lower half (%B {bb_pct_b:.2f}); breakdown risk elevated")
-    elif bb_breakout == "bullish":
-        score += 10; g['pattern'] += 10
-        bull_reasons.append(f"Price above Bollinger upper band {fmt_p(bb_upper)} — strong bullish momentum")
-    elif bb_breakout == "bearish":
-        score -= 10; g['pattern'] -= 10
-        bear_reasons.append(f"Price below Bollinger lower band {fmt_p(bb_lower)} — strong bearish momentum")
 
     # SuperTrend — flip scores outside the trend cap (it's a momentum event,
     # not just a trend state), sustained direction goes into the cap bucket
@@ -1849,11 +1854,12 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append("🔗 RSI divergence + MACD cross — dual momentum reversal confirmed; high-quality top signal")
 
     # ── Combo 8: Bollinger squeeze + Volume breakout (coiled spring released) ──────
+    # Gated on breakout_after_squeeze (previous window squeezed) — the stronger
+    # squeeze-release combo only fires for a genuine post-compression break.
     bb_local      = analysis.get("bollinger") or {}
-    bb_squeeze_l  = bb_local.get("squeeze", False)
-    bb_breakout_l = bb_local.get("breakout")
-    bb_bull_break = bb_squeeze_l and bb_breakout_l == 'bullish'
-    bb_bear_break = bb_squeeze_l and bb_breakout_l == 'bearish'
+    bb_break_sq_l = bb_local.get("breakout_after_squeeze")
+    bb_bull_break = bb_break_sq_l == 'bullish'
+    bb_bear_break = bb_break_sq_l == 'bearish'
     if (bb_bull_break and vol_with_trend and score > 0) or (bb_bear_break and vol_with_trend and score < 0):
         pts = 10
         combo_pts += pts if score > 0 else -pts

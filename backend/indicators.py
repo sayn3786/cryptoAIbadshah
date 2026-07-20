@@ -1058,8 +1058,8 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
     if len(candles) < period:
         return {
             "upper": None, "middle": None, "lower": None,
-            "bandwidth": None, "squeeze": False,
-            "breakout": None, "pct_b": None,
+            "bandwidth": None, "squeeze": False, "prev_squeeze": False,
+            "breakout": None, "breakout_after_squeeze": None, "pct_b": None,
         }
 
     closes = [c["close"] for c in candles]
@@ -1084,16 +1084,30 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
 
     squeeze = bool(bw_series and bw < sum(bw_series) / len(bw_series) * 0.85)
 
+    # Previous completed window (ending one candle earlier) — a breakout candle
+    # EXPANDS the bands, so "breakout after squeeze" must be judged against the
+    # PREVIOUS window's squeeze state, not the current one (which the breakout
+    # itself has usually already un-squeezed).
+    prev_squeeze = False
+    if len(closes) >= period + 1:
+        p_sma, p_sd = _sma_std(closes[:-1][-period:])
+        prev_bw = (2 * std_dev * p_sd) / p_sma if p_sma > 0 else 0.0
+        prev_hist = bw_series[:-1] or bw_series
+        prev_squeeze = bool(prev_hist and
+                            prev_bw < sum(prev_hist) / len(prev_hist) * 0.85)
+
     # %B: where current price sits within the band (0 = lower, 1 = upper)
     price  = closes[-1]
     pct_b  = (price - lower) / (upper - lower) if (upper - lower) > 0 else 0.5
 
-    # Breakout / breakdown on the last candle
+    # Breakout / breakdown: newest close vs the current bands
     breakout = None
     if price > upper:
         breakout = "bullish"
     elif price < lower:
         breakout = "bearish"
+
+    breakout_after_squeeze = breakout if (breakout and prev_squeeze) else None
 
     return {
         "upper":     round(upper, 8),
@@ -1101,7 +1115,9 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
         "lower":     round(lower, 8),
         "bandwidth": round(bw,    6),
         "squeeze":   squeeze,
+        "prev_squeeze": prev_squeeze,
         "breakout":  breakout,
+        "breakout_after_squeeze": breakout_after_squeeze,
         "pct_b":     round(pct_b, 4),
     }
 

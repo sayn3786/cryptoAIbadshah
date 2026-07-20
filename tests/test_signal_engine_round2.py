@@ -474,6 +474,72 @@ def test_accumulation_range_includes_newest_closed_candle():
     assert acc["high"] == 101.5, "newest closed candle must be inside the window"
 
 
+# ── 11. Bollinger breakout-after-squeeze uses the PREVIOUS window ──────────────
+from indicators import calculate_bollinger_bands                        # noqa: E402
+
+
+def _bb_candles(closes):
+    return [{"timestamp": T0 + i * STEP, "open": c, "high": c + 0.1,
+             "low": c - 0.1, "close": c, "volume": 10.0}
+            for i, c in enumerate(closes)]
+
+
+def test_bollinger_breakout_after_squeeze_bullish_and_bearish():
+    # 30 volatile bars (wide-band history), then 19 pinned bars (tight bands =
+    # squeeze in the PREVIOUS window), then a breakout candle. The breakout bar
+    # expands the current bands, so the old current-squeeze gate missed this.
+    volatile = [100 + (3.0 if i % 2 == 0 else -3.0) for i in range(30)]
+    quiet = [100.0 + (0.02 if i % 2 == 0 else -0.02) for i in range(19)]
+
+    up = calculate_bollinger_bands(_bb_candles(volatile + quiet + [103.0]))
+    assert up["prev_squeeze"] is True, up
+    assert up["breakout"] == "bullish"
+    assert up["breakout_after_squeeze"] == "bullish", up
+
+    dn = calculate_bollinger_bands(_bb_candles(volatile + quiet + [97.0]))
+    assert dn["prev_squeeze"] is True
+    assert dn["breakout_after_squeeze"] == "bearish", dn
+
+
+def test_bollinger_ordinary_break_without_prior_squeeze():
+    # steadily volatile series ending in a band break — no prior-window squeeze,
+    # so it's an ordinary break: breakout set, breakout_after_squeeze None.
+    volatile = [100 + (3.0 if i % 2 == 0 else -3.0) for i in range(49)]
+    up = calculate_bollinger_bands(_bb_candles(volatile + [112.0]))
+    assert up["breakout"] == "bullish"
+    assert up["prev_squeeze"] is False
+    assert up["breakout_after_squeeze"] is None, up
+    dn = calculate_bollinger_bands(_bb_candles(volatile + [88.0]))
+    assert dn["breakout"] == "bearish" and dn["breakout_after_squeeze"] is None
+
+
+def test_bollinger_scoring_split_squeeze_vs_ordinary():
+    a = {
+        "symbol": "ETH", "timeframe": "1D", "candles": mk_candles(60, up=True),
+        "rsi": 50, "rsi_slope": 0, "price_roc": 0.1, "candle_dirs": [1, -1, 1, -1],
+        "ema_trend": {"above": [], "below": [], "aligned": "neutral",
+                      "ema50": 100, "ema21": 100},
+        "supertrend": {"direction": "neutral", "value": 100},
+        "macd": {"histogram": 0.0, "cross": "none"},
+    }
+    base = generate_signal(dict(a, bollinger={}))["score"]
+    strong = generate_signal(dict(a, bollinger={
+        "squeeze": False, "prev_squeeze": True, "breakout": "bullish",
+        "breakout_after_squeeze": "bullish", "pct_b": 1.1,
+        "upper": 101, "lower": 99}))["score"]
+    ordinary = generate_signal(dict(a, bollinger={
+        "squeeze": False, "prev_squeeze": False, "breakout": "bullish",
+        "breakout_after_squeeze": None, "pct_b": 1.1,
+        "upper": 101, "lower": 99}))["score"]
+    assert strong > ordinary > base, (strong, ordinary, base)
+    # bearish mirror gets equal absolute contributions
+    strong_b = generate_signal(dict(a, bollinger={
+        "squeeze": False, "prev_squeeze": True, "breakout": "bearish",
+        "breakout_after_squeeze": "bearish", "pct_b": -0.1,
+        "upper": 101, "lower": 99}))["score"]
+    assert strong - base == base - strong_b
+
+
 # ── 10. engulfing honors lookback ──────────────────────────────────────────────
 from indicators import detect_engulfing                                 # noqa: E402
 
