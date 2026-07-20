@@ -2294,7 +2294,10 @@ def api_whale_alerts():
         try:
             bs      = SYMBOLS[sym]
             candles = client.get_spot_klines(bs, "1h", 60)
-            events  = detect_whale_activity(candles, detect_window=3)
+            # detect_whale_activity expects CLOSED candles only (closed-candle
+            # contract) — strip the still-forming 1H bar here.
+            closed, _live = _split_closed(candles, TF_SECONDS["1H"])
+            events  = detect_whale_activity(closed, detect_window=3)
             SGT     = timezone(timedelta(hours=8))
             result  = []
             for e in events:

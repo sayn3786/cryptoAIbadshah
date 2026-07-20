@@ -760,11 +760,13 @@ def detect_whale_activity(candles: List[Dict], lookback: int = 20,
     Detect candles with abnormally high volume — potential whale entries.
     Checks last detect_window closed candles against a lookback average.
     Direction is determined by taker buy/sell ratio + price action.
-    """
-    if len(candles) < lookback + 2:
-        return []
 
-    closed = candles[:-1]  # exclude current forming candle
+    CLOSED-CANDLE CONTRACT: `candles` MUST already contain only fully closed
+    candles (forming bar removed upstream — app.build_analysis via
+    _split_closed, the whale-alert endpoint, backtest). No internal slicing:
+    candles[-1] is the newest completed candle and IS scanned.
+    """
+    closed = candles
     if len(closed) < lookback + 1:
         return []
 
@@ -1279,17 +1281,27 @@ def calculate_stoch_rsi(closes: List[float], rsi_period: int = 14,
 
 
 def calculate_volume_signal(candles: List[Dict], lookback: int = 20) -> Dict:
-    """Volume confirmation — elevated volume on directional candles."""
+    """Volume confirmation — elevated volume on directional candles.
+
+    CLOSED-CANDLE CONTRACT: `candles` are already fully closed (forming bar
+    removed upstream); candles[-1] is the newest completed candle and IS
+    eligible for volume confirmation. The average baseline is built from the
+    `lookback` bars BEFORE the three candidate candles, so a candidate's own
+    spike can never inflate the threshold it is measured against.
+    """
     if len(candles) < lookback + 2:
         return {"signal": None, "ratio": None, "description": None}
 
-    closed  = candles[:-1]
-    avg_vol = sum(c["volume"] for c in closed[-lookback:]) / lookback
+    closed   = candles
+    baseline = closed[:-3][-lookback:]        # prior bars only — no candidates
+    if not baseline:
+        return {"signal": None, "ratio": None, "description": None}
+    avg_vol = sum(c["volume"] for c in baseline) / len(baseline)
     if avg_vol <= 0:
         return {"signal": None, "ratio": None, "description": None}
 
     best_ratio, best_signal, best_desc = 0.0, None, None
-    for c in reversed(closed[-3:]):
+    for c in reversed(closed[-3:]):           # the actual latest 3 closed candles
         ratio = c["volume"] / avg_vol
         if ratio < 1.3:
             continue
@@ -1308,7 +1320,7 @@ def calculate_volume_signal(candles: List[Dict], lookback: int = 20) -> Dict:
     # Sustained accumulation: 3 recent candles all above-average volume, directionally consistent
     # Catches pre-pump buildup that a single-spike check misses entirely.
     if not best_signal and len(closed) >= 4:
-        recent_3  = closed[-4:-1]
+        recent_3  = closed[-3:]               # the actual latest 3 closed candles
         sus_ratio = sum(c["volume"] for c in recent_3) / (3 * avg_vol)
         if sus_ratio >= 1.35:
             bull_c = sum(1 for c in recent_3 if c["close"] > c["open"])

@@ -389,3 +389,111 @@ def test_cvd_neutral_legs_have_explicit_types():
     assert div["type"] == "spot_only_down" and div["signal"] == "bearish"
     div = detect_cvd_divergence(spot_neutral, _mk_cvd_usd([-50.0] * 12), csd)
     assert div["type"] == "futures_only_down"
+
+
+# ── 4. closed-candle contract: whale / volume / equal levels / acc range ───────
+from indicators import detect_whale_activity, calculate_volume_signal   # noqa: E402
+from patterns import (                                                  # noqa: E402
+    detect_equal_levels, detect_accumulation_range, detect_choch,
+)
+
+
+def _vol_candles(n=30, vol=10.0, up=True, start=100.0):
+    out, p = [], start
+    for i in range(n):
+        cl = p + (0.4 if up else -0.4)
+        out.append({"timestamp": T0 + i * STEP, "open": p,
+                    "high": max(p, cl) + 0.05, "low": min(p, cl) - 0.05,
+                    "close": cl, "volume": vol,
+                    "taker_buy_volume": vol * (0.8 if up else 0.2)})
+        p = cl
+    return out
+
+
+def test_whale_activity_sees_newest_closed_candle():
+    cs = _vol_candles(30)
+    cs[-1]["volume"] = 100.0                 # 10× spike on the NEWEST closed bar
+    cs[-1]["taker_buy_volume"] = 80.0
+    events = detect_whale_activity(cs)
+    assert any(e["timestamp"] == cs[-1]["timestamp"] and e["candles_ago"] == 1
+               for e in events), \
+        "the newest closed candle's whale spike must be detected"
+
+
+def test_volume_signal_newest_closed_candle_and_clean_baseline():
+    # 10× spike on the newest closed bar (old code dropped it via [:-1]); the
+    # baseline must exclude the candidate, so the reported ratio is the full
+    # spike vs the PRIOR average, not diluted by its own volume.
+    cs = _vol_candles(30)
+    cs[-1]["volume"] = 100.0
+    out = calculate_volume_signal(cs)
+    assert out["signal"] == "bullish"
+    assert out["ratio"] >= 9.5, f"candidate must not inflate its own baseline: {out}"
+
+
+def test_volume_sustained_uses_actual_latest_three():
+    # last 3 closed candles at 1.5× volume but indecisive bodies (skip the
+    # single-spike branch) — the sustained check must read candles[-3:], not
+    # [-4:-1]. candles[-4] is kept at 1× so the old slice would fail the 1.35×.
+    cs = _vol_candles(30)
+    for c in cs[-3:]:
+        c["volume"] = 15.0
+        # indecisive body: close ~ open within a tall range
+        mid = (c["open"] + c["close"]) / 2
+        c["close"] = c["open"] + 0.02
+        c["high"], c["low"] = mid + 1.0, mid - 1.0
+    out = calculate_volume_signal(cs)
+    assert out["signal"] == "bullish", out
+    assert out["ratio"] >= 1.4
+
+
+def test_equal_levels_include_newest_closed_candle():
+    cs = _vol_candles(30)
+    # two equal highs: one 5 bars back, one on the NEWEST closed candle
+    cs[-6]["high"] = 120.0
+    cs[-1]["high"] = 120.02
+    eq = detect_equal_levels(cs, window=25, tolerance=0.003)
+    assert eq["eqh"] is not None
+    assert eq["eqh"]["candles_ago"] == 0, \
+        "the newest closed candle's touch must count (candles_ago 0)"
+
+
+def test_accumulation_range_includes_newest_closed_candle():
+    # tight flat range; the newest closed candle sets the range HIGH
+    cs = []
+    p = 100.0
+    for i in range(25):
+        cl = 100.0 + (0.05 if i % 2 == 0 else -0.05)
+        cs.append({"timestamp": T0 + i * STEP, "open": p, "high": cl + 0.2,
+                   "low": cl - 0.2, "close": cl, "volume": 10.0})
+        p = cl
+    cs[-1]["high"] = 101.5                    # range top set by newest closed bar
+    acc = detect_accumulation_range(cs, window=20)
+    assert acc["high"] == 101.5, "newest closed candle must be inside the window"
+
+
+def test_choch_exception_confirmation_candle_not_a_pivot():
+    # Uptrend swings (HH/HL), then the NEWEST closed candle closes below the
+    # last swing low → bearish CHoCH confirmed BY the newest candle. Changing
+    # that candle's wick must not move the broken level: it is intentionally
+    # excluded from pivot construction (documented exception).
+    cs = []
+    # two clear swing lows (valleys with 3 lower-low neighbours each side):
+    # V1 low 98.4 @ i3, V2 low 101.0 @ i9 — a HIGHER low (uptrend structure).
+    pattern = [104, 103, 101, 99, 100.5, 102, 104, 103.5, 101.8, 101.6,
+               103, 105, 106, 105.5, 105.2]
+    for i, px in enumerate(pattern):
+        cs.append({"timestamp": T0 + i * STEP, "open": px + 0.1, "high": px + 0.6,
+                   "low": px - 0.6, "close": px, "volume": 10.0})
+    # newest closed candle closes below the last higher swing low (101.0)
+    cs.append({"timestamp": T0 + len(pattern) * STEP, "open": 105,
+               "high": 105.2, "low": 99.8, "close": 100.0, "volume": 10.0})
+    out = detect_choch(cs, window=3)
+    assert out["signal"] == "bearish", out
+    level = out["level"]
+    # an extreme wick on the confirmation candle must NOT change the pivot set
+    cs2 = [dict(c) for c in cs]
+    cs2[-1]["low"] = 50.0
+    out2 = detect_choch(cs2, window=3)
+    assert out2["signal"] == "bearish" and out2["level"] == level, \
+        "confirmation candle must never contribute its own pivot"

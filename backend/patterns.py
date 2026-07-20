@@ -535,7 +535,12 @@ def detect_choch(candles: List[Dict], window: int = 3) -> Dict:
     if len(candles) < window * 2 + 5:
         return {"signal": "none"}
 
-    ph, pl = find_pivots(candles[:-1], window=window)  # exclude current candle for pivots
+    # INTENTIONAL closed-candle-contract EXCEPTION: `candles` are all closed,
+    # and the NEWEST closed candle is CHoCH's breakout-confirmation bar (its
+    # close is compared against the last swing level below). It is excluded
+    # from pivot construction only, so the confirmation candle can never be
+    # its own swing pivot — not because it is a forming bar.
+    ph, pl = find_pivots(candles[:-1], window=window)
     if not ph or not pl:
         return {"signal": "none"}
 
@@ -667,8 +672,12 @@ def detect_equal_levels(candles: List[Dict], window: int = 25,
           "eqh": {"price": float, "touches": int, "candles_ago": int} | None,
           "eql": {"price": float, "touches": int, "candles_ago": int} | None,
         }
+
+    CLOSED-CANDLE CONTRACT: `candles` are already fully closed (forming bar
+    removed upstream); candles[-1] is the newest completed candle and its
+    high/low participate in the equal-level clusters.
     """
-    closed = candles[:-1]
+    closed = candles
     if len(closed) < 5:
         return {"eqh": None, "eql": None}
 
@@ -727,8 +736,12 @@ def detect_accumulation_range(candles: List[Dict], window: int = 20,
           "range_pct": float,    # (high-low)/mid * 100
           "choppiness": float,   # ATR / range, lower = choppier
         }
+
+    CLOSED-CANDLE CONTRACT: `candles` are already fully closed (forming bar
+    removed upstream); candles[-1] is the newest completed candle and is part
+    of the range window.
     """
-    closed = candles[:-1]
+    closed = candles
     if len(closed) < window:
         return {"detected": False}
 
