@@ -474,6 +474,72 @@ def test_accumulation_range_includes_newest_closed_candle():
     assert acc["high"] == 101.5, "newest closed candle must be inside the window"
 
 
+# ── 9. MACD: signal-line cross vs centerline cross are independent ─────────────
+from indicators import calculate_macd                                   # noqa: E402
+
+
+def _mirror(closes):
+    return [200.0 - c for c in closes]
+
+
+def _macd_fixtures():
+    base = [100 + i * 0.5 for i in range(40)]
+    sig_only = base + [base[-1] - 0.5 * (i + 1) for i in range(10)] + [base[-1] + 10.0]
+    dec = [100 - i * 0.8 for i in range(40)]
+    center_only = dec + [dec[-1] + 0.9 * (i + 1) for i in range(15)]
+    flat = [100.0] * 40
+    both = flat + [100 - 0.3 * (i + 1) for i in range(8)] + [flat[-1] - 2.4 + 10.0]
+    neither = [100 + i * 0.2 for i in range(50)]
+    return sig_only, center_only, both, neither
+
+
+def test_macd_signal_cross_only():
+    sig_only, *_ = _macd_fixtures()
+    m = calculate_macd(sig_only)
+    assert m["cross"] == "bullish" and m["zero_cross"] is None, m
+    mm = calculate_macd(_mirror(sig_only))
+    assert mm["cross"] == "bearish" and mm["zero_cross"] is None, mm
+
+
+def test_macd_centerline_cross_only():
+    _, center_only, *_ = _macd_fixtures()
+    m = calculate_macd(center_only)
+    assert m["zero_cross"] == "bullish" and m["cross"] is None, m
+    mm = calculate_macd(_mirror(center_only))
+    assert mm["zero_cross"] == "bearish" and mm["cross"] is None, mm
+
+
+def test_macd_both_crosses_same_candle_scores_once():
+    *_, both, _ = _macd_fixtures()
+    m = calculate_macd(both)
+    assert m["cross"] == "bullish" and m["zero_cross"] == "bullish", m
+    mm = calculate_macd(_mirror(both))
+    assert mm["cross"] == "bearish" and mm["zero_cross"] == "bearish", mm
+    # OR-based scoring: both events on one candle score exactly the same as a
+    # single signal-line cross (no double-count)
+    a = {
+        "symbol": "ETH", "timeframe": "1D", "candles": mk_candles(60, up=True),
+        "rsi": 50, "rsi_slope": 0, "price_roc": 0.1, "candle_dirs": [1, -1, 1, -1],
+        "ema_trend": {"above": [], "below": [], "aligned": "neutral",
+                      "ema50": 100, "ema21": 100},
+        "supertrend": {"direction": "neutral", "value": 100},
+    }
+    base = generate_signal(dict(a, macd={"histogram": 0.0, "cross": None}))
+    one = generate_signal(dict(a, macd={"histogram": 0.5, "cross": "bullish",
+                                        "zero_cross": None, "trend": "bullish"}))
+    two = generate_signal(dict(a, macd={"histogram": 0.5, "cross": "bullish",
+                                        "zero_cross": "bullish", "trend": "bullish"}))
+    assert one["score"] == two["score"] != base["score"]
+
+
+def test_macd_neither_cross():
+    *_, neither = _macd_fixtures()
+    m = calculate_macd(neither)
+    assert m["cross"] is None and m["zero_cross"] is None, m
+    mm = calculate_macd(_mirror(neither))
+    assert mm["cross"] is None and mm["zero_cross"] is None, mm
+
+
 # ── 8. recommendation reason selection ─────────────────────────────────────────
 def test_recommendation_reasons_match_direction():
     pytest.importorskip("flask")

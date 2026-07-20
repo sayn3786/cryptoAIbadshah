@@ -692,13 +692,16 @@ def calculate_macd(closes: List[float], fast: int = 12, slow: int = 26, signal_p
         elif prev_macd >= prev_sig and cur_macd < cur_sig:
             cross = "bearish"
 
-    # Also detect histogram zero-cross (more bars back)
-    prev_hist = (prev_macd - prev_sig) if prev_macd is not None and prev_sig is not None else None
+    # Centerline cross: the MACD LINE crossing zero. (The old check used the
+    # HISTOGRAM crossing zero — but histogram = MACD − signal, so that is by
+    # definition the same event as the signal-line cross above, duplicated.)
+    # A signal-line cross and a centerline cross are independent events and may
+    # occur on the same candle; scoring stays OR-based so they never double-count.
     zero_cross = None
-    if histogram is not None and prev_hist is not None:
-        if prev_hist <= 0 and histogram > 0:
+    if cur_macd is not None and prev_macd is not None:
+        if prev_macd <= 0 and cur_macd > 0:
             zero_cross = "bullish"
-        elif prev_hist >= 0 and histogram < 0:
+        elif prev_macd >= 0 and cur_macd < 0:
             zero_cross = "bearish"
 
     trend = "neutral"
