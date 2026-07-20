@@ -1732,24 +1732,34 @@ def generate_signal(analysis: Dict) -> Dict:
     combo_pts = 0   # additive bonuses/penalties from specific cross-group combos
 
     # ── Combo 1: Flow confirms Trend (real money behind the move) ─────────────────
+    # Sign comes from the AGREEING GROUPS, never from the running score: bullish
+    # Flow+Trend agreement is always +12 (bearish always −12). Keying off `score`
+    # let bullish agreement strengthen a SHORT whenever other groups had made the
+    # running total negative (and the bearish mirror strengthened LONGs).
     if gdir['flow'] == gdir['trend'] != 'neutral':
         pts = 12
-        combo_pts += pts if score > 0 else -pts
+        agree_bull = gdir['trend'] == 'bull'
+        combo_pts += pts if agree_bull else -pts
         label = "🔗 Flow+Trend confluence — CVD/OI confirms trend direction; real money behind the move"
-        (bull_reasons if score > 0 else bear_reasons).append(label)
+        (bull_reasons if agree_bull else bear_reasons).append(label)
 
     # ── Combo 2: Momentum confirms Trend (healthy trend continuation) ─────────────
     if gdir['momentum'] == gdir['trend'] != 'neutral':
         pts = 8
-        combo_pts += pts if score > 0 else -pts
+        agree_bull = gdir['trend'] == 'bull'
+        combo_pts += pts if agree_bull else -pts
         label = "🔗 Momentum+Trend confluence — MACD/RSI aligned with trend; healthy continuation signal"
-        (bull_reasons if score > 0 else bear_reasons).append(label)
+        (bull_reasons if agree_bull else bear_reasons).append(label)
 
     # ── Combo 3: Flow contradicts Trend (CVD divergence warning) ─────────────────
+    # A contradiction reduces confidence in the TREND direction (pulls the score
+    # back toward zero from the trend's side) — keyed off gdir['trend'], not the
+    # running score, so a bearish trend is never described as an "uptrend".
     if gdir['flow'] not in ('neutral', gdir['trend']) and gdir['trend'] != 'neutral':
         penalty = min(abs(g['flow']), 20)
-        combo_pts += penalty if score < 0 else -penalty   # works against dominant direction
-        if score > 0:
+        trend_bull = gdir['trend'] == 'bull'
+        combo_pts += -penalty if trend_bull else penalty
+        if trend_bull:
             bear_reasons.append(f"⚠️ Flow-Trend divergence — CVD/Volume contradicts uptrend (−{penalty} pts caution); watch for reversal")
         else:
             bull_reasons.append(f"⚠️ Flow-Trend divergence — CVD/Volume contradicts downtrend (−{penalty} pts caution); squeeze risk elevated")
@@ -1757,8 +1767,9 @@ def generate_signal(analysis: Dict) -> Dict:
     # ── Combo 4: Momentum diverging from Trend (early exhaustion warning) ─────────
     if gdir['momentum'] not in ('neutral', gdir['trend']) and gdir['trend'] != 'neutral':
         penalty = min(abs(g['momentum']), 12)
-        combo_pts += penalty if score < 0 else -penalty
-        if score > 0:
+        trend_bull = gdir['trend'] == 'bull'
+        combo_pts += -penalty if trend_bull else penalty
+        if trend_bull:
             bear_reasons.append(f"⚠️ Momentum diverging from trend (−{penalty} pts) — MACD/RSI losing alignment; trend exhaustion risk")
         else:
             bull_reasons.append(f"⚠️ Momentum diverging from downtrend (−{penalty} pts) — possible reversal building; monitor closely")
