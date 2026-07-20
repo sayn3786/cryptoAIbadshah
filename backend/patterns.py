@@ -687,17 +687,23 @@ def detect_equal_levels(candles: List[Dict], window: int = 25,
     def _cluster(prices: list, is_high: bool) -> Optional[Dict]:
         best = None
         best_count = 1
+        best_last_touch_idx = -1
         for i, p in enumerate(prices):
             if p is None:
                 continue
             cluster = [j for j, q in enumerate(prices) if q is not None
                        and abs(q - p) / p <= tolerance]
-            if len(cluster) >= 2 and len(cluster) > best_count:
+            last_touch_idx = max(cluster) if cluster else -1
+            # Prefer more touches; for equal-sized liquidity pools, prefer the
+            # freshest one so stale levels cannot mask a recent actionable pool.
+            if (len(cluster) >= 2 and
+                    (len(cluster), last_touch_idx) >
+                    (best_count, best_last_touch_idx)):
                 best_count = len(cluster)
+                best_last_touch_idx = last_touch_idx
                 cluster_prices = [prices[j] for j in cluster]
                 ref_price = max(cluster_prices) if is_high else min(cluster_prices)
                 # candles_ago = distance from the MOST RECENT touch to live candle
-                last_touch_idx = max(cluster)      # index in `recent` list
                 candles_ago = (n - 1) - last_touch_idx
                 best = {
                     "price":       round(ref_price, 8),
@@ -797,12 +803,12 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
     Pump setup (bullish):
       - Accumulation range detected
       - Equal Lows (EQL) at the bottom → sellside liquidity pool
-      - Bearish FVG below range (gap to be filled on sweep)
+      - Bullish FVG below range (demand/support imbalance)
 
     Dump setup (bearish):
       - Accumulation/distribution range detected
       - Equal Highs (EQH) at the top → buyside liquidity pool
-      - Bullish FVG above range (gap to be filled on sweep)
+      - Bearish FVG above range (supply/resistance imbalance)
 
     Returns:
         {
@@ -817,27 +823,27 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
     acc = detect_accumulation_range(candles, window=window)
     eq  = detect_equal_levels(candles, window=window)
 
-    current_price = candles[-1]["close"] if candles else 0
     result_base   = {"signal": "none", "label": "No setup", "strength": 0,
                      "range": acc, "eq_level": None, "fvg": None}
 
     if not acc["detected"]:
         return result_base
 
-    # Find the most relevant FVG for each direction
-    # Bearish FVG = gap below current price (bullish pump target)
-    # Bullish FVG = gap above current price (bearish dump target)
-    # Filled gaps are spent — they no longer act as magnets and must not anchor
-    # a pump/dump setup (permanent-fill lifecycle in detect_fvg).
-    bear_fvgs = sorted(
-        [f for f in fvgs if f.get("type") == "bearish" and not f.get("filled")
-         and f.get("low", 0) < current_price],
-        key=lambda f: abs(f.get("low", 0) - acc["low"])
-    )
-    bull_fvgs = sorted(
+    # Find directionally consistent, unfilled FVGs OUTSIDE the range.
+    # Bullish FVG below support can act as demand for the EQL pump setup;
+    # bearish FVG above resistance can act as supply for the EQH dump setup.
+    # Merely checking one edge against current price admitted gaps inside or
+    # straddling the range and the old type pairing contradicted direct FVG
+    # scoring in signals.py.
+    bull_fvgs_below = sorted(
         [f for f in fvgs if f.get("type") == "bullish" and not f.get("filled")
-         and f.get("high", 0) > current_price],
-        key=lambda f: abs(f.get("high", 0) - acc["high"])
+         and f.get("top") is not None and f["top"] <= acc["low"]],
+        key=lambda f: acc["low"] - f["top"]
+    )
+    bear_fvgs_above = sorted(
+        [f for f in fvgs if f.get("type") == "bearish" and not f.get("filled")
+         and f.get("bottom") is not None and f["bottom"] >= acc["high"]],
+        key=lambda f: f["bottom"] - acc["high"]
     )
 
     eql = eq.get("eql")
@@ -849,7 +855,7 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
     # RECENT (smaller candles_ago); tie → higher strength. Checking bullish-first
     # and returning early would mask a fresher/stronger bearish setup.
     bull_setup = bear_setup = None
-    if eql and bear_fvgs:
+    if eql and bull_fvgs_below:
         eql_near_low = abs(eql["price"] - acc["low"]) / acc["mid"] < 0.02
         if eql_near_low or eql["touches"] >= 3:
             strength = min(100, 55
@@ -860,9 +866,9 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
                 "signal":   "bullish",
                 "label":    f"Acc + EQL ({eql['touches']} touches @ ${eql['price']:,.4f}) + FVG → PUMP setup",
                 "strength": strength, "range": acc, "eq_level": eql,
-                "fvg": bear_fvgs[0], "_ago": eql["candles_ago"],
+                "fvg": bull_fvgs_below[0], "_ago": eql["candles_ago"],
             }
-    if eqh and bull_fvgs:
+    if eqh and bear_fvgs_above:
         eqh_near_high = abs(eqh["price"] - acc["high"]) / acc["mid"] < 0.02
         if eqh_near_high or eqh["touches"] >= 3:
             strength = min(100, 55
@@ -873,7 +879,7 @@ def detect_acc_eql_fvg_setup(candles: List[Dict], fvgs: List[Dict],
                 "signal":   "bearish",
                 "label":    f"Acc + EQH ({eqh['touches']} touches @ ${eqh['price']:,.4f}) + FVG → DUMP setup",
                 "strength": strength, "range": acc, "eq_level": eqh,
-                "fvg": bull_fvgs[0], "_ago": eqh["candles_ago"],
+                "fvg": bear_fvgs_above[0], "_ago": eqh["candles_ago"],
             }
 
     both = [s for s in (bull_setup, bear_setup) if s]
