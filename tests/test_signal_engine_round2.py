@@ -263,3 +263,129 @@ def test_fvg_production_backtest_parity():
     direct = detect_fvg(cs)
     via_backtest = build_price_analysis(cs, "1D", "TESTX")["fvgs"]
     assert direct == via_backtest, "identical lifecycle through both paths"
+
+
+# ── 3. CVD scoring monotonic across dominance classes ──────────────────────────
+from indicators import detect_cvd_divergence                            # noqa: E402
+
+
+def _mk_cvd_usd(deltas):
+    s, c = [], 0.0
+    out = []
+    for i, d in enumerate(deltas):
+        c += d
+        out.append({"timestamp": T0 + i * STEP, "cvd": round(c, 2), "delta": d})
+    return {"current": round(c, 2), "trend": ("bullish" if sum(deltas) > 0
+                                              else "bearish" if sum(deltas) < 0
+                                              else "neutral"),
+            "series": out, "unit": "usd"}
+
+
+def _cvd_market(fut_share, rising=True, n=12):
+    """Aligned spot/futures USD CVD at an exact futures gross share, with price
+    trending ±1% over the last 5 candles."""
+    d = 1 if rising else -1
+    candles = []
+    p = 100.0
+    for i in range(n):
+        cl = p + 0.4 * d
+        candles.append({"timestamp": T0 + i * STEP, "open": p,
+                        "high": max(p, cl) + 0.1, "low": min(p, cl) - 0.1,
+                        "close": cl, "volume": 10.0})
+        p = cl
+    f_per = fut_share * 100.0
+    s_per = (1.0 - fut_share) * 100.0
+    spot = _mk_cvd_usd([s_per * d] * n)
+    fut = _mk_cvd_usd([f_per * d] * n)
+    return spot, fut, candles
+
+
+def _flow_score(div):
+    """Score contribution of a given divergence dict through generate_signal."""
+    a = {
+        "symbol": "ETH", "timeframe": "1D", "candles": mk_candles(60, up=True),
+        "rsi": 50, "rsi_slope": 0, "price_roc": 0.1, "candle_dirs": [1, -1, 1, -1],
+        "ema_trend": {"above": [], "below": [], "aligned": "neutral",
+                      "ema50": 100, "ema21": 100},
+        "supertrend": {"direction": "neutral", "value": 100},
+        "macd": {"histogram": 0.0, "cross": "none"},
+    }
+    base = generate_signal(a)["score"]
+    return generate_signal(dict(a, cvd_divergence=div))["score"] - base
+
+
+def test_cvd_rising_classes_and_no_sign_cliff():
+    shares = [0.64, 0.65, 0.79, 0.80, 0.81]
+    expected_type = {0.64: "confirmed_up", 0.65: "futures_heavy_up",
+                     0.79: "futures_heavy_up", 0.80: "futures_dominated_up",
+                     0.81: "futures_dominated_up"}
+    scores = {}
+    for sh in shares:
+        spot, fut, cs = _cvd_market(sh, rising=True)
+        div = detect_cvd_divergence(spot, fut, cs)
+        assert div["type"] == expected_type[sh], f"share {sh}: {div['type']}"
+        assert div["signal"] == "bullish", \
+            f"aligned rising flow must stay bullish at share {sh}"
+        scores[sh] = _flow_score(div)
+    # every class scores POSITIVE (no inversion) and conviction is
+    # non-increasing as futures share rises
+    assert all(v > 0 for v in scores.values()), scores
+    ordered = [scores[s] for s in shares]
+    assert all(a >= b for a, b in zip(ordered, ordered[1:])), scores
+    # a 1% share move around each boundary cannot flip the sign or jump wildly
+    assert abs(scores[0.79] - scores[0.80]) <= 15
+    assert abs(scores[0.64] - scores[0.65]) <= 15
+
+
+def test_cvd_falling_classes_and_no_sign_cliff():
+    shares = [0.64, 0.65, 0.79, 0.80, 0.81]
+    expected_type = {0.64: "confirmed_down", 0.65: "futures_heavy_down",
+                     0.79: "futures_heavy_down", 0.80: "futures_dominated_down",
+                     0.81: "futures_dominated_down"}
+    scores = {}
+    for sh in shares:
+        spot, fut, cs = _cvd_market(sh, rising=False)
+        div = detect_cvd_divergence(spot, fut, cs)
+        assert div["type"] == expected_type[sh], f"share {sh}: {div['type']}"
+        assert div["signal"] == "bearish", \
+            f"aligned falling flow must stay bearish at share {sh}"
+        scores[sh] = _flow_score(div)
+    assert all(v < 0 for v in scores.values()), scores
+    ordered = [scores[s] for s in shares]
+    assert all(a <= b for a, b in zip(ordered, ordered[1:])), scores
+    assert abs(scores[0.79] - scores[0.80]) <= 15
+    assert abs(scores[0.64] - scores[0.65]) <= 15
+
+
+def test_cvd_squeeze_risk_is_metadata_not_score_flip():
+    spot, fut, cs = _cvd_market(0.85, rising=True)
+    div = detect_cvd_divergence(spot, fut, cs)
+    assert div["squeeze_risk"] == "long_squeeze_elevated"
+    spot, fut, cs = _cvd_market(0.85, rising=False)
+    div = detect_cvd_divergence(spot, fut, cs)
+    assert div["squeeze_risk"] == "short_squeeze_elevated"
+    # spot-side classes carry no squeeze risk
+    spot, fut, cs = _cvd_market(0.15, rising=True)
+    assert detect_cvd_divergence(spot, fut, cs)["squeeze_risk"] is None
+
+
+def test_cvd_neutral_legs_have_explicit_types():
+    # spot bullish + futures NEUTRAL → explicit spot_only_up, not generic neutral
+    _, _, cs = _cvd_market(0.5, rising=True)
+    spot = _mk_cvd_usd([50.0] * 12)
+    fut_neutral = _mk_cvd_usd([5.0 if i % 2 == 0 else -5.0 for i in range(12)])
+    div = detect_cvd_divergence(spot, fut_neutral, cs)
+    assert div["type"] == "spot_only_up" and div["signal"] == "bullish"
+
+    # spot NEUTRAL + futures bullish → explicit futures_only_up
+    spot_neutral = _mk_cvd_usd([5.0 if i % 2 == 0 else -5.0 for i in range(12)])
+    fut = _mk_cvd_usd([50.0] * 12)
+    div = detect_cvd_divergence(spot_neutral, fut, cs)
+    assert div["type"] == "futures_only_up"
+
+    # falling mirrors
+    _, _, csd = _cvd_market(0.5, rising=False)
+    div = detect_cvd_divergence(_mk_cvd_usd([-50.0] * 12), fut_neutral, csd)
+    assert div["type"] == "spot_only_down" and div["signal"] == "bearish"
+    div = detect_cvd_divergence(spot_neutral, _mk_cvd_usd([-50.0] * 12), csd)
+    assert div["type"] == "futures_only_down"

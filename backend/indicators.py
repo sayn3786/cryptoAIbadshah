@@ -252,10 +252,11 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
         "unknown":           f"dominance unknown ({_dom['dominance_data_quality']})",
     }.get(dom_class, "balanced spot/futures flow")
 
-    def _result(type_, label, detail, signal):
+    def _result(type_, label, detail, signal, squeeze_risk=None):
         r = {"type": type_, "label": label, "detail": detail, "signal": signal,
              "futures_ratio": futures_ratio, "spot_ratio": spot_ratio,
-             "dominance": dominance, "dominance_class": dom_class}
+             "dominance": dominance, "dominance_class": dom_class,
+             "squeeze_risk": squeeze_risk}
         # surface the aligned-flow diagnostics without breaking existing fields
         for k in ("futures_share", "spot_net_usd", "futures_net_usd",
                   "spot_gross_usd", "futures_gross_usd", "aligned_candles",
@@ -276,12 +277,42 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                 "Price rising with spot CVD confirming — genuine buying pressure. Futures are not chasing, suggesting a healthier, more sustained move.",
                 "bullish",
             )
+        if spot_trend == "bullish" and fut_trend == "neutral":
+            # Explicit branch (was a silent fall-through to generic 'neutral').
+            # Deliberately NOT in the scoring table: the signal engine's
+            # individual-trend fallback prices the spot leg exactly as before.
+            return _result(
+                "spot_only_up", "Spot-led rally, futures flat",
+                "Price rising with spot CVD confirming and futures CVD flat — genuine demand without leverage build-up.",
+                "bullish",
+            )
+        if spot_trend == "neutral" and fut_trend == "bullish":
+            # Explicit informative type; NOT in the scoring table, so the signal
+            # engine's individual-trend fallback prices the futures leg alone.
+            return _result(
+                "futures_only_up", "Futures-led rally, spot flat",
+                "Price rising on futures buying while spot CVD is flat — speculative demand without organic confirmation yet.",
+                "neutral",
+            )
         if spot_trend == "bullish" and fut_trend == "bullish":
+            # ── ALL dominance classes handled explicitly. When price, spot CVD
+            # and futures CVD all rise, the move IS bullish at every dominance
+            # tier — rising futures share only REDUCES conviction (monotonically:
+            # spot_dominated > spot_heavy > balanced > futures_heavy >
+            # futures_dominated), it never inverts the direction. Squeeze risk
+            # from leverage crowding is reported via squeeze_risk metadata, not
+            # by flipping confirmed directional flow to an opposite score.
             if dom_class == "futures_dominated":
                 return _result(
                     "futures_dominated_up", "Futures-dominated rally",
-                    f"Both CVDs rising but futures ({dom_label}) — move is overwhelmingly speculative leverage, not organic. Elevated reversal risk.",
-                    "bearish",
+                    f"Both CVDs rising but futures is {dom_label} — heavily leveraged rally with thin organic support; reduced conviction, elevated long-squeeze risk.",
+                    "bullish", squeeze_risk="long_squeeze_elevated",
+                )
+            if dom_class == "futures_heavy":
+                return _result(
+                    "futures_heavy_up", "Futures-heavy rally",
+                    f"Both CVDs rising but futures is {dom_label} — speculative buying heavier than organic; bullish with lower conviction.",
+                    "bullish", squeeze_risk="long_squeeze_building",
                 )
             if dom_class == "spot_dominated":
                 return _result(
@@ -314,18 +345,34 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                 "Price falling with spot CVD confirming — genuine distribution. Futures are not selling but spot sellers dominate.",
                 "bearish",
             )
+        if spot_trend == "bearish" and fut_trend == "neutral":
+            # Explicit branch (was a silent fall-through); not in the scoring
+            # table — fallback prices the spot leg exactly as before.
+            return _result(
+                "spot_only_down", "Spot-led selloff, futures flat",
+                "Price falling with spot CVD confirming and futures CVD flat — real distribution without speculative pressure.",
+                "bearish",
+            )
+        if spot_trend == "neutral" and fut_trend == "bearish":
+            return _result(
+                "futures_only_down", "Futures-led selloff, spot flat",
+                "Price falling on futures selling while spot CVD is flat — speculative pressure without organic distribution yet.",
+                "neutral",
+            )
         if spot_trend == "bearish" and fut_trend == "bearish":
+            # Mirror of the rising case: all classes explicit, direction never
+            # inverts, conviction decreases monotonically as futures share rises.
             if dom_class == "futures_dominated":
                 return _result(
                     "futures_dominated_down", "Futures-dominated selloff",
-                    f"Both CVDs falling but futures is {dom_label} — selling is overwhelmingly speculative shorts, not real holder distribution. Short squeeze risk elevated.",
-                    "neutral",   # downgraded from bearish — unreliable organic signal
+                    f"Both CVDs falling but futures is {dom_label} — heavily speculative selloff with little real distribution; reduced conviction, elevated short-squeeze risk.",
+                    "bearish", squeeze_risk="short_squeeze_elevated",
                 )
             if dom_class == "futures_heavy":
                 return _result(
                     "futures_heavy_down", "Futures-heavy selloff",
                     f"Both CVDs falling but futures is {dom_label} — speculative selling heavier than organic. Some squeeze risk.",
-                    "bearish",   # still bearish but lower conviction
+                    "bearish", squeeze_risk="short_squeeze_building",
                 )
             if dom_class == "spot_dominated":
                 return _result(

@@ -529,20 +529,34 @@ def generate_signal(analysis: Dict) -> Dict:
     spot_ratio = cvd_div.get("spot_ratio",    1) or 1
     fut_ratio  = cvd_div.get("futures_ratio", 1) or 1
 
+    # ALIGNED-FLOW LADDER — when price + spot CVD + futures CVD all move
+    # together, direction NEVER inverts with dominance; rising futures share
+    # only reduces conviction, monotonically:
+    #   up:   +35 ≥ +30 ≥ +26 ≥ +14 ≥ +10  (never negative)
+    #   down: −35 ≤ −30 ≤ −26 ≤ −14 ≤ −10  (never positive)
+    # The old table scored futures_dominated_up at −14 (a ~40-pt bullish→bearish
+    # cliff at the 0.80 futures-share boundary vs confirmed_up +26, with
+    # futures_heavy_up silently falling through to +26) and
+    # futures_dominated_down at +10 (bearish→bullish inversion). Squeeze risk
+    # from leverage crowding is expressed via the divergence's squeeze_risk
+    # metadata and a no-points warning reason — never by flipping the score.
+    # futures_led_up / futures_led_down are genuine DISAGREEMENT cases (spot
+    # moving against price) and keep their opposite-direction scores.
     _CVD_BASE = {
-        "spot_dominated_up":     +35,   # spot >10×: pure organic buying
-        "spot_heavy_up":         +30,   # spot 2–10×: real buyers leading
+        "spot_dominated_up":     +35,   # futures share ≤0.20: pure organic buying
+        "spot_heavy_up":         +30,   # futures share ≤0.35: real buyers leading
         "confirmed_up":          +26,   # balanced: both streams confirming
-        "spot_led_up":           +20,   # spot bullish, futures neutral/missing
-        "futures_led_up":        -16,   # futures pump, spot not confirming
-        "futures_dominated_up":  -14,   # futures >50×: leveraged long crowding
-        "futures_dominated_down":+10,   # futures >50×: speculative short pile-on
-        "futures_led_down":      +16,   # futures selling, spot rising — squeeze
-        "futures_heavy_down":    -14,   # futures 10–50×: speculative, lower conviction
-        "spot_led_down":         -20,   # spot selling, futures not following
+        "spot_led_up":           +20,   # spot bullish, futures opposing
+        "futures_heavy_up":      +14,   # futures share ≥0.65: speculative-heavy, reduced conviction
+        "futures_dominated_up":  +10,   # futures share ≥0.80: leveraged crowding, lowest conviction
+        "futures_led_up":        -16,   # futures pump, spot FALLING — disagreement, likely to fade
+        "futures_led_down":      +16,   # futures selling, spot RISING — squeeze
+        "futures_dominated_down":-10,   # futures share ≥0.80: speculative pile-on, lowest conviction
+        "futures_heavy_down":    -14,   # futures share ≥0.65: speculative, lower conviction
+        "spot_led_down":         -20,   # spot selling, futures opposing
         "confirmed_down":        -26,   # balanced: both streams confirming
-        "spot_heavy_down":       -30,   # spot 2–10×: real sellers leading
-        "spot_dominated_down":   -35,   # spot >10×: pure holder distribution
+        "spot_heavy_down":       -30,   # futures share ≤0.35: real sellers leading
+        "spot_dominated_down":   -35,   # futures share ≤0.20: pure holder distribution
     }
     _CVD_REASON = {
         "spot_dominated_up":     ("bull", "Spot-dominated rally — spot CVD {sr:.0f}× futures; overwhelmingly organic buying with minimal leverage, highest-conviction bullish signal"),
@@ -550,8 +564,9 @@ def generate_signal(analysis: Dict) -> Dict:
         "confirmed_up":          ("bull", "Fully confirmed rally — spot and futures CVD rising in sync; balanced organic + speculative buying, strong confluence"),
         "spot_led_up":           ("bull", "Spot-driven rally — spot CVD rising, futures not chasing; genuine demand without leverage build-up, more sustainable"),
         "futures_led_up":        ("bear", "Futures-driven pump — spot CVD falling despite rally; no real spot demand behind the move; leveraged buyers only, likely to fade"),
-        "futures_dominated_up":  ("bear", "Futures-dominated rally — futures CVD {fr:.0f}× spot; speculative leverage crowding with no organic support; elevated long-squeeze risk"),
-        "futures_dominated_down":("bull", "Futures-dominated selloff — futures CVD {fr:.0f}× spot; speculative short pile-on, real holders not selling; high short-squeeze risk"),
+        "futures_heavy_up":      ("bull", "Futures-heavy rally — futures CVD {fr:.0f}× spot; bullish flow but speculative-heavy, reduced conviction"),
+        "futures_dominated_up":  ("bull", "Futures-dominated rally — futures CVD {fr:.0f}× spot; aligned bullish flow but heavily leveraged, lowest conviction"),
+        "futures_dominated_down":("bear", "Futures-dominated selloff — futures CVD {fr:.0f}× spot; aligned bearish flow but speculative pile-on, lowest conviction"),
         "futures_led_down":      ("bull", "Futures-driven selloff — spot CVD rising while futures sell; no real distribution; short-squeeze risk elevated"),
         "futures_heavy_down":    ("bear", "Futures-heavy selloff — futures CVD {fr:.0f}× spot; bearish but mostly speculative, conviction lower than genuine distribution"),
         "spot_led_down":         ("bear", "Spot-driven selloff — spot CVD falling, futures not following; real holders distributing quietly without leverage"),
@@ -571,9 +586,9 @@ def generate_signal(analysis: Dict) -> Dict:
         if "spot_dominated" in div_type:
             extra = max(0, min(5, round((spot_ratio - 10) * 0.1)))
             pts = pts + extra if pts > 0 else pts - extra
-        elif "futures_dominated" in div_type:
-            extra = max(0, min(5, round((fut_ratio - 50) * 0.02)))
-            pts = pts + extra if pts > 0 else pts - extra
+        # (No intensifier for futures_dominated: under the aligned-flow ladder a
+        # HIGHER futures ratio means LOWER conviction, so amplifying the score
+        # with the ratio would break monotonicity as futures share rises.)
         score += pts; g['flow'] += pts
         side, tmpl = _CVD_REASON[div_type]
         reason = tmpl.format(sr=spot_ratio, fr=fut_ratio)
@@ -581,6 +596,14 @@ def generate_signal(analysis: Dict) -> Dict:
             bull_reasons.append(reason)
         else:
             bear_reasons.append(reason)
+        # Squeeze risk from leverage crowding: a WARNING on the opposite side,
+        # zero points — the directional score above already carries the reduced
+        # conviction; flipping the score itself is what created the old cliff.
+        _sq = cvd_div.get("squeeze_risk")
+        if _sq == "long_squeeze_elevated":
+            bear_reasons.append("⚠️ Long-squeeze risk — rally is futures-dominated leverage; crowded longs vulnerable if momentum stalls (warning only, no points)")
+        elif _sq == "short_squeeze_elevated":
+            bull_reasons.append("⚠️ Short-squeeze risk — selloff is futures-dominated leverage; crowded shorts vulnerable to a bounce (warning only, no points)")
     else:
         # No divergence detected — score individual CVD trends as independent signals
         # (lower weight than unified signal since they carry no relational context)
