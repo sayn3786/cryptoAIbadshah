@@ -1058,6 +1058,7 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
     if len(candles) < period:
         return {
             "upper": None, "middle": None, "lower": None,
+            "previous_upper": None, "previous_lower": None,
             "bandwidth": None, "squeeze": False, "prev_squeeze": False,
             "breakout": None, "breakout_after_squeeze": None, "pct_b": None,
         }
@@ -1089,8 +1090,11 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
     # PREVIOUS window's squeeze state, not the current one (which the breakout
     # itself has usually already un-squeezed).
     prev_squeeze = False
+    previous_upper = previous_lower = None
     if len(closes) >= period + 1:
         p_sma, p_sd = _sma_std(closes[:-1][-period:])
+        previous_upper = p_sma + std_dev * p_sd
+        previous_lower = p_sma - std_dev * p_sd
         prev_bw = (2 * std_dev * p_sd) / p_sma if p_sma > 0 else 0.0
         prev_hist = bw_series[:-1] or bw_series
         prev_squeeze = bool(prev_hist and
@@ -1107,12 +1111,23 @@ def calculate_bollinger_bands(candles: List[Dict], period: int = 20, std_dev: fl
     elif price < lower:
         breakout = "bearish"
 
-    breakout_after_squeeze = breakout if (breakout and prev_squeeze) else None
+    # A squeeze release is a CROSS of the PREVIOUS compressed boundary. Testing
+    # only against the current band misses modest but valid releases because the
+    # breakout candle itself widens that band.
+    breakout_after_squeeze = None
+    if prev_squeeze and previous_upper is not None and previous_lower is not None:
+        previous_close = closes[-2]
+        if previous_close <= previous_upper and price > previous_upper:
+            breakout_after_squeeze = "bullish"
+        elif previous_close >= previous_lower and price < previous_lower:
+            breakout_after_squeeze = "bearish"
 
     return {
         "upper":     round(upper, 8),
         "middle":    round(sma,   8),
         "lower":     round(lower, 8),
+        "previous_upper": round(previous_upper, 8) if previous_upper is not None else None,
+        "previous_lower": round(previous_lower, 8) if previous_lower is not None else None,
         "bandwidth": round(bw,    6),
         "squeeze":   squeeze,
         "prev_squeeze": prev_squeeze,
