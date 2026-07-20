@@ -1422,14 +1422,16 @@ def generate_signal(analysis: Dict) -> Dict:
     bb_pct_b     = bb.get("pct_b", 0.5)
     bb_upper     = bb.get("upper")
     bb_lower     = bb.get("lower")
+    bb_prev_upper = bb.get("previous_upper")
+    bb_prev_lower = bb.get("previous_lower")
 
     fmt_p = lambda v: f"${v:,.4f}" if v else ""
     if bb_break_sq == "bullish":
         score += 16; g['pattern'] += 16
-        bull_reasons.append(f"Bollinger squeeze breakout BULLISH — price closed above upper band {fmt_p(bb_upper)} after compression; explosive move signal")
+        bull_reasons.append(f"Bollinger squeeze breakout BULLISH — price crossed the prior compressed upper band {fmt_p(bb_prev_upper or bb_upper)}; explosive move signal")
     elif bb_break_sq == "bearish":
         score -= 16; g['pattern'] -= 16
-        bear_reasons.append(f"Bollinger squeeze breakdown BEARISH — price closed below lower band {fmt_p(bb_lower)} after compression; explosive move signal")
+        bear_reasons.append(f"Bollinger squeeze breakdown BEARISH — price crossed the prior compressed lower band {fmt_p(bb_prev_lower or bb_lower)}; explosive move signal")
     elif bb_breakout == "bullish":
         # ordinary band break (no prior-window squeeze) — lower existing score
         score += 10; g['pattern'] += 10
