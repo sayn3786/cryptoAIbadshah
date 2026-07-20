@@ -474,6 +474,64 @@ def test_accumulation_range_includes_newest_closed_candle():
     assert acc["high"] == 101.5, "newest closed candle must be inside the window"
 
 
+# ── 7. options reason attribution (4-way matrix) ───────────────────────────────
+def _options_fixture(long_side: bool, opts_bullish: bool):
+    a = _confluence_fixture(bull=long_side)              # strong LONG / SHORT
+    a["options_expiry"] = {
+        "signal_pts": 10 if opts_bullish else -10,
+        "bias": {"bias": "bullish" if opts_bullish else "bearish",
+                 "in_window": True},
+    }
+    return a
+
+
+def _opts_reason(sig):
+    for lst, side in ((sig["bullish_reasons"], "bull"),
+                      (sig["bearish_reasons"], "bear")):
+        for r in lst:
+            if "Options expiry pin" in r:
+                return side, r
+    return None, None
+
+
+def test_options_long_bullish_aligned_in_bull_reasons():
+    sig = generate_signal(_options_fixture(long_side=True, opts_bullish=True))
+    assert sig["direction"] == "LONG"
+    side, r = _opts_reason(sig)
+    assert side == "bull" and "aligns with LONG" in r
+
+
+def test_options_long_bearish_opposed_in_bear_reasons():
+    sig = generate_signal(_options_fixture(long_side=True, opts_bullish=False))
+    assert sig["direction"] == "LONG"
+    side, r = _opts_reason(sig)
+    assert side == "bear" and "opposes LONG" in r
+
+
+def test_options_short_bearish_aligned_in_bear_reasons():
+    sig = generate_signal(_options_fixture(long_side=False, opts_bullish=False))
+    assert sig["direction"] == "SHORT"
+    side, r = _opts_reason(sig)
+    assert side == "bear" and "aligns with SHORT" in r, (side, r)
+
+
+def test_options_short_bullish_opposed_in_bull_reasons():
+    sig = generate_signal(_options_fixture(long_side=False, opts_bullish=True))
+    assert sig["direction"] == "SHORT"
+    side, r = _opts_reason(sig)
+    assert side == "bull" and "opposes SHORT" in r, (side, r)
+
+
+def test_options_adjustment_still_applied_exactly_once():
+    base = generate_signal(_confluence_fixture(bull=True))
+    sig = generate_signal(_options_fixture(long_side=True, opts_bullish=True))
+    assert sig["options_applied"] is True
+    assert sig["options_adjustment"] == 10
+    assert sig["strength"] - base["strength"] == 10, "aligned magnitude unchanged"
+    opp = generate_signal(_options_fixture(long_side=True, opts_bullish=False))
+    assert opp["options_adjustment"] == -5, "opposed formula (-mag/2) unchanged"
+
+
 # ── 6. VWAP cross detection ────────────────────────────────────────────────────
 from indicators import calculate_vwap                                   # noqa: E402
 

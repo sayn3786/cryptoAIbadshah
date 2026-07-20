@@ -2061,15 +2061,27 @@ def generate_signal(analysis: Dict) -> Dict:
     _options_applied     = False
     if _opts_in_win and _opts_pts != 0 and direction != "NEUTRAL":
         mag = abs(_opts_pts)
-        if (_opts_pts > 0 and direction == "LONG") or (_opts_pts < 0 and direction == "SHORT"):
+        aligned = (_opts_pts > 0 and direction == "LONG") or (_opts_pts < 0 and direction == "SHORT")
+        # Reason list follows the OPTIONS pressure direction, not the trade
+        # direction: bullish pressure (+pts) is always a bullish-side reason —
+        # whether it aligns with a LONG or opposes a SHORT — and bearish
+        # pressure (−pts) always a bearish-side reason. (The old code keyed the
+        # list off aligned/opposed, filing bearish pressure aligned with a
+        # SHORT under bullish_reasons and vice versa.)
+        _opts_is_bull = _opts_pts > 0
+        if aligned:
             opts_adj = mag
             strength = min(100, strength + mag)
-            bull_reasons.append(f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{mag} pts)")
+            msg = f"Options expiry pin pressure aligns with {direction} (max pain {_opts_bias.get('bias','').upper()}, +{mag} pts)"
         else:
             opts_adj = -round(mag * 0.5)
             strength = max(0, strength + opts_adj)
-            bear_reasons.append(f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, {opts_adj} pts)")
-        g['sentiment'] += mag if direction == "LONG" else -mag
+            msg = f"Options expiry pin opposes {direction} signal (max pain {_opts_bias.get('bias','').upper()}, {opts_adj} pts)"
+        (bull_reasons if _opts_is_bull else bear_reasons).append(msg)
+        # Sentiment group carries the SIGNED options pressure — not a magnitude
+        # signed by the trade direction (which credited bearish pressure as
+        # bullish sentiment on LONGs it opposed).
+        g['sentiment'] += _opts_pts
         _options_applied = True
 
     # Strength tiers (strength = score / 220 * 100):
