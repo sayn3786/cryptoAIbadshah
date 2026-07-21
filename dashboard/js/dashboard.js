@@ -971,6 +971,8 @@ function renderCVDDivergence(div) {
     spot_heavy_up:         '✓✓',
     spot_dominated_down:   '↓↓↓',
     spot_heavy_down:       '↓↓',
+    spot_absorption_bullish: '✓⏳',
+    spot_absorption_bearish: '↓⏳',
   };
   const sigCls = div.signal === 'bullish' ? 'bull' : div.signal === 'bearish' ? 'bear' : '';
   // Build magnitude badge — use spot_ratio when spot dominates, futures_ratio otherwise
