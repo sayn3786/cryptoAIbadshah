@@ -22,6 +22,38 @@ LBANK_BASE   = "https://api.lbkex.com"
 TIMEOUT      = 5
 BINANCE_RETRIES = int(os.getenv("BINANCE_RETRIES", "1"))
 
+# ── Funding-interval normalization ────────────────────────────────────────────
+# Perps run different funding cadences — 8h is the historical standard, but 4h
+# (e.g. TAO) and 1h intervals are increasingly common. Our funding thresholds
+# are calibrated for 8h, so the raw per-interval rate must be normalized to a
+# per-8h basis before comparison, else a genuinely extreme 4h rate reads as only
+# half as extreme (under-weighting squeeze fuel on short-interval coins).
+FUNDING_STD_HOURS = 8
+
+
+def infer_funding_interval_hours(funding_times_ms) -> int:
+    """Infer the funding interval (hours) from the spacing of funding timestamps.
+
+    Uses the MEDIAN gap between consecutive funding events (robust to a missing
+    point), snapped to the nearest whole hour and clamped to 1..8. Falls back to
+    the 8h standard when there aren't enough timestamps."""
+    ts = sorted(int(t) for t in funding_times_ms if t is not None)
+    if len(ts) < 2:
+        return FUNDING_STD_HOURS
+    gaps = [ts[i] - ts[i - 1] for i in range(1, len(ts)) if ts[i] - ts[i - 1] > 0]
+    if not gaps:
+        return FUNDING_STD_HOURS
+    med_ms = sorted(gaps)[len(gaps) // 2]
+    hours = med_ms / 3_600_000
+    return max(1, min(FUNDING_STD_HOURS, round(hours)))
+
+
+def normalize_funding_8h(rate_pct: float, interval_hours: int) -> float:
+    """Scale a per-interval funding rate to a per-8h-equivalent rate."""
+    if not interval_hours:
+        return rate_pct
+    return round(rate_pct * FUNDING_STD_HOURS / interval_hours, 6)
+
 # Approximate market caps (USD) used as fallback when CoinGecko is unavailable.
 # Values are intentionally rounded — only need to be accurate enough for tier bucketing.
 # Update periodically; wrong by 2× still gives correct tier in most cases.
@@ -1039,8 +1071,13 @@ class BinanceClient:
                              {"symbol": symbol, "limit": limit})
             if data:
                 rates = [float(d["fundingRate"]) * 100 for d in data]
+                interval_hours = infer_funding_interval_hours(
+                    d["fundingTime"] for d in data)
+                cur = round(rates[-1], 4)
                 return {
-                    "current": round(rates[-1], 4),
+                    "current": cur,                                   # raw per-interval rate
+                    "current_8h": normalize_funding_8h(cur, interval_hours),
+                    "interval_hours": interval_hours,
                     "average": round(sum(rates) / len(rates), 4),
                     "history": [{"timestamp": int(d["fundingTime"]),
                                  "rate": round(float(d["fundingRate"]) * 100, 4)}
