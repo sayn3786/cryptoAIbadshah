@@ -1,6 +1,27 @@
 from typing import Dict, List, Optional
 
 
+def _funding_8h(funding: Optional[Dict]):
+    """Funding rate normalized to a per-8h basis for threshold comparison.
+
+    Perps run different funding cadences (8h standard, but 4h/1h increasingly
+    common). Our funding thresholds are 8h-calibrated, so comparing the raw
+    per-interval rate against them under-weights extremes on short-interval
+    coins (a 4h coin's genuinely extreme rate reads half as extreme). Prefer the
+    data-layer-provided `current_8h`; else normalize `current` by
+    `interval_hours` (defaulting to 8 when unknown, i.e. no change). Returns
+    None when funding data is absent, preserving the existing 'no data' paths."""
+    if not funding:
+        return None
+    if funding.get("current_8h") is not None:
+        return funding.get("current_8h")
+    cur = funding.get("current")
+    if cur is None:
+        return None
+    ih = funding.get("interval_hours") or 8
+    return round(cur * 8.0 / ih, 6) if ih else cur
+
+
 def _recent_closed_extremes(candles: List[Dict], n: int = 5):
     """Swing (high, low) over the last `n` CLOSED candles.
 
@@ -169,7 +190,7 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
     rsi      = analysis.get("rsi")
     rsi_div  = (analysis.get("rsi_divergence") or {}).get("type")
     fg_val   = (analysis.get("fear_greed") or {}).get("value")
-    fr_val   = (analysis.get("funding_rate") or {}).get("current")
+    fr_val   = _funding_8h(analysis.get("funding_rate"))   # per-8h normalized
     bb_pctb  = (analysis.get("bollinger") or {}).get("pct_b")
     srsi_sig = (analysis.get("stoch_rsi") or {}).get("signal")
     vol      = analysis.get("vol_signal") or {}
@@ -319,7 +340,7 @@ def _squeeze_priming(analysis: Dict) -> Optional[Dict]:
     is deliberately small — funding, CVD and OI are each scored on their own
     elsewhere; this only rewards the specific three-way ALIGNMENT that primes a
     squeeze, and flags the building state with no extra points (heads-up only)."""
-    fr    = (analysis.get("funding_rate") or {}).get("current")
+    fr    = _funding_8h(analysis.get("funding_rate"))          # per-8h normalized
     fcvd  = (analysis.get("futures_cvd") or {}).get("trend")   # bullish|bearish|neutral
     scvd  = (analysis.get("spot_cvd") or {}).get("trend")
     oi    = analysis.get("open_interest") or {}
@@ -635,19 +656,25 @@ def generate_signal(analysis: Dict) -> Dict:
     # squeeze risk. Documented by BitMEX traders, Arthur Hayes, Cobie, and
     # multiple quant studies on perpetual swap funding as a contrarian indicator.
     # Consistently the strongest mean-reversion signal in crypto markets.
-    fr = funding.get("current", 0.0) or 0.0
+    # Compare on the per-8h basis so 4h/1h-interval perps (e.g. TAO on a 4h
+    # cycle) are weighed the same as 8h ones. Display shows the 8h-equivalent
+    # with the native rate/interval noted when it isn't the 8h standard.
+    fr = _funding_8h(funding) or 0.0
+    _fr_iv  = (funding or {}).get("interval_hours") or 8
+    _fr_raw = (funding or {}).get("current", fr) or 0.0
+    _fr_note = "" if _fr_iv == 8 else f" [native {_fr_raw:.4f}%/{_fr_iv:g}h]"
     if fr < -0.02:
         score += 30; g['flow'] += 30
-        bull_reasons.append(f"Funding extremely negative ({fr:.4f}%) — market max short, very high squeeze probability")
+        bull_reasons.append(f"Funding extremely negative ({fr:.4f}%/8h{_fr_note}) — market max short, very high squeeze probability")
     elif fr < -0.005:
         score += 15; g['flow'] += 15
-        bull_reasons.append(f"Funding negative ({fr:.4f}%) — shorts paying longs, structurally favours longs")
+        bull_reasons.append(f"Funding negative ({fr:.4f}%/8h{_fr_note}) — shorts paying longs, structurally favours longs")
     elif fr > 0.04:
         score -= 30; g['flow'] -= 30
-        bear_reasons.append(f"Funding extremely high ({fr:.4f}%) — market max long, very high flush probability")
+        bear_reasons.append(f"Funding extremely high ({fr:.4f}%/8h{_fr_note}) — market max long, very high flush probability")
     elif fr > 0.015:
         score -= 15; g['flow'] -= 15
-        bear_reasons.append(f"Funding elevated ({fr:.4f}%) — longs overextended, late-cycle caution")
+        bear_reasons.append(f"Funding elevated ({fr:.4f}%/8h{_fr_note}) — longs overextended, late-cycle caution")
 
     # ── Open Interest ─────────────────────────────────────────────────────────
     # Rising OI + rising price = new longs entering (bullish conviction).
@@ -1812,14 +1839,14 @@ def generate_signal(analysis: Dict) -> Dict:
             bull_reasons.append(f"⚠️ Momentum diverging from downtrend (−{penalty} pts) — possible reversal building; monitor closely")
 
     # ── Combo 5: Extreme Funding + Trend aligned (maximum squeeze/flush setup) ───
-    fr_val = funding.get("current", 0.0) or 0.0
+    fr_val = _funding_8h(funding) or 0.0                 # per-8h normalized
     if abs(fr_val) >= 0.02 and gdir['trend'] == overall_dir and gdir['trend'] != 'neutral':
         pts = 15
         combo_pts += pts if score > 0 else -pts
         if score > 0:
-            bull_reasons.append(f"🔗 Extreme Funding+Trend aligned — max short positioning ({fr_val:.4f}%) + bullish trend = extreme squeeze setup")
+            bull_reasons.append(f"🔗 Extreme Funding+Trend aligned — max short positioning ({fr_val:.4f}%/8h) + bullish trend = extreme squeeze setup")
         else:
-            bear_reasons.append(f"🔗 Extreme Funding+Trend aligned — max long positioning ({fr_val:.4f}%) + bearish trend = extreme flush setup")
+            bear_reasons.append(f"🔗 Extreme Funding+Trend aligned — max long positioning ({fr_val:.4f}%/8h) + bearish trend = extreme flush setup")
 
     # ── Combo 6: SuperTrend flip + Volume confirmation (breakout with conviction) ─
     vol_sig_local = (analysis.get("vol_signal") or {}).get("signal")

@@ -222,6 +222,8 @@ def mock_funding_rate(symbol: str, limit: int = 10) -> Dict:
         history.append({"timestamp": ts, "rate": rate})
     return {
         "current": round(base, 4),
+        "current_8h": round(base, 4),   # mock history is on the 8h cadence
+        "interval_hours": 8,
         "average": round(sum(h["rate"] for h in history) / len(history), 4),
         "history": history,
     }

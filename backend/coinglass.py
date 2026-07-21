@@ -107,8 +107,13 @@ class CoinGlassClient:
 
             # Aggregate: weighted average across exchanges
             recent_rates = [h["rate"] for h in sorted(history, key=lambda x: x["timestamp"])[-10:]]
+            cur = round(recent_rates[-1], 4) if recent_rates else 0.0
             return {
-                "current": round(recent_rates[-1], 4) if recent_rates else 0.0,
+                "current": cur,
+                # this endpoint is requested with time_type="h8", so the rate is
+                # already on the 8h basis the thresholds expect.
+                "current_8h": cur,
+                "interval_hours": 8,
                 "average": round(sum(recent_rates) / len(recent_rates), 4),
                 "history": sorted(history, key=lambda x: x["timestamp"])[-20:],
                 "source":  "coinglass",
