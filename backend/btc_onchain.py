@@ -552,6 +552,7 @@ def get_btc_mining_signals() -> dict:
         "hash_ribbon_ma60":   None,
         "hash_ribbon_history":  None,   # bullish/bearish flip history (backfilled)
         "difficulty_history":   None,   # rising/falling streak + recent adjustments
+        "lth_sth":              None,   # LTH/STH supply cohorts + distribution history
         "halving_phase":      None,
         "halving_days_since": None,
         "halving_days_until": None,
@@ -754,6 +755,11 @@ def get_btc_mining_signals() -> dict:
                 "estimated":     True,
             }
 
+    # ── LTH / STH supply cohorts (real supply-age data) ──────────────────────
+    lth_sth = _fetch_lth_sth()
+    if lth_sth:
+        result["lth_sth"] = lth_sth
+
     # ── Realized Price — derived from MVRV (btc_price / mvrv_score) ──────────
     # MVRV = market cap / realized cap, so realized price = btc_price / mvrv
     rp = (result.get("mvrv") or {}).get("realized_price")
@@ -776,6 +782,86 @@ def get_btc_mining_signals() -> dict:
 
 
 # ── Long-Term Holder Accumulation Proxy ─────────────────────────────────────────
+
+# ── LTH / STH supply (real supply-age cohorts) ────────────────────────────────
+LTH_TREND_WINDOW_DAYS = 30      # look-back for the accumulation/distribution slope
+LTH_TREND_THRESH_PP   = 0.20    # ± percentage-points of held-supply change to call it
+
+
+def _lth_distribution_states(held_series: list, window: int = LTH_TREND_WINDOW_DAYS,
+                             thresh_pp: float = LTH_TREND_THRESH_PP) -> list:
+    """Classify each day as accumulation / distribution / neutral from the change
+    in HELD (long-term) supply % over `window` days.
+
+    held_series: [(ts, held_pct)] ascending. Rising held supply = long-term
+    holders growing their position (accumulation); falling = old coins moving to
+    new hands (distribution). Returns [(ts, state)]."""
+    out = []
+    for i in range(window, len(held_series)):
+        chg = held_series[i][1] - held_series[i - window][1]
+        state = ("accumulation" if chg > thresh_pp
+                 else "distribution" if chg < -thresh_pp else "neutral")
+        out.append((held_series[i][0], state))
+    return out
+
+
+def _fetch_lth_sth() -> dict:
+    """Real LTH/STH supply split from CoinMetrics free supply-age bands.
+
+    True 155-day LTH/STH cohorts need a paid provider; the community API's
+    `SplyActPct*` (percentage of supply that MOVED within a window) gives a
+    real, close proxy: HELD (LTH-ish) = 100 − active%, ACTIVE (STH-ish) =
+    active%. We track the TREND — rising held supply = accumulation, falling =
+    distribution — which is the actionable part, with flip history.
+
+    Tries progressively-shorter age bands (180d ≈ the 155d standard, else 1yr).
+    Returns {} on any failure so the panel simply omits the row."""
+    for metric, win_label, win_days in (("SplyActPct180d", ">180d", 180),
+                                         ("SplyActPct1yr",  ">1yr",  365)):
+        url = ("https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+               f"?assets=btc&metrics={metric}&frequency=1d&page_size=760")
+        data = _get(url, f"coinmetrics_{metric}", ttl=4 * 3600)
+        rows = (data or {}).get("data") or []
+        held = []                                   # [(ts, held_pct)]
+        for row in rows:
+            v = row.get(metric)
+            if v is None:
+                continue
+            try:
+                active = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not (0.0 <= active <= 100.0):
+                continue
+            ts = _iso_to_ts(row.get("time"))
+            if ts is not None:
+                held.append((ts, round(100.0 - active, 4)))
+        if len(held) < LTH_TREND_WINDOW_DAYS + 5:
+            continue                                # try the next band
+
+        held_now = held[-1][1]
+        active_now = round(100.0 - held_now, 4)
+        chg_30 = (round(held[-1][1] - held[-1 - LTH_TREND_WINDOW_DAYS][1], 3)
+                  if len(held) > LTH_TREND_WINDOW_DAYS else None)
+        states = _lth_distribution_states(held)
+        history = summarize_transitions(states, now_ts=held[-1][0], min_run_days=5.0)
+        state = history["current_state"] if history else "neutral"
+        label = {
+            "accumulation": "LTH supply rising — accumulation (holders growing position)",
+            "distribution": "LTH supply falling — DISTRIBUTION (old coins moving to new hands)",
+            "neutral":      "LTH supply flat — no clear accumulation or distribution",
+        }[state]
+        cls = "bull" if state == "accumulation" else "bear" if state == "distribution" else ""
+        return {
+            "lth_supply_pct": held_now,             # long-term-holder-ish supply share
+            "sth_supply_pct": active_now,           # short-term-holder-ish supply share
+            "window": win_label,
+            "change_30d_pp": chg_30,                # Δ held supply over 30d (pp)
+            "state": state, "cls": cls, "label": label,
+            "history": history,
+        }
+    return {}
+
 
 def get_lth_accumulation_proxy(netflow: dict = None, sopr_zone: str = None,
                                mvrv_zone: str = None) -> dict:
