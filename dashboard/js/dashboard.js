@@ -163,24 +163,65 @@ function initCharts() {
 }
 
 /* ─── Fetch dashboard overview ────────────────────────────────────────────── */
+const TICKER_SYMS = ['BTC', 'ETH', 'LINK', 'TAO', 'HYPE', 'ONDO'];
+let _tickerData = {};   // {sym: {price, change_pct, ref_close}}
+
 async function loadTicker() {
-  const TICKER_SYMS = ['BTC', 'ETH', 'LINK', 'TAO', 'HYPE', 'ONDO'];
   try {
     const res = await fetch(`${API}/dashboard`);
     if (!res.ok) return;
     const data = await res.json();
-    const bar = document.getElementById('tickerBar');
-    bar.innerHTML = TICKER_SYMS.map(sym => {
+    // Cache price + change + the change baseline (ref_close) per symbol; the
+    // fast live-price poll refreshes the price against that baseline between
+    // these (heavier) full refreshes.
+    TICKER_SYMS.forEach(sym => {
       const d = data[sym];
-      if (!d || d.error) return '';
-      const chg = d.change_pct ?? 0;
-      const cls = chg >= 0 ? 'up' : 'dn';
-      return `<div class="ticker-item">
-        <span class="ticker-sym">${sym}</span>
-        <span class="ticker-price">${fmtPrice(d.price || 0)}</span>
-        <span class="ticker-chg ${cls}">${pct(chg)}</span>
-      </div>`;
-    }).join('');
+      if (d && !d.error) {
+        _tickerData[sym] = {
+          price:      d.price,
+          change_pct: d.change_pct ?? 0,
+          ref_close:  d.ref_close ?? d.price,
+        };
+      }
+    });
+    renderTicker();
+  } catch (_) {}
+}
+
+function renderTicker() {
+  const bar = document.getElementById('tickerBar');
+  if (!bar) return;
+  bar.innerHTML = TICKER_SYMS.map(sym => {
+    const d = _tickerData[sym];
+    if (!d || d.price == null) return '';
+    const chg = d.change_pct ?? 0;
+    const cls = chg >= 0 ? 'up' : 'dn';
+    return `<div class="ticker-item">
+      <span class="ticker-sym">${sym}</span>
+      <span class="ticker-price">${fmtPrice(d.price || 0)}</span>
+      <span class="ticker-chg ${cls}">${pct(chg)}</span>
+    </div>`;
+  }).join('');
+}
+
+/* Fast, lightweight live-price poll (no full analysis) — updates just the price
+   and recomputes today's change against the cached ref_close baseline. */
+async function loadLivePrices() {
+  if (!Object.keys(_tickerData).length) return;   // wait for the first full load
+  try {
+    const syms = TICKER_SYMS.join(',');
+    const prices = await fetch(`${API}/prices?symbols=${syms}`).then(r => r.json());
+    let changed = false;
+    TICKER_SYMS.forEach(sym => {
+      const p = prices[sym];
+      const d = _tickerData[sym];
+      if (p != null && d) {
+        d.price = p;
+        if (d.ref_close) d.change_pct = +(((p - d.ref_close) / d.ref_close) * 100).toFixed(2);
+        changed = true;
+      }
+    });
+    if (changed) renderTicker();
   } catch (_) {}
 }
 
@@ -4434,7 +4475,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   wireSelectors();
   initCharts();
   renderMyTrades();
-  loadTicker();
+  loadTicker().then(loadLivePrices);   // full baseline, then an immediate live tick
   loadAnalysis();
   loadRecommendations();
   loadEngulfAlerts();
@@ -4445,8 +4486,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   setInterval(loadWhaleAlerts, 5 * 60 * 1000);
   setInterval(loadMacro, 6 * 60 * 60 * 1000);   // macro updates a few times/day at most
 
-  // Auto-refresh every 5 minutes (ticker); strength check every 60 minutes
+  // Ticker: heavy full refresh every 5 min (rebuilds the change baseline), plus
+  // a lightweight live-price poll every 45s so the header prices stay current.
   setInterval(loadTicker, 5 * 60 * 1000);
+  setInterval(loadLivePrices, 45 * 1000);
   setInterval(checkStrengthChanges, 60 * 60 * 1000);
 });
 

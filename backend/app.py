@@ -1597,6 +1597,8 @@ def api_dashboard():
                 results[sym] = {
                     "price":        live,
                     "change_pct":   round(chg, 2),
+                    "ref_close":    last_closed,   # baseline for the fast live-price poll
+
                     "rsi":          data["rsi"],
                     "signal":       data["signal"],
                     "funding_rate": (data["funding_rate"] or {}).get("current"),
