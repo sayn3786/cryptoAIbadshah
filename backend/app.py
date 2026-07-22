@@ -1587,11 +1587,15 @@ def api_dashboard():
             try:
                 data  = future.result()
                 c     = data["candles"]
-                price = c[-1]["close"] if c else None
-                prev  = c[-2]["close"] if len(c) > 1 else price
-                chg   = (price - prev) / prev * 100 if prev else 0
+                # Header ticker shows the LIVE price (the forming candle / latest
+                # spot), not the last CLOSED daily close, with today's change
+                # measured against that last close. Falls back to the closed
+                # close when no live price is available.
+                last_closed = c[-1]["close"] if c else None
+                live  = data.get("live_price") or last_closed
+                chg   = ((live - last_closed) / last_closed * 100) if (last_closed and live) else 0
                 results[sym] = {
-                    "price":        price,
+                    "price":        live,
                     "change_pct":   round(chg, 2),
                     "rsi":          data["rsi"],
                     "signal":       data["signal"],
