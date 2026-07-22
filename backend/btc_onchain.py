@@ -479,12 +479,21 @@ def _fetch_sopr_realized_puell() -> dict:
     return out
 
 
+# Long-term-holder supply behaviour tilts the composite ±LTH_SCORE_ADJ. Applied
+# as a signed ADJUSTMENT (not a new additive band) so the six base components
+# still sum to 100 and their calibration is untouched; LTH just nudges. Symmetric
+# so accumulation and distribution move the score by equal magnitude.
+LTH_SCORE_ADJ = 8
+
+
 def _onchain_score(ribbon: str, phase: str, prof_ratio, mvrv_zone: str, diff_last,
-                   sopr_zone: str = None, puell_zone: str = None) -> dict:
+                   sopr_zone: str = None, puell_zone: str = None,
+                   lth_state: str = None) -> dict:
     """
     Combine on-chain/mining signals into a single 0-100 score.
     Higher = more bullish on-chain context for BTC price.
-    Now includes SOPR and Puell Multiple for a more complete picture.
+    Includes SOPR, Puell Multiple, and an LTH-supply accumulation/distribution
+    tilt for a more complete picture.
     """
     pts = 0
 
@@ -516,6 +525,13 @@ def _onchain_score(ribbon: str, phase: str, prof_ratio, mvrv_zone: str, diff_las
         pts += {"deep_undervalued": 10, "undervalued": 8, "fair": 6,
                 "elevated": 3,          "extreme": 0}.get(puell_zone, 5)
 
+    # LTH supply tilt (±LTH_SCORE_ADJ) — rising long-term-holder supply is
+    # accumulation (bullish); falling is distribution (old coins to new hands →
+    # top-forming, bearish). Signed adjustment on top of the 0-100 base.
+    lth_adj = {"accumulation": LTH_SCORE_ADJ,
+               "distribution": -LTH_SCORE_ADJ}.get(lth_state, 0)
+    pts += lth_adj
+
     score = min(100, max(0, pts))
 
     if   score >= 75: label, cls = "Strong On-Chain Bull",    "bull"
@@ -524,7 +540,7 @@ def _onchain_score(ribbon: str, phase: str, prof_ratio, mvrv_zone: str, diff_las
     elif score >= 30: label, cls = "Moderately Bearish",      "bear"
     else:             label, cls = "Strong On-Chain Bear",    "bear"
 
-    return {"score": score, "label": label, "cls": cls}
+    return {"score": score, "label": label, "cls": cls, "lth_adjustment": lth_adj}
 
 
 def get_btc_mining_signals() -> dict:
@@ -776,6 +792,7 @@ def get_btc_mining_signals() -> dict:
         diff_last   = result.get("difficulty_last_change"),
         sopr_zone   = (result.get("sopr") or {}).get("zone"),
         puell_zone  = (result.get("puell_multiple") or {}).get("zone"),
+        lth_state   = (result.get("lth_sth") or {}).get("state"),
     )
 
     return result

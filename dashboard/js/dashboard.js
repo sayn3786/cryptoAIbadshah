@@ -1465,13 +1465,17 @@ function renderBtcMiningCard(mining, symbol) {
   const ocBar   = ocScore != null
     ? `<div class="btcm-oc-bar"><div class="btcm-oc-fill ${ocCls}" style="width:${ocScore}%"></div></div>`
     : '';
+  // LTH supply tilt applied to the composite (±8): show it when non-zero.
+  const ocLthAdj = oc.lth_adjustment || 0;
+  const ocLthNote = ocLthAdj > 0 ? ` <span class="bull">(LTH accumulation +${ocLthAdj})</span>`
+                  : ocLthAdj < 0 ? ` <span class="bear">(LTH distribution ${ocLthAdj})</span>` : '';
   const ocRow = ocScore != null ? `
     <div class="btcm-oc-header">
       <span class="btcm-oc-title">On-Chain Score</span>
       <span class="btcm-oc-score ${ocCls}">${ocScore}<span style="opacity:.5;font-size:.8em">/100</span></span>
     </div>
     ${ocBar}
-    <div class="btcm-sub" style="margin-bottom:10px">${ocLabel} — Hash Ribbon + Halving + Profitability + MVRV + SOPR + Puell + Difficulty</div>
+    <div class="btcm-sub" style="margin-bottom:10px">${ocLabel} — Hash Ribbon + Halving + Profitability + MVRV + SOPR + Puell + Difficulty + LTH${ocLthNote}</div>
     <hr class="btcm-divider">` : '';
 
   rows.innerHTML = `

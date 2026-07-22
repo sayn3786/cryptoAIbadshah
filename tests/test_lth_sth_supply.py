@@ -63,3 +63,45 @@ def test_lth_supply_and_active_are_complementary():
     # a single classified series' current held/active must sum to 100
     held_val = 62.3
     assert round(held_val + (100.0 - held_val), 4) == 100.0
+
+
+# ── LTH tilt wired into the composite on-chain score ─────────────────────────────
+def _base_score(**kw):
+    defaults = dict(ribbon="bull", phase="mid", prof_ratio=1.3,
+                    mvrv_zone="fair_value", diff_last=None,
+                    sopr_zone="neutral", puell_zone="fair")
+    defaults.update(kw)
+    return o._onchain_score(**defaults)
+
+
+def test_lth_tilt_symmetric_and_signed():
+    base = _base_score(lth_state=None)["score"]
+    acc = _base_score(lth_state="accumulation")
+    dist = _base_score(lth_state="distribution")
+    assert acc["score"] == min(100, base + o.LTH_SCORE_ADJ)
+    assert dist["score"] == max(0, base - o.LTH_SCORE_ADJ)
+    # symmetric magnitude and exposed adjustment
+    assert acc["lth_adjustment"] == o.LTH_SCORE_ADJ
+    assert dist["lth_adjustment"] == -o.LTH_SCORE_ADJ
+    assert (acc["score"] - base) == (base - dist["score"]) == o.LTH_SCORE_ADJ
+
+
+def test_lth_neutral_and_missing_are_no_ops():
+    base = _base_score(lth_state=None)["score"]
+    assert _base_score(lth_state="neutral")["score"] == base
+    assert _base_score(lth_state="neutral")["lth_adjustment"] == 0
+    # unknown/garbage state must not move the score
+    assert _base_score(lth_state="???")["score"] == base
+
+
+def test_lth_distribution_can_flip_the_label_bearish():
+    # a mid score sitting just above the neutral/bearish edge drops a band when
+    # LTH distribution is applied — the actionable top-warning behavior
+    near_edge = _base_score(ribbon="bear", phase="late", prof_ratio=1.0,
+                            mvrv_zone="fair_elevated", sopr_zone="profit",
+                            puell_zone="fair", lth_state=None)
+    dist = _base_score(ribbon="bear", phase="late", prof_ratio=1.0,
+                       mvrv_zone="fair_elevated", sopr_zone="profit",
+                       puell_zone="fair", lth_state="distribution")
+    assert dist["score"] == near_edge["score"] - o.LTH_SCORE_ADJ
+    assert dist["score"] < near_edge["score"]
