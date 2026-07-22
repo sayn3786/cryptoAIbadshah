@@ -585,6 +585,11 @@ def generate_signal(analysis: Dict) -> Dict:
         "confirmed_down":        -26,   # balanced: both streams confirming
         "spot_heavy_down":       -30,   # futures share ≤0.35: real sellers leading
         "spot_dominated_down":   -35,   # futures share ≤0.20: pure holder distribution
+        # ── Absorption: price FLAT while spot & futures CVD pull opposite ways.
+        # Lower conviction than a trending divergence (price hasn't confirmed a
+        # direction yet), so scored below spot_led_* — it's fuel, not follow-through.
+        "spot_absorption_bullish": +12,  # spot buys, futures sell, price holds → squeeze fuel
+        "spot_absorption_bearish": -12,  # spot sells, futures buy, price holds → distribution
     }
     _CVD_REASON = {
         "spot_dominated_up":     ("bull", "Spot-dominated rally — spot CVD {sr:.0f}× futures; overwhelmingly organic buying with minimal leverage, highest-conviction bullish signal"),
@@ -601,6 +606,8 @@ def generate_signal(analysis: Dict) -> Dict:
         "confirmed_down":        ("bear", "Fully confirmed selloff — spot and futures CVD falling in sync; real selling meets speculative pressure, strong bearish confluence"),
         "spot_heavy_down":       ("bear", "Spot-heavy confirmed selloff — spot CVD {sr:.1f}× futures; real sellers leading with futures confirming"),
         "spot_dominated_down":   ("bear", "Spot-dominated selloff — spot CVD {sr:.0f}× futures; pure holder distribution with minimal leverage, highest-conviction bearish signal"),
+        "spot_absorption_bullish": ("bull", "Spot absorbing futures selling — price holding flat while spot CVD buys and futures CVD sells; real buyers soaking up a leveraged short campaign, short-squeeze fuel building (unconfirmed until an upside break)"),
+        "spot_absorption_bearish": ("bear", "Spot distributing into futures buying — price holding flat while spot CVD sells and futures CVD buys; real sellers offloading into leveraged bids, distribution/top risk (unconfirmed until a downside break)"),
     }
 
     if div_type in _CVD_BASE:

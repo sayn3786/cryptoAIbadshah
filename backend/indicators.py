@@ -256,7 +256,11 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
     elif price_chg < -0.005:
         price_trend = "down"
     else:
-        return {"type": "neutral", "label": "Price ranging", "detail": "No clear price trend to compare CVDs against.", "signal": "neutral", "futures_ratio": None, "dominance": "balanced"}
+        # Price FLAT — do not bail to neutral yet. Price holding flat while spot
+        # and futures CVD pull HARD in opposite directions is the definition of
+        # ABSORPTION (one side soaking up the other's aggression), handled in the
+        # price_trend == "flat" branch below.
+        price_trend = "flat"
 
     spot_trend = spot_cvd.get("trend", "neutral")
     fut_trend  = fut_cvd.get("trend",  "neutral")
@@ -420,6 +424,35 @@ def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) ->
                 f"Both spot and futures CVD falling with price — strong confluence of real and speculative selling. {dom_label.capitalize()}.",
                 "bearish",
             )
+
+    if price_trend == "flat":
+        # ── SPOT-ABSORPTION divergence ────────────────────────────────────────
+        # Price holding flat while spot and futures CVD pull HARD in opposite
+        # directions: one side's aggression is being absorbed by the other. Only
+        # fire on genuinely aligned flow (dominance_data_quality == "ok"), else
+        # fall through to neutral — a thin/unknown feed isn't an absorption read.
+        if _dom["dominance_data_quality"] == "ok":
+            if spot_trend == "bullish" and fut_trend == "bearish":
+                return _result(
+                    "spot_absorption_bullish", "Spot absorbing futures selling",
+                    "Price holding flat while spot CVD BUYS and futures CVD SELLS — "
+                    "real spot buyers are absorbing a leveraged short campaign; the "
+                    "move price 'should' make down isn't happening. Short-squeeze "
+                    "fuel building — needs an upside break to confirm.",
+                    "bullish", squeeze_risk="short_squeeze_building",
+                )
+            if spot_trend == "bearish" and fut_trend == "bullish":
+                return _result(
+                    "spot_absorption_bearish", "Spot distributing into futures buying",
+                    "Price holding flat while spot CVD SELLS and futures CVD BUYS — "
+                    "real spot sellers are distributing into leveraged buying; price "
+                    "refuses to rise despite the futures bid. Distribution / top risk "
+                    "— needs a downside break to confirm.",
+                    "bearish", squeeze_risk="long_squeeze_building",
+                )
+        # flat price, no strong opposite divergence → genuinely ranging
+        return _result("neutral", "Price ranging",
+                       "No clear price trend to compare CVDs against.", "neutral")
 
     return _result("neutral", "CVDs aligned with price", "No significant divergence between spot and futures CVD.", "neutral")
 
