@@ -170,8 +170,11 @@ def _hash_ribbon_history(hashrates: list, min_run_days: float = 3.0) -> dict:
     (bullish = ma30 > ma60), then summarize the flips. This is what answers
     "Hash Ribbon is bullish today — when was it last bearish?". A small
     min_run_days debounces the odd 1-2 day whipsaw right at a cross."""
-    pts = sorted(((int(h["timestamp"]), float(h.get("avgHashrate") or 0))
-                  for h in hashrates if (h.get("avgHashrate") or 0) > 0),
+    def _hts(h):
+        return h.get("timestamp", h.get("time"))
+    pts = sorted(((int(_hts(h)), float(h.get("avgHashrate") or 0))
+                  for h in hashrates
+                  if (h.get("avgHashrate") or 0) > 0 and _hts(h) is not None),
                  key=lambda x: x[0])
     if len(pts) < 60:
         return None
@@ -187,11 +190,15 @@ def _hash_ribbon_history(hashrates: list, min_run_days: float = 3.0) -> dict:
 def _difficulty_history(difficulty: list, max_adjustments: int = 12) -> dict:
     """Difficulty rising/falling streak + a log of recent adjustments (date, %).
 
-    `difficulty`: list of {timestamp, difficulty} (from the mempool hashrate
-    endpoint's `difficulty` array). Each retarget's % change comes from the
-    ratio to the previous epoch's difficulty."""
-    pts = sorted(((int(d["timestamp"]), float(d.get("difficulty") or 0))
-                  for d in difficulty if (d.get("difficulty") or 0) > 0),
+    `difficulty`: list from the mempool hashrate endpoint's `difficulty` array.
+    That array keys its timestamp as `time` (seconds) — NOT `timestamp` — so we
+    accept either. Each retarget's % change comes from the ratio to the previous
+    epoch's difficulty."""
+    def _dts(d):
+        return d.get("time", d.get("timestamp"))
+    pts = sorted((( int(_dts(d)), float(d.get("difficulty") or 0))
+                  for d in difficulty
+                  if (d.get("difficulty") or 0) > 0 and _dts(d) is not None),
                  key=lambda x: x[0])
     if len(pts) < 2:
         return None
@@ -637,11 +644,16 @@ def get_btc_mining_signals() -> dict:
         "mempool_hashrate_2y",
         ttl=6 * 3600,   # daily-granularity history; refresh a few times a day
     )
-    if hist_data:
-        if hist_data.get("hashrates"):
-            result["hash_ribbon_history"] = _hash_ribbon_history(hist_data["hashrates"])
-        if hist_data.get("difficulty"):
-            result["difficulty_history"] = _difficulty_history(hist_data["difficulty"])
+    # History is a display-only extra — never let an unexpected upstream shape
+    # take down the whole BTC analysis (this block runs only for BTC).
+    try:
+        if hist_data:
+            if hist_data.get("hashrates"):
+                result["hash_ribbon_history"] = _hash_ribbon_history(hist_data["hashrates"])
+            if hist_data.get("difficulty"):
+                result["difficulty_history"] = _difficulty_history(hist_data["difficulty"])
+    except Exception:
+        pass
 
     # ── Difficulty adjustment ─────────────────────────────────────────────────
     diff_data = _get(
@@ -772,9 +784,12 @@ def get_btc_mining_signals() -> dict:
             }
 
     # ── LTH / STH supply cohorts (real supply-age data) ──────────────────────
-    lth_sth = _fetch_lth_sth()
-    if lth_sth:
-        result["lth_sth"] = lth_sth
+    try:
+        lth_sth = _fetch_lth_sth()
+        if lth_sth:
+            result["lth_sth"] = lth_sth
+    except Exception:
+        pass
 
     # ── Realized Price — derived from MVRV (btc_price / mvrv_score) ──────────
     # MVRV = market cap / realized cap, so realized price = btc_price / mvrv
