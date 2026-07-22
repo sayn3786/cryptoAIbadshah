@@ -1256,6 +1256,37 @@ function renderVolSignalCard(vol) {
   descEl.style.color = 'var(--muted2)';
 }
 
+/* On-chain state-transition strips — "bullish today; last bearish N ago". */
+function _fmtDays(d) {
+  if (d == null) return '—';
+  if (d >= 365) return (d / 365).toFixed(1) + 'y';
+  if (d >= 30)  return Math.round(d / 30) + 'mo';
+  return Math.round(d) + 'd';
+}
+function _prettyState(s) { return String(s || '').replace(/_/g, ' '); }
+function histStrip(h, pretty) {
+  if (!h || !h.current_state) return '';
+  pretty = pretty || _prettyState;
+  let s = `${pretty(h.current_state)} · ${_fmtDays(h.days_in_state)} in state`;
+  if (h.previous) {
+    const ago = h.last_seen ? h.last_seen[h.previous.state] : null;
+    s += ` · last <b>${pretty(h.previous.state)}</b>` +
+         (ago != null ? ` ${_fmtDays(ago)} ago` : '') +
+         ` (held ${_fmtDays(h.previous.days)})`;
+  }
+  const flips = h.flips ? h.flips.length : 0;
+  return `<div class="btcm-hist">🕑 ${s}${flips ? ` · ${flips} flips` : ''}</div>`;
+}
+function diffHistStrip(dh) {
+  if (!dh || !dh.streak || !dh.streak.current_state) return '';
+  const st = dh.streak;
+  const recent = (dh.adjustments || []).slice(-5).map(a =>
+    `<span class="${a.change_pct >= 0 ? 'bull' : 'bear'}">${a.change_pct >= 0 ? '+' : ''}${a.change_pct}%</span>`
+  ).join(' ');
+  return `<div class="btcm-hist">🕑 ${st.current_state} ${_fmtDays(st.days_in_state)}` +
+         `${recent ? ` · recent: ${recent}` : ''}</div>`;
+}
+
 function renderBtcMiningCard(mining, symbol) {
   const card = document.getElementById('btcMiningCard');
   const rows = document.getElementById('btcMiningRows');
@@ -1433,6 +1464,7 @@ function renderBtcMiningCard(mining, symbol) {
     ${ocRow}
     <div class="btcm-row"><span class="btcm-label">Hash Ribbon</span><span class="btcm-val ${rm.cls}">${rm.icon} ${rm.label}</span></div>
     <div class="btcm-sub">${rm.desc}</div>
+    ${histStrip(mining.hash_ribbon_history)}
     <div class="btcm-row"><span class="btcm-label">Halving Phase</span><span class="btcm-val ${pm.cls}">${pm.label}</span></div>
     <div class="btcm-sub">${months} since halving · ${daysUntil} until next · ${pm.desc}</div>
     <div class="btcm-row"><span class="btcm-label">Miner Profitability</span><span class="btcm-val ${profCls}">${profLabel}</span></div>
@@ -1442,10 +1474,14 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-sub">Completed at last epoch — directly set current reward per TH</div>
     <div class="btcm-row"><span class="btcm-label">Next Difficulty Adj</span><span class="btcm-val ${diffCls}">${diffStr} <small style="opacity:.6">${diffTimeStr}</small></span></div>
     <div class="btcm-sub">${diffProgressStr} · ${diffBlocksStr} · rising = more competition · falling = fewer miners</div>
+    ${diffHistStrip(mining.difficulty_history)}
     ${mvrvRow}
+    ${mvrv && mvrv.history ? histStrip(mvrv.history) : ''}
     ${realizedRow}
     ${soprRow}
+    ${soprData && soprData.history ? histStrip(soprData.history) : ''}
     ${puellRow}
+    ${puellData && puellData.history ? histStrip(puellData.history) : ''}
   `;
 }
 
