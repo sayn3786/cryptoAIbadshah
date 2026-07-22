@@ -895,6 +895,14 @@ a:hover { color: var(--gold2); }
 .btcm-label { color: var(--muted2); font-weight: 500; }
 .btcm-val   { font-weight: 700; text-align: right; }
 .btcm-sub   { font-size: .60rem; color: var(--muted); margin-bottom: 4px; }
+.btcm-hist  {
+  font-size: .60rem; color: var(--muted2, #94a3b8); margin: -1px 0 6px;
+  padding: 3px 7px; border-left: 2px solid var(--border, #1e2d44);
+  background: rgba(148,163,184,.05); border-radius: 4px; line-height: 1.5;
+}
+.btcm-hist b { color: var(--text, #e2e8f0); }
+.btcm-hist .bull { color: var(--bull, #10b981); }
+.btcm-hist .bear { color: var(--bear, #ef4444); }
 .btcm-price-ctx { color: var(--muted2); font-size: .62rem; }
 
 .btcm-oc-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }

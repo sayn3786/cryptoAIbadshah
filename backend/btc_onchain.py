@@ -29,6 +29,105 @@ def _get(url: str, key: str, ttl: int = _CACHE_TTL):
         return _cache.get(key, {}).get("data")
 
 
+# ── State-transition tracking ─────────────────────────────────────────────────
+# Shared, pure helpers that turn a chronological (timestamp, state) series into a
+# human-readable transition summary: current state, how long it's held, when it
+# last held the opposite/other state, and a log of recent flips. Used by every
+# on-chain metric (Hash Ribbon, MVRV/SOPR/Puell zones, difficulty) so they all
+# expose "…since X days; last <other> was N days ago" the same way.
+
+def _coalesce_runs(runs: list) -> list:
+    """Merge adjacent runs that share a state (in place-safe, returns new list)."""
+    out: list = []
+    for r in runs:
+        if out and out[-1]["state"] == r["state"]:
+            out[-1]["end_ts"] = r["end_ts"]
+        else:
+            out.append(dict(r))
+    return out
+
+
+def _state_runs(series: list) -> list:
+    """series: list of (ts_seconds, state) in ascending ts order (state hashable,
+    None entries skipped). Returns consecutive runs [{state,start_ts,end_ts}]."""
+    runs: list = []
+    for ts, st in series:
+        if st is None:
+            continue
+        if runs and runs[-1]["state"] == st:
+            runs[-1]["end_ts"] = ts
+        else:
+            runs.append({"state": st, "start_ts": ts, "end_ts": ts})
+    return runs
+
+
+def _denoise_runs(runs: list, min_run_days: float, now_ts: int) -> list:
+    """Drop runs shorter than `min_run_days` (day-boundary noise), absorbing the
+    blip into its neighbours, until every remaining non-final run is long enough.
+    A run occupies from its start to the NEXT run's start (the final run to now),
+    so dropping a short interior run naturally extends the previous state over it.
+    The final (current) run is always kept so the live state is never hidden."""
+    if min_run_days <= 0 or len(runs) <= 1:
+        return runs
+    runs = _coalesce_runs(runs)
+    changed = True
+    while changed and len(runs) > 1:
+        changed = False
+        for i in range(len(runs) - 1):                 # never drop the final run
+            end = runs[i + 1]["start_ts"] if i + 1 < len(runs) else now_ts
+            if (end - runs[i]["start_ts"]) / 86400.0 < min_run_days:
+                del runs[i]
+                runs = _coalesce_runs(runs)
+                changed = True
+                break
+    return runs
+
+
+def summarize_transitions(series: list, now_ts: int = None, max_flips: int = 8,
+                          min_run_days: float = 0.0) -> dict:
+    """Turn a (ts, state) series into a transition summary.
+
+    Returns None when the series has no classifiable state. Otherwise:
+      current_state, since_ts, days_in_state,
+      previous: {state, start_ts, end_ts, days} | None   (the run before current)
+      last_seen: {state: days_ago}                        (most recent day each
+                                                           OTHER state was active)
+      flips:    [{ts, from, to}]  (most recent `max_flips`)
+      runs:     total run count
+    Timestamps are unix seconds; days are floats rounded to 0.1."""
+    runs = _state_runs(series)
+    if not runs:
+        return None
+    if now_ts is None:
+        now_ts = runs[-1]["end_ts"]
+    runs = _denoise_runs(runs, min_run_days, now_ts)
+
+    cur = runs[-1]
+    prev = runs[-2] if len(runs) >= 2 else None
+    flips = [{"ts": runs[i]["start_ts"], "from": runs[i - 1]["state"],
+              "to": runs[i]["state"]} for i in range(1, len(runs))]
+
+    # For every state OTHER than the current one, how many days since it was last
+    # the active state (end of its most recent run → now).
+    last_seen: dict = {}
+    for i in range(len(runs) - 1):                     # exclude the current run
+        end = runs[i + 1]["start_ts"]                  # this run ended when next began
+        last_seen[runs[i]["state"]] = round((now_ts - end) / 86400.0, 1)
+
+    return {
+        "current_state": cur["state"],
+        "since_ts": cur["start_ts"],
+        "days_in_state": round((now_ts - cur["start_ts"]) / 86400.0, 1),
+        "previous": ({"state": prev["state"], "start_ts": prev["start_ts"],
+                      "end_ts": cur["start_ts"],
+                      "days": round((cur["start_ts"] - prev["start_ts"]) / 86400.0, 1)}
+                     if prev else None),
+        "last_seen": last_seen,
+        "flips": flips[-max_flips:],
+        "runs": len(runs),
+    }
+
+
 # ── constants ──────────────────────────────────────────────────────────────────
 HALVING_4_DATE    = datetime(2024, 4, 20, tzinfo=timezone.utc)
 HALVING_5_DATE    = datetime(2028, 4, 20, tzinfo=timezone.utc)   # ~estimate
@@ -61,6 +160,51 @@ def _hash_ribbon(hashrates: list) -> dict:
         direction = "capitulation" if prev_ma30 >= prev_ma60 else "bear"
 
     return {"direction": direction, "ma30": ma30, "ma60": ma60}
+
+
+def _hash_ribbon_history(hashrates: list, min_run_days: float = 3.0) -> dict:
+    """Full bullish/bearish flip history from a dated hashrate series.
+
+    `hashrates`: list of {timestamp, avgHashrate} (any order). For each day with
+    a full 60-window we classify the state as the 30d-MA vs 60d-MA cross
+    (bullish = ma30 > ma60), then summarize the flips. This is what answers
+    "Hash Ribbon is bullish today — when was it last bearish?". A small
+    min_run_days debounces the odd 1-2 day whipsaw right at a cross."""
+    pts = sorted(((int(h["timestamp"]), float(h.get("avgHashrate") or 0))
+                  for h in hashrates if (h.get("avgHashrate") or 0) > 0),
+                 key=lambda x: x[0])
+    if len(pts) < 60:
+        return None
+    vals = [v for _, v in pts]
+    series = []
+    for i in range(59, len(pts)):
+        ma30 = sum(vals[i - 29:i + 1]) / 30.0
+        ma60 = sum(vals[i - 59:i + 1]) / 60.0
+        series.append((pts[i][0], "bullish" if ma30 > ma60 else "bearish"))
+    return summarize_transitions(series, now_ts=pts[-1][0], min_run_days=min_run_days)
+
+
+def _difficulty_history(difficulty: list, max_adjustments: int = 12) -> dict:
+    """Difficulty rising/falling streak + a log of recent adjustments (date, %).
+
+    `difficulty`: list of {timestamp, difficulty} (from the mempool hashrate
+    endpoint's `difficulty` array). Each retarget's % change comes from the
+    ratio to the previous epoch's difficulty."""
+    pts = sorted(((int(d["timestamp"]), float(d.get("difficulty") or 0))
+                  for d in difficulty if (d.get("difficulty") or 0) > 0),
+                 key=lambda x: x[0])
+    if len(pts) < 2:
+        return None
+    adjustments, series = [], []
+    for i in range(1, len(pts)):
+        prev_v, v = pts[i - 1][1], pts[i][1]
+        pct = (v - prev_v) / prev_v * 100.0 if prev_v else 0.0
+        adjustments.append({"ts": pts[i][0], "change_pct": round(pct, 2)})
+        series.append((pts[i][0], "rising" if pct > 0 else "falling" if pct < 0 else "flat"))
+    return {
+        "adjustments": adjustments[-max_adjustments:],
+        "streak": summarize_transitions(series, now_ts=pts[-1][0]),
+    }
 
 
 def _halving_phase(now: datetime) -> dict:
@@ -113,6 +257,44 @@ def _break_even_range(hash_rate_hs: float):
             _break_even(hash_rate_hs, EFFICIENCY_AVERAGE_J_TH))
 
 
+def _iso_to_ts(s: str):
+    """Parse a CoinMetrics ISO-8601 time string to unix seconds (None on fail)."""
+    if not s:
+        return None
+    try:
+        s2 = s.replace("Z", "+00:00")
+        if "." in s2:                       # trim fractional seconds to 6 digits
+            head, frac = s2.split(".", 1)
+            tz = ""
+            for m in ("+", "-"):
+                if m in frac:
+                    frac, tz = frac.split(m, 1)
+                    tz = m + tz
+                    break
+            s2 = f"{head}.{frac[:6]}{tz}"
+        return int(datetime.fromisoformat(s2).timestamp())
+    except (ValueError, TypeError):
+        return None
+
+
+def _sopr_zone(sopr: float) -> str:
+    """SOPR value → cycle zone (single source of truth for current + history)."""
+    if sopr < 0.95:  return "capitulation"
+    if sopr < 1.0:   return "loss"
+    if sopr < 1.05:  return "neutral"
+    if sopr < 1.15:  return "profit"
+    return "euphoria"
+
+
+def _puell_zone(puell: float) -> str:
+    """Puell Multiple → miner-revenue zone (shared by current + history)."""
+    if puell < 0.5:  return "deep_undervalued"
+    if puell < 0.8:  return "undervalued"
+    if puell < 1.5:  return "fair"
+    if puell < 2.5:  return "elevated"
+    return "extreme"
+
+
 def _mvrv_signal(score: float) -> dict:
     """Classify MVRV score into a market cycle zone."""
     if score >= 3.7:
@@ -134,18 +316,21 @@ def _fetch_mvrv() -> dict:
     """
     url  = (
         "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
-        "?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=120"
+        "?assets=btc&metrics=CapMVRVCur&frequency=1d&page_size=800"   # ~2y for history
     )
     data = _get(url, "coinmetrics_mvrv", ttl=4 * 3600)
     if not data:
         return {}
     rows = data.get("data") or []
-    values = []
+    values, dated = [], []                    # dated = [(ts, value)] for history
     for row in rows:
         try:
             v = float(row.get("CapMVRVCur") or 0)
             if v > 0:
                 values.append(v)
+                ts = _iso_to_ts(row.get("time"))
+                if ts is not None:
+                    dated.append((ts, v))
         except (TypeError, ValueError):
             pass
     if not values:
@@ -159,9 +344,21 @@ def _fetch_mvrv() -> dict:
     if not (0.3 <= _eff <= 15):
         return {}
     sig    = _mvrv_signal(_eff)
+    # Zone history — classify each day on its trailing 90d SMA (matching the
+    # current read) so the last history entry equals the badge shown today.
+    history = None
+    if len(dated) >= 90:
+        zone_series = []
+        vv = [v for _, v in dated]
+        for i in range(89, len(dated)):
+            sma = sum(vv[i - 89:i + 1]) / 90.0
+            if 0.3 <= sma <= 15:
+                zone_series.append((dated[i][0], _mvrv_signal(sma)["zone"]))
+        history = summarize_transitions(zone_series, now_ts=dated[-1][0])
     return {
         "score":  round(score, 3),
         "sma90":  sma90,
+        "history": history,
         **sig,
     }
 
@@ -178,16 +375,20 @@ def _fetch_sopr_realized_puell() -> dict:
     try:
         sopr_url = (
             "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
-            "?assets=btc&metrics=Sopr&frequency=1d&page_size=60"
+            "?assets=btc&metrics=Sopr&frequency=1d&page_size=730"      # ~2y for history
         )
         sopr_data = _get(sopr_url, "coinmetrics_sopr", ttl=4 * 3600)
-        sopr_vals = []
+        sopr_vals, sopr_dated = [], []
         for row in (sopr_data or {}).get("data") or []:
             v = row.get("Sopr")          # must check None explicitly
             if v is not None:
                 try:
                     s = float(v)
-                    if s > 0: sopr_vals.append(s)
+                    if s > 0:
+                        sopr_vals.append(s)
+                        ts = _iso_to_ts(row.get("time"))
+                        if ts is not None:
+                            sopr_dated.append((ts, s))
                 except (TypeError, ValueError):
                     pass
         # Sane band: SOPR realistically sits ~0.85-1.2; even deep capitulation
@@ -197,18 +398,25 @@ def _fetch_sopr_realized_puell() -> dict:
         if sopr_vals and 0.5 <= sopr_vals[-1] <= 1.5:
             sopr  = sopr_vals[-1]
             sma7  = round(sum(sopr_vals[-7:]) / min(len(sopr_vals), 7), 4)
-            if sopr < 0.95:
-                zone, cls, label = "capitulation", "bull", "Panic Selling — BUY"
-            elif sopr < 1.0:
-                zone, cls, label = "loss",         "bull", "Selling at Loss — Accumulate"
-            elif sopr < 1.05:
-                zone, cls, label = "neutral",      "",     "Breakeven — Neutral"
-            elif sopr < 1.15:
-                zone, cls, label = "profit",       "",     "Taking Profits — Watch"
-            else:
-                zone, cls, label = "euphoria",     "bear", "Euphoric Selling — CAUTION"
+            zone  = _sopr_zone(sopr)
+            cls, label = {
+                "capitulation": ("bull", "Panic Selling — BUY"),
+                "loss":         ("bull", "Selling at Loss — Accumulate"),
+                "neutral":      ("",     "Breakeven — Neutral"),
+                "profit":       ("",     "Taking Profits — Watch"),
+                "euphoria":     ("bear", "Euphoric Selling — CAUTION"),
+            }[zone]
+            # Zone history — raw SOPR is noisy day-to-day, so debounce sub-3-day
+            # blips (min_run_days) to keep "last time it was X" meaningful.
+            history = None
+            valid = [(ts, s) for ts, s in sopr_dated if 0.5 <= s <= 1.5]
+            if len(valid) >= 10:
+                history = summarize_transitions(
+                    [(ts, _sopr_zone(s)) for ts, s in valid],
+                    now_ts=valid[-1][0], min_run_days=3.0)
             out["sopr"] = {"value": round(sopr, 4), "sma7": sma7,
-                           "zone": zone, "cls": cls, "label": label}
+                           "zone": zone, "cls": cls, "label": label,
+                           "history": history}
     except Exception:
         pass
 
@@ -216,38 +424,54 @@ def _fetch_sopr_realized_puell() -> dict:
     try:
         rev_url  = "https://blockchain.info/charts/miners-revenue?timespan=2years&format=json"
         rev_data = _get(rev_url, "blockchain_miners_revenue", ttl=4 * 3600)
-        rev_vals = []
+        rev_dated = []
         for pt in (rev_data or {}).get("values") or []:
             y = pt.get("y")              # must check None explicitly
             if y is not None:
                 try:
                     v = float(y)
-                    if v > 0: rev_vals.append(v)
+                    if v > 0:
+                        rev_dated.append((int(pt.get("x") or 0), v))
                 except (TypeError, ValueError):
                     pass
+        rev_vals = [v for _, v in rev_dated]
         if len(rev_vals) >= 30:
             today_rev = rev_vals[-1]
             ma365     = sum(rev_vals[-365:]) / min(len(rev_vals), 365)
             puell     = round(today_rev / ma365, 3) if ma365 else None
+            _pz_label = {
+                "deep_undervalued": ("bull", "Miners Capitulating — STRONG BUY"),
+                "undervalued":      ("bull", "Low Miner Revenue — Accumulate"),
+                "fair":             ("",     "Fair Miner Revenue — Neutral"),
+                "elevated":         ("",     "High Miner Revenue — Caution"),
+                "extreme":          ("bear", "Peak Miner Revenue — SELL"),
+            }
             # Sanity floor: real BTC miner revenue is tens of $M/day and Puell
             # has never gone below ~0.3 historically. A near-zero reading (or
             # sub-$1M/day revenue) is broken data, NOT capitulation — skip it
             # so it can't emit a false "STRONG BUY".
             if puell and puell >= 0.15 and today_rev >= 1_000_000:
-                if puell < 0.5:
-                    pz, pc, pl = "deep_undervalued", "bull", "Miners Capitulating — STRONG BUY"
-                elif puell < 0.8:
-                    pz, pc, pl = "undervalued",      "bull", "Low Miner Revenue — Accumulate"
-                elif puell < 1.5:
-                    pz, pc, pl = "fair",             "",     "Fair Miner Revenue — Neutral"
-                elif puell < 2.5:
-                    pz, pc, pl = "elevated",         "",     "High Miner Revenue — Caution"
-                else:
-                    pz, pc, pl = "extreme",          "bear", "Peak Miner Revenue — SELL"
+                pz = _puell_zone(puell)
+                pc, pl = _pz_label[pz]
+                # Zone history: per-day Puell = rev ÷ its own trailing 365d mean,
+                # so history begins ~1y into the 2y series (once the MA is valid).
+                history = None
+                if len(rev_dated) >= 400:
+                    zseries = []
+                    for i in range(365, len(rev_dated)):
+                        ma = sum(rev_vals[i - 365:i]) / 365.0
+                        if ma <= 0:
+                            continue
+                        p = rev_vals[i] / ma
+                        if p >= 0.15 and rev_vals[i] >= 1_000_000:
+                            zseries.append((rev_dated[i][0], _puell_zone(p)))
+                    history = summarize_transitions(zseries, now_ts=rev_dated[-1][0],
+                                                    min_run_days=3.0)
                 out["puell_multiple"] = {
                     "value": puell, "zone": pz, "cls": pc, "label": pl,
                     "daily_rev_usd": round(today_rev, 0),
                     "ma365_rev_usd": round(ma365, 0),
+                    "history": history,
                 }
     except Exception:
         pass
@@ -326,6 +550,8 @@ def get_btc_mining_signals() -> dict:
         "hash_ribbon":        "neutral",
         "hash_ribbon_ma30":   None,
         "hash_ribbon_ma60":   None,
+        "hash_ribbon_history":  None,   # bullish/bearish flip history (backfilled)
+        "difficulty_history":   None,   # rising/falling streak + recent adjustments
         "halving_phase":      None,
         "halving_days_since": None,
         "halving_days_until": None,
@@ -385,6 +611,20 @@ def get_btc_mining_signals() -> dict:
                 result["reward_per_th_btc"] = round(reward_btc, 10)
     else:
         result["error"] = True
+
+    # ── Backfilled history (separate 2y pull — leaves the validated 3m current
+    # read above untouched). Powers the "bullish today; last bearish N days ago"
+    # transition strips for Hash Ribbon and difficulty.
+    hist_data = _get(
+        "https://mempool.space/api/v1/mining/hashrate/2y",
+        "mempool_hashrate_2y",
+        ttl=6 * 3600,   # daily-granularity history; refresh a few times a day
+    )
+    if hist_data:
+        if hist_data.get("hashrates"):
+            result["hash_ribbon_history"] = _hash_ribbon_history(hist_data["hashrates"])
+        if hist_data.get("difficulty"):
+            result["difficulty_history"] = _difficulty_history(hist_data["difficulty"])
 
     # ── Difficulty adjustment ─────────────────────────────────────────────────
     diff_data = _get(
