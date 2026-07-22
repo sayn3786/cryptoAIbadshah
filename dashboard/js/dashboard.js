@@ -1432,6 +1432,20 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-sub">${puellData.label}${rev} — &lt;0.5 miner capitulation (buy) · &gt;2.5 peak revenue (sell)</div>`;
   })() : '';
 
+  // LTH / STH supply cohorts (real supply-age data)
+  const lthData = mining.lth_sth;
+  const lthRow = lthData ? (() => {
+    const cls = lthData.cls || '';
+    const chg = lthData.change_30d_pp;
+    const chgStr = chg != null
+      ? ` <small>(30d ${chg >= 0 ? '+' : ''}${chg}pp)</small>` : '';
+    const lth = lthData.lth_supply_pct != null ? lthData.lth_supply_pct.toFixed(1) : '—';
+    const sth = lthData.sth_supply_pct != null ? lthData.sth_supply_pct.toFixed(1) : '—';
+    return `
+    <div class="btcm-row"><span class="btcm-label">LTH / STH Supply</span><span class="btcm-val ${cls}">${lth}% / ${sth}%${chgStr}</span></div>
+    <div class="btcm-sub">${lthData.label} · held ${lthData.window} = LTH · rising held = accumulation, falling = distribution</div>`;
+  })() : '';
+
   // Realized Price row
   const realizedPrice = mining.realized_price;
   const ptr = mining.price_to_realized;
@@ -1482,6 +1496,8 @@ function renderBtcMiningCard(mining, symbol) {
     ${soprData && soprData.history ? histStrip(soprData.history) : ''}
     ${puellRow}
     ${puellData && puellData.history ? histStrip(puellData.history) : ''}
+    ${lthRow}
+    ${lthData && lthData.history ? histStrip(lthData.history) : ''}
   `;
 }
 
