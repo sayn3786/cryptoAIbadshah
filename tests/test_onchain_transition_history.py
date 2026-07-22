@@ -107,6 +107,23 @@ def test_difficulty_history_needs_two_points():
     assert o._difficulty_history([{"timestamp": T0, "difficulty": 100}]) is None
 
 
+def test_difficulty_history_accepts_mempool_time_key():
+    # REGRESSION: mempool's hashrate-endpoint `difficulty` array keys its
+    # timestamp as `time` (not `timestamp`). Using d["timestamp"] raised a
+    # KeyError that 500'd the whole BTC analysis. Both keys must work.
+    diff = [{"time": T0 + i * DAY, "height": 800000 + i, "difficulty": d}
+            for i, d in enumerate([100, 105, 110, 108])]
+    dh = o._difficulty_history(diff)
+    assert dh is not None
+    assert [a["change_pct"] for a in dh["adjustments"]] == [5.0, 4.76, -1.82]
+    assert dh["streak"]["current_state"] == "falling"
+
+
+def test_hash_ribbon_history_accepts_time_key():
+    hr = [{"time": T0 + i * DAY, "avgHashrate": 500 + i} for i in range(80)]
+    assert o._hash_ribbon_history(hr) is not None
+
+
 # ── zone helpers (shared by current read + history) ──────────────────────────────
 def test_sopr_and_puell_zone_helpers():
     assert o._sopr_zone(0.90) == "capitulation"

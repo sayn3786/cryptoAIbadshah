@@ -836,8 +836,13 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Only available for BTC/ETH via CoinGlass. Panel stays hidden for other tokens.
     whale_sells = cg_client.get_exchange_netflow(bs) if cg_client.enabled else None
 
-    # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs)
-    btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
+    # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs).
+    # This is an ancillary enrichment — a failure in any free on-chain source must
+    # NEVER 500 the core price/signal analysis, so it degrades to None.
+    try:
+        btc_mining = get_btc_mining_signals() if symbol == "BTC" else None
+    except Exception:
+        btc_mining = None
     if btc_mining:
         try:
             _spot_px = spot[-1]["close"] if spot else None
