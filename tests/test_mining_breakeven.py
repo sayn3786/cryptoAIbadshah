@@ -63,6 +63,39 @@ def test_zero_hashrate_is_none():
     assert o._break_even_all_in(0, 21.0) is None
 
 
+from datetime import datetime, timezone                                 # noqa: E402
+
+
+def test_network_efficiency_estimate_declines_and_floors():
+    anchor = datetime(o.EFF_ANCHOR_YEAR, o.EFF_ANCHOR_MONTH, 1, tzinfo=timezone.utc)
+    assert o._network_efficiency_estimate(anchor) == o.EFF_ANCHOR_AVG
+    # one year later it has improved (lower J/TH), but not below the floor
+    later = datetime(o.EFF_ANCHOR_YEAR + 1, o.EFF_ANCHOR_MONTH, 1, tzinfo=timezone.utc)
+    assert o._network_efficiency_estimate(later) < o.EFF_ANCHOR_AVG
+    far = datetime(o.EFF_ANCHOR_YEAR + 20, o.EFF_ANCHOR_MONTH, 1, tzinfo=timezone.utc)
+    assert o._network_efficiency_estimate(far) == o.EFF_FLOOR_AVG
+    # never rises above the anchor for dates before it
+    before = datetime(o.EFF_ANCHOR_YEAR - 1, 1, 1, tzinfo=timezone.utc)
+    assert o._network_efficiency_estimate(before) == o.EFF_ANCHOR_AVG
+
+
+def test_current_efficiencies_auto_by_default(monkeypatch):
+    monkeypatch.delenv("BTC_EFF_AVERAGE_JTH", raising=False)
+    monkeypatch.delenv("BTC_EFF_EFFICIENT_JTH", raising=False)
+    eff, avg, src = o._current_efficiencies()
+    assert src == "auto"                       # no env var required
+    assert avg == o._network_efficiency_estimate()
+    assert eff == round(avg * o.EFF_EFFICIENT_RATIO, 1)
+    assert eff < avg                            # top-tier more efficient than avg
+
+
+def test_current_efficiencies_env_override_wins(monkeypatch):
+    monkeypatch.setenv("BTC_EFF_AVERAGE_JTH", "25")
+    monkeypatch.setenv("BTC_EFF_EFFICIENT_JTH", "18")
+    eff, avg, src = o._current_efficiencies()
+    assert (eff, avg, src) == (18.0, 25.0, "env")
+
+
 def test_env_configurable(monkeypatch):
     # overriding the power cost via env changes the computed marginal break-even
     monkeypatch.setenv("BTC_POWER_COST_KWH", "0.12")   # double the default
