@@ -305,7 +305,7 @@ function renderAll(a) {
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
   renderFVGTable(a.fvgs);
-  renderFlags(a.flags, a.candles, a.signal);
+  renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
   renderEngulfing(a.engulfing, a.timeframe);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
@@ -2606,7 +2606,7 @@ function flagSvg(f) {
   </svg>`;
 }
 
-function renderFlags(flags, candles, signal) {
+function renderFlags(flags, candles, signal, diagnostics) {
   const el    = document.getElementById('flagList');
   const badge = document.getElementById('flagCount');
   // tear down any charts from the previous render (avoid leaks)
@@ -2628,7 +2628,14 @@ function renderFlags(flags, candles, signal) {
   badge.textContent = flags.length;
   if (!flags.length) {
     const hadStale = flagsAll.length > 0;
-    el.innerHTML = `<p class="empty">${hadStale ? 'No active flag patterns (older ones already resolved)' : 'No flag patterns detected'}</p>`;
+    // Explain WHY a pattern is absent when the backend rejected a near-miss —
+    // e.g. "retraced 80% of the pole (max 62%)" — so an empty card isn't a mystery.
+    const diag = (diagnostics || []).filter(d => d && d.message);
+    const why = diag.length
+      ? `<ul class="flag-why">${diag.map(d =>
+          `<li>${d.message.replace(/</g, '&lt;')}</li>`).join('')}</ul>`
+      : '';
+    el.innerHTML = `<p class="empty">${hadStale ? 'No active flag patterns (older ones already resolved)' : 'No flag patterns detected'}</p>${why}`;
     return;
   }
   // Chart only ONE flag: the direction-aligned one first (so a short shows the
