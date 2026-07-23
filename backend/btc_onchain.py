@@ -163,6 +163,48 @@ HW_USD_PER_TH     = _env_float("BTC_HW_USD_PER_TH", 18.0)    # rig capex per TH 
 HW_LIFESPAN_DAYS  = _env_float("BTC_HW_LIFESPAN_DAYS", 1460.0)  # amortization horizon (~4y)
 OPEX_PCT          = _env_float("BTC_OPEX_PCT", 0.10)         # pool/hosting/maintenance markup
 
+# ── Auto-evolving fleet efficiency (no manual tuning / env var needed) ────────
+# Network AVERAGE efficiency (J/TH) improves slowly as old rigs retire. Rather
+# than pin a fixed number (or force an env var), we model a gentle monthly
+# decline from a recent anchor toward a best-in-class fleet floor, so the
+# break-even tracks the improving fleet automatically as time passes. A modeled
+# estimate, not a live measurement — and an explicit env override still wins.
+EFF_ANCHOR_YEAR     = 2025
+EFF_ANCHOR_MONTH    = 7
+EFF_ANCHOR_AVG      = 28.0     # J/TH avg fleet at the anchor month
+EFF_MONTHLY_DECAY   = 0.010    # ≈1%/month efficiency improvement
+EFF_FLOOR_AVG       = 20.0     # a whole fleet can't beat best-in-class overnight
+EFF_EFFICIENT_RATIO = 0.75     # top-tier rigs ≈ 75% of the average J/TH
+
+
+def _network_efficiency_estimate(now=None) -> float:
+    """Modeled network AVERAGE efficiency (J/TH) for the current month —
+    gently declining from EFF_ANCHOR_AVG toward EFF_FLOOR_AVG."""
+    now = now or datetime.now(timezone.utc)
+    months = (now.year - EFF_ANCHOR_YEAR) * 12 + (now.month - EFF_ANCHOR_MONTH)
+    months = max(0, months)
+    return round(max(EFF_FLOOR_AVG, EFF_ANCHOR_AVG * (1 - EFF_MONTHLY_DECAY) ** months), 1)
+
+
+def _current_efficiencies(now=None):
+    """(efficient_jth, average_jth, source) used for break-even.
+
+    Uses an explicit env override when set; otherwise the auto-evolving estimate
+    — so the model needs no env var and never goes stale by hand. `source` is
+    'env' or 'auto' for transparency on the card."""
+    avg_env = os.getenv("BTC_EFF_AVERAGE_JTH")
+    eff_env = os.getenv("BTC_EFF_EFFICIENT_JTH")
+    src = "env" if (avg_env or eff_env) else "auto"
+    try:
+        avg = float(avg_env) if avg_env not in (None, "") else _network_efficiency_estimate(now)
+    except (TypeError, ValueError):
+        avg = _network_efficiency_estimate(now)
+    try:
+        eff = float(eff_env) if eff_env not in (None, "") else round(avg * EFF_EFFICIENT_RATIO, 1)
+    except (TypeError, ValueError):
+        eff = round(avg * EFF_EFFICIENT_RATIO, 1)
+    return eff, avg, src
+
 
 def _hash_ribbon(hashrates: list) -> dict:
     """
@@ -719,17 +761,21 @@ def get_btc_mining_signals() -> dict:
             # sats: 776 vs 957 EH/s). currentHashrate matches pool payouts.
             cur_hs = hr_data.get("currentHashrate")
             latest_hs = cur_hs if (cur_hs and cur_hs > 0) else rates[-1]
-            be_eff, be_avg = _break_even_range(latest_hs)
+            # Efficiencies auto-evolve over time (no env var needed) unless
+            # explicitly overridden — see _current_efficiencies.
+            eff_j, avg_j, eff_src = _current_efficiencies()
+            be_eff = _break_even(latest_hs, eff_j)
+            be_avg = _break_even(latest_hs, avg_j)
             result["break_even_usd"]           = be_eff   # back-compat = marginal efficient
             result["break_even_efficient_usd"] = be_eff   # MARGINAL (electricity only)
             result["break_even_average_usd"]   = be_avg
-            ai_eff, ai_avg = _break_even_all_in_range(latest_hs)
-            result["break_even_allin_efficient_usd"] = ai_eff   # ALL-IN (elec+hardware+opex)
-            result["break_even_allin_average_usd"]   = ai_avg
+            result["break_even_allin_efficient_usd"] = _break_even_all_in(latest_hs, eff_j)
+            result["break_even_allin_average_usd"]   = _break_even_all_in(latest_hs, avg_j)
             result["mining_cost_assumptions"] = {
                 "power_cost_kwh":   ELECTRICITY_KWH,
-                "eff_efficient_jth": EFFICIENCY_EFFICIENT_J_TH,
-                "eff_average_jth":  EFFICIENCY_AVERAGE_J_TH,
+                "eff_efficient_jth": eff_j,
+                "eff_average_jth":  avg_j,
+                "efficiency_source": eff_src,     # "auto" (modeled) or "env" (override)
                 "hw_usd_per_th":    HW_USD_PER_TH,
                 "hw_lifespan_days": HW_LIFESPAN_DAYS,
                 "opex_pct":         OPEX_PCT,
