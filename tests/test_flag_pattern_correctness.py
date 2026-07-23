@@ -103,11 +103,11 @@ def _divergence_candles():
 
     for i in range(16):
         add(100 + (0.05 if i % 2 == 0 else -0.05), 0.1)
-    for cl in [102, 104, 106]:                                  # pole (3 bars, +2)
+    for cl in [101.5, 103.0, 104.5]:                            # pole (3 bars, +4.5%)
         add(cl, 0.2)
-    for cl in [105.8, 105.6, 105.4, 105.2, 105.0, 104.8]:       # flag (drift -0.2)
-        add(cl, 0.6)
-    for cl in [105.8, 106.1]:                                   # post → up-breakout
+    for cl in [104.4, 104.3, 104.2, 104.1, 104.0]:             # flag (5 bars, drift -0.1)
+        add(cl, 0.4)
+    for cl in [105.0]:                                          # post → up-breakout
         add(cl, 0.2)
     return out
 
