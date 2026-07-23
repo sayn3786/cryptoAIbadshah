@@ -70,27 +70,60 @@ def test_denoise_keeps_current_run_even_if_short():
 
 
 # ── Hash Ribbon history ──────────────────────────────────────────────────────────
-def test_hash_ribbon_history_flip():
-    # 120 falling days (ma30 < ma60 → bearish) then 120 rising (→ bullish cross)
+def test_hash_ribbon_series_flip_and_badge_history_consistent():
+    # 120 falling days (bearish) then 120 rising → bullish cross now
     hr = ([{"timestamp": T0 + i * DAY, "avgHashrate": 1000 - i * 3} for i in range(120)]
           + [{"timestamp": T0 + (120 + i) * DAY, "avgHashrate": 640 + i * 6} for i in range(120)])
-    h = o._hash_ribbon_history(hr)
+    rib = o._hash_ribbon_series(hr)
+    h = rib["history"]
     assert h["current_state"] == "bullish"
     assert "bearish" in h["last_seen"]
-    assert h["last_seen"]["bearish"] > 0         # it was bearish some days ago
-    assert len(h["flips"]) >= 1
+    # badge (buy/bull) must agree with the history's current state — the bug was
+    # a bearish/capitulation badge sitting over a "bullish" history and vice versa
+    assert rib["direction"] in ("buy", "bull")
 
 
-def test_hash_ribbon_history_needs_60_points():
+def test_hash_ribbon_series_time_windowed_on_coarse_feed():
+    # COARSE cadence (one point every ~1.4 days, like mempool's 2y feed): a long
+    # rise then a sharp recent drop. Point-count windows produced noisy false
+    # flips here; time-based windows give ONE clean cross.
+    n = 520
+    hr = []
+    for i in range(n):
+        ts = T0 + int(i * 1.4 * DAY)
+        v = (500 + i * 1.0) if i < n * 0.8 else (500 + n * 0.8 - (i - n * 0.8) * 6.0)
+        hr.append({"timestamp": ts, "avgHashrate": v})
+    rib = o._hash_ribbon_series(hr)
+    h = rib["history"]
+    assert h["current_state"] == "bearish"
+    assert rib["direction"] in ("bear", "capitulation")     # consistent
+    assert len(h["flips"]) <= 2, f"time-windowed MA must not whipsaw: {h['flips']}"
+
+
+def test_hash_ribbon_fresh_cross_is_capitulation():
+    # long bullish, then only the last ~11 days crash → a FRESH cross
+    n = 400
+    hr = []
+    for i in range(n):
+        ts = T0 + int(i * 1.4 * DAY)
+        v = (500 + i * 1.5) if i < n - 8 else (500 + (n - 8) * 1.5 - (i - (n - 8)) * 40.0)
+        hr.append({"timestamp": ts, "avgHashrate": v})
+    rib = o._hash_ribbon_series(hr)
+    assert rib["direction"] == "capitulation"
+    assert rib["history"]["current_state"] == "bearish"
+    assert rib["history"]["days_in_state"] <= o.RIBBON_FRESH_DAYS
+
+
+def test_hash_ribbon_series_needs_60_day_span():
     hr = [{"timestamp": T0 + i * DAY, "avgHashrate": 100 + i} for i in range(40)]
-    assert o._hash_ribbon_history(hr) is None
+    assert o._hash_ribbon_series(hr) is None
 
 
-def test_hash_ribbon_history_ignores_zero_entries():
-    hr = ([{"timestamp": T0 + i * DAY, "avgHashrate": 0} for i in range(5)]
-          + [{"timestamp": T0 + (5 + i) * DAY, "avgHashrate": 500 + i} for i in range(80)])
-    h = o._hash_ribbon_history(hr)
-    assert h is not None and h["current_state"] in ("bullish", "bearish")
+def test_hash_ribbon_series_accepts_time_key_and_ignores_zeros():
+    hr = ([{"time": T0 + i * DAY, "avgHashrate": 0} for i in range(5)]
+          + [{"time": T0 + (5 + i) * DAY, "avgHashrate": 500 + i} for i in range(80)])
+    rib = o._hash_ribbon_series(hr)
+    assert rib is not None and rib["history"]["current_state"] in ("bullish", "bearish")
 
 
 # ── Difficulty history ───────────────────────────────────────────────────────────
@@ -117,11 +150,6 @@ def test_difficulty_history_accepts_mempool_time_key():
     assert dh is not None
     assert [a["change_pct"] for a in dh["adjustments"]] == [5.0, 4.76, -1.82]
     assert dh["streak"]["current_state"] == "falling"
-
-
-def test_hash_ribbon_history_accepts_time_key():
-    hr = [{"time": T0 + i * DAY, "avgHashrate": 500 + i} for i in range(80)]
-    assert o._hash_ribbon_history(hr) is not None
 
 
 # ── zone helpers (shared by current read + history) ──────────────────────────────

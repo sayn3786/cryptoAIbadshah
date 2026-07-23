@@ -162,29 +162,68 @@ def _hash_ribbon(hashrates: list) -> dict:
     return {"direction": direction, "ma30": ma30, "ma60": ma60}
 
 
-def _hash_ribbon_history(hashrates: list, min_run_days: float = 3.0) -> dict:
-    """Full bullish/bearish flip history from a dated hashrate series.
+RIBBON_MIN_RUN_DAYS = 6      # debounce whipsaws around the cross
+RIBBON_FRESH_DAYS   = 14     # show the "buy"/"capitulation" fresh-cross label
+                            # for this long after a flip, then plain bull/bear
 
-    `hashrates`: list of {timestamp, avgHashrate} (any order). For each day with
-    a full 60-window we classify the state as the 30d-MA vs 60d-MA cross
-    (bullish = ma30 > ma60), then summarize the flips. This is what answers
-    "Hash Ribbon is bullish today — when was it last bearish?". A small
-    min_run_days debounces the odd 1-2 day whipsaw right at a cross."""
+
+def _ma_over_days(dated: list, end_idx: int, days: float):
+    """Mean avgHashrate over the trailing `days` ending at dated[end_idx].
+
+    TIME-based (not point-count) so it's correct whatever cadence the feed
+    returns — mempool's long-window hashrate is coarser than daily, which broke
+    the old point-count 30/60 windows (30 points ≠ 30 days) and produced noisy,
+    wrong crosses."""
+    end_ts = dated[end_idx][0]
+    cutoff = end_ts - days * 86400
+    vals = [v for ts, v in dated[:end_idx + 1] if ts > cutoff]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _hash_ribbon_series(hashrates: list, min_run_days: float = RIBBON_MIN_RUN_DAYS) -> dict:
+    """Time-windowed Hash Ribbon: current direction + ma30/ma60 + flip history,
+    all from ONE series so the badge and the history can never disagree.
+
+    Returns {direction, ma30, ma60, history} or None. `direction` uses the
+    4-state buy/bull/bear/capitulation labels, derived from the DEBOUNCED history
+    (a fresh cross within RIBBON_FRESH_DAYS is buy/capitulation, older is
+    bull/bear) — so 'capitulation' only shows when the history genuinely just
+    flipped, and a 1-2 day whipsaw no longer toggles the headline."""
     def _hts(h):
         return h.get("timestamp", h.get("time"))
-    pts = sorted(((int(_hts(h)), float(h.get("avgHashrate") or 0))
-                  for h in hashrates
-                  if (h.get("avgHashrate") or 0) > 0 and _hts(h) is not None),
-                 key=lambda x: x[0])
-    if len(pts) < 60:
+    dated = sorted(((int(_hts(h)), float(h.get("avgHashrate") or 0))
+                    for h in hashrates
+                    if (h.get("avgHashrate") or 0) > 0 and _hts(h) is not None),
+                   key=lambda x: x[0])
+    if len(dated) < 3 or (dated[-1][0] - dated[0][0]) / 86400.0 < 60:
         return None
-    vals = [v for _, v in pts]
+
+    first_ts = dated[0][0] + 60 * 86400            # need a full 60d look-back
     series = []
-    for i in range(59, len(pts)):
-        ma30 = sum(vals[i - 29:i + 1]) / 30.0
-        ma60 = sum(vals[i - 59:i + 1]) / 60.0
-        series.append((pts[i][0], "bullish" if ma30 > ma60 else "bearish"))
-    return summarize_transitions(series, now_ts=pts[-1][0], min_run_days=min_run_days)
+    for i in range(len(dated)):
+        if dated[i][0] < first_ts:
+            continue
+        ma30 = _ma_over_days(dated, i, 30)
+        ma60 = _ma_over_days(dated, i, 60)
+        if ma30 is not None and ma60 is not None:
+            series.append((dated[i][0], "bullish" if ma30 > ma60 else "bearish"))
+    if not series:
+        return None
+
+    now_ts = dated[-1][0]
+    hist = summarize_transitions(series, now_ts=now_ts, min_run_days=min_run_days)
+    cur = hist["current_state"]
+    fresh = hist.get("previous") is not None and hist["days_in_state"] <= RIBBON_FRESH_DAYS
+    if cur == "bullish":
+        direction = "buy" if fresh else "bull"
+    else:
+        direction = "capitulation" if fresh else "bear"
+    return {
+        "direction": direction,
+        "ma30": _ma_over_days(dated, len(dated) - 1, 30),
+        "ma60": _ma_over_days(dated, len(dated) - 1, 60),
+        "history": hist,
+    }
 
 
 def _difficulty_history(difficulty: list, max_adjustments: int = 12) -> dict:
@@ -608,12 +647,12 @@ def get_btc_mining_signals() -> dict:
         ttl=600  # 10 min — keeps sats/TH in sync with live network hashrate
     )
     if hr_data and "hashrates" in hr_data:
-        # Drop missing/zero entries — trailing 0s would drag the 30d MA below
-        # the 60d and fake a "capitulation" cross. Only classify with enough
-        # real points for the 60-window.
+        # /3m read powers reward/TH & break-even below, and is a FALLBACK for the
+        # ribbon badge — the 2y block overrides direction/MAs/history with the
+        # time-windowed read (badge and history from one series) when available.
         rates = [r for r in (h.get("avgHashrate", 0) for h in hr_data["hashrates"])
                  if r and r > 0]
-        ribbon = _hash_ribbon(rates)   # returns neutral when < 60 valid points
+        ribbon = _hash_ribbon(rates)   # fallback; neutral when < 60 valid points
         result["hash_ribbon"]      = ribbon["direction"]
         result["hash_ribbon_ma30"] = ribbon["ma30"]
         result["hash_ribbon_ma60"] = ribbon["ma60"]
@@ -649,7 +688,13 @@ def get_btc_mining_signals() -> dict:
     try:
         if hist_data:
             if hist_data.get("hashrates"):
-                result["hash_ribbon_history"] = _hash_ribbon_history(hist_data["hashrates"])
+                rib = _hash_ribbon_series(hist_data["hashrates"])
+                if rib:
+                    # Badge + history from ONE time-windowed series → consistent.
+                    result["hash_ribbon"]         = rib["direction"]
+                    result["hash_ribbon_ma30"]    = rib["ma30"]
+                    result["hash_ribbon_ma60"]    = rib["ma60"]
+                    result["hash_ribbon_history"] = rib["history"]
             if hist_data.get("difficulty"):
                 result["difficulty_history"] = _difficulty_history(hist_data["difficulty"])
     except Exception:
