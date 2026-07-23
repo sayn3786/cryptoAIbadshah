@@ -18,6 +18,7 @@ const S = {
   overlayPriceLines: [], // swing high/low + realized price horizontal lines
   supertrendUpSeries: null,
   supertrendDownSeries: null,
+  supertrendShade: null,   // TradingView-style green/red regime background
   ichimokuSpanASeries: null,
   ichimokuSpanBSeries: null,
 };
@@ -74,13 +75,17 @@ function initCharts() {
     wickUpColor: '#10b981', wickDownColor: '#ef4444',
   });
 
-  // SuperTrend — blue while bullish, orange while bearish. Deliberately NOT
-  // green/red so it never reads as another FVG zone or candle color.
+  // SuperTrend trailing line — GREEN while bullish, RED while bearish, like the
+  // classic TradingView SuperTrend. The regime background is shaded to match via
+  // the SupertrendShade primitive below, so the line + shading read as one.
   // autoscaleInfoProvider: () => null prevents these overlay series from
   // stretching the Y-axis — only candles drive the price scale.
   const _overlayOpts = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
-  S.supertrendUpSeries   = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#3b82f6', lineWidth: 3 });
-  S.supertrendDownSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#fb923c', lineWidth: 3 });
+  S.supertrendUpSeries   = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#22c55e', lineWidth: 3 });
+  S.supertrendDownSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#ef4444', lineWidth: 3 });
+  // Green/red regime shading behind the candles (TradingView-style).
+  S.supertrendShade = new SupertrendShade(S.mainChart, S.candleSeries);
+  try { S.candleSeries.attachPrimitive(S.supertrendShade); } catch (_) {}
 
   // Ichimoku cloud boundaries (Span A / Span B) — purple/cyan, distinct from
   // every other overlay color on the chart.
@@ -822,6 +827,9 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   // Each series gets the full timeline but with nulls where the other trend is
   // active, so lightweight-charts draws a gap instead of a flat connecting line.
   const stSeries = supertrend?.series || [];
+  // Green/red regime shading behind the candles (set before the line setData
+  // below, whose redraw repaints this bottom-layer primitive).
+  if (S.supertrendShade) S.supertrendShade.setData(_supertrendSegments(stSeries));
   if (stSeries.length) {
     const allTimes = stSeries.map(p => Math.floor(p.timestamp / 1000));
     const upData = stSeries.map((p, i) => p.trend === 'bullish' ? { time: allTimes[i], value: p.value } : null).filter(Boolean);
@@ -2770,6 +2778,57 @@ class FlagShade {
       }),
     }];
   }
+}
+
+// Series primitive that shades the MAIN chart background by SuperTrend regime —
+// a translucent GREEN column while bullish, RED while bearish — like the classic
+// TradingView SuperTrend. Drawn at the BOTTOM so the candles stay crisp on top.
+class SupertrendShade {
+  constructor(chart, series) { this._chart = chart; this._series = series; this._segs = []; }
+  setData(segs) { this._segs = segs || []; }
+  updateAllViews() {}
+  paneViews() {
+    const self = this;
+    return [{
+      zOrder: () => 'bottom',
+      renderer: () => ({
+        draw: (target) => {
+          target.useMediaCoordinateSpace((scope) => {
+            const ctx = scope.context;
+            const H   = scope.mediaSize.height;
+            const tx  = t => self._chart.timeScale().timeToCoordinate(t);
+            self._segs.forEach(s => {
+              const x0 = tx(s.t0), x1 = tx(s.t1);
+              if (x0 == null || x1 == null) return;
+              ctx.fillStyle = s.bullish ? 'rgba(34,197,94,.10)' : 'rgba(239,68,68,.10)';
+              ctx.fillRect(Math.min(x0, x1), 0, Math.abs(x1 - x0), H);
+            });
+          });
+        },
+      }),
+    }];
+  }
+}
+
+// Collapse a SuperTrend series into contiguous same-trend segments {t0,t1,bullish}
+// (seconds), each ending where the next begins so the shading tiles with no gaps.
+function _supertrendSegments(stSeries) {
+  if (!stSeries || !stSeries.length) return [];
+  const sec = p => Math.floor(p.timestamp / 1000);
+  const interval = stSeries.length > 1 ? (sec(stSeries[1]) - sec(stSeries[0])) : 86400;
+  const segs = [];
+  let cur = null;
+  stSeries.forEach(p => {
+    const bullish = p.trend === 'bullish';
+    const t = sec(p);
+    if (!cur || cur.bullish !== bullish) { if (cur) segs.push(cur); cur = { t0: t, t1: t, bullish }; }
+    else cur.t1 = t;
+  });
+  if (cur) segs.push(cur);
+  for (let i = 0; i < segs.length; i++) {
+    segs[i].t1 = (i < segs.length - 1) ? segs[i + 1].t0 : segs[i].t1 + interval;
+  }
+  return segs;
 }
 
 // One clear candlestick chart for the best flag: the token's actual candles over
