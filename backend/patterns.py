@@ -81,7 +81,7 @@ def _flag_selection_rank(flag: Dict) -> Tuple[int, float]:
 
 
 def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
-                 min_pole_pct: float = 4.0) -> List[Dict]:
+                 min_pole_pct: float = 4.0, diag_out: Optional[List[Dict]] = None) -> List[Dict]:
     """
     Detect bullish and bearish flag patterns in a candle list.
 
@@ -148,6 +148,24 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
     }.get(tf_label, 1.0)
 
     candidates: List[Dict] = []
+
+    # ── Rejection diagnostics ────────────────────────────────────────────────
+    # When `diag_out` is supplied, record WHY a would-be flag was dropped so the
+    # UI can explain an absent pattern ("rejected: retrace 80% > 62% max"). Only
+    # meaningful near-misses are recorded (a real pole that then failed a flag
+    # gate), each tagged with a `stage` so the caller can keep the ones that got
+    # furthest. Choppy-pole rejections are intentionally not recorded — they are
+    # noise. `stage` ordering: 3 retrace · 4 geometry · 7 invalidated · 8 inactive.
+    def _reject(stage: int, reason: str, is_bull: bool, **extra) -> None:
+        if diag_out is None:
+            return
+        diag_out.append({
+            "pole_start_ts": pole_bars[0]["timestamp"],
+            "direction":     "bullish" if is_bull else "bearish",
+            "stage":         stage,
+            "reason":        reason,
+            **extra,
+        })
 
     # Pole must start in the second half of the candle set — prevents ancient
     # history poles (e.g. a 60% rally from 18 months ago) appearing on short TFs.
@@ -233,6 +251,11 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 else:
                     break
             fl = len(flag)                       # consolidation_bars
+            # Did growth stop because it hit the length cap while MORE in-channel
+            # candles remained? Then the consolidation is genuinely longer than a
+            # flag should be — a downtrend/channel, not a pause. Tag it so the
+            # diagnostic can say so (the capped window is still evaluated below).
+            capped_at_max = (fl >= MAX_CONSOLIDATION_BARS and k < len(remaining))
 
             # ── Retrace of the pole ──────────────────────────────────────────
             if is_bull:
@@ -240,6 +263,14 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             else:
                 retrace = (fh - pole_close) / pole_height
             if not (RETRACE_MIN <= retrace <= RETRACE_MAX):
+                too_deep = retrace > RETRACE_MAX
+                _reject(3, "retrace_too_deep" if too_deep else "retrace_too_shallow",
+                        is_bull, pole_pct=round(abs(pole_move) * 100, 2),
+                        retrace_pct=round(retrace * 100, 1),
+                        max_pct=round(RETRACE_MAX * 100, 0),
+                        min_pct=round(RETRACE_MIN * 100, 0),
+                        consolidation_bars=fl, capped_at_max=capped_at_max,
+                        flag_high=round(fh, 8), flag_low=round(fl_, 8))
                 continue
 
             # ── Channel geometry ─────────────────────────────────────────────
@@ -268,15 +299,25 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             # a bear flag's ≥ −NEUTRAL_SLOPE_PCT (neutral or ascending). A channel
             # drifting WITH the pole beyond the neutral band is a wedge, not a flag.
             if is_bull and slope_pct_per_bar > NEUTRAL_SLOPE_PCT:
+                _reject(4, "wedge_with_trend", is_bull,
+                        slope_pct_per_bar=round(slope_pct_per_bar, 4),
+                        consolidation_bars=fl, capped_at_max=capped_at_max)
                 continue
             if (not is_bull) and slope_pct_per_bar < -NEUTRAL_SLOPE_PCT:
+                _reject(4, "wedge_with_trend", is_bull,
+                        slope_pct_per_bar=round(slope_pct_per_bar, 4),
+                        consolidation_bars=fl, capped_at_max=capped_at_max)
                 continue
             # Rails must be reasonably parallel.
             if abs(h_slope_pct - l_slope_pct) > PARALLEL_TOL_PCT:
+                _reject(4, "rails_not_parallel", is_bull,
+                        consolidation_bars=fl, capped_at_max=capped_at_max)
                 continue
             # Volatility must contract into the flag relative to the pole.
             flag_avg_range = sum(c["high"] - c["low"] for c in flag) / len(flag)
             if flag_avg_range > pole_avg_range * FLAG_MAX_VOL_FRAC:
+                _reject(4, "no_volatility_contraction", is_bull,
+                        consolidation_bars=fl, capped_at_max=capped_at_max)
                 continue
 
             direction = "bullish" if is_bull else "bearish"
@@ -360,6 +401,10 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
 
             # Invalidated patterns are never returned as active candidates.
             if status == "invalidated":
+                _reject(7, "invalidated", is_bull, detail=invalidation_reason,
+                        breakout_dir=breakout_dir, consolidation_bars=fl,
+                        capped_at_max=capped_at_max,
+                        flag_high=round(fh, 8), flag_low=round(fl_, 8))
                 continue
 
             # ── Activity / adverse-price / target-hit (existing behaviour) ────
@@ -375,6 +420,10 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 price_near_flag = current_price <= fh * (1.0 + FLAG_ACTIVE_BUFFER)
                 target_hit      = current_price <= target
             if not price_near_flag or target_hit:
+                _reject(8, "target_already_hit" if target_hit else "price_left_zone",
+                        is_bull, consolidation_bars=fl, capped_at_max=capped_at_max,
+                        flag_high=round(fh, 8), flag_low=round(fl_, 8),
+                        target=target)
                 continue
             is_active = flag_ended_recently and price_near_flag and not target_hit
 
@@ -438,6 +487,74 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
 
     result = sorted(seen.values(), key=_flag_selection_rank, reverse=True)
     return result[:MAX_FLAGS_RETURNED]
+
+
+def summarize_flag_diagnostics(diag: List[Dict], max_items: int = 3) -> List[Dict]:
+    """Turn raw ``detect_flags`` rejection records into a short, human-readable
+    list explaining WHY would-be flags were suppressed.
+
+    Keeps the furthest-along rejection per pole start (highest ``stage``), sorts
+    most-advanced first, and renders a plain-English ``message`` for each. Returns
+    at most ``max_items`` entries. Safe on an empty / None list.
+    """
+    if not diag:
+        return []
+
+    # Keep the highest-stage rejection per pole start (the one that got furthest).
+    best: Dict = {}
+    for d in diag:
+        key = d.get("pole_start_ts")
+        if key not in best or d.get("stage", 0) > best[key].get("stage", 0):
+            best[key] = d
+    items = sorted(best.values(), key=lambda d: d.get("stage", 0), reverse=True)
+
+    def _msg(d: Dict) -> str:
+        r   = d.get("reason")
+        dr  = d.get("direction", "")
+        cb  = d.get("consolidation_bars")
+        if r == "retrace_too_deep":
+            m = (f"{dr} flag rejected — the pullback retraced "
+                 f"{d.get('retrace_pct')}% of the pole (max {int(d.get('max_pct', 62))}%). "
+                 f"Price gave back too much of the move to still be a flag.")
+        elif r == "retrace_too_shallow":
+            m = (f"{dr} flag rejected — the pullback is only {d.get('retrace_pct')}% "
+                 f"of the pole (min {int(d.get('min_pct', 15))}%); no real consolidation yet.")
+        elif r == "wedge_with_trend":
+            m = (f"{dr} flag rejected — the channel drifts WITH the trend "
+                 f"({d.get('slope_pct_per_bar')}%/bar): that's a wedge, not a flag.")
+        elif r == "rails_not_parallel":
+            m = f"{dr} flag rejected — the channel rails aren't parallel enough."
+        elif r == "no_volatility_contraction":
+            m = f"{dr} flag rejected — range didn't contract into the consolidation."
+        elif r == "invalidated":
+            m = f"{dr} flag invalidated — {d.get('detail') or 'broke the wrong way before its breakout'}."
+        elif r == "price_left_zone":
+            m = f"{dr} flag no longer active — price has left the flag zone."
+        elif r == "target_already_hit":
+            m = f"{dr} flag no longer active — the measured-move target was already reached."
+        else:
+            m = f"{dr} flag rejected ({r})."
+        if d.get("capped_at_max"):
+            m += (f" It also ran past the {MAX_CONSOLIDATION_BARS}-bar length limit "
+                  f"({cb} bars) — a downtrend/channel, not a flag.")
+        return m
+
+    out, seen_msgs = [], set()
+    for d in items:
+        msg = _msg(d)
+        if msg in seen_msgs:          # collapse identical sentences from sibling poles
+            continue
+        seen_msgs.add(msg)
+        out.append({
+            "reason":    d.get("reason"),
+            "direction": d.get("direction"),
+            "message":   msg,
+            "consolidation_bars": d.get("consolidation_bars"),
+            "capped_at_max":      bool(d.get("capped_at_max")),
+        })
+        if len(out) >= max_items:     # truncate AFTER de-duping so distinct reasons survive
+            break
+    return out
 
 
 def pick_dominant_flags(all_flags: List[Dict]) -> List[Dict]:

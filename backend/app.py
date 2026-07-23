@@ -37,7 +37,7 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     candle_direction)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
-from patterns import detect_flags, pick_dominant_flags, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
+from patterns import detect_flags, pick_dominant_flags, summarize_flag_diagnostics, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
 from signals import generate_signal, _swing_levels
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs
@@ -804,7 +804,12 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Flag patterns — detect on the same candles already fetched for this TF.
     # One flag set per timeframe, no cross-TF duplication.
     min_pole = TF_MIN_POLE_PCT.get(timeframe, 5.0)
-    flags = pick_dominant_flags(detect_flags(spot, timeframe, 1.0, min_pole_pct=min_pole))
+    _flag_diag: list = []
+    flags = pick_dominant_flags(detect_flags(spot, timeframe, 1.0,
+                                             min_pole_pct=min_pole, diag_out=_flag_diag))
+    # Only surface "why suppressed" reasons when nothing active was found — they
+    # explain an EMPTY flag card, not a populated one.
+    flag_diagnostics = summarize_flag_diagnostics(_flag_diag) if not flags else []
 
     rsi_with_ts = [
         {"timestamp": spot[i]["timestamp"], "rsi": v}
@@ -1003,6 +1008,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "htf_levels":   _collect_htf_levels(symbol, timeframe),
         "engulfing":    engulfing,
         "flags":        flags,
+        "flag_diagnostics": flag_diagnostics,
         "elliott_wave": elliott,
         "market_cap":        market_cap,
         "volume_spikes":     volume_spikes,
