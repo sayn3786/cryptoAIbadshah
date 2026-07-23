@@ -2645,9 +2645,15 @@ function renderFlags(flags, candles, signal) {
   // confirmed = the breakout candle closed beyond the boundary and is marked on
   // the chart; forming = still consolidating, and it scores ZERO signal points
   // until it breaks — so say what to watch for.
+  // The actionable break level is the DIAGONAL rail for a sloped flag (rises for
+  // an ascending bear flag, falls for a descending bull flag) and the flat
+  // high/low for a neutral one. `break_level` already encodes that per pattern;
+  // fall back to the flat boundary for older payloads that predate the field.
+  const brkLvl = f => (f.break_level != null ? f.break_level
+                      : (f.direction === 'bullish' ? f.flag_high : f.flag_low));
   const bestStatus = best.confirmed
     ? '✅ breakout confirmed'
-    : `⏳ forming — awaiting a close ${best.direction === 'bullish' ? 'above' : 'below'} $${p(best.direction === 'bullish' ? best.flag_high : best.flag_low)}`;
+    : `⏳ forming — awaiting a close ${best.direction === 'bullish' ? 'above' : 'below'} $${p(brkLvl(best))}${best.rail_break ? ' (rail)' : ''}`;
   const bestNote = (bestAligned
     ? `aligned with the ${signal.direction} signal`
     : (wantDir ? `active pattern · note: your signal is ${signal.direction}` : 'strongest active pattern'))
@@ -2697,6 +2703,7 @@ function renderFlags(flags, candles, signal) {
       </div>
       <div class="flag-target">Target: <span>$${p(f.target)}</span>
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
+        ${f.rail_break ? `&nbsp;·&nbsp; Break ${isBull ? 'above' : 'below'} <span>$${p(brkLvl(f))}</span> <span class="flag-rail-tag">rail</span>` : ''}
       </div>
       ${idx === bestIdx ? `<div class="flag-chart-cap">📊 ${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag · ${bestNote}</div>
       ${conflictNote}
@@ -2904,16 +2911,24 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
         color: isBull ? 'rgba(34,197,94,.09)' : 'rgba(239,68,68,.09)' };
     }
 
-    // Flag ZONE boundaries — the actual highest high / lowest low the flag traded
-    // to (flat horizontal levels). These, NOT the sloping channel rails, are what
-    // the pattern's validity is judged against: for a bullish flag a decisive
-    // close below flag_low (≈ its value × 0.97) invalidates it. Drawn as muted
-    // dotted lines so it's clear where the real break level sits vs. the projected
-    // channel, which extrapolates past the price that was actually reached.
-    if (f.flag_low)  cs.createPriceLine({ price: +f.flag_low,  color: 'rgba(148,163,184,.55)',
+    // Flag ZONE boundaries — the highest high / lowest low the flag traded to
+    // (flat horizontal levels). Drawn as muted dotted context lines showing the
+    // extent of the consolidation box.
+    if (f.flag_low)  cs.createPriceLine({ price: +f.flag_low,  color: 'rgba(148,163,184,.45)',
       lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'Flag low' });
-    if (f.flag_high) cs.createPriceLine({ price: +f.flag_high, color: 'rgba(148,163,184,.55)',
+    if (f.flag_high) cs.createPriceLine({ price: +f.flag_high, color: 'rgba(148,163,184,.45)',
       lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'Flag high' });
+
+    // BREAK level — the boundary the next close is actually judged against. For a
+    // SLOPED flag that's the projected DIAGONAL rail (the sloping channel line
+    // already drawn above), so mark its current value with a solid coloured line
+    // labelled "Break": a rising bear-flag lower rail triggers the breakdown
+    // sooner (higher) than the flat flag_low. Neutral flags break at the flat
+    // boundary, which the zone line already shows — no separate line needed.
+    if (f.rail_break && f.break_level) {
+      cs.createPriceLine({ price: +f.break_level, color: col, lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: 'Break' });
+    }
 
     // target — labelled horizontal line. A createPriceLine alone does NOT stretch
     // the price scale here, so a far-away measured-move target (e.g. a 1W pole
@@ -2932,12 +2947,14 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     if (f.confirmed && flagC.length >= 2) {
       const up = f.breakout_dir === 'up';
       const n  = flagC.length - 1;
-      // Start the breakout from the flag boundary it broke through (flag_high for
-      // an up-break, flag_low for a down-break) — that's exactly where the clipped
-      // rail ends, so the arrow leaves the same point the eye sees on the chart.
-      const edge = up
-        ? (f.flag_high != null ? +f.flag_high : (upLine ? upLine(n) : 0))
-        : (f.flag_low  != null ? +f.flag_low  : (loLine ? loLine(n) : 0));
+      // Start the breakout from the boundary it broke through — the diagonal rail
+      // break level for a sloped flag (where the eye sees the rail), else the flat
+      // flag boundary. That's where the arrow should leave from.
+      const edge = f.rail_break && f.break_level != null
+        ? +f.break_level
+        : (up
+            ? (f.flag_high != null ? +f.flag_high : (upLine ? upLine(n) : 0))
+            : (f.flag_low  != null ? +f.flag_low  : (loLine ? loLine(n) : 0)));
       // Project into empty space to the RIGHT of the last candle so the descent
       // has room to actually reach the target level instead of clipping the edge.
       const tgtT = flagC[n].time + Math.max(projBars, 3) * interval;

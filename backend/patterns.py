@@ -253,6 +253,44 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             direction = "bullish" if is_bull else "bearish"
             pole_pct  = round(abs(pole_move) * 100, 2)
 
+            # ── Diagonal channel rails ───────────────────────────────────────
+            # For a SLOPED flag the breakout is resolved against the PROJECTED
+            # trendline rail, not the flat high/low. A bearish ASCENDING flag
+            # therefore breaks down when a candle closes below its RISING lower
+            # rail — sooner, and more textbook, than waiting for a close under
+            # the flat oldest-bar low. A NEUTRAL flag keeps the flat boundaries.
+            #
+            # Rails are the least-squares fit through the flag highs/lows (same
+            # regression as the slope), evaluated at any bar index x where x = 0
+            # is the first flag bar, so x = fl is the first post-flag candle.
+            # The CONFIRMING rail can only make the break EARLIER (never require a
+            # more extreme close than the flat boundary); clamping keeps it inside
+            # the flat zone so a far projection can't invert or run away.
+            x_ref     = (fl - 1) / 2.0
+            low_mean  = sum(flag_lows)  / fl
+            high_mean = sum(flag_highs) / fl
+            sloped    = flag_slope != "neutral"
+
+            def _lower_rail(x, _m=low_mean,  _s=l_slope, _r=x_ref):
+                return _m + _s * (x - _r)
+
+            def _upper_rail(x, _m=high_mean, _s=h_slope, _r=x_ref):
+                return _m + _s * (x - _r)
+
+            def _dn_break(x):
+                # lower-rail break level, clamped to (0, flag_high]
+                return min(max(_lower_rail(x), 1e-9), fh)
+
+            def _up_break(x):
+                # upper-rail break level, clamped to [flag_low, ∞)
+                return max(_upper_rail(x), fl_)
+
+            # Break level at the first post-flag candle (x = fl) — the level the
+            # NEXT close is measured against while the flag is still forming.
+            break_low  = round(_dn_break(fl) if sloped else fl_, 8)
+            break_high = round(_up_break(fl) if sloped else fh, 8)
+            break_level = break_high if is_bull else break_low
+
             # ── Target projection ────────────────────────────────────────────
             proj = pole_height * proj_frac
             if is_bull:
@@ -270,20 +308,23 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             breakout_dir        = None
             breakout_ts         = None
             invalidation_reason = None
-            for c in post:
-                if c["close"] > fh:
+            for j, c in enumerate(post):
+                x = fl + j                       # bar index of this post candle
+                up_lvl = _up_break(x) if sloped else fh
+                dn_lvl = _dn_break(x) if sloped else fl_
+                if c["close"] > up_lvl:
                     breakout_ts = c["timestamp"]
                     if is_bull:
                         status, confirmed, breakout_dir = "confirmed", True, "up"
                     else:
                         status, breakout_dir = "invalidated", "up"
-                        invalidation_reason = "closed above flag high before bearish breakdown"
+                        invalidation_reason = "closed above upper rail before bearish breakdown"
                     break
-                if c["close"] < fl_:
+                if c["close"] < dn_lvl:
                     breakout_ts = c["timestamp"]
                     if is_bull:
                         status, breakout_dir = "invalidated", "down"
-                        invalidation_reason = "closed below flag low before bullish breakout"
+                        invalidation_reason = "closed below lower rail before bullish breakout"
                     else:
                         status, confirmed, breakout_dir = "confirmed", True, "down"
                     break
@@ -323,6 +364,14 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 "pole_end_price":     round(pole_close, 8),
                 "flag_high":          round(fh,  8),
                 "flag_low":           round(fl_, 8),
+                # Diagonal-rail break levels (== flat high/low for neutral flags).
+                # `break_level` is the boundary the NEXT close is tested against
+                # in the pattern's own direction — the number the "awaiting a
+                # close …" message and the break line should use.
+                "break_high":         break_high,
+                "break_low":          break_low,
+                "break_level":        round(break_level, 8),
+                "rail_break":         sloped,
                 "retrace_pct":        round(retrace * 100, 2),
                 "target":             target,
                 "proj_frac":          proj_frac,
