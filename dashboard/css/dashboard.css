@@ -903,6 +903,27 @@ a:hover { color: var(--gold2); }
 .btcm-hist b { color: var(--text, #e2e8f0); }
 .btcm-hist .bull { color: var(--bull, #10b981); }
 .btcm-hist .bear { color: var(--bear, #ef4444); }
+
+/* Miner economics: Efficient vs Avg-fleet comparison table */
+.miner-price { font-size: .7rem; color: var(--muted2, #94a3b8); font-family: var(--mono); }
+.miner-tbl {
+  width: 100%; border-collapse: collapse; margin: 2px 0 6px;
+  font-size: .72rem; font-family: var(--mono);
+}
+.miner-tbl th {
+  text-align: right; font-weight: 600; color: var(--muted2, #94a3b8);
+  padding: 3px 6px; border-bottom: 1px solid var(--border, #1e2d44);
+  font-family: var(--font);
+}
+.miner-tbl th:first-child { text-align: left; }
+.miner-tbl td {
+  padding: 4px 6px; color: var(--muted, #cbd5e1);
+  border-bottom: 1px solid rgba(30,45,68,.5);
+}
+.miner-tbl tr:last-child td { border-bottom: none; }
+.miner-tbl td.mt-c { text-align: right; color: var(--text, #e2e8f0); font-weight: 600; }
+.miner-tbl td.mt-c.bull { color: var(--bull, #10b981); }
+.miner-tbl td.mt-c.bear { color: var(--bear, #ef4444); }
 .btcm-price-ctx { color: var(--muted2); font-size: .62rem; }
 
 .btcm-oc-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
