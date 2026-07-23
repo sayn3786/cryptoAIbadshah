@@ -21,8 +21,17 @@ def _line_slope(values: list) -> float:
 MIN_CANDLES_FOR_FLAGS    = 10     # need enough history to find a pole + flag
 POLE_MIN_BARS            = 2      # a pole spans POLE_MIN_BARS…POLE_MAX_BARS candles
 POLE_MAX_BARS            = 8
-MIN_CONSOLIDATION_BARS   = 3      # flag consolidation length bounds (candles)
-MAX_CONSOLIDATION_BARS   = 20
+# Flag consolidation length bounds (candles). Textbook flags are SHORT — Murphy
+# and Edwards & Magee put them at 1–3 weeks, and Bulkowski finds they rarely run
+# past ~15 bars before degrading into a pennant/rectangle. The minimum of 5 gives
+# a channel at least two swing highs and two swing lows so its rails are real
+# (two touches per rail); below that there isn't enough structure for a trendline.
+MIN_CONSOLIDATION_BARS   = 5      # ≥ 2 touches per rail → a genuine channel
+MAX_CONSOLIDATION_BARS   = 15     # past ~3 weeks it's no longer a flag
+# Short flags perform best (Bulkowski), so tightness scales strength: a flag at
+# MIN bars keeps full weight and one at MAX bars keeps TIGHT_MIN_FACTOR of it —
+# a mild taper (never zero) that ranks crisp, quick flags above long grinds.
+TIGHT_MIN_FACTOR         = 0.7
 RETRACE_MIN              = 0.15   # flag must retrace 15–62% of the pole height
 RETRACE_MAX              = 0.62   # (single source of truth for the docstring too)
 # Channel geometry — slope as a percentage of mid-price per bar:
@@ -196,7 +205,27 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             k = MIN_CONSOLIDATION_BARS
             while k < len(remaining) and len(flag) < MAX_CONSOLIDATION_BARS:
                 nxt = remaining[k]
-                if fl_ <= nxt["close"] <= fh:
+                # Membership boundary — a candle joins the consolidation only while
+                # it closes INSIDE the channel. For a SLOPED channel that boundary
+                # is the projected DIAGONAL rail (recomputed from the bars so far),
+                # so a close beyond the rising/falling rail ENDS the flag and
+                # becomes the breakout candle instead of being absorbed. A neutral
+                # channel uses the flat high/low. This keeps window membership and
+                # breakout resolution judged against the SAME boundary.
+                m   = len(flag)
+                ch  = [c["high"] for c in flag]
+                cl_ = [c["low"]  for c in flag]
+                hs  = _line_slope(ch)
+                ls  = _line_slope(cl_)
+                mid = (fh + fl_) / 2.0
+                msp = ((hs + ls) / 2.0) / mid * 100.0 if mid > 0 else 0.0
+                if abs(msp) <= NEUTRAL_SLOPE_PCT:
+                    up_b, lo_b = fh, fl_
+                else:
+                    xr   = (m - 1) / 2.0
+                    up_b = max(sum(ch)  / m + hs * (m - xr), fl_)   # clamp inside
+                    lo_b = min(sum(cl_) / m + ls * (m - xr), fh)    # the flat zone
+                if lo_b <= nxt["close"] <= up_b:
                     flag.append(nxt)
                     fh = max(fh, nxt["high"])
                     fl_ = min(fl_, nxt["low"])
@@ -351,7 +380,13 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
 
             # ── Strength & recency ───────────────────────────────────────────
             recency  = 1.0 + (pe + fl) / n * 0.5
-            strength = pole_pct * (1.0 - retrace) * recency * tf_weight
+            # Tightness: full weight at MIN bars, tapering to TIGHT_MIN_FACTOR at
+            # MAX bars (short flags perform best). Guard the degenerate MIN==MAX.
+            span     = MAX_CONSOLIDATION_BARS - MIN_CONSOLIDATION_BARS
+            frac     = (fl - MIN_CONSOLIDATION_BARS) / span if span > 0 else 0.0
+            frac     = min(max(frac, 0.0), 1.0)
+            tightness = 1.0 - (1.0 - TIGHT_MIN_FACTOR) * frac
+            strength = pole_pct * (1.0 - retrace) * recency * tightness * tf_weight
 
             candidates.append({
                 "direction":          direction,

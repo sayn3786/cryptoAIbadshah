@@ -52,8 +52,8 @@ def test_bull_descending_break_level_below_flat_high():
 def test_neutral_flag_break_levels_equal_flat():
     # a genuine retrace held FLAT across many bars → neutral slope (the single
     # elevated first-bar high is averaged out by the regression)
-    cs = build_flag(direction="up", pole_step=2.0, pole_bars=4,
-                    flag_closes=[106.0] * 8, flag_half=0.3)
+    cs = build_flag(direction="up", pole_step=1.5, pole_bars=4,
+                    flag_closes=[105.0] * 6, flag_half=0.3)
     bulls = _bull_flags(detect_flags(cs, "1D", 1.0, 4.0))
     assert bulls, "expected a neutral bullish flag"
     f = bulls[0]
