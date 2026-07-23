@@ -230,6 +230,32 @@ TF_MIN_POLE_PCT = {
     "1W": 8.0, "2W": 8.0, "3W":  8.0, "1M": 10.0,
 }
 
+
+def _flag_diagnostics_for(flags: list, raw_diag: list) -> list:
+    """Build the "why is the flag card empty" explanation.
+
+    Fires whenever NO ACTIVE flag exists — that's exactly when the dashboard card
+    is empty (the frontend hides inactive/stale flags). Prefers the concrete
+    rejection reasons from detect_flags; if flags were found but merely resolved /
+    aged out (nothing was rejected), describes that state instead.
+    """
+    if any(f.get("is_active") for f in flags):
+        return []
+    diag = summarize_flag_diagnostics(raw_diag)
+    if not diag and flags:
+        f0 = flags[0]
+        state = ("its breakout already played out" if f0.get("confirmed")
+                 else "it resolved or aged out of the active window")
+        diag = [{
+            "reason": "inactive",
+            "direction": f0.get("direction"),
+            "message": (f"A {f0.get('direction')} flag was found but is no "
+                        f"longer active — {state}."),
+            "consolidation_bars": f0.get("consolidation_bars"),
+            "capped_at_max": False,
+        }]
+    return diag
+
 # Higher timeframes that each TF must align with for confluence validation.
 # Shorter TFs depend on a larger stack of HTFs; longer TFs have fewer above them.
 _HTF_DEPS: Dict[str, List[str]] = {
@@ -807,9 +833,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     _flag_diag: list = []
     flags = pick_dominant_flags(detect_flags(spot, timeframe, 1.0,
                                              min_pole_pct=min_pole, diag_out=_flag_diag))
-    # Only surface "why suppressed" reasons when nothing active was found — they
-    # explain an EMPTY flag card, not a populated one.
-    flag_diagnostics = summarize_flag_diagnostics(_flag_diag) if not flags else []
+    # Surface "why suppressed" reasons whenever NO ACTIVE flag exists — that's
+    # exactly when the dashboard card is empty (the frontend hides inactive/stale
+    # flags). Covers both "nothing detected" and "only stale flags remain".
+    flag_diagnostics = _flag_diagnostics_for(flags, _flag_diag)
 
     rsi_with_ts = [
         {"timestamp": spot[i]["timestamp"], "rsi": v}
