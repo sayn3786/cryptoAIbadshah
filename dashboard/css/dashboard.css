@@ -391,6 +391,9 @@ a:hover { color: var(--gold2); }
 .flag-stat span { color: var(--text); font-weight: 600; }
 .flag-target { font-size: .72rem; font-family: var(--mono); }
 .flag-target span { color: var(--gold); font-weight: 600; }
+.flag-rail-tag { font-size: .6rem; font-weight: 700; padding: 0 5px; border-radius: 100px;
+                 background: rgba(148,163,184,.16); color: var(--muted2); letter-spacing: .3px;
+                 text-transform: uppercase; vertical-align: middle; }
 /* Flag pattern chart (candles + pole/channel/target overlay) — best flag only */
 .flag-chart-cap {
   font-size: .68rem; font-weight: 600; color: var(--muted2, #94a3b8);
