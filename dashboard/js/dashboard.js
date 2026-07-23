@@ -1360,22 +1360,8 @@ function renderBtcMiningCard(mining, symbol) {
   const months = mining.halving_months_since != null ? `${mining.halving_months_since} mo` : '—';
   const daysUntil = mining.halving_days_until != null ? `${mining.halving_days_until.toLocaleString()} days` : '—';
 
-  const prof = mining.profitability_ratio;         // vs efficient break-even
-  const profAvg = mining.profitability_ratio_avg;  // vs blended-fleet break-even
-  let profCls = '', profLabel = '—';
-  if (prof != null) {
-    if (prof >= 2.0)       { profCls = 'bull'; profLabel = `${prof}× (Very profitable)`; }
-    else if (prof >= 1.3)  { profCls = 'bull'; profLabel = `${prof}× (Profitable)`; }
-    else if (prof < 1.05)  { profCls = 'bear'; profLabel = `${prof}× (Near break-even!)`; }
-    else                   { profCls = '';      profLabel = `${prof}×`; }
-    // Show the blended-fleet ratio too — a sub-1× avg fleet explains miner
-    // sell pressure even while efficient rigs stay above water.
-    if (profAvg != null) {
-      profLabel += profAvg < 1.0
-        ? ` · avg fleet ${profAvg}× (underwater)`
-        : ` · avg fleet ${profAvg}×`;
-    }
-  }
+  const prof = mining.profitability_ratio;         // vs efficient (power) break-even
+  const profAvg = mining.profitability_ratio_avg;  // vs blended-fleet (power) break-even
 
   const diff        = mining.difficulty_change;
   const diffLast    = mining.difficulty_last_change;
@@ -1399,21 +1385,32 @@ function renderBtcMiningCard(mining, symbol) {
   const diffProgressStr = diffPct != null ? `${diffPct.toFixed(0)}% through epoch` : '';
   const diffBlocksStr   = diffBlocks != null ? `${diffBlocks.toLocaleString()} blocks remaining` : '';
 
-  const be = mining.break_even_usd;                          // MARGINAL efficient
-  const beAvg = mining.break_even_average_usd;               // MARGINAL avg fleet
-  const aiEff = mining.break_even_allin_efficient_usd;       // ALL-IN efficient
-  const aiAvg = mining.break_even_allin_average_usd;         // ALL-IN avg fleet
+  // ── Miner economics as a scannable Efficient vs Avg-fleet table ───────────
+  const be = mining.break_even_usd;                          // power, efficient
+  const beAvg = mining.break_even_average_usd;               // power, avg fleet
+  const aiEff = mining.break_even_allin_efficient_usd;       // all-in, efficient
+  const aiAvg = mining.break_even_allin_average_usd;         // all-in, avg fleet
   const _beK = v => v != null ? '$' + (v / 1000).toFixed(0) + 'K' : '—';
-  // Two floors: MARGINAL (electricity only — the cash keep-the-lights-on line)
-  // and ALL-IN (electricity + amortized hardware + opex — the full-cost/ROI line),
-  // each an efficient→avg-fleet range.
-  const beMarginalStr = be != null
-    ? (beAvg != null ? `${_beK(be)}→${_beK(beAvg)}` : _beK(be)) : '—';
-  const beAllinStr = aiEff != null
-    ? (aiAvg != null ? `${_beK(aiEff)}→${_beK(aiAvg)}` : _beK(aiEff)) : null;
-  const beStr = `⚡ Power ${beMarginalStr}` +
-                (beAllinStr ? ` · 🏭 All-in ${beAllinStr}` : '') +
-                ` <span style="opacity:.6">(efficient→avg)</span>`;
+  // Profit cell: ✅ above cost / 🔴 underwater / ⚠️ right at break-even.
+  const _profCell = r => {
+    if (r == null) return '<td class="mt-c">—</td>';
+    const cls  = r >= 1.05 ? 'bull' : r < 1.0 ? 'bear' : '';
+    const icon = r >= 1.05 ? '✅' : r < 1.0 ? '🔴' : '⚠️';
+    return `<td class="mt-c ${cls}">${icon} ${r}×</td>`;
+  };
+  const _btcPx = mining.btc_price_usd;
+  const _pxTag = _btcPx ? `<span class="miner-price">BTC $${(_btcPx / 1000).toFixed(1)}K</span>` : '';
+  const minerTable = (prof != null || be != null) ? `
+    <div class="btcm-row" style="margin-bottom:4px">
+      <span class="btcm-label">Miner Profitability</span>${_pxTag}
+    </div>
+    <table class="miner-tbl">
+      <tr><th></th><th>Efficient</th><th>Avg fleet</th></tr>
+      <tr><td>Profit vs power</td>${_profCell(prof)}${_profCell(profAvg)}</tr>
+      <tr><td>⚡ Power cost / BTC</td><td class="mt-c">${_beK(be)}</td><td class="mt-c">${_beK(beAvg)}</td></tr>
+      <tr><td>🏭 All-in cost / BTC</td><td class="mt-c">${_beK(aiEff)}</td><td class="mt-c">${_beK(aiAvg)}</td></tr>
+    </table>
+    <div class="btcm-sub">Profit = BTC price ÷ cost · &gt;1× = above cost (mining at a profit), &lt;1× = underwater · <b>Power</b> = electricity only · <b>All-in</b> = + hardware &amp; overhead</div>` : '';
 
   const rev = mining.miner_revenue_usd;
   const revStr = rev != null ? `$${(rev / 1e6).toFixed(1)}M / day` : '—';
@@ -1532,8 +1529,8 @@ function renderBtcMiningCard(mining, symbol) {
     ${histStrip(mining.hash_ribbon_history)}
     <div class="btcm-row"><span class="btcm-label">Halving Phase</span><span class="btcm-val ${pm.cls}">${pm.label}</span></div>
     <div class="btcm-sub">${months} since halving · ${daysUntil} until next · ${pm.desc}</div>
-    <div class="btcm-row"><span class="btcm-label">Miner Profitability</span><span class="btcm-val ${profCls}">${profLabel}</span></div>
-    <div class="btcm-sub">Break-even ${beStr} · Revenue ${revStr}</div>
+    ${minerTable}
+    <div class="btcm-sub">Network revenue ${revStr}</div>
     ${rewardRow}
     <div class="btcm-row"><span class="btcm-label">Last Difficulty Adj</span><span class="btcm-val ${diffLastCls}">${diffLastStr}</span></div>
     <div class="btcm-sub">Completed at last epoch — directly set current reward per TH</div>
