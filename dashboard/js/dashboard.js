@@ -1399,15 +1399,21 @@ function renderBtcMiningCard(mining, symbol) {
   const diffProgressStr = diffPct != null ? `${diffPct.toFixed(0)}% through epoch` : '';
   const diffBlocksStr   = diffBlocks != null ? `${diffBlocks.toLocaleString()} blocks remaining` : '';
 
-  const be = mining.break_even_usd;
-  const beAvg = mining.break_even_average_usd;
-  // Break-even is efficiency-sensitive → show a range: efficient rigs (floor)
-  // through the blended fleet. Falls back to the single value if avg is absent.
-  const beStr = be != null
-    ? (beAvg != null
-        ? `$${be.toLocaleString()} (efficient) → $${beAvg.toLocaleString()} (avg fleet)`
-        : `$${be.toLocaleString()}`)
-    : '—';
+  const be = mining.break_even_usd;                          // MARGINAL efficient
+  const beAvg = mining.break_even_average_usd;               // MARGINAL avg fleet
+  const aiEff = mining.break_even_allin_efficient_usd;       // ALL-IN efficient
+  const aiAvg = mining.break_even_allin_average_usd;         // ALL-IN avg fleet
+  const _beK = v => v != null ? '$' + (v / 1000).toFixed(0) + 'K' : '—';
+  // Two floors: MARGINAL (electricity only — the cash keep-the-lights-on line)
+  // and ALL-IN (electricity + amortized hardware + opex — the full-cost/ROI line),
+  // each an efficient→avg-fleet range.
+  const beMarginalStr = be != null
+    ? (beAvg != null ? `${_beK(be)}→${_beK(beAvg)}` : _beK(be)) : '—';
+  const beAllinStr = aiEff != null
+    ? (aiAvg != null ? `${_beK(aiEff)}→${_beK(aiAvg)}` : _beK(aiEff)) : null;
+  const beStr = `⚡ Power ${beMarginalStr}` +
+                (beAllinStr ? ` · 🏭 All-in ${beAllinStr}` : '') +
+                ` <span style="opacity:.6">(efficient→avg)</span>`;
 
   const rev = mining.miner_revenue_usd;
   const revStr = rev != null ? `$${(rev / 1e6).toFixed(1)}M / day` : '—';
@@ -1527,7 +1533,7 @@ function renderBtcMiningCard(mining, symbol) {
     <div class="btcm-row"><span class="btcm-label">Halving Phase</span><span class="btcm-val ${pm.cls}">${pm.label}</span></div>
     <div class="btcm-sub">${months} since halving · ${daysUntil} until next · ${pm.desc}</div>
     <div class="btcm-row"><span class="btcm-label">Miner Profitability</span><span class="btcm-val ${profCls}">${profLabel}</span></div>
-    <div class="btcm-sub">Break-even est. ${beStr} · Revenue ${revStr}</div>
+    <div class="btcm-sub">Break-even ${beStr} · Revenue ${revStr}</div>
     ${rewardRow}
     <div class="btcm-row"><span class="btcm-label">Last Difficulty Adj</span><span class="btcm-val ${diffLastCls}">${diffLastStr}</span></div>
     <div class="btcm-sub">Completed at last epoch — directly set current reward per TH</div>

@@ -5,6 +5,7 @@ Data sources (all free, no API key required):
   - blockchain.info — network stats, miner revenue
 """
 
+import os
 import time
 import math
 import requests
@@ -132,13 +133,35 @@ def summarize_transitions(series: list, now_ts: int = None, max_flips: int = 8,
 HALVING_4_DATE    = datetime(2024, 4, 20, tzinfo=timezone.utc)
 HALVING_5_DATE    = datetime(2028, 4, 20, tzinfo=timezone.utc)   # ~estimate
 DAILY_BTC_MINED   = 144 * 3.125          # blocks/day × block reward = 450 BTC
-# Break-even is an efficiency-sensitive cost model, so we report a RANGE:
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float config value from the environment, with a fallback default.
+    Lets the mining-cost assumptions be tuned per deployment (Vercel env vars)
+    without a code change."""
+    try:
+        v = os.getenv(name)
+        return float(v) if v not in (None, "") else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+# ── Mining-cost assumptions (env-configurable) ────────────────────────────────
+# Break-even is an efficiency-sensitive cost model, reported as a RANGE:
 #   efficient = best-in-class rigs on cheap industrial power (the optimistic floor)
 #   average   = blended global fleet (older S19-class gear mixed with S21)
-EFFICIENCY_J_TH            = 21.0         # kept for back-compat = efficient tier
-EFFICIENCY_EFFICIENT_J_TH = 21.0         # J/TH — Antminer S21-class (top tier)
-EFFICIENCY_AVERAGE_J_TH   = 28.0         # J/TH — blended fleet (S19/S19XP/S21 mix)
-ELECTRICITY_KWH   = 0.06                 # USD/kWh — industrial miner average
+# We report TWO thresholds:
+#   • MARGINAL  (electricity only) — the cash "keep-the-lights-on" floor. Below
+#     it a miner loses cash per coin and tends to power off.
+#   • ALL-IN    (electricity + amortized hardware + opex) — the full-cost floor.
+#     Below it a miner is cash-positive but not recouping the rig / making ROI.
+EFFICIENCY_EFFICIENT_J_TH = _env_float("BTC_EFF_EFFICIENT_JTH", 21.0)   # S21-class top tier
+EFFICIENCY_AVERAGE_J_TH   = _env_float("BTC_EFF_AVERAGE_JTH",   28.0)   # blended fleet
+EFFICIENCY_J_TH           = EFFICIENCY_EFFICIENT_J_TH                    # back-compat alias
+ELECTRICITY_KWH   = _env_float("BTC_POWER_COST_KWH", 0.06)   # USD/kWh — industrial average
+HW_USD_PER_TH     = _env_float("BTC_HW_USD_PER_TH", 18.0)    # rig capex per TH of hashrate
+HW_LIFESPAN_DAYS  = _env_float("BTC_HW_LIFESPAN_DAYS", 1460.0)  # amortization horizon (~4y)
+OPEX_PCT          = _env_float("BTC_OPEX_PCT", 0.10)         # pool/hosting/maintenance markup
 
 
 def _hash_ribbon(hashrates: list) -> dict:
@@ -284,9 +307,11 @@ def _halving_phase(now: datetime) -> dict:
 
 
 def _break_even(hash_rate_hs: float, efficiency_j_th: float = EFFICIENCY_EFFICIENT_J_TH) -> float | None:
-    """Estimate USD break-even mining cost per BTC from current network hash rate
-    (H/s) at a given rig efficiency (J/TH). Break-even scales linearly with
-    efficiency, so a less-efficient fleet breaks even at a higher price."""
+    """MARGINAL (electricity-only) break-even per BTC — the cash floor.
+
+    From current network hash rate (H/s) at a given rig efficiency (J/TH). This
+    is what "can they keep the lights on?" is measured against; below it a miner
+    loses cash per coin. Scales linearly with efficiency."""
     if not hash_rate_hs or hash_rate_hs <= 0:
         return None
     hash_rate_ths = hash_rate_hs / 1e12                 # H/s → TH/s
@@ -296,11 +321,38 @@ def _break_even(hash_rate_hs: float, efficiency_j_th: float = EFFICIENCY_EFFICIE
     return round(daily_cost / DAILY_BTC_MINED, 0)
 
 
+def _break_even_all_in(hash_rate_hs: float, efficiency_j_th: float,
+                       kwh: float = None, hw_usd_per_th: float = None,
+                       hw_life_days: float = None, opex_pct: float = None) -> float | None:
+    """ALL-IN break-even per BTC — electricity + amortized hardware + opex.
+
+    The full-cost floor: below it a miner is still cash-positive (if above the
+    marginal line) but not recouping the rig / making ROI. Cost params default to
+    the module (env-configurable) assumptions; overridable for testing."""
+    if not hash_rate_hs or hash_rate_hs <= 0:
+        return None
+    kwh          = ELECTRICITY_KWH   if kwh is None else kwh
+    hw_usd_per_th = HW_USD_PER_TH    if hw_usd_per_th is None else hw_usd_per_th
+    hw_life_days = HW_LIFESPAN_DAYS  if hw_life_days is None else hw_life_days
+    opex_pct     = OPEX_PCT          if opex_pct is None else opex_pct
+
+    hash_rate_ths = hash_rate_hs / 1e12
+    elec_daily    = (hash_rate_ths * efficiency_j_th / 1_000) * 24 * kwh
+    hw_daily      = (hw_usd_per_th * hash_rate_ths) / hw_life_days if hw_life_days > 0 else 0.0
+    all_in_daily  = (elec_daily + hw_daily) * (1.0 + opex_pct)
+    return round(all_in_daily / DAILY_BTC_MINED, 0)
+
+
 def _break_even_range(hash_rate_hs: float):
-    """(efficient, average) USD break-even per BTC — the optimistic floor (top-tier
-    rigs) and the blended-fleet estimate."""
+    """(efficient, average) MARGINAL break-even per BTC."""
     return (_break_even(hash_rate_hs, EFFICIENCY_EFFICIENT_J_TH),
             _break_even(hash_rate_hs, EFFICIENCY_AVERAGE_J_TH))
+
+
+def _break_even_all_in_range(hash_rate_hs: float):
+    """(efficient, average) ALL-IN break-even per BTC."""
+    return (_break_even_all_in(hash_rate_hs, EFFICIENCY_EFFICIENT_J_TH),
+            _break_even_all_in(hash_rate_hs, EFFICIENCY_AVERAGE_J_TH))
 
 
 def _iso_to_ts(s: str):
@@ -620,9 +672,12 @@ def get_btc_mining_signals() -> dict:
         "halving_days_until": None,
         "halving_months_since": None,
         "difficulty_change":        None,
-        "break_even_usd":           None,   # = efficient tier (back-compat)
-        "break_even_efficient_usd": None,
+        "break_even_usd":           None,   # = MARGINAL efficient (back-compat)
+        "break_even_efficient_usd": None,   # MARGINAL (electricity only)
         "break_even_average_usd":   None,
+        "break_even_allin_efficient_usd": None,   # ALL-IN (elec+hardware+opex)
+        "break_even_allin_average_usd":   None,
+        "mining_cost_assumptions":  None,
         "miner_revenue_usd":        None,
         "profitability_ratio":      None,   # vs efficient break-even (back-compat)
         "profitability_ratio_avg":  None,   # vs average-fleet break-even
@@ -665,9 +720,20 @@ def get_btc_mining_signals() -> dict:
             cur_hs = hr_data.get("currentHashrate")
             latest_hs = cur_hs if (cur_hs and cur_hs > 0) else rates[-1]
             be_eff, be_avg = _break_even_range(latest_hs)
-            result["break_even_usd"]           = be_eff   # back-compat = efficient
-            result["break_even_efficient_usd"] = be_eff
+            result["break_even_usd"]           = be_eff   # back-compat = marginal efficient
+            result["break_even_efficient_usd"] = be_eff   # MARGINAL (electricity only)
             result["break_even_average_usd"]   = be_avg
+            ai_eff, ai_avg = _break_even_all_in_range(latest_hs)
+            result["break_even_allin_efficient_usd"] = ai_eff   # ALL-IN (elec+hardware+opex)
+            result["break_even_allin_average_usd"]   = ai_avg
+            result["mining_cost_assumptions"] = {
+                "power_cost_kwh":   ELECTRICITY_KWH,
+                "eff_efficient_jth": EFFICIENCY_EFFICIENT_J_TH,
+                "eff_average_jth":  EFFICIENCY_AVERAGE_J_TH,
+                "hw_usd_per_th":    HW_USD_PER_TH,
+                "hw_lifespan_days": HW_LIFESPAN_DAYS,
+                "opex_pct":         OPEX_PCT,
+            }
             # Reward per TH/day = total daily BTC / network hashrate in TH
             if latest_hs > 0:
                 reward_btc = DAILY_BTC_MINED / (latest_hs / 1e12)
