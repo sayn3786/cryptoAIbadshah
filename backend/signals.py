@@ -1128,37 +1128,52 @@ def generate_signal(analysis: Dict) -> Dict:
     macro_summary = macro.get("summary") or {}
     macro_events  = macro.get("events") or []
     macro_net = macro_summary.get("net_pts", 0) or 0
-    # A scheduled release within ±1 day (about to print or just printed) DOES move
-    # 1H/2H/4H price, so in that window macro is applied at FULL weight instead of
-    # the usual daily-context down-scaling (_cyc). Outside the window it stays a
-    # faint intraday tilt.
     _macro_intraday = bool(macro_summary.get("intraday_active"))
-    if macro_events and macro_net:
-        _raw_macro = max(-18, min(18, int(round(macro_net * 0.4))))
-        macro_pts  = _raw_macro if _macro_intraday else _cyc(_raw_macro)
-        if macro_pts:
-            score += macro_pts; g['sentiment'] += macro_pts
-            # Name the biggest drivers (up to 3 by absolute impact points)
+    intraday_net = macro_summary.get("intraday_net_pts", 0) or 0
+    if macro_events:
+        # Split the macro impact into TWO independent contributions so a single
+        # imminent release is never mislabelled by the aggregate:
+        #
+        #  • BACKDROP — the standing tilt from every release NOT imminent right
+        #    now. It is daily context, so always down-scaled by the cycle factor.
+        #  • IMMINENT CATALYST — a SCHEDULED release within ±1 day. It moves price
+        #    intraday on ITS OWN direction, so it scores at FULL weight on its own
+        #    sign. This is the fix for "a bearish jobless-claims print was adding
+        #    to the bullish side": the imminent bearish release now lands on the
+        #    bearish side and can, at full weight, outweigh a down-scaled bullish
+        #    backdrop — exactly "one release can flip the whole macro".
+        backdrop_net = macro_net - (intraday_net if _macro_intraday else 0)
+        backdrop_pts = _cyc(max(-18, min(18, int(round(backdrop_net * 0.4)))))
+        imm_pts      = (max(-18, min(18, int(round(intraday_net * 0.4))))
+                        if (_macro_intraday and intraday_net) else 0)
+
+        # Score both, but keep the combined macro tilt within the ±18 cap so it
+        # still tilts rather than dominates the per-token technical confluence.
+        total = max(-18, min(18, backdrop_pts + imm_pts))
+        if total:
+            score += total; g['sentiment'] += total
+
+        bias = macro_summary.get("bias", "mixed")
+        if backdrop_pts:
             drivers = sorted(
-                [e for e in macro_events if e.get("impact") in ("bullish", "bearish")],
+                [e for e in macro_events
+                 if e.get("impact") in ("bullish", "bearish") and not e.get("imminent")],
                 key=lambda e: abs(e.get("signal_pts", 0) or 0), reverse=True
             )[:3]
-            names = ", ".join(f"{d['label'].split(' (')[0]} {d['impact']}" for d in drivers)
-            bias  = macro_summary.get("bias", "mixed")
-            if _macro_intraday:
-                _imm = macro_summary.get("intraday_drivers") or []
-                _imm_name = _imm[0]["label"].split(" (")[0] if _imm else "macro release"
-                _win_note = f" ⚡[{_imm_name} within ±1 day — full weight on {timeframe}]"
-            else:
-                _win_note = _cyc_note
-            if macro_pts > 0:
+            names = ", ".join(f"{d['label'].split(' (')[0]} {d['impact']}" for d in drivers) or "mixed data"
+            if backdrop_pts > 0:
                 bull_reasons.append(
-                    f"Macro tailwind ({bias.upper()}): {names} — adds strength until next release{_win_note}"
-                )
+                    f"Macro tailwind ({bias.upper()}): {names} — adds strength until next release{_cyc_note}")
             else:
                 bear_reasons.append(
-                    f"Macro headwind ({bias.upper()}): {names} — drops strength until next release{_win_note}"
-                )
+                    f"Macro headwind ({bias.upper()}): {names} — drops strength until next release{_cyc_note}")
+        if imm_pts:
+            _imm = macro_summary.get("intraday_drivers") or []
+            imm_names = ", ".join(f"{d['label'].split(' (')[0]} {d['impact']}" for d in _imm[:2]) or "macro release"
+            _dir = "bullish" if imm_pts > 0 else "bearish"
+            _line = (f"⚡ Imminent macro ({_dir}): {imm_names} within ±1 day — "
+                     f"full weight on {timeframe} (can flip the backdrop)")
+            (bull_reasons if imm_pts > 0 else bear_reasons).append(_line)
 
     # ── Traditional markets backdrop (DXY / SPX / 10Y) ────────────────────────
     # Crypto is a risk asset: dollar and yields lead it, equities correlate.
