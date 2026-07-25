@@ -898,6 +898,48 @@ def generate_signal(analysis: Dict) -> Dict:
                 )
             score -= pts; g['pattern'] -= pts
 
+    # ── Reversal & converging-trendline patterns (CONFIRMED only) ─────────────
+    # Confirmed Double Top/Bottom, Head & Shoulders, triangles and wedges add
+    # directional points — but only when the breakout is FRESH (the neckline/rail
+    # break happened within PATTERN_FRESH_BARS of the last close), so a months-old
+    # confirmation from deep in the history never scores. Forming patterns stay
+    # display-only (zero points), exactly like forming flags. Scored once per
+    # direction, reversals ranked ahead of triangles (stronger, more points).
+    PATTERN_FRESH_BARS = 5
+    _cand_ts = [c.get("timestamp") for c in candles]
+    _last_ci = len(_cand_ts) - 1
+
+    def _break_fresh(ts):
+        # Fresh only if the break candle is inside the recent signal window AND
+        # within PATTERN_FRESH_BARS of the last close.
+        if ts is None or ts not in _cand_ts:
+            return False
+        return (_last_ci - _cand_ts.index(ts)) <= PATTERN_FRESH_BARS
+
+    _pattern_specs = []
+    for _pat in (analysis.get("reversal_patterns") or []):
+        if _pat.get("confirmed"):
+            _pattern_specs.append((_pat, 18 if "head" in (_pat.get("type") or "") else 14))
+    for _pat in (analysis.get("triangle_patterns") or []):
+        if _pat.get("confirmed"):
+            _pattern_specs.append((_pat, 12))
+
+    _scored_pat_dirs: set = set()
+    for _pat, _pts in _pattern_specs:
+        _d = _pat.get("direction")
+        if _d not in ("bullish", "bearish") or _d in _scored_pat_dirs:
+            continue
+        if not _break_fresh(_pat.get("break_ts")):
+            continue
+        _scored_pat_dirs.add(_d)
+        _tgt = _pat.get("target")
+        _tgt_s = f" (target ${_tgt:,.4f})" if isinstance(_tgt, (int, float)) else ""
+        _label = f"{_pat.get('label')} confirmed on {_pat.get('timeframe')}{_tgt_s}"
+        if _d == "bullish":
+            score += _pts; g['pattern'] += _pts; bull_reasons.append(_label)
+        else:
+            score -= _pts; g['pattern'] -= _pts; bear_reasons.append(_label)
+
     # ── Engulfing Patterns ────────────────────────────────────────────────────
     # Bulkowski research + HTF studies show confirmed engulfing has 60-65%
     # accuracy on daily+ timeframes, especially with volume confirmation.
