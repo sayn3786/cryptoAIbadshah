@@ -38,3 +38,9 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+
+# Runtime state (server-generated, never commit)
+.rec_cache.json
+.pattern_alerts.json
+backend/.rec_cache.json
+backend/.pattern_alerts.json

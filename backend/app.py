@@ -40,7 +40,7 @@ from holidays import get_upcoming_holidays
 from patterns import detect_flags, pick_dominant_flags, summarize_flag_diagnostics, detect_reversals, detect_triangles_wedges, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
 from signals import generate_signal, _swing_levels
 from journal import generate_journal
-from telegram import send_daily_recs as _send_telegram_recs
+from telegram import send_daily_recs as _send_telegram_recs, send_pattern_alerts as _send_pattern_alerts
 from twitter import post_daily_signals as _post_twitter_signals
 from video import create_talk, get_talk
 
@@ -437,6 +437,121 @@ def _rec_cache_save(key: str, data: dict) -> None:
             json.dump({"key": key, "data": data}, f)
     except Exception:
         pass
+
+
+# ── Chart-pattern confirmation alerts (Telegram) ─────────────────────────────
+# Scans tracked symbols for FRESHLY-confirmed flags / reversals / triangles and
+# sends one Telegram alert per new confirmation. A confirmation fires ONCE: an
+# on-disk id set dedupes across cron runs (best-effort on serverless — a cold
+# start may occasionally re-alert, which is harmless). The scan is LIGHTWEIGHT —
+# it fetches only candles and runs the detectors, skipping the heavy on-chain /
+# funding / CVD work that full build_analysis does, so 32 symbols stay well
+# within a single request.
+PATTERN_ALERT_TFS        = ["1D", "1W"]
+PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
+_PATTERN_ALERT_FILE = os.path.join(os.path.dirname(__file__), ".pattern_alerts.json")
+_pattern_alert_lock = _threading.Lock()
+
+
+def _pattern_alert_ids_load() -> set:
+    try:
+        with open(_PATTERN_ALERT_FILE) as f:
+            return set(json.load(f).get("ids", []))
+    except Exception:
+        return set()
+
+
+def _pattern_alert_ids_save(ids: set) -> None:
+    try:
+        with open(_PATTERN_ALERT_FILE, "w") as f:
+            json.dump({"ids": list(ids)[-1000:]}, f)   # cap growth
+    except Exception:
+        pass
+
+
+def _fetch_closed_spot(sym: str, tf: str):
+    """Just the closed spot candles for a symbol/TF — no heavy analysis."""
+    bs       = SYMBOLS[sym]
+    interval = TF_INTERVAL.get(tf, "1w")
+    limit    = TF_LIMIT.get(tf, 120)
+    spot = client.get_spot_klines(bs, interval, limit)
+    if tf in TF_AGG:
+        spot = client.aggregate_candles(spot, TF_AGG[tf])
+    closed, _live = _split_closed(spot, TF_SECONDS.get(tf, 3600))
+    return closed
+
+
+def _confirmed_patterns_for(closed: list, tf: str) -> list:
+    """All CONFIRMED + FRESH flags/reversals/triangles in one candle set, as
+    normalized alert dicts (symbol added by the caller)."""
+    if not closed:
+        return []
+    ts_list = [c.get("timestamp") for c in closed]
+    last_i  = len(ts_list) - 1
+
+    def _fresh(ts):
+        return ts is not None and ts in ts_list and (last_i - ts_list.index(ts)) <= PATTERN_ALERT_FRESH_BARS
+
+    out = []
+    try:
+        min_pole = TF_MIN_POLE_PCT.get(tf, 5.0)
+        for f in pick_dominant_flags(detect_flags(closed, tf, 1.0, min_pole_pct=min_pole)):
+            if f.get("confirmed") and f.get("is_active") and _fresh(f.get("breakout_ts")):
+                slope = f.get("flag_slope", "")
+                lbl = f"{f['direction'].capitalize()}{(' ' + slope.capitalize()) if slope and slope != 'neutral' else ''} Flag"
+                out.append({"kind": "flag", "type": f.get("flag_slope", "flag"),
+                            "label": lbl, "direction": f.get("direction"),
+                            "break_dir": f.get("breakout_dir"),
+                            "level": f.get("break_level"), "target": f.get("target"),
+                            "break_ts": f.get("breakout_ts")})
+    except Exception:
+        pass
+    try:
+        for r in detect_reversals(closed, tf):
+            if r.get("confirmed") and _fresh(r.get("break_ts")):
+                out.append({"kind": "reversal", "type": r.get("type"),
+                            "label": r.get("label"), "direction": r.get("direction"),
+                            "break_dir": "up" if r.get("direction") == "bullish" else "down",
+                            "level": r.get("neckline"), "target": r.get("target"),
+                            "break_ts": r.get("break_ts")})
+    except Exception:
+        pass
+    try:
+        for t in detect_triangles_wedges(closed, tf):
+            if t.get("confirmed") and _fresh(t.get("break_ts")):
+                out.append({"kind": "triangle", "type": t.get("type"),
+                            "label": t.get("label"), "direction": t.get("direction"),
+                            "break_dir": t.get("breakout_dir"),
+                            "level": t.get("upper_now") if t.get("breakout_dir") == "up" else t.get("lower_now"),
+                            "target": t.get("target"), "break_ts": t.get("break_ts")})
+    except Exception:
+        pass
+    return out
+
+
+def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
+    """Scan for freshly-confirmed patterns not yet alerted; record & return the new ones."""
+    symbols = symbols or list(SYMBOLS.keys())
+    tfs     = tfs or PATTERN_ALERT_TFS
+    with _pattern_alert_lock:
+        seen = _pattern_alert_ids_load()
+    new_alerts, added = [], False
+    for sym in symbols:
+        for tf in tfs:
+            try:
+                closed = _fetch_closed_spot(sym, tf)
+            except Exception:
+                continue
+            for pat in _confirmed_patterns_for(closed, tf):
+                pid = f"{sym}:{tf}:{pat['kind']}:{pat.get('type','')}:{pat.get('break_ts')}"
+                if pid in seen:
+                    continue
+                seen.add(pid); added = True
+                new_alerts.append({"symbol": sym, "timeframe": tf, **pat})
+    if added:
+        with _pattern_alert_lock:
+            _pattern_alert_ids_save(seen)
+    return new_alerts
 
 def _fetch_fear_greed() -> Dict:
     """Fear & Greed Index from Alternative.me (free, updates daily). Cached 1 h."""
@@ -2171,6 +2286,45 @@ def api_telegram_send():
     return jsonify({"ok": False, "error": "Telegram send failed — check server logs"}), 500
 
 
+@app.get("/api/patterns/alert")
+@app.post("/api/patterns/alert")
+def api_patterns_alert():
+    """Scan for freshly-confirmed chart patterns and push any NEW ones to Telegram.
+    Called by the daily cron; also usable on demand. Optional query params:
+      symbols=BTC,ETH  tfs=1D,1W  dry=1 (scan only, don't send / don't record)."""
+    import os as _os
+    cron_secret = _os.getenv("CRON_SECRET", "")
+    if cron_secret and request.method == "POST":
+        auth   = request.headers.get("authorization", "")
+        secret = request.headers.get("x-cron-secret", "")
+        if auth != f"Bearer {cron_secret}" and secret != cron_secret:
+            return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    syms = [s.strip().upper() for s in request.args.get("symbols", "").split(",") if s.strip()] or None
+    tfs  = [t.strip() for t in request.args.get("tfs", "").split(",") if t.strip()] or None
+    dry  = request.args.get("dry") in ("1", "true", "yes")
+
+    if dry:
+        # Preview without recording/sending: scan against a COPY of the seen-set.
+        with _pattern_alert_lock:
+            seen = set(_pattern_alert_ids_load())
+        found = []
+        for sym in (syms or list(SYMBOLS.keys())):
+            for tf in (tfs or PATTERN_ALERT_TFS):
+                try:
+                    closed = _fetch_closed_spot(sym, tf)
+                except Exception:
+                    continue
+                for pat in _confirmed_patterns_for(closed, tf):
+                    pid = f"{sym}:{tf}:{pat['kind']}:{pat.get('type','')}:{pat.get('break_ts')}"
+                    found.append({"symbol": sym, "timeframe": tf, "already_alerted": pid in seen, **pat})
+        return jsonify({"ok": True, "dry": True, "found": found})
+
+    alerts = _scan_confirmed_patterns(syms, tfs)
+    sent = _send_pattern_alerts(alerts) if alerts else False
+    return jsonify({"ok": True, "new": len(alerts), "sent": bool(sent), "alerts": alerts})
+
+
 @app.get("/api/twitter/posts")
 def api_twitter_posts():
     """Return pre-formatted X posts for manual copying (BTC+ETH and ALTs)."""
@@ -2258,6 +2412,15 @@ def api_cron_daily():
         results["twitter"] = "sent" if tw_ok else "failed/not configured"
     except Exception as e:
         results["twitter"] = f"error: {e}"
+
+    # Chart-pattern confirmations → Telegram (only NEW ones, deduped)
+    try:
+        alerts = _scan_confirmed_patterns()
+        if alerts:
+            _send_pattern_alerts(alerts, results.get("date_label", ""))
+        results["pattern_alerts"] = len(alerts)
+    except Exception as e:
+        results["pattern_alerts"] = f"error: {e}"
 
     print(f"[cron/daily] {results}")
     return jsonify({"ok": True, "results": results})

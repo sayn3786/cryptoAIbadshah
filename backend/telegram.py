@@ -133,6 +133,56 @@ def build_rec_message(recs_data: Dict) -> str:
     return "\n".join(lines)
 
 
+def _pat_dot(d: str) -> str:
+    return "🟢" if d == "bullish" else "🔴" if d == "bearish" else "⚪"
+
+
+def build_pattern_alert_message(alerts: List[Dict], date_label: str = "") -> str:
+    """Format a batch of freshly-CONFIRMED chart patterns into a Telegram alert."""
+    lines = ["🔔 *CryptoMonk — Pattern Confirmed*"]
+    if date_label:
+        lines.append(f"🗓 {date_label}")
+    lines.append("")
+    for a in alerts:
+        arrow = "↑" if a.get("break_dir") == "up" else "↓" if a.get("break_dir") == "down" else "•"
+        lvl = a.get("level")
+        lvl_s = f" @ {_fmt_price(lvl)}" if lvl is not None else ""
+        tgt = a.get("target")
+        tgt_s = f"  ·  🎯 {_fmt_price(tgt)}" if tgt is not None else ""
+        lines.append(
+            f"{_pat_dot(a.get('direction'))} *{a.get('symbol')}/USDT {a.get('timeframe')}* — "
+            f"{a.get('label')} confirmed")
+        lines.append(f"   Broke {arrow}{lvl_s}{tgt_s}")
+        lines.append("")
+    lines += ["⚠️ _Not financial advice. Confirmation ≠ guarantee — manage risk._",
+              "🌟 @CryptoMonk1560"]
+    return "\n".join(lines)
+
+
+def send_pattern_alerts(alerts: List[Dict], date_label: str = "") -> bool:
+    """Send freshly-confirmed pattern alerts to the configured Telegram channel."""
+    if not alerts:
+        return False
+    token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        print("[telegram] BOT_TOKEN or CHAT_ID not set — skipping pattern alerts")
+        return False
+    text = build_pattern_alert_message(alerts, date_label)
+    try:
+        resp = requests.post(
+            f"{TELEGRAM_API}/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        print(f"[telegram] {len(alerts)} pattern alert(s) sent to {chat_id}")
+        return True
+    except Exception as e:
+        print(f"[telegram] ERROR sending pattern alerts: {e}")
+        return False
+
+
 def send_daily_recs(recs_data: Dict) -> bool:
     """Send the daily recommendation message to the configured Telegram channel."""
     token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
