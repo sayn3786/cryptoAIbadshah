@@ -1286,3 +1286,178 @@ def detect_sr_zones(candles: List[Dict], window: int = 3,
     if out:
         out["price"] = round(cur, 8)
     return out
+
+
+# ── Reversal patterns: Double Top/Bottom (+triple) and Head & Shoulders ─────────
+#
+# Built on swing pivots (find_pivots). Confirmation is a CLOSE beyond the neckline,
+# resolved CHRONOLOGICALLY (the first post-pattern candle to close through the
+# neckline confirms; a close through the invalidation level first kills it) — the
+# same lifecycle contract as flags: forming / confirmed / invalidated. The
+# measured-move target projects the pattern height from the neckline.
+REV_PIVOT_WINDOW    = 3       # swing strength (bars each side) for find_pivots
+REV_PEAK_TOL        = 0.04    # two tops/bottoms are "equal" within 4%
+REV_SHOULDER_TOL    = 0.06    # H&S shoulders "equal" within 6%
+REV_HEAD_MIN        = 0.03    # H&S head must clear the shoulders by ≥3%
+REV_MIN_DEPTH       = 0.03    # trough/peak must be ≥3% off the tops (a real pattern)
+REV_MAX_RETURNED    = 4
+
+
+def _pct_close(a: float, b: float) -> float:
+    return abs(a - b) / ((a + b) / 2.0 + 1e-12)
+
+
+def _resolve_neckline_break(candles: List[Dict], start_idx: int, neckline: float,
+                            invalid_level: float, bearish: bool) -> Dict:
+    """Scan candles AFTER start_idx. `bearish` patterns (double top / H&S) confirm
+    on a close BELOW the neckline and invalidate on a close ABOVE invalid_level;
+    bullish ones are mirrored. First decisive close wins."""
+    status, confirmed, break_ts = "forming", False, None
+    for c in candles[start_idx + 1:]:
+        if bearish:
+            if c["close"] > invalid_level:
+                return {"status": "invalidated", "confirmed": False, "break_ts": c["timestamp"]}
+            if c["close"] < neckline:
+                return {"status": "confirmed", "confirmed": True, "break_ts": c["timestamp"]}
+        else:
+            if c["close"] < invalid_level:
+                return {"status": "invalidated", "confirmed": False, "break_ts": c["timestamp"]}
+            if c["close"] > neckline:
+                return {"status": "confirmed", "confirmed": True, "break_ts": c["timestamp"]}
+    return {"status": status, "confirmed": confirmed, "break_ts": break_ts}
+
+
+def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
+                     window: int = REV_PIVOT_WINDOW) -> List[Dict]:
+    """Detect Double Top / Double Bottom (and Triple) and Head & Shoulders /
+    Inverse Head & Shoulders. Returns the most recent valid pattern of each kind
+    that is still LIVE (forming or confirmed), newest first. Never returns
+    invalidated patterns as active candidates.
+
+    Each pattern dict carries: type, direction, neckline, target, key points,
+    status (forming/confirmed/invalidated), confirmed, height_pct, timestamps —
+    parallel to a flag so the UI/lifecycle handling is identical.
+    """
+    n = len(candles)
+    if n < window * 2 + 6:
+        return []
+
+    ph, pl = find_pivots(candles, window=window)
+    current_price = candles[-1]["close"]
+    out: List[Dict] = []
+
+    def _between_extreme(idx_a: int, idx_b: int, want_low: bool):
+        """The most extreme pivot (low if want_low else high) strictly between two
+        indices — the neckline anchor of a top/bottom pattern."""
+        pool = [p for p in (pl if want_low else ph) if idx_a < p["index"] < idx_b]
+        if not pool:
+            return None
+        return min(pool, key=lambda p: p["price"]) if want_low else max(pool, key=lambda p: p["price"])
+
+    # ── Double / Triple Top (bearish) & Bottom (bullish) ─────────────────────
+    for want_top in (True, False):
+        pivots = ph if want_top else pl
+        if len(pivots) < 2:
+            continue
+        a, b = pivots[-2], pivots[-1]                    # the two most recent peaks/troughs
+        if _pct_close(a["price"], b["price"]) > REV_PEAK_TOL:
+            continue
+        neck_piv = _between_extreme(a["index"], b["index"], want_low=want_top)
+        if not neck_piv:
+            continue
+        peak_lvl = (a["price"] + b["price"]) / 2.0
+        neck     = neck_piv["price"]
+        depth    = abs(peak_lvl - neck) / (peak_lvl + 1e-12)
+        if depth < REV_MIN_DEPTH:
+            continue
+        # triple if a third matching peak precedes them
+        triple = (len(pivots) >= 3 and _pct_close(pivots[-3]["price"], peak_lvl) <= REV_PEAK_TOL)
+        height = abs(peak_lvl - neck)
+        if want_top:
+            target = round(max(neck - height, current_price * 0.2), 8)
+            invalid_level = max(a["price"], b["price"])
+        else:
+            target = round(neck + height, 8)
+            invalid_level = min(a["price"], b["price"])
+        res = _resolve_neckline_break(candles, b["index"], neck, invalid_level, bearish=want_top)
+        if res["status"] == "invalidated":
+            continue
+        out.append({
+            "type":        ("triple_top" if triple else "double_top") if want_top
+                           else ("triple_bottom" if triple else "double_bottom"),
+            "label":       ("Triple Top" if triple else "Double Top") if want_top
+                           else ("Triple Bottom" if triple else "Double Bottom"),
+            "direction":   "bearish" if want_top else "bullish",
+            "timeframe":   tf_label, "tf_weight": tf_weight,
+            "neckline":    round(neck, 8),
+            "peak_level":  round(peak_lvl, 8),
+            "target":      target,
+            "height_pct":  round(depth * 100, 2),
+            "status":      res["status"], "confirmed": res["confirmed"],
+            "break_ts":    res["break_ts"],
+            "points": [
+                {"role": "peak1" if want_top else "trough1", "price": round(a["price"], 8), "timestamp": a["timestamp"]},
+                {"role": "neckline", "price": round(neck, 8), "timestamp": neck_piv["timestamp"]},
+                {"role": "peak2" if want_top else "trough2", "price": round(b["price"], 8), "timestamp": b["timestamp"]},
+            ],
+            "pattern_end_ts": b["timestamp"],
+        })
+
+    # ── Head & Shoulders (bearish) & Inverse H&S (bullish) ───────────────────
+    for want_top in (True, False):
+        pivots = ph if want_top else pl
+        if len(pivots) < 3:
+            continue
+        ls, head, rs = pivots[-3], pivots[-2], pivots[-1]     # left shoulder, head, right shoulder
+        # head must be the extreme; shoulders roughly equal and lower/higher than head
+        if want_top:
+            if not (head["price"] > ls["price"] and head["price"] > rs["price"]):
+                continue
+            if head["price"] < max(ls["price"], rs["price"]) * (1 + REV_HEAD_MIN):
+                continue
+        else:
+            if not (head["price"] < ls["price"] and head["price"] < rs["price"]):
+                continue
+            if head["price"] > min(ls["price"], rs["price"]) * (1 - REV_HEAD_MIN):
+                continue
+        if _pct_close(ls["price"], rs["price"]) > REV_SHOULDER_TOL:
+            continue
+        t1 = _between_extreme(ls["index"], head["index"], want_low=want_top)
+        t2 = _between_extreme(head["index"], rs["index"], want_low=want_top)
+        if not t1 or not t2:
+            continue
+        neck = (t1["price"] + t2["price"]) / 2.0              # flat-neckline approximation
+        height = abs(head["price"] - neck)
+        if height / (head["price"] + 1e-12) < REV_MIN_DEPTH:
+            continue
+        if want_top:
+            target = round(max(neck - height, current_price * 0.2), 8)
+            invalid_level = head["price"]
+        else:
+            target = round(neck + height, 8)
+            invalid_level = head["price"]
+        res = _resolve_neckline_break(candles, rs["index"], neck, invalid_level, bearish=want_top)
+        if res["status"] == "invalidated":
+            continue
+        out.append({
+            "type":        "head_shoulders" if want_top else "inverse_head_shoulders",
+            "label":       "Head & Shoulders" if want_top else "Inverse Head & Shoulders",
+            "direction":   "bearish" if want_top else "bullish",
+            "timeframe":   tf_label, "tf_weight": tf_weight,
+            "neckline":    round(neck, 8),
+            "head_level":  round(head["price"], 8),
+            "target":      target,
+            "height_pct":  round(height / (head["price"] + 1e-12) * 100, 2),
+            "status":      res["status"], "confirmed": res["confirmed"],
+            "break_ts":    res["break_ts"],
+            "points": [
+                {"role": "left_shoulder",  "price": round(ls["price"], 8),   "timestamp": ls["timestamp"]},
+                {"role": "head",           "price": round(head["price"], 8), "timestamp": head["timestamp"]},
+                {"role": "right_shoulder", "price": round(rs["price"], 8),   "timestamp": rs["timestamp"]},
+            ],
+            "pattern_end_ts": rs["timestamp"],
+        })
+
+    # Newest patterns first (by where they end); confirmed ahead of forming.
+    out.sort(key=lambda p: (1 if p["confirmed"] else 0, p["pattern_end_ts"]), reverse=True)
+    return out[:REV_MAX_RETURNED]

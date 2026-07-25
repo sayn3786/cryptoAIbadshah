@@ -306,6 +306,7 @@ function renderAll(a) {
   renderCVDDivergence(a.cvd_divergence);
   renderFVGTable(a.fvgs);
   renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
+  renderReversals(a.reversal_patterns);
   renderEngulfing(a.engulfing, a.timeframe);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
@@ -2724,6 +2725,47 @@ function renderFlags(flags, candles, signal, diagnostics) {
   // is contradictory, so drop them when they disagree.
   const overlaySignal = (!wantDir || bestAligned) ? signal : null;
   renderFlagCharts([flags[bestIdx]], candles, [bestIdx], overlaySignal);
+}
+
+// Reversal patterns (Double Top/Bottom, Head & Shoulders) — a compact list that
+// mirrors the flag card's lifecycle language: forming → confirmed → invalidated.
+function renderReversals(patterns) {
+  const el    = document.getElementById('revList');
+  const badge = document.getElementById('revCount');
+  if (!el || !badge) return;
+  const p = (v, d = 4) => Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
+  const list = (patterns || []).filter(Boolean);
+  badge.textContent = list.length;
+  if (!list.length) {
+    el.innerHTML = '<p class="empty">No reversal patterns detected</p>';
+    return;
+  }
+  el.innerHTML = list.map(r => {
+    const isBull = r.direction === 'bullish';
+    const cls    = isBull ? 'bull' : 'bear';
+    const icon   = isBull ? '▲' : '▼';
+    const statusTxt = r.confirmed
+      ? `✅ confirmed — closed ${isBull ? 'above' : 'below'} the neckline`
+      : `⏳ forming — awaiting a close ${isBull ? 'above' : 'below'} $${p(r.neckline)}`;
+    const anchorLbl = r.head_level != null ? 'Head' : 'Peaks';
+    const anchorVal = r.head_level != null ? r.head_level : r.peak_level;
+    return `<div class="flag-item ${cls}">
+      <div class="flag-top">
+        <span class="flag-name ${cls}">${icon} ${r.label}</span>
+        <span class="flag-tf">${r.timeframe}</span>
+        ${r.confirmed ? `<span class="flag-confirmed">${isBull ? '↑' : '↓'} Confirmed</span>`
+                      : '<span class="flag-active">Forming</span>'}
+      </div>
+      <div class="flag-stats">
+        <span class="flag-stat">${anchorLbl} <span>$${p(anchorVal)}</span></span>
+        <span class="flag-stat">Neckline <span>$${p(r.neckline)}</span></span>
+        <span class="flag-stat">Height <span>${r.height_pct}%</span></span>
+      </div>
+      <div class="flag-target">Target: <span>$${p(r.target)}</span>
+        &nbsp;·&nbsp; ${statusTxt}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // Series primitive (lightweight-charts v4) that shades the flag chart: a
