@@ -79,3 +79,14 @@ def test_non_converging_is_ignored():
 
 def test_too_few_pivots_empty():
     assert detect_triangles_wedges([_bar(i, 100) for i in range(20)], "1D") == []
+
+
+def test_drawable_rail_geometry_present():
+    # The chart overlay needs two rail endpoints (start pivot → end of structure).
+    f = _one(_zigzag([90, 100, 92, 100, 94, 100, 96, 100, 98], tail=[101, 103, 105]))
+    for key in ("upper_line", "lower_line"):
+        assert key in f and len(f[key]) == 2
+        for pt in f[key]:
+            assert "timestamp" in pt and "price" in pt
+    # rails are ordered in time (start before end)
+    assert f["upper_line"][0]["timestamp"] < f["upper_line"][1]["timestamp"]

@@ -1596,5 +1596,12 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         "status":     status, "confirmed": confirmed,
         "breakout_dir": brk_dir, "break_ts": break_ts,
         "pattern_end_ts": candles[scan_from]["timestamp"],
+        # Drawable rail endpoints (start pivot → end of structure) for the chart.
+        "upper_line": [
+            {"timestamp": candles[start_i]["timestamp"], "price": round(upper(start_i), 8)},
+            {"timestamp": candles[last_i]["timestamp"],   "price": round(upper(last_i), 8)}],
+        "lower_line": [
+            {"timestamp": candles[start_i]["timestamp"], "price": round(lower(start_i), 8)},
+            {"timestamp": candles[last_i]["timestamp"],   "price": round(lower(last_i), 8)}],
     }]
     return out[:TW_MAX_RETURNED]
