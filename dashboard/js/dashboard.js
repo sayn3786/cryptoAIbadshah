@@ -307,6 +307,7 @@ function renderAll(a) {
   renderFVGTable(a.fvgs);
   renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
   renderReversals(a.reversal_patterns);
+  renderTriangles(a.triangle_patterns);
   renderEngulfing(a.engulfing, a.timeframe);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
@@ -2764,6 +2765,45 @@ function renderReversals(patterns) {
       <div class="flag-target">Target: <span>$${p(r.target)}</span>
         &nbsp;·&nbsp; ${statusTxt}
       </div>
+    </div>`;
+  }).join('');
+}
+
+// Triangles & Wedges (converging-trendline patterns) — same compact card style.
+function renderTriangles(patterns) {
+  const el    = document.getElementById('triList');
+  const badge = document.getElementById('triCount');
+  if (!el || !badge) return;
+  const p = (v, d = 4) => v == null ? '—' : Number(v).toLocaleString('en-US', { maximumFractionDigits: d });
+  const list = (patterns || []).filter(Boolean);
+  badge.textContent = list.length;
+  if (!list.length) {
+    el.innerHTML = '<p class="empty">No triangle/wedge patterns detected</p>';
+    return;
+  }
+  el.innerHTML = list.map(t => {
+    const dir  = t.direction;                         // bullish | bearish | neutral
+    const cls  = dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
+    const icon = dir === 'bullish' ? '▲' : dir === 'bearish' ? '▼' : '◆';
+    const statusTxt = t.confirmed
+      ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}`
+      : dir === 'neutral'
+        ? '⏳ forming — awaiting a break either way'
+        : `⏳ forming — awaiting a ${dir === 'bullish' ? 'break above' : 'break below'} the rail`;
+    const tgt = t.target != null ? `Target: <span>$${p(t.target)}</span> &nbsp;·&nbsp; ` : '';
+    return `<div class="flag-item ${cls}">
+      <div class="flag-top">
+        <span class="flag-name ${cls}">${icon} ${t.label}</span>
+        <span class="flag-tf">${t.timeframe}</span>
+        ${t.confirmed ? `<span class="flag-confirmed">${t.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>`
+                      : '<span class="flag-active">Forming</span>'}
+      </div>
+      <div class="flag-stats">
+        <span class="flag-stat">Upper <span>$${p(t.upper_now)}</span></span>
+        <span class="flag-stat">Lower <span>$${p(t.lower_now)}</span></span>
+        <span class="flag-stat">Converged <span>${t.converge_pct}%</span></span>
+      </div>
+      <div class="flag-target">${tgt}${statusTxt}</div>
     </div>`;
   }).join('');
 }

@@ -1461,3 +1461,140 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
     # Newest patterns first (by where they end); confirmed ahead of forming.
     out.sort(key=lambda p: (1 if p["confirmed"] else 0, p["pattern_end_ts"]), reverse=True)
     return out[:REV_MAX_RETURNED]
+
+
+# ── Triangles & Wedges: converging-trendline patterns ───────────────────────────
+#
+# Fit a line through the recent swing highs and another through the recent swing
+# lows; classify by the two slopes once the rails are CONVERGING (the gap narrows):
+#   Ascending triangle   flat top   + rising bottom   → bullish continuation
+#   Descending triangle  falling top + flat bottom    → bearish continuation
+#   Symmetrical triangle falling top + rising bottom  → neutral (break decides)
+#   Rising wedge         both rising, converging       → bearish reversal
+#   Falling wedge        both falling, converging       → bullish reversal
+# Confirmation = a CLOSE beyond the breakout rail (chronological, first decisive
+# close wins); lifecycle mirrors flags/reversals. Target = the widest width of the
+# structure projected from the breakout.
+TW_PIVOT_WINDOW  = 3
+TW_MIN_PIVOTS    = 3       # ≥3 highs and ≥3 lows → real trendlines (2 touches each)
+TW_FLAT_PCT      = 0.10    # |slope| ≤ this (%/bar of mid price) counts as "flat"
+TW_CONVERGE_FRAC = 0.75    # end gap must be ≤ this fraction of the start gap
+TW_MAX_RETURNED  = 3
+
+
+def _fit_line(points):
+    """Least-squares slope+intercept over (x, y) points (x = bar index)."""
+    n = len(points)
+    if n < 2:
+        return 0.0, (points[0][1] if points else 0.0)
+    mx = sum(x for x, _ in points) / n
+    my = sum(y for _, y in points) / n
+    num = sum((x - mx) * (y - my) for x, y in points)
+    den = sum((x - mx) ** 2 for x, _ in points)
+    slope = num / den if den > 0 else 0.0
+    return slope, my - slope * mx
+
+
+def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
+                            window: int = TW_PIVOT_WINDOW) -> List[Dict]:
+    """Detect ascending/descending/symmetrical triangles and rising/falling wedges
+    from converging swing-high and swing-low trendlines. Returns live (forming or
+    confirmed) patterns, newest/confirmed first."""
+    n = len(candles)
+    if n < window * 2 + 8:
+        return []
+    ph, pl = find_pivots(candles, window=window)
+    if len(ph) < TW_MIN_PIVOTS or len(pl) < TW_MIN_PIVOTS:
+        return []
+
+    hs = ph[-4:] if len(ph) >= 4 else ph[-TW_MIN_PIVOTS:]
+    ls = pl[-4:] if len(pl) >= 4 else pl[-TW_MIN_PIVOTS:]
+    h_slope, h_int = _fit_line([(p["index"], p["price"]) for p in hs])
+    l_slope, l_int = _fit_line([(p["index"], p["price"]) for p in ls])
+
+    upper = lambda i: h_slope * i + h_int
+    lower = lambda i: l_slope * i + l_int
+
+    start_i = min(hs[0]["index"], ls[0]["index"])
+    last_i  = max(hs[-1]["index"], ls[-1]["index"])   # END OF STRUCTURE (last pivot),
+                                                       # not the current bar — after a
+                                                       # break the rails have already met.
+    gap_start = upper(start_i) - lower(start_i)
+    gap_end   = upper(last_i)  - lower(last_i)
+    if gap_start <= 0 or gap_end <= 0:
+        return []                                   # rails already crossed → not clean
+    if gap_end > gap_start * TW_CONVERGE_FRAC:
+        return []                                   # not converging enough
+
+    mid = (upper(last_i) + lower(last_i)) / 2.0
+    if mid <= 0:
+        return []
+    h_pct = h_slope / mid * 100.0                   # %/bar
+    l_pct = l_slope / mid * 100.0
+    flat_h = abs(h_pct) <= TW_FLAT_PCT
+    flat_l = abs(l_pct) <= TW_FLAT_PCT
+
+    kind = direction = None
+    if flat_h and l_pct > TW_FLAT_PCT:
+        kind, direction = "ascending_triangle", "bullish"
+    elif flat_l and h_pct < -TW_FLAT_PCT:
+        kind, direction = "descending_triangle", "bearish"
+    elif h_pct < -TW_FLAT_PCT and l_pct > TW_FLAT_PCT:
+        kind, direction = "symmetrical_triangle", "neutral"
+    elif h_pct > TW_FLAT_PCT and l_pct > TW_FLAT_PCT:
+        kind, direction = "rising_wedge", "bearish"
+    elif h_pct < -TW_FLAT_PCT and l_pct < -TW_FLAT_PCT:
+        kind, direction = "falling_wedge", "bullish"
+    else:
+        return []
+
+    label = {
+        "ascending_triangle":  "Ascending Triangle",
+        "descending_triangle": "Descending Triangle",
+        "symmetrical_triangle": "Symmetrical Triangle",
+        "rising_wedge":  "Rising Wedge",
+        "falling_wedge": "Falling Wedge",
+    }[kind]
+
+    # ── Chronological breakout resolution against the diagonal rails ──────────
+    scan_from = max(hs[-1]["index"], ls[-1]["index"])
+    status, confirmed, brk_dir, break_ts = "forming", False, None, None
+    for off, c in enumerate(candles[scan_from + 1:]):
+        i = scan_from + 1 + off
+        up_lvl, lo_lvl = upper(i), lower(i)
+        if c["close"] > up_lvl:
+            status, confirmed, brk_dir, break_ts = "confirmed", True, "up", c["timestamp"]; break
+        if c["close"] < lo_lvl:
+            status, confirmed, brk_dir, break_ts = "confirmed", True, "down", c["timestamp"]; break
+
+    # For a directional pattern, a break the WRONG way invalidates it; symmetrical
+    # takes whichever side broke.
+    expected_up = direction == "bullish"
+    if confirmed and direction != "neutral" and (brk_dir == "up") != expected_up:
+        return []                                   # broke against the pattern → drop
+    if direction == "neutral" and confirmed:
+        direction = "bullish" if brk_dir == "up" else "bearish"
+
+    height = gap_start                              # widest part of the structure
+    current_price = candles[-1]["close"]
+    if direction == "bullish":
+        target = round(upper(last_i) + height, 8)
+    elif direction == "bearish":
+        target = round(max(lower(last_i) - height, current_price * 0.2), 8)
+    else:
+        target = None                               # neutral & still forming — break decides
+
+    out = [{
+        "type":       kind, "label": label, "direction": direction,
+        "timeframe":  tf_label, "tf_weight": tf_weight,
+        "upper_now":  round(upper(last_i), 8),
+        "lower_now":  round(lower(last_i), 8),
+        "upper_slope_pct": round(h_pct, 4),
+        "lower_slope_pct": round(l_pct, 4),
+        "converge_pct": round((1 - gap_end / gap_start) * 100, 1),
+        "target":     target,
+        "status":     status, "confirmed": confirmed,
+        "breakout_dir": brk_dir, "break_ts": break_ts,
+        "pattern_end_ts": candles[scan_from]["timestamp"],
+    }]
+    return out[:TW_MAX_RETURNED]

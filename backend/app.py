@@ -37,7 +37,7 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     candle_direction)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
-from patterns import detect_flags, pick_dominant_flags, summarize_flag_diagnostics, detect_reversals, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
+from patterns import detect_flags, pick_dominant_flags, summarize_flag_diagnostics, detect_reversals, detect_triangles_wedges, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
 from signals import generate_signal, _swing_levels
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs
@@ -813,6 +813,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Classical reversal patterns (Double Top/Bottom, Head & Shoulders) over the
     # full closed history — display alongside flags with the same lifecycle.
     reversal_patterns = detect_reversals(spot, timeframe)
+    # Converging-trendline patterns (triangles + wedges).
+    triangle_patterns = detect_triangles_wedges(spot, timeframe)
     market_cap    = client.get_market_cap(bs)
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
     fvgs = detect_fvg(spot)
@@ -1040,6 +1042,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "flags":        flags,
         "flag_diagnostics": flag_diagnostics,
         "reversal_patterns": reversal_patterns,
+        "triangle_patterns": triangle_patterns,
         "elliott_wave": elliott,
         "market_cap":        market_cap,
         "volume_spikes":     volume_spikes,
