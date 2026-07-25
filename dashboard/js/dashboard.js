@@ -18,10 +18,8 @@ const S = {
   overlayPriceLines: [], // swing high/low + realized price horizontal lines
   supertrendUpSeries: null,
   supertrendDownSeries: null,
-  patternRailA: null,      // chart-pattern neckline / upper rail overlay
-  patternRailB: null,      // chart-pattern lower rail overlay
-  patternTargetLine: null, // measured-move target line
-  patternMarkerSeries: null, // carrier for pivot markers (LS/H/RS, peaks/troughs)
+  revCharts: [],           // per-pattern mini charts (reversal card)
+  triCharts: [],           // per-pattern mini charts (triangle card)
   ichimokuSpanASeries: null,
   ichimokuSpanBSeries: null,
 };
@@ -103,20 +101,8 @@ function initCharts() {
   S.ema50Series  = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#f472b6', lineWidth: 1 });
   S.ema200Series = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#facc15', lineWidth: 2 });
 
-  // Chart-pattern structure overlay — the neckline (reversals) or the two
-  // converging rails (triangles/wedges) of the most significant active pattern.
-  // Colour is set per-render by the pattern direction; dashed so it reads as a
-  // structural guide, not price. autoscale off so a rail can't stretch the axis.
-  S.patternRailA = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#94a3b8', lineWidth: 2, lineStyle: 2 });
-  S.patternRailB = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#94a3b8', lineWidth: 2, lineStyle: 2 });
-  // Measured-move target line — dotted, and INCLUDED in autoscale (no null
-  // provider) so the chart expands to keep the target on-screen. Shows its price
-  // on the axis.
-  S.patternTargetLine = S.mainChart.addLineSeries({ priceLineVisible: false, lastValueVisible: true,
-    crosshairMarkerVisible: false, color: '#94a3b8', lineWidth: 1, lineStyle: 1 });
-  // Transparent carrier for pivot MARKERS (LS/H/RS, peaks/troughs) so they don't
-  // clobber the Elliott-wave markers on the candle series.
-  S.patternMarkerSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: 'rgba(0,0,0,0)', lineWidth: 1 });
+  // Chart patterns (reversals / triangles / wedges) are drawn in their OWN mini
+  // charts inside their cards — NOT overlaid here — so the main chart stays clean.
 
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
@@ -325,9 +311,8 @@ function renderAll(a) {
   renderCVDDivergence(a.cvd_divergence);
   renderFVGTable(a.fvgs);
   renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
-  renderReversals(a.reversal_patterns);
-  renderTriangles(a.triangle_patterns);
-  renderPatternOverlay(a.reversal_patterns, a.triangle_patterns, a.candles);
+  renderReversals(a.reversal_patterns, a.candles);
+  renderTriangles(a.triangle_patterns, a.candles);
   renderEngulfing(a.engulfing, a.timeframe);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
@@ -2750,7 +2735,7 @@ function renderFlags(flags, candles, signal, diagnostics) {
 
 // Reversal patterns (Double Top/Bottom, Head & Shoulders) — a compact list that
 // mirrors the flag card's lifecycle language: forming → confirmed → invalidated.
-function renderReversals(patterns) {
+function renderReversals(patterns, candles) {
   const el    = document.getElementById('revList');
   const badge = document.getElementById('revCount');
   if (!el || !badge) return;
@@ -2758,10 +2743,12 @@ function renderReversals(patterns) {
   const list = (patterns || []).filter(Boolean);
   badge.textContent = list.length;
   if (!list.length) {
+    (S.revCharts || []).forEach(c => { try { c.remove(); } catch (_) {} });
+    S.revCharts = [];
     el.innerHTML = '<p class="empty">No reversal patterns detected</p>';
     return;
   }
-  el.innerHTML = list.map(r => {
+  el.innerHTML = list.map((r, idx) => {
     const isBull = r.direction === 'bullish';
     const cls    = isBull ? 'bull' : 'bear';
     const icon   = isBull ? '▲' : '▼';
@@ -2785,12 +2772,14 @@ function renderReversals(patterns) {
       <div class="flag-target">Target: <span>$${p(r.target)}</span>
         &nbsp;·&nbsp; ${statusTxt}
       </div>
+      <div class="pattern-chart" id="revChart_${idx}"></div>
     </div>`;
   }).join('');
+  renderPatternMiniCharts(list, candles, 'rev', 'revCharts');
 }
 
 // Triangles & Wedges (converging-trendline patterns) — same compact card style.
-function renderTriangles(patterns) {
+function renderTriangles(patterns, candles) {
   const el    = document.getElementById('triList');
   const badge = document.getElementById('triCount');
   if (!el || !badge) return;
@@ -2798,10 +2787,12 @@ function renderTriangles(patterns) {
   const list = (patterns || []).filter(Boolean);
   badge.textContent = list.length;
   if (!list.length) {
+    (S.triCharts || []).forEach(c => { try { c.remove(); } catch (_) {} });
+    S.triCharts = [];
     el.innerHTML = '<p class="empty">No triangle/wedge patterns detected</p>';
     return;
   }
-  el.innerHTML = list.map(t => {
+  el.innerHTML = list.map((t, idx) => {
     const dir  = t.direction;                         // bullish | bearish | neutral
     const cls  = dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
     const icon = dir === 'bullish' ? '▲' : dir === 'bearish' ? '▼' : '◆';
@@ -2824,73 +2815,108 @@ function renderTriangles(patterns) {
         <span class="flag-stat">Converged <span>${t.converge_pct}%</span></span>
       </div>
       <div class="flag-target">${tgt}${statusTxt}</div>
+      <div class="pattern-chart" id="triChart_${idx}"></div>
     </div>`;
   }).join('');
+  renderPatternMiniCharts(list, candles, 'tri', 'triCharts');
 }
 
-// Draw the most significant active pattern's STRUCTURE on the main chart: the
-// horizontal neckline for a reversal, or the two converging rails for a
-// triangle/wedge. Coloured by direction (green bull / red bear / grey neutral),
-// dashed. Cleared when there's no pattern. Card shows the numbers; this shows
-// where the structure sits against the live candles.
-function renderPatternOverlay(reversals, triangles, candles) {
-  if (!S.patternRailA || !S.patternRailB) return;
-  const clear = () => {
-    S.patternRailA.setData([]); S.patternRailB.setData([]);
-    if (S.patternTargetLine) S.patternTargetLine.setData([]);
-    if (S.patternMarkerSeries) { S.patternMarkerSeries.setData([]); S.patternMarkerSeries.setMarkers([]); }
-  };
-  const all = (reversals || []).filter(Boolean).concat((triangles || []).filter(Boolean));
-  if (!all.length || !candles || !candles.length) { clear(); return; }
-  const t = ts => Math.floor(ts / 1000);
-  // Most significant: confirmed first, then most recently completed.
-  all.sort((a, b) => ((b.confirmed ? 1 : 0) - (a.confirmed ? 1 : 0))
-                     || ((b.pattern_end_ts || 0) - (a.pattern_end_ts || 0)));
-  const pat  = all[0];
-  const dir  = pat.direction;
-  const col  = dir === 'bullish' ? '#22c55e' : dir === 'bearish' ? '#ef4444' : '#94a3b8';
-  const lastT = t(candles[candles.length - 1].timestamp);
-  clear();
-  S.patternRailA.applyOptions({ color: col });
-  S.patternRailB.applyOptions({ color: col });
+// Draw ONE pattern's own mini candlestick chart in `el`: the token's candles over
+// the pattern window, with the structure overlaid — a neckline + labelled pivots
+// for a reversal, or the two converging rails for a triangle/wedge — plus the
+// measured-move target line. Kept OFF the main chart so it never overcrowds it.
+// Returns the chart handle (for teardown) or null.
+function drawPatternMiniChart(el, pat, rows, interval) {
+  if (!el || !window.LightweightCharts || !rows || rows.length < 3) {
+    if (el) el.innerHTML = '<p class="empty" style="padding:8px 0">Chart unavailable</p>';
+    return null;
+  }
+  const t   = ts => Math.floor(ts / 1000);
+  const dir = pat.direction;
+  const col = dir === 'bullish' ? '#22c55e' : dir === 'bearish' ? '#ef4444' : '#94a3b8';
+  const uniq = arr => arr.filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
 
-  let startT = lastT;
-  if (pat.upper_line && pat.lower_line) {                 // triangle / wedge — two rails
-    const line = arr => arr.map(p => ({ time: t(p.timestamp), value: +p.price }))
-                           .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
-    S.patternRailA.setData(line(pat.upper_line));
-    S.patternRailB.setData(line(pat.lower_line));
-    startT = t(pat.upper_line[0].timestamp);
-  } else if (pat.neckline != null && pat.points && pat.points.length) {   // reversal — neckline
-    startT = t(pat.points[0].timestamp);
-    if (startT < lastT) {
-      S.patternRailA.setData([{ time: startT, value: +pat.neckline },
-                              { time: lastT,  value: +pat.neckline }]);
+  const anchorTs = pat.upper_line ? t(pat.upper_line[0].timestamp)
+                 : (pat.points && pat.points.length ? t(pat.points[0].timestamp) : rows[0].time);
+  const lastRowT = rows[rows.length - 1].time;
+  const win = rows.filter(c => c.time >= anchorTs - 2 * interval && c.time <= lastRowT);
+  if (win.length < 3) {
+    el.innerHTML = '<p class="empty" style="padding:8px 0">Pattern extends beyond the chart window</p>';
+    return null;
+  }
+  const prec = (pat.target != null && pat.target < 1) ? 5 : 2;
+
+  const chart = LightweightCharts.createChart(el, {
+    ...CHART_OPTS,
+    layout: { ...CHART_OPTS.layout, fontSize: 11 },
+    width: el.clientWidth || 320,
+    height: 300,
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+    handleScale:  { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
+    rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true, scaleMargins: { top: 0.12, bottom: 0.12 } },
+  });
+  const cs = chart.addCandlestickSeries({
+    upColor: '#10b981', downColor: '#ef4444', borderUpColor: '#10b981',
+    borderDownColor: '#ef4444', wickUpColor: '#10b981', wickDownColor: '#ef4444',
+    priceFormat: { type: 'price', precision: prec, minMove: prec === 5 ? 0.00001 : 0.01 },
+  });
+  cs.setData(win);
+  const ov = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+
+  if (pat.upper_line && pat.lower_line) {                       // triangle / wedge — two rails
+    const line = arr => uniq(arr.map(p => ({ time: t(p.timestamp), value: +p.price })));
+    chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(line(pat.upper_line));
+    chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(line(pat.lower_line));
+  } else if (pat.neckline != null) {                            // reversal — neckline + pivots
+    const nlStart = pat.points && pat.points.length ? t(pat.points[0].timestamp) : win[0].time;
+    if (nlStart < lastRowT) {
+      chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
+        .setData([{ time: nlStart, value: +pat.neckline }, { time: lastRowT, value: +pat.neckline }]);
     }
-    // Mark the pivots (LS/H/RS for H&S; 1/2 for double top/bottom). Bearish tops
-    // sit ABOVE the bars, bullish bottoms BELOW.
-    if (S.patternMarkerSeries) {
+    if (pat.points && pat.points.length) {
       const LBL = { left_shoulder: 'LS', head: 'H', right_shoulder: 'RS',
                     peak1: '1', peak2: '2', trough1: '1', trough2: '2' };
       const isTop = dir === 'bearish';
-      const pts = pat.points.filter(p => p.role !== 'neckline')
-                            .map(p => ({ ...p, time: t(p.timestamp) }))
-                            .sort((a, b) => a.time - b.time)
-                            .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
-      S.patternMarkerSeries.setData(pts.map(p => ({ time: p.time, value: +p.price })));
-      S.patternMarkerSeries.setMarkers(pts.map(p => ({
+      const pts = uniq(pat.points.filter(p => p.role !== 'neckline')
+                                 .map(p => ({ ...p, time: t(p.timestamp) }))
+                                 .sort((a, b) => a.time - b.time));
+      cs.setMarkers(pts.map(p => ({
         time: p.time, position: isTop ? 'aboveBar' : 'belowBar',
         color: col, shape: 'circle', text: LBL[p.role] || '',
       })));
     }
   }
 
-  // Measured-move target line across the pattern span → current bar.
-  if (S.patternTargetLine && pat.target != null && startT < lastT) {
-    S.patternTargetLine.applyOptions({ color: col });
-    S.patternTargetLine.setData([{ time: startT, value: +pat.target },
-                                 { time: lastT,  value: +pat.target }]);
+  // Target line — included in autoscale (own last-value label) so it stays visible.
+  if (pat.target != null && anchorTs < lastRowT) {
+    chart.addLineSeries({ priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
+      color: col, lineWidth: 1, lineStyle: 1 })
+      .setData([{ time: anchorTs, value: +pat.target }, { time: lastRowT, value: +pat.target }]);
   }
+
+  chart.timeScale().fitContent();
+  return chart;
+}
+
+// Build the candle rows once and draw a mini chart for EACH pattern into its
+// card container (id = `${prefix}Chart_${idx}`). Charts tracked in `bucket` for
+// teardown on the next render.
+function renderPatternMiniCharts(patterns, candles, prefix, bucket) {
+  (S[bucket] || []).forEach(c => { try { c.remove(); } catch (_) {} });
+  S[bucket] = [];
+  const list = (patterns || []).filter(Boolean);
+  if (!list.length || !candles || !candles.length || !window.LightweightCharts) return;
+  const rows = candles
+    .map(c => ({ time: Math.floor(c.timestamp / 1000), open: +c.open, high: +c.high, low: +c.low, close: +c.close }))
+    .sort((a, b) => a.time - b.time)
+    .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
+  const interval = rows.length > 1 ? (rows[1].time - rows[0].time) : 604800;
+  list.forEach((pat, idx) => {
+    const el = document.getElementById(`${prefix}Chart_${idx}`);
+    if (!el) return;
+    const chart = drawPatternMiniChart(el, pat, rows, interval);
+    if (chart) S[bucket].push(chart);
+  });
 }
 
 // Series primitive (lightweight-charts v4) that shades the flag chart: a
