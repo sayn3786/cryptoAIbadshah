@@ -41,6 +41,6 @@ venv/
 
 # Runtime state (server-generated, never commit)
 .rec_cache.json
-.pattern_alerts.json
+.kv_dedup.json
 backend/.rec_cache.json
-backend/.pattern_alerts.json
+backend/.kv_dedup.json

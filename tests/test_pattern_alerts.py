@@ -68,10 +68,39 @@ def test_stale_confirmation_is_filtered_out():
         "a confirmation older than PATTERN_ALERT_FRESH_BARS must be filtered"
 
 
-def test_dedup_ids_round_trip(tmp_path, monkeypatch):
-    pytest.importorskip("flask")
-    import app
-    f = tmp_path / "alerts.json"
-    monkeypatch.setattr(app, "_PATTERN_ALERT_FILE", str(f))
-    app._pattern_alert_ids_save({"BTC:1D:reversal:double_top:123"})
-    assert "BTC:1D:reversal:double_top:123" in app._pattern_alert_ids_load()
+def test_kv_file_fallback_claims_exactly_once(tmp_path, monkeypatch):
+    # With no KV configured, claim() uses the local file and is exact-once.
+    import kv
+    monkeypatch.setattr(kv, "_KV_URL", "")
+    monkeypatch.setattr(kv, "_KV_TOKEN", "")
+    monkeypatch.setattr(kv, "_FILE", str(tmp_path / "dedup.json"))
+    key = "patalert:BTC:1D:reversal:double_top:123"
+    assert kv.claim(key) is True          # first caller wins
+    assert kv.claim(key) is False         # second caller skips
+    assert kv.exists(key) is True
+
+
+def test_kv_rest_claim_uses_set_nx(monkeypatch):
+    # With KV configured, claim() issues SET NX and honors its result.
+    import kv
+    monkeypatch.setattr(kv, "_KV_URL", "https://example.upstash.io")
+    monkeypatch.setattr(kv, "_KV_TOKEN", "tok")
+    store = {}
+
+    def fake_cmd(*args):
+        if args[0] == "SET" and "NX" in args:      # SET key 1 NX EX ttl
+            k = args[1]
+            if k in store:
+                return None
+            store[k] = "1"
+            return "OK"
+        if args[0] == "EXISTS":
+            return 1 if args[1] in store else 0
+        return None
+
+    monkeypatch.setattr(kv, "_kv_cmd", fake_cmd)
+    key = "patalert:ETH:1W:triangle:rising_wedge:999"
+    assert kv.claim(key) is True
+    assert kv.claim(key) is False
+    assert kv.exists(key) is True
+    assert kv.exists("patalert:none") is False
