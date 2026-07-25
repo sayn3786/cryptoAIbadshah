@@ -18,6 +18,8 @@ const S = {
   overlayPriceLines: [], // swing high/low + realized price horizontal lines
   supertrendUpSeries: null,
   supertrendDownSeries: null,
+  patternRailA: null,      // chart-pattern neckline / upper rail overlay
+  patternRailB: null,      // chart-pattern lower rail overlay
   ichimokuSpanASeries: null,
   ichimokuSpanBSeries: null,
 };
@@ -98,6 +100,13 @@ function initCharts() {
   // stretch the price axis (candles drive the scale).
   S.ema50Series  = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#f472b6', lineWidth: 1 });
   S.ema200Series = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#facc15', lineWidth: 2 });
+
+  // Chart-pattern structure overlay — the neckline (reversals) or the two
+  // converging rails (triangles/wedges) of the most significant active pattern.
+  // Colour is set per-render by the pattern direction; dashed so it reads as a
+  // structural guide, not price. autoscale off so a rail can't stretch the axis.
+  S.patternRailA = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#94a3b8', lineWidth: 2, lineStyle: 2 });
+  S.patternRailB = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#94a3b8', lineWidth: 2, lineStyle: 2 });
 
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
@@ -308,6 +317,7 @@ function renderAll(a) {
   renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
   renderReversals(a.reversal_patterns);
   renderTriangles(a.triangle_patterns);
+  renderPatternOverlay(a.reversal_patterns, a.triangle_patterns, a.candles);
   renderEngulfing(a.engulfing, a.timeframe);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
@@ -2806,6 +2816,41 @@ function renderTriangles(patterns) {
       <div class="flag-target">${tgt}${statusTxt}</div>
     </div>`;
   }).join('');
+}
+
+// Draw the most significant active pattern's STRUCTURE on the main chart: the
+// horizontal neckline for a reversal, or the two converging rails for a
+// triangle/wedge. Coloured by direction (green bull / red bear / grey neutral),
+// dashed. Cleared when there's no pattern. Card shows the numbers; this shows
+// where the structure sits against the live candles.
+function renderPatternOverlay(reversals, triangles, candles) {
+  if (!S.patternRailA || !S.patternRailB) return;
+  const clear = () => { S.patternRailA.setData([]); S.patternRailB.setData([]); };
+  const all = (reversals || []).filter(Boolean).concat((triangles || []).filter(Boolean));
+  if (!all.length || !candles || !candles.length) { clear(); return; }
+  const t = ts => Math.floor(ts / 1000);
+  // Most significant: confirmed first, then most recently completed.
+  all.sort((a, b) => ((b.confirmed ? 1 : 0) - (a.confirmed ? 1 : 0))
+                     || ((b.pattern_end_ts || 0) - (a.pattern_end_ts || 0)));
+  const pat  = all[0];
+  const dir  = pat.direction;
+  const col  = dir === 'bullish' ? '#22c55e' : dir === 'bearish' ? '#ef4444' : '#94a3b8';
+  const lastT = t(candles[candles.length - 1].timestamp);
+  clear();
+  S.patternRailA.applyOptions({ color: col });
+  S.patternRailB.applyOptions({ color: col });
+  if (pat.upper_line && pat.lower_line) {                 // triangle / wedge — two rails
+    const line = arr => arr.map(p => ({ time: t(p.timestamp), value: +p.price }))
+                           .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
+    S.patternRailA.setData(line(pat.upper_line));
+    S.patternRailB.setData(line(pat.lower_line));
+  } else if (pat.neckline != null && pat.points && pat.points.length) {   // reversal — neckline
+    const startT = t(pat.points[0].timestamp);
+    if (startT < lastT) {
+      S.patternRailA.setData([{ time: startT, value: +pat.neckline },
+                              { time: lastT,  value: +pat.neckline }]);
+    }
+  }
 }
 
 // Series primitive (lightweight-charts v4) that shades the flag chart: a
