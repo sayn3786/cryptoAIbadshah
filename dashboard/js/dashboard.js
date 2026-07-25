@@ -20,6 +20,8 @@ const S = {
   supertrendDownSeries: null,
   patternRailA: null,      // chart-pattern neckline / upper rail overlay
   patternRailB: null,      // chart-pattern lower rail overlay
+  patternTargetLine: null, // measured-move target line
+  patternMarkerSeries: null, // carrier for pivot markers (LS/H/RS, peaks/troughs)
   ichimokuSpanASeries: null,
   ichimokuSpanBSeries: null,
 };
@@ -107,6 +109,14 @@ function initCharts() {
   // structural guide, not price. autoscale off so a rail can't stretch the axis.
   S.patternRailA = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#94a3b8', lineWidth: 2, lineStyle: 2 });
   S.patternRailB = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#94a3b8', lineWidth: 2, lineStyle: 2 });
+  // Measured-move target line — dotted, and INCLUDED in autoscale (no null
+  // provider) so the chart expands to keep the target on-screen. Shows its price
+  // on the axis.
+  S.patternTargetLine = S.mainChart.addLineSeries({ priceLineVisible: false, lastValueVisible: true,
+    crosshairMarkerVisible: false, color: '#94a3b8', lineWidth: 1, lineStyle: 1 });
+  // Transparent carrier for pivot MARKERS (LS/H/RS, peaks/troughs) so they don't
+  // clobber the Elliott-wave markers on the candle series.
+  S.patternMarkerSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: 'rgba(0,0,0,0)', lineWidth: 1 });
 
   const rsiEl = document.getElementById('rsiChart');
   S.rsiChart = LightweightCharts.createChart(rsiEl, {
@@ -2825,7 +2835,11 @@ function renderTriangles(patterns) {
 // where the structure sits against the live candles.
 function renderPatternOverlay(reversals, triangles, candles) {
   if (!S.patternRailA || !S.patternRailB) return;
-  const clear = () => { S.patternRailA.setData([]); S.patternRailB.setData([]); };
+  const clear = () => {
+    S.patternRailA.setData([]); S.patternRailB.setData([]);
+    if (S.patternTargetLine) S.patternTargetLine.setData([]);
+    if (S.patternMarkerSeries) { S.patternMarkerSeries.setData([]); S.patternMarkerSeries.setMarkers([]); }
+  };
   const all = (reversals || []).filter(Boolean).concat((triangles || []).filter(Boolean));
   if (!all.length || !candles || !candles.length) { clear(); return; }
   const t = ts => Math.floor(ts / 1000);
@@ -2839,17 +2853,43 @@ function renderPatternOverlay(reversals, triangles, candles) {
   clear();
   S.patternRailA.applyOptions({ color: col });
   S.patternRailB.applyOptions({ color: col });
+
+  let startT = lastT;
   if (pat.upper_line && pat.lower_line) {                 // triangle / wedge — two rails
     const line = arr => arr.map(p => ({ time: t(p.timestamp), value: +p.price }))
                            .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
     S.patternRailA.setData(line(pat.upper_line));
     S.patternRailB.setData(line(pat.lower_line));
+    startT = t(pat.upper_line[0].timestamp);
   } else if (pat.neckline != null && pat.points && pat.points.length) {   // reversal — neckline
-    const startT = t(pat.points[0].timestamp);
+    startT = t(pat.points[0].timestamp);
     if (startT < lastT) {
       S.patternRailA.setData([{ time: startT, value: +pat.neckline },
                               { time: lastT,  value: +pat.neckline }]);
     }
+    // Mark the pivots (LS/H/RS for H&S; 1/2 for double top/bottom). Bearish tops
+    // sit ABOVE the bars, bullish bottoms BELOW.
+    if (S.patternMarkerSeries) {
+      const LBL = { left_shoulder: 'LS', head: 'H', right_shoulder: 'RS',
+                    peak1: '1', peak2: '2', trough1: '1', trough2: '2' };
+      const isTop = dir === 'bearish';
+      const pts = pat.points.filter(p => p.role !== 'neckline')
+                            .map(p => ({ ...p, time: t(p.timestamp) }))
+                            .sort((a, b) => a.time - b.time)
+                            .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
+      S.patternMarkerSeries.setData(pts.map(p => ({ time: p.time, value: +p.price })));
+      S.patternMarkerSeries.setMarkers(pts.map(p => ({
+        time: p.time, position: isTop ? 'aboveBar' : 'belowBar',
+        color: col, shape: 'circle', text: LBL[p.role] || '',
+      })));
+    }
+  }
+
+  // Measured-move target line across the pattern span → current bar.
+  if (S.patternTargetLine && pat.target != null && startT < lastT) {
+    S.patternTargetLine.applyOptions({ color: col });
+    S.patternTargetLine.setData([{ time: startT, value: +pat.target },
+                                 { time: lastT,  value: +pat.target }]);
   }
 }
 
