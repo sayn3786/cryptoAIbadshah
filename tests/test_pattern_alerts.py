@@ -73,7 +73,7 @@ def test_pattern_alerts_endpoint_returns_confirmed(monkeypatch):
     pytest.importorskip("flask")
     import app
     monkeypatch.setattr(app, "SYMBOLS", {"BTC": "BTCUSDT"})
-    monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
+    monkeypatch.setattr(app, "PATTERN_BELL_TFS", ["1D"])
     monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT + [97, 93, 89, 87]))
     app._pattern_bell_cache["data"] = None
     app._pattern_bell_cache["ts"] = 0

@@ -448,7 +448,8 @@ def _rec_cache_save(key: str, data: dict) -> None:
 # it fetches only candles and runs the detectors, skipping the heavy on-chain /
 # funding / CVD work that full build_analysis does, so 32 symbols stay well
 # within a single request.
-PATTERN_ALERT_TFS        = ["1D", "1W"]
+PATTERN_ALERT_TFS        = ["1D", "1W"]           # Telegram: higher TFs only (no intraday spam)
+PATTERN_BELL_TFS         = ["1H", "4H", "1D", "1W"]  # in-app bell: also intraday
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
 _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 
@@ -2500,10 +2501,11 @@ _PATTERN_BELL_TTL   = 1800   # 30 min — confirmations don't change faster than
 
 @app.get("/api/pattern-alerts")
 def api_pattern_alerts():
-    """Scan all tokens on 1D + 1W for freshly-CONFIRMED chart patterns (flags,
-    reversals, triangles/wedges) for the in-app bell. Same detections that go to
-    Telegram, but this endpoint never CLAIMS (no dedup mutation) — the bell tracks
-    'seen' client-side. Cached 30 min."""
+    """Scan all tokens on 1H + 4H + 1D + 1W for freshly-CONFIRMED chart patterns
+    (flags, reversals, triangles/wedges) for the in-app bell. Same detections that
+    go to Telegram (which stays on the higher TFs), but this endpoint never CLAIMS
+    (no dedup mutation) — the bell tracks 'seen' client-side. Cached 30 min.
+    Parallelized over (symbol, timeframe) pairs for speed across the extra TFs."""
     with _pattern_bell_lock:
         if _pattern_bell_cache["data"] is not None and \
                 time.time() - _pattern_bell_cache["ts"] < _PATTERN_BELL_TTL:
@@ -2512,20 +2514,19 @@ def api_pattern_alerts():
     SGT      = timezone(timedelta(hours=8))
     scan_fmt = datetime.now(timezone.utc).astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
 
-    def _scan(sym):
-        out = []
-        for tf in PATTERN_ALERT_TFS:
-            try:
-                closed = _fetch_closed_spot(sym, tf)
-            except Exception:
-                continue
-            for pat in _confirmed_patterns_for(closed, tf):
-                out.append({"symbol": sym, "timeframe": tf, "detected_at": scan_fmt, **pat})
-        return out
+    def _scan(pair):
+        sym, tf = pair
+        try:
+            closed = _fetch_closed_spot(sym, tf)
+        except Exception:
+            return []
+        return [{"symbol": sym, "timeframe": tf, "detected_at": scan_fmt, **pat}
+                for pat in _confirmed_patterns_for(closed, tf)]
 
+    pairs = [(sym, tf) for sym in SYMBOLS.keys() for tf in PATTERN_BELL_TFS]
     alerts: list = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        for res in ex.map(_scan, SYMBOLS.keys()):
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        for res in ex.map(_scan, pairs):
             alerts.extend(res)
     alerts.sort(key=lambda a: a.get("break_ts") or 0, reverse=True)
 
