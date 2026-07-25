@@ -41,6 +41,7 @@ from patterns import detect_flags, pick_dominant_flags, summarize_flag_diagnosti
 from signals import generate_signal, _swing_levels
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs, send_pattern_alerts as _send_pattern_alerts
+from kv import claim as _kv_claim, exists as _kv_exists, kv_enabled as _kv_enabled
 from twitter import post_daily_signals as _post_twitter_signals
 from video import create_talk, get_talk
 
@@ -449,24 +450,11 @@ def _rec_cache_save(key: str, data: dict) -> None:
 # within a single request.
 PATTERN_ALERT_TFS        = ["1D", "1W"]
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
-_PATTERN_ALERT_FILE = os.path.join(os.path.dirname(__file__), ".pattern_alerts.json")
-_pattern_alert_lock = _threading.Lock()
+_PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 
 
-def _pattern_alert_ids_load() -> set:
-    try:
-        with open(_PATTERN_ALERT_FILE) as f:
-            return set(json.load(f).get("ids", []))
-    except Exception:
-        return set()
-
-
-def _pattern_alert_ids_save(ids: set) -> None:
-    try:
-        with open(_PATTERN_ALERT_FILE, "w") as f:
-            json.dump({"ids": list(ids)[-1000:]}, f)   # cap growth
-    except Exception:
-        pass
+def _pattern_alert_id(sym: str, tf: str, pat: dict) -> str:
+    return f"{_PATTERN_ALERT_NS}{sym}:{tf}:{pat['kind']}:{pat.get('type','')}:{pat.get('break_ts')}"
 
 
 def _fetch_closed_spot(sym: str, tf: str):
@@ -530,12 +518,11 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
 
 
 def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
-    """Scan for freshly-confirmed patterns not yet alerted; record & return the new ones."""
+    """Scan for freshly-confirmed patterns not yet alerted; atomically CLAIM each
+    (exact-once via KV) and return only the newly-claimed ones."""
     symbols = symbols or list(SYMBOLS.keys())
     tfs     = tfs or PATTERN_ALERT_TFS
-    with _pattern_alert_lock:
-        seen = _pattern_alert_ids_load()
-    new_alerts, added = [], False
+    new_alerts = []
     for sym in symbols:
         for tf in tfs:
             try:
@@ -543,14 +530,10 @@ def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
             except Exception:
                 continue
             for pat in _confirmed_patterns_for(closed, tf):
-                pid = f"{sym}:{tf}:{pat['kind']}:{pat.get('type','')}:{pat.get('break_ts')}"
-                if pid in seen:
-                    continue
-                seen.add(pid); added = True
-                new_alerts.append({"symbol": sym, "timeframe": tf, **pat})
-    if added:
-        with _pattern_alert_lock:
-            _pattern_alert_ids_save(seen)
+                # kv.claim is atomic SET-NX: True only for the first caller, so a
+                # confirmation alerts exactly once even across cold starts.
+                if _kv_claim(_pattern_alert_id(sym, tf, pat)):
+                    new_alerts.append({"symbol": sym, "timeframe": tf, **pat})
     return new_alerts
 
 def _fetch_fear_greed() -> Dict:
@@ -2305,9 +2288,7 @@ def api_patterns_alert():
     dry  = request.args.get("dry") in ("1", "true", "yes")
 
     if dry:
-        # Preview without recording/sending: scan against a COPY of the seen-set.
-        with _pattern_alert_lock:
-            seen = set(_pattern_alert_ids_load())
+        # Preview without claiming/sending — checks (not claims) each id.
         found = []
         for sym in (syms or list(SYMBOLS.keys())):
             for tf in (tfs or PATTERN_ALERT_TFS):
@@ -2316,9 +2297,9 @@ def api_patterns_alert():
                 except Exception:
                     continue
                 for pat in _confirmed_patterns_for(closed, tf):
-                    pid = f"{sym}:{tf}:{pat['kind']}:{pat.get('type','')}:{pat.get('break_ts')}"
-                    found.append({"symbol": sym, "timeframe": tf, "already_alerted": pid in seen, **pat})
-        return jsonify({"ok": True, "dry": True, "found": found})
+                    already = _kv_exists(_pattern_alert_id(sym, tf, pat))
+                    found.append({"symbol": sym, "timeframe": tf, "already_alerted": already, **pat})
+        return jsonify({"ok": True, "dry": True, "kv": _kv_enabled(), "found": found})
 
     alerts = _scan_confirmed_patterns(syms, tfs)
     sent = _send_pattern_alerts(alerts) if alerts else False
