@@ -68,6 +68,21 @@ def test_stale_confirmation_is_filtered_out():
         "a confirmation older than PATTERN_ALERT_FRESH_BARS must be filtered"
 
 
+def test_pattern_alerts_endpoint_returns_confirmed(monkeypatch):
+    # The bell endpoint returns confirmed patterns (no KV mutation).
+    pytest.importorskip("flask")
+    import app
+    monkeypatch.setattr(app, "SYMBOLS", {"BTC": "BTCUSDT"})
+    monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
+    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT + [97, 93, 89, 87]))
+    app._pattern_bell_cache["data"] = None
+    app._pattern_bell_cache["ts"] = 0
+    resp = app.app.test_client().get("/api/pattern-alerts")
+    assert resp.status_code == 200
+    alerts = resp.get_json()["alerts"]
+    assert any(a["symbol"] == "BTC" and a["type"] in ("double_top", "triple_top") for a in alerts)
+
+
 def test_kv_file_fallback_claims_exactly_once(tmp_path, monkeypatch):
     # With no KV configured, claim() uses the local file and is exact-once.
     import kv

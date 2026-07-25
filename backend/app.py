@@ -2494,6 +2494,48 @@ def api_engulf_alerts():
     return jsonify(data)
 
 
+_pattern_bell_cache: Dict = {"ts": 0, "data": None}
+_pattern_bell_lock  = _threading.Lock()
+_PATTERN_BELL_TTL   = 1800   # 30 min — confirmations don't change faster than a bar
+
+@app.get("/api/pattern-alerts")
+def api_pattern_alerts():
+    """Scan all tokens on 1D + 1W for freshly-CONFIRMED chart patterns (flags,
+    reversals, triangles/wedges) for the in-app bell. Same detections that go to
+    Telegram, but this endpoint never CLAIMS (no dedup mutation) — the bell tracks
+    'seen' client-side. Cached 30 min."""
+    with _pattern_bell_lock:
+        if _pattern_bell_cache["data"] is not None and \
+                time.time() - _pattern_bell_cache["ts"] < _PATTERN_BELL_TTL:
+            return jsonify(_pattern_bell_cache["data"])
+
+    SGT      = timezone(timedelta(hours=8))
+    scan_fmt = datetime.now(timezone.utc).astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
+
+    def _scan(sym):
+        out = []
+        for tf in PATTERN_ALERT_TFS:
+            try:
+                closed = _fetch_closed_spot(sym, tf)
+            except Exception:
+                continue
+            for pat in _confirmed_patterns_for(closed, tf):
+                out.append({"symbol": sym, "timeframe": tf, "detected_at": scan_fmt, **pat})
+        return out
+
+    alerts: list = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for res in ex.map(_scan, SYMBOLS.keys()):
+            alerts.extend(res)
+    alerts.sort(key=lambda a: a.get("break_ts") or 0, reverse=True)
+
+    data = {"alerts": alerts, "scanned_at": int(time.time())}
+    with _pattern_bell_lock:
+        _pattern_bell_cache["ts"]   = time.time()
+        _pattern_bell_cache["data"] = data
+    return jsonify(data)
+
+
 _whale_cache: Dict = {"ts": 0, "data": None}
 _whale_lock  = _threading.Lock()
 _WHALE_TTL   = 300  # re-scan every 5 minutes
