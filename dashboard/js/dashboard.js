@@ -3996,16 +3996,31 @@ async function checkStrengthChanges() {
   if (newAlerts.length) {
     _strengthAlerts = [...newAlerts, ..._strengthAlerts].slice(0, 30);
     _renderNotifList();
-    const seen   = _getStrengthSeen();
-    const unseen = _strengthAlerts.filter(a => !seen[a.id]).length;
-    const engulfUnseen = _engulfAlerts.filter(a => !_getSeenAlerts()[`engulf_${a.symbol}_${a.timestamp}`]).length;
-    _updateBadge(unseen + engulfUnseen);
+    _recomputeBadge();
   }
 }
 
 /* ─── Engulfing Alert Notification Panel (1W) ────────────────────────────── */
 const _ENGULF_SEEN_KEY = 'engulf_seen_v2';
 let   _engulfAlerts    = [];
+let   _patternAlerts   = [];    // confirmed chart patterns (Double Top/Bottom, H&S, triangles, flags)
+
+// Stable per-confirmation id for client-side "seen" tracking (in the shared
+// strength-seen store, same as whale alerts).
+function _patternSeenId(a) {
+  return `pattern_${a.symbol}_${a.timeframe}_${a.type || a.kind}_${a.break_ts}`;
+}
+
+// Single source of truth for the bell badge: total UNSEEN across every alert type.
+function _recomputeBadge() {
+  const eSeen = _getSeenAlerts();
+  const sSeen = _getStrengthSeen();
+  const e = _engulfAlerts.filter(a => !eSeen[`engulf_${a.symbol}_${a.timestamp}`]).length;
+  const s = _strengthAlerts.filter(a => !sSeen[a.id]).length;
+  const w = _whaleAlerts.filter(a => !sSeen[`whale_${a.symbol}_${a.timestamp}`]).length;
+  const p = _patternAlerts.filter(a => !sSeen[_patternSeenId(a)]).length;
+  _updateBadge(e + s + w + p);
+}
 
 function _getSeenAlerts() {
   try { return JSON.parse(localStorage.getItem(_ENGULF_SEEN_KEY) || '{}'); }
@@ -4031,6 +4046,7 @@ function toggleNotifPanel() {
     _engulfAlerts.forEach(a => _markSeen(`engulf_${a.symbol}_${a.timestamp}`));
     _strengthAlerts.forEach(a => _markStrengthSeen(a.id));
     _whaleAlerts.forEach(a => _markStrengthSeen(`whale_${a.symbol}_${a.timestamp}`));
+    _patternAlerts.forEach(a => _markStrengthSeen(_patternSeenId(a)));
     _updateBadge(0);
   }
 }
@@ -4039,6 +4055,7 @@ function clearAllAlerts() {
   _engulfAlerts.forEach(a => _markSeen(`engulf_${a.symbol}_${a.timestamp}`));
   _strengthAlerts.forEach(a => _markStrengthSeen(a.id));
   _whaleAlerts.forEach(a => _markStrengthSeen(`whale_${a.symbol}_${a.timestamp}`));
+  _patternAlerts.forEach(a => _markStrengthSeen(_patternSeenId(a)));
   _strengthAlerts = [];
   _whaleAlerts = [];
   _renderNotifList();
@@ -4132,6 +4149,27 @@ function _renderNotifList() {
     </div>` });
   });
 
+  _patternAlerts.forEach(a => {
+    const dir   = a.direction;
+    const cls   = dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
+    const icon  = dir === 'bullish' ? '🟢' : dir === 'bearish' ? '🔴' : '⚪';
+    const arrow = a.break_dir === 'up' ? '↑' : a.break_dir === 'down' ? '↓' : '•';
+    const tgt   = a.target != null ? ` · 🎯 ${fmtPrice(a.target)}` : '';
+    const isNew = !strengthSeen[_patternSeenId(a)];
+    const msg   = dir === 'bullish' ? 'Confirmed bullish break'
+                : dir === 'bearish' ? 'Confirmed bearish break' : 'Breakout confirmed';
+    items.push({ ts: a.break_ts || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+      <span class="notif-item-icon">${icon}</span>
+      <div class="notif-item-body">
+        <div class="notif-item-title">${a.label} — <strong>${a.symbol}/USDT</strong></div>
+        <div class="notif-item-sub">${a.timeframe} confirmed · broke ${arrow}${tgt}</div>
+        <div class="notif-item-msg">${msg}</div>
+        ${a.detected_at ? `<div class="notif-item-time">🕐 Detected: ${a.detected_at}</div>` : ''}
+      </div>
+      <button class="notif-item-view" onclick="jumpTo('${a.symbol}','${a.timeframe}');toggleNotifPanel()">View →</button>
+    </div>` });
+  });
+
   if (!items.length) {
     list.innerHTML = '<p class="notif-empty">No alerts yet. Strength checked hourly.</p>';
     return;
@@ -4147,11 +4185,7 @@ async function loadEngulfAlerts() {
     const data = await res.json();
     _engulfAlerts = data.alerts || [];
     _renderNotifList();
-    const seen   = _getSeenAlerts();
-    const strSeen = _getStrengthSeen();
-    const unreadE = _engulfAlerts.filter(a => !seen[`engulf_${a.symbol}_${a.timestamp}`]).length;
-    const unreadS = _strengthAlerts.filter(a => !strSeen[a.id]).length;
-    _updateBadge(unreadE + unreadS);
+    _recomputeBadge();
   } catch (_) {}
 }
 
@@ -4161,11 +4195,17 @@ async function loadWhaleAlerts() {
     const data = await res.json();
     _whaleAlerts = data.alerts || [];
     _renderNotifList();
-    const seen    = _getStrengthSeen();
-    const unseen  = _whaleAlerts.filter(a => !seen[`whale_${a.symbol}_${a.timestamp}`]).length;
-    const engulfU = _engulfAlerts.filter(a => !_getSeenAlerts()[`engulf_${a.symbol}_${a.timestamp}`]).length;
-    const strengthU = _strengthAlerts.filter(a => !seen[a.id]).length;
-    _updateBadge(unseen + engulfU + strengthU);
+    _recomputeBadge();
+  } catch (_) {}
+}
+
+async function loadPatternAlerts() {
+  try {
+    const res  = await fetch(`${API}/pattern-alerts`);
+    const data = await res.json();
+    _patternAlerts = data.alerts || [];
+    _renderNotifList();
+    _recomputeBadge();
   } catch (_) {}
 }
 
@@ -4701,9 +4741,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadEngulfAlerts();
   checkStrengthChanges();
   loadWhaleAlerts();
+  loadPatternAlerts();
   loadMacro();
   loadCalendar();
   setInterval(loadWhaleAlerts, 5 * 60 * 1000);
+  setInterval(loadPatternAlerts, 30 * 60 * 1000);   // matches the endpoint's 30-min cache
   setInterval(loadMacro, 6 * 60 * 60 * 1000);   // macro updates a few times/day at most
 
   // Ticker: heavy full refresh every 5 min (rebuilds the change baseline), plus
