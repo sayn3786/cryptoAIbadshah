@@ -1333,20 +1333,31 @@ def _resolve_neckline_break(candles: List[Dict], start_idx: int, neckline: float
                             invalid_level: float, bearish: bool) -> Dict:
     """Scan candles AFTER start_idx. `bearish` patterns (double top / H&S) confirm
     on a close BELOW the neckline and invalidate on a close ABOVE invalid_level;
-    bullish ones are mirrored. First decisive close wins."""
-    status, confirmed, break_ts = "forming", False, None
-    for c in candles[start_idx + 1:]:
+    bullish ones are mirrored. First decisive close wins. After a confirmation, a
+    later candle that RECLAIMS the neckline (closes back through it) marks the
+    breakout FAILED — a whipsaw, not a live signal."""
+    scan = candles[start_idx + 1:]
+    conf_k = None
+    for k, c in enumerate(scan):
         if bearish:
             if c["close"] > invalid_level:
                 return {"status": "invalidated", "confirmed": False, "break_ts": c["timestamp"]}
             if c["close"] < neckline:
-                return {"status": "confirmed", "confirmed": True, "break_ts": c["timestamp"]}
+                conf_k = k; break
         else:
             if c["close"] < invalid_level:
                 return {"status": "invalidated", "confirmed": False, "break_ts": c["timestamp"]}
             if c["close"] > neckline:
-                return {"status": "confirmed", "confirmed": True, "break_ts": c["timestamp"]}
-    return {"status": status, "confirmed": confirmed, "break_ts": break_ts}
+                conf_k = k; break
+    if conf_k is None:
+        return {"status": "forming", "confirmed": False, "break_ts": None}
+    break_ts = scan[conf_k]["timestamp"]
+    for c in scan[conf_k + 1:]:
+        if bearish and c["close"] > neckline:
+            return {"status": "failed", "confirmed": False, "break_ts": break_ts}
+        if (not bearish) and c["close"] < neckline:
+            return {"status": "failed", "confirmed": False, "break_ts": break_ts}
+    return {"status": "confirmed", "confirmed": True, "break_ts": break_ts}
 
 
 def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
@@ -1402,7 +1413,7 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             target = round(neck + height, 8)
             invalid_level = min(a["price"], b["price"])
         res = _resolve_neckline_break(candles, b["index"], neck, invalid_level, bearish=want_top)
-        if res["status"] == "invalidated":
+        if res["status"] in ("invalidated", "failed"):
             continue
         out.append({
             "type":        ("triple_top" if triple else "double_top") if want_top
@@ -1459,7 +1470,7 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             target = round(neck + height, 8)
             invalid_level = head["price"]
         res = _resolve_neckline_break(candles, rs["index"], neck, invalid_level, bearish=want_top)
-        if res["status"] == "invalidated":
+        if res["status"] in ("invalidated", "failed"):
             continue
         out.append({
             "type":        "head_shoulders" if want_top else "inverse_head_shoulders",
@@ -1581,13 +1592,14 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
     # ── Chronological breakout resolution against the diagonal rails ──────────
     scan_from = max(hs[-1]["index"], ls[-1]["index"])
     status, confirmed, brk_dir, break_ts = "forming", False, None, None
+    bo_i = None
     for off, c in enumerate(candles[scan_from + 1:]):
         i = scan_from + 1 + off
         up_lvl, lo_lvl = upper(i), lower(i)
         if c["close"] > up_lvl:
-            status, confirmed, brk_dir, break_ts = "confirmed", True, "up", c["timestamp"]; break
+            status, confirmed, brk_dir, break_ts, bo_i = "confirmed", True, "up", c["timestamp"], i; break
         if c["close"] < lo_lvl:
-            status, confirmed, brk_dir, break_ts = "confirmed", True, "down", c["timestamp"]; break
+            status, confirmed, brk_dir, break_ts, bo_i = "confirmed", True, "down", c["timestamp"], i; break
 
     # For a directional pattern, a break the WRONG way invalidates it; symmetrical
     # takes whichever side broke.
@@ -1596,6 +1608,17 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         return []                                   # broke against the pattern → drop
     if direction == "neutral" and confirmed:
         direction = "bullish" if brk_dir == "up" else "bearish"
+
+    # Failed-breakout: after a confirmed break, a later candle closing back through
+    # the OPPOSITE rail is a whipsaw — drop it (same guard as flags). An up-break
+    # fails on a close below the lower rail; a down-break on a close above the upper.
+    if confirmed and bo_i is not None:
+        for off2, c in enumerate(candles[bo_i + 1:]):
+            i2 = bo_i + 1 + off2
+            if brk_dir == "up" and c["close"] < lower(i2):
+                return []
+            if brk_dir == "down" and c["close"] > upper(i2):
+                return []
 
     height = gap_start                              # widest part of the structure
     current_price = candles[-1]["close"]

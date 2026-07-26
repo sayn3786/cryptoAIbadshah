@@ -71,6 +71,19 @@ def test_wrong_way_break_drops_directional_pattern():
     assert f is None or f["type"] != "ascending_triangle"
 
 
+def test_wedge_breakout_retest_stays_confirmed():
+    # Falling wedge breaks up, then pulls back to retest but HOLDS above the lower
+    # rail → still a valid confirmed breakout (the TAO 4H case).
+    f = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 102]))
+    assert f and f["type"] == "falling_wedge" and f["confirmed"]
+
+
+def test_wedge_failed_breakout_dropped():
+    # Breaks up, then collapses back BELOW the lower rail → failed → dropped.
+    f = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 90]))
+    assert f is None or f["type"] != "falling_wedge"
+
+
 def test_non_converging_is_ignored():
     # Parallel rails (a channel, gap not narrowing) → not a triangle/wedge.
     ch = _zigzag([90, 100, 90, 100, 90, 100, 90, 100])
