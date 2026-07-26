@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=102" />
+  <link rel="stylesheet" href="css/dashboard.css?v=103" />
 </head>
 <body>
 
@@ -327,33 +327,34 @@
     <div class="card chart-card">
       <div class="chart-header">
         <span class="chart-title" id="chartTitle">BTC/USDT · 1W</span>
-        <div class="chart-legend-group">
+        <div class="chart-legend-group" id="chartLegend">
+          <div class="chart-legend-tip">Tap a legend item to show / hide that layer</div>
           <div class="chart-legend">
-            <span class="legend-dot bull"></span><span>Bullish FVG</span>
-            <span class="legend-dot bear"></span><span>Bearish FVG</span>
-            <span class="legend-dot bull" style="outline:2px solid rgba(16,185,129,0.8);outline-offset:1px"></span><span>BAG (strong)</span>
+            <span class="legend-item" data-layer="fvg"><span class="legend-dot bull"></span>Bullish FVG</span>
+            <span class="legend-item" data-layer="fvg"><span class="legend-dot bear"></span>Bearish FVG</span>
+            <span class="legend-item" data-layer="fvg"><span class="legend-dot bull" style="outline:2px solid rgba(16,185,129,0.8);outline-offset:1px"></span>BAG (strong)</span>
           </div>
           <div class="chart-legend">
-            <span class="legend-dot" style="background:#3b82f6"></span><span>SuperTrend ▲</span>
-            <span class="legend-dot" style="background:#fb923c"></span><span>SuperTrend ▼</span>
-            <span class="legend-dot" style="background:#a855f7"></span><span>Ichimoku Span A</span>
-            <span class="legend-dot" style="background:#22d3ee"></span><span>Span B</span>
-            <span class="legend-dot" style="background:#fbbf24"></span><span>Realized Price</span>
-            <span class="legend-dot" style="background:#94a3b8"></span><span>Swing High/Low</span>
-            <span class="legend-dot" style="background:#f472b6"></span><span>EMA 50</span>
-            <span class="legend-dot" style="background:#facc15"></span><span>EMA 200</span>
+            <span class="legend-item" data-layer="supertrend"><span class="legend-dot" style="background:#3b82f6"></span>SuperTrend ▲</span>
+            <span class="legend-item" data-layer="supertrend"><span class="legend-dot" style="background:#fb923c"></span>SuperTrend ▼</span>
+            <span class="legend-item" data-layer="ichimoku"><span class="legend-dot" style="background:#a855f7"></span>Ichimoku Span A</span>
+            <span class="legend-item" data-layer="ichimoku"><span class="legend-dot" style="background:#22d3ee"></span>Span B</span>
+            <span class="legend-item" data-layer="realized"><span class="legend-dot" style="background:#fbbf24"></span>Realized Price</span>
+            <span class="legend-item" data-layer="swing"><span class="legend-dot" style="background:#94a3b8"></span>Swing High/Low</span>
+            <span class="legend-item" data-layer="ema50"><span class="legend-dot" style="background:#f472b6"></span>EMA 50</span>
+            <span class="legend-item" data-layer="ema200"><span class="legend-dot" style="background:#facc15"></span>EMA 200</span>
           </div>
           <div class="chart-legend">
-            <span class="legend-line" style="border-top-color:#22c55e"></span><span>Support line (local)</span>
-            <span class="legend-line" style="border-top-color:#ef4444"></span><span>Resistance line (local)</span>
-            <span class="legend-line dashed" style="border-top-color:#cbd5e1"></span><span>Macro line (multi-week)</span>
-            <span class="legend-dot" style="background:rgba(34,197,94,0.35);border:1px solid #22c55e"></span><span>Demand Zone</span>
-            <span class="legend-dot" style="background:rgba(239,68,68,0.35);border:1px solid #ef4444"></span><span>Supply Zone</span>
+            <span class="legend-item" data-layer="trendline"><span class="legend-line" style="border-top-color:#22c55e"></span>Support line (local)</span>
+            <span class="legend-item" data-layer="trendline"><span class="legend-line" style="border-top-color:#ef4444"></span>Resistance line (local)</span>
+            <span class="legend-item" data-layer="macro"><span class="legend-line dashed" style="border-top-color:#cbd5e1"></span>Macro line (multi-week)</span>
+            <span class="legend-item" data-layer="zones"><span class="legend-dot" style="background:rgba(34,197,94,0.35);border:1px solid #22c55e"></span>Demand Zone</span>
+            <span class="legend-item" data-layer="zones"><span class="legend-dot" style="background:rgba(239,68,68,0.35);border:1px solid #ef4444"></span>Supply Zone</span>
           </div>
           <div class="chart-legend">
-            <span class="legend-line dashed" style="border-top-color:#38bdf8"></span><span>1D swing H/L</span>
-            <span class="legend-line dashed" style="border-top-color:#fb7185"></span><span>1W swing H/L</span>
-            <span class="legend-line dashed" style="border-top-color:#c084fc"></span><span>1M swing H/L</span>
+            <span class="legend-item" data-layer="htf_1D"><span class="legend-line dashed" style="border-top-color:#38bdf8"></span>1D swing H/L</span>
+            <span class="legend-item" data-layer="htf_1W"><span class="legend-line dashed" style="border-top-color:#fb7185"></span>1W swing H/L</span>
+            <span class="legend-item" data-layer="htf_1M"><span class="legend-line dashed" style="border-top-color:#c084fc"></span>1M swing H/L</span>
             <span class="legend-hint">(higher-TF levels · ▲ high ▼ low)</span>
           </div>
         </div>
@@ -755,7 +756,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=139"></script>
+<script src="js/dashboard.js?v=140"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
