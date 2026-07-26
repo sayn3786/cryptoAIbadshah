@@ -277,6 +277,17 @@ a:hover { color: var(--gold2); }
 .legend-line { width: 18px; height: 0; border-top: 3px solid var(--muted); flex-shrink: 0; }
 .legend-line.dashed { border-top-style: dashed; border-top-width: 2px; }
 .legend-hint { font-size: .65rem; opacity: .7; font-style: italic; }
+/* Clickable legend items — tap to show/hide the layer on the chart. */
+.chart-legend-tip { font-size: .62rem; color: var(--muted2); opacity: .8; margin-bottom: 2px; }
+.legend-item {
+  display: inline-flex; align-items: center; gap: 5px;
+  cursor: pointer; user-select: none; padding: 1px 5px 1px 3px;
+  border-radius: 6px; transition: background .12s, opacity .12s;
+}
+.legend-item:hover { background: rgba(148,163,184,.12); }
+.legend-item.legend-off { opacity: .38; text-decoration: line-through; }
+.legend-item.legend-off .legend-dot,
+.legend-item.legend-off .legend-line { filter: grayscale(1); opacity: .5; }
 /* Viewport-based height: scales with the screen instead of a fixed 380px —
    ~55% of the viewport on desktop/laptop, clamped so it never gets absurd.
    svh (small viewport height) keeps mobile browsers' URL bar from causing

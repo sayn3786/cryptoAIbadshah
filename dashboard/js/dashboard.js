@@ -252,6 +252,7 @@ async function loadAnalysis() {
 }
 
 function renderAll(a) {
+  S.lastAnalysis = a;   // remember for legend-toggle re-renders of the main chart
   // Show data source banner
   const banner = document.getElementById('demoBanner');
   const src = a.data_source || 'demo';
@@ -754,6 +755,40 @@ function renderMarketCap(mcap) {
   rankEl.textContent = 'Live · CoinGecko';
 }
 
+// ── Toggleable chart layers ─────────────────────────────────────────────────
+// Each legend item maps to a layer key; tapping it shows/hides that overlay so
+// the user can declutter a busy chart. Choices persist per device. Default: all
+// visible (a missing key = on).
+const _LAYER_KEY = 'chart_layers_v1';
+function _getLayers() { try { return JSON.parse(localStorage.getItem(_LAYER_KEY) || '{}'); } catch (_) { return {}; } }
+function _layerVisible(k) { return _getLayers()[k] !== false; }
+function _saveLayers(s) { try { localStorage.setItem(_LAYER_KEY, JSON.stringify(s)); } catch (_) {} }
+
+function _syncLegendUI() {
+  document.querySelectorAll('#chartLegend [data-layer]').forEach(el => {
+    el.classList.toggle('legend-off', !_layerVisible(el.dataset.layer));
+  });
+}
+
+function _toggleLayer(k) {
+  const s = _getLayers();
+  s[k] = s[k] === false ? true : false;   // flip; undefined → false (hide)
+  _saveLayers(s);
+  _syncLegendUI();
+  // Re-render the main chart so both line-series visibility AND the rebuilt
+  // price-line overlays (FVG / swings / zones / HTF) honour the new state.
+  const a = S.lastAnalysis;
+  if (a) renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining,
+                         a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels);
+}
+
+function initLegendToggles() {
+  document.querySelectorAll('#chartLegend [data-layer]').forEach(el => {
+    el.addEventListener('click', () => _toggleLayer(el.dataset.layer));
+  });
+  _syncLegendUI();
+}
+
 function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol, trendline, srZones, emaLines, htfLevels) {
   if (!candles?.length || !S.candleSeries) return;
 
@@ -804,7 +839,7 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   // of price (far-away gaps stacked labels without being tradeable), and only
   // BAG (strong) gaps get their top/bottom boundary lines — plain FVGs are a
   // single labelled midline, so the chart isn't a wall of dashed lines.
-  if (fvgs?.length) {
+  if (fvgs?.length && _layerVisible('fvg')) {
     const px = candles[candles.length - 1].close;
     const unfilled = fvgs
       .filter(f => !f.filled && px > 0 && Math.abs(f.midpoint - px) / px <= 0.12)
@@ -839,6 +874,9 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     S.supertrendUpSeries.setData([]);
     S.supertrendDownSeries.setData([]);
   }
+  const _stVis = _layerVisible('supertrend');
+  S.supertrendUpSeries.applyOptions({ visible: _stVis });
+  S.supertrendDownSeries.applyOptions({ visible: _stVis });
 
   // Ichimoku cloud — Span A / Span B boundary lines tracking every candle.
   const ichiSeries = ichimoku?.series || [];
@@ -849,10 +887,13 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     S.ichimokuSpanASeries.setData([]);
     S.ichimokuSpanBSeries.setData([]);
   }
+  const _ichiVis = _layerVisible('ichimoku');
+  S.ichimokuSpanASeries.applyOptions({ visible: _ichiVis });
+  S.ichimokuSpanBSeries.applyOptions({ visible: _ichiVis });
 
   // Swing high/low — last 5 closed candles (skip the live/forming candle).
   const closed = unique.length >= 6 ? unique.slice(-6, -1) : unique.slice(0, -1);
-  if (closed.length) {
+  if (closed.length && _layerVisible('swing')) {
     const swingHigh = Math.max(...closed.map(c => c.high));
     const swingLow  = Math.min(...closed.map(c => c.low));
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: swingHigh, color: '#94a3b899', lineWidth: 1, lineStyle: 3, title: 'Swing High' }));
@@ -868,6 +909,7 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   const _HTF_COL = { '1D': '#38bdf8', '1W': '#fb7185', '1M': '#c084fc' };
   const _lastPx = unique.length ? unique[unique.length - 1].close : 0;
   (htfLevels || []).forEach(lv => {
+    if (!_layerVisible(`htf_${lv.tf}`)) return;
     const col = _HTF_COL[lv.tf] || '#94a3b8';
     [['high', lv.high, '▲'], ['low', lv.low, '▼']].forEach(([kind, price, arrow]) => {
       if (!price || !_lastPx) return;
@@ -884,7 +926,7 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
 
   // Realized Price — BTC only, historically the strongest support/floor level.
   const rp = btcMining?.realized_price || btcMining?.mvrv?.realized_price;
-  if (symbol === 'BTC' && rp) {
+  if (symbol === 'BTC' && rp && _layerVisible('realized')) {
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: rp, color: '#fbbf24', lineWidth: 2, lineStyle: 0, title: `Realized $${(rp/1000).toFixed(1)}K` }));
   }
 
@@ -945,6 +987,8 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   };
   _drawTrend(S.trendlineSeries,      trendline?.local, false);
   _drawTrend(S.trendlineMacroSeries, trendline?.macro, true);
+  S.trendlineSeries.applyOptions({ visible: _layerVisible('trendline') });
+  S.trendlineMacroSeries.applyOptions({ visible: _layerVisible('macro') });
 
   // ── EMA 50 / EMA 200 lines ────────────────────────────────────────────────
   const _emaData = (arr) => (arr || [])
@@ -952,6 +996,8 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     .filter((d, i, a) => i === 0 || d.time !== a[i - 1].time);
   S.ema50Series.setData(_emaData(emaLines?.ema50));
   S.ema200Series.setData(_emaData(emaLines?.ema200));
+  S.ema50Series.applyOptions({ visible: _layerVisible('ema50') });
+  S.ema200Series.applyOptions({ visible: _layerVisible('ema200') });
 
   // ── Supply / demand zones — draw each band as top/mid/bottom price lines ──
   // (mirrors the FVG style; lightweight-charts v4 has no native filled boxes).
@@ -966,8 +1012,10 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.mid,    color: col, lineWidth: strong ? 3 : 2, lineStyle: 3, title: `${label}${tag}` }));
     S.overlayPriceLines.push(S.candleSeries.createPriceLine({ price: z.bottom, color: dim, lineWidth: strong ? 2 : 1, lineStyle: 2, title: '', axisLabelVisible: false }));
   };
-  if (srZones?.resistance) drawZone(srZones.resistance, true);
-  if (srZones?.support)    drawZone(srZones.support, false);
+  if (_layerVisible('zones')) {
+    if (srZones?.resistance) drawZone(srZones.resistance, true);
+    if (srZones?.support)    drawZone(srZones.support, false);
+  }
 
   S.mainChart.timeScale().fitContent();
 }
@@ -4734,6 +4782,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await renderAssetTabs();   // build tabs sorted by live market cap first
   wireSelectors();
   initCharts();
+  initLegendToggles();
   renderMyTrades();
   loadTicker().then(loadLivePrices);   // full baseline, then an immediate live tick
   loadAnalysis();
