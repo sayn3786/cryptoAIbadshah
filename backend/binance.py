@@ -894,15 +894,16 @@ class BinanceClient:
         # fall through to the last-resort/demo data.
         _floor = min(3 if use_weekly_fallbacks else 26, max(1, limit))
 
-        # "Rich" = enough history to stop searching immediately. For weekly/monthly
-        # some exchanges return only a few recent bars (OKX's /market/candles gives
-        # a thin weekly window for some instruments) while others carry the full
-        # multi-year history. Accepting the FIRST source that clears the low floor
-        # would lock us onto that thin window and hide the deeper data — so for
-        # weekly/monthly we keep the RICHEST result across sources instead of the
-        # first that merely clears the floor. Intraday keeps the original
-        # first-good-source behaviour (_rich == floor).
-        _rich = min(60, max(1, limit)) if use_weekly_fallbacks else _floor
+        # "Rich" = enough history to stop searching immediately. Some exchanges
+        # return only a few recent bars for a recently-listed instrument (e.g.
+        # OKX's TAO/USDT spot has only ~26 daily candles) while others carry the
+        # full multi-year history. Accepting the FIRST source that merely clears
+        # the low floor would LOCK us onto that thin window and hide the deeper
+        # data — so we keep the RICHEST result across sources and only stop early
+        # once a source is genuinely rich. Applies to intraday too (previously it
+        # stopped at the first source clearing 26, which pinned young-on-one-
+        # exchange tokens like TAO to a thin, "not tradeable" window).
+        _rich = min(60, max(1, limit)) if use_weekly_fallbacks else min(200, max(1, limit))
 
         _best_r: Optional[List[Dict]] = None
         _best_src: Optional[str] = None
@@ -950,9 +951,13 @@ class BinanceClient:
             # For intraday: try the single next-larger interval on each exchange.
             # Stops at one step up (2H→4H, 4H→8H, etc.) to keep latency bounded —
             # chaining through all intervals caused 15s×12 call timeouts on Vercel.
+            # Only reach for the WRONG-interval next step when we have NOTHING
+            # usable — never serve 2H data as 1D once a real (floor-clearing)
+            # result exists. CoinGecko below is the CORRECT interval and may still
+            # enrich a thin result.
             _NEXT_IV = {"1h": "2h", "2h": "4h", "4h": "8h", "8h": "12h", "12h": "1d"}
             next_iv  = _NEXT_IV.get(interval.lower())
-            if next_iv:
+            if next_iv and _blen(_best_r) < _floor:
                 result = self._binance_klines(symbol, next_iv, limit)
                 if _consider(result, "binance"):
                     self.data_source = "binance"
