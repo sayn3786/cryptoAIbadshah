@@ -84,6 +84,17 @@ def test_wedge_failed_breakout_dropped():
     assert f is None or f["type"] != "falling_wedge"
 
 
+def test_wedge_breakout_roundtrip_to_lower_half_dropped():
+    # Breaks up, then price round-trips back into the LOWER half of the wedge
+    # (below the midline) without closing below the rail — a stalled/failed
+    # breakout that must not keep showing an up-target (the odd TAO 1H case).
+    dropped = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 97]))
+    assert dropped is None or dropped["type"] != "falling_wedge"
+    # Control: a shallow pullback that stays in the UPPER half remains confirmed.
+    held = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 102]))
+    assert held and held["type"] == "falling_wedge" and held["confirmed"]
+
+
 def test_non_converging_is_ignored():
     # Parallel rails (a channel, gap not narrowing) → not a triangle/wedge.
     ch = _zigzag([90, 100, 90, 100, 90, 100, 90, 100])

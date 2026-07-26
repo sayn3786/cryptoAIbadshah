@@ -1610,18 +1610,35 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         direction = "bullish" if brk_dir == "up" else "bearish"
 
     # Failed-breakout: after a confirmed break, a later candle closing back through
-    # the OPPOSITE rail is a whipsaw — drop it (same guard as flags). An up-break
-    # fails on a close below the lower rail; a down-break on a close above the upper.
+    # the OPPOSITE rail is a whipsaw — drop it (same guard as flags). The failure
+    # level is the opposite rail AT THE BREAKOUT BAR, held FLAT — NOT the diagonal
+    # extrapolated forward (which keeps descending/rising and would run past price,
+    # so a full round-trip back into the wedge slips through). An up-break fails on
+    # a close below that flat lower level; a down-break above the flat upper level.
     if confirmed and bo_i is not None:
-        for off2, c in enumerate(candles[bo_i + 1:]):
-            i2 = bo_i + 1 + off2
-            if brk_dir == "up" and c["close"] < lower(i2):
+        fail_lo = lower(bo_i)
+        fail_hi = upper(bo_i)
+        for c in candles[bo_i + 1:]:
+            if brk_dir == "up" and c["close"] < fail_lo:
                 return []
-            if brk_dir == "down" and c["close"] > upper(i2):
+            if brk_dir == "down" and c["close"] > fail_hi:
                 return []
 
     height = gap_start                              # widest part of the structure
     current_price = candles[-1]["close"]
+
+    # A CONFIRMED directional breakout is only live while price still holds the
+    # breakout side of the structure. If price has round-tripped back through the
+    # MIDLINE (bullish break but now below mid, or bearish break but now above),
+    # the breakout has stalled/failed — don't keep showing an up/down target while
+    # price sits on the other side of the wedge.
+    if confirmed and direction in ("bullish", "bearish"):
+        mid_now = (upper(last_i) + lower(last_i)) / 2.0
+        if direction == "bullish" and current_price < mid_now:
+            return []
+        if direction == "bearish" and current_price > mid_now:
+            return []
+
     if direction == "bullish":
         target = round(upper(last_i) + height, 8)
     elif direction == "bearish":
