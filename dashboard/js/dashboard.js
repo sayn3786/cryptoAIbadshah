@@ -2887,11 +2887,6 @@ function drawPatternMiniChart(el, pat, rows, interval) {
   const anchorTs = pat.upper_line ? t(pat.upper_line[0].timestamp)
                  : (pat.points && pat.points.length ? t(pat.points[0].timestamp) : rows[0].time);
   const lastRowT = rows[rows.length - 1].time;
-  // End of the pattern STRUCTURE (last rail point / last pivot) — the neckline
-  // and target line stop here rather than stretching across to the current price.
-  const patEndTs = pat.upper_line
-    ? t(pat.upper_line[pat.upper_line.length - 1].timestamp)
-    : (pat.points && pat.points.length ? t(pat.points[pat.points.length - 1].timestamp) : lastRowT);
   const win = rows.filter(c => c.time >= anchorTs - 2 * interval && c.time <= lastRowT);
   if (win.length < 3) {
     el.innerHTML = '<p class="empty" style="padding:8px 0">Pattern extends beyond the chart window</p>';
@@ -2917,14 +2912,23 @@ function drawPatternMiniChart(el, pat, rows, interval) {
   const ov = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
 
   if (pat.upper_line && pat.lower_line) {                       // triangle / wedge — two rails
-    const line = arr => uniq(arr.map(p => ({ time: t(p.timestamp), value: +p.price })));
-    chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(line(pat.upper_line));
-    chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(line(pat.lower_line));
+    // Extend each rail FORWARD along its slope to the current candle so the
+    // channel covers the most recent bars (otherwise the last few candles sit
+    // outside the drawn lines).
+    const extend = (arr) => {
+      const p0 = arr[0], p1 = arr[arr.length - 1];
+      const t0 = t(p0.timestamp), t1 = t(p1.timestamp), v0 = +p0.price, v1 = +p1.price;
+      if (t1 <= t0 || lastRowT <= t1) return uniq(arr.map(p => ({ time: t(p.timestamp), value: +p.price })));
+      const slope = (v1 - v0) / (t1 - t0);
+      return [{ time: t0, value: v0 }, { time: lastRowT, value: v0 + slope * (lastRowT - t0) }];
+    };
+    chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(extend(pat.upper_line));
+    chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 }).setData(extend(pat.lower_line));
   } else if (pat.neckline != null) {                            // reversal — neckline + pivots
     const nlStart = pat.points && pat.points.length ? t(pat.points[0].timestamp) : win[0].time;
-    if (nlStart < patEndTs) {
+    if (nlStart < lastRowT) {
       chart.addLineSeries({ ...ov, color: col, lineWidth: 2, lineStyle: 2 })
-        .setData([{ time: nlStart, value: +pat.neckline }, { time: patEndTs, value: +pat.neckline }]);
+        .setData([{ time: nlStart, value: +pat.neckline }, { time: lastRowT, value: +pat.neckline }]);
     }
     if (pat.points && pat.points.length) {
       const LBL = { left_shoulder: 'LS', head: 'H', right_shoulder: 'RS',
@@ -2940,12 +2944,11 @@ function drawPatternMiniChart(el, pat, rows, interval) {
     }
   }
 
-  // Target line — spans the pattern only (not stretched to the current price);
-  // still included in autoscale with its own axis label so the level stays visible.
-  if (pat.target != null && anchorTs < patEndTs) {
+  // Target line — included in autoscale (own last-value label) so it stays visible.
+  if (pat.target != null && anchorTs < lastRowT) {
     chart.addLineSeries({ priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
       color: col, lineWidth: 1, lineStyle: 1 })
-      .setData([{ time: anchorTs, value: +pat.target }, { time: patEndTs, value: +pat.target }]);
+      .setData([{ time: anchorTs, value: +pat.target }, { time: lastRowT, value: +pat.target }]);
   }
 
   chart.timeScale().fitContent();
