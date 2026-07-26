@@ -60,8 +60,13 @@ def test_rising_wedge_bearish():
     assert f and f["type"] == "rising_wedge" and f["direction"] == "bearish"
 
 
+# A tight, clean falling wedge (highs fall fast, lows fall slowly → converging),
+# whose swing-touch rails clear the convergence threshold. mid ≈ 96.1.
+FALLING_WEDGE = [100, 112, 98, 106, 96, 101, 95, 97]
+
+
 def test_falling_wedge_bullish():
-    f = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 107]))
+    f = _one(_zigzag(FALLING_WEDGE, tail=[100, 104, 108]))
     assert f and f["type"] == "falling_wedge" and f["direction"] == "bullish"
 
 
@@ -72,26 +77,26 @@ def test_wrong_way_break_drops_directional_pattern():
 
 
 def test_wedge_breakout_retest_stays_confirmed():
-    # Falling wedge breaks up, then pulls back to retest but HOLDS above the lower
-    # rail → still a valid confirmed breakout (the TAO 4H case).
-    f = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 102]))
+    # Falling wedge breaks up, then pulls back to retest but HOLDS in the upper
+    # half → still a valid confirmed breakout (the TAO 4H case).
+    f = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 103]))
     assert f and f["type"] == "falling_wedge" and f["confirmed"]
 
 
 def test_wedge_failed_breakout_dropped():
-    # Breaks up, then collapses back BELOW the lower rail → failed → dropped.
-    f = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 90]))
+    # Breaks up, then collapses well BELOW the wedge → failed → dropped.
+    f = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 90]))
     assert f is None or f["type"] != "falling_wedge"
 
 
 def test_wedge_breakout_roundtrip_to_lower_half_dropped():
     # Breaks up, then price round-trips back into the LOWER half of the wedge
-    # (below the midline) without closing below the rail — a stalled/failed
-    # breakout that must not keep showing an up-target (the odd TAO 1H case).
-    dropped = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 97]))
+    # (below the midline ≈96.1) — a stalled/failed breakout that must not keep
+    # showing an up-target (the odd TAO 1H case).
+    dropped = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 95]))
     assert dropped is None or dropped["type"] != "falling_wedge"
     # Control: a shallow pullback that stays in the UPPER half remains confirmed.
-    held = _one(_zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 102]))
+    held = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 103]))
     assert held and held["type"] == "falling_wedge" and held["confirmed"]
 
 
@@ -114,7 +119,7 @@ def test_rails_are_envelopes_bounding_the_candles():
     # The drawn rails must actually CONTAIN the price — every candle in the wedge
     # window sits at/below the upper rail and at/above the lower rail (envelope),
     # not a mean line that leaves half the candles outside.
-    cs = _zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 103])
+    cs = _zigzag(FALLING_WEDGE, tail=[101, 104, 103])
     f = _one(cs)
     assert f and f["upper_line"] and f["lower_line"]
     ul, ll = f["upper_line"], f["lower_line"]

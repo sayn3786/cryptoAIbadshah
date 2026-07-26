@@ -1528,6 +1528,48 @@ def _fit_line(points):
     return slope, my - slope * mx
 
 
+def _trendline_through_pivots(pivots, want_upper: bool):
+    """Fit a rail that TOUCHES the swing pivots — the line through two pivots that
+    keeps every other pivot on the correct side (all highs at/below for an upper
+    rail; all lows at/above for a lower rail), preferring the widest span (most
+    representative) then the most touches. Returns (slope, intercept) or None when
+    no clean boundary exists (caller then falls back to regression+envelope).
+
+    This makes the drawn rail sit ON the swing highs/lows instead of a regression
+    mean-line (candles poking out) or a slope-plus-offset (rail drifting past the
+    recent swings)."""
+    pts = [(p["index"], p["price"]) for p in pivots]
+    n = len(pts)
+    if n < 2:
+        return None
+    scale = sum(y for _, y in pts) / n
+    tol = max(scale * 5e-4, 1e-9)          # ~0.05% of price, absorbs float noise
+    best = None                             # (span, touches), slope, intercept
+    for i in range(n):
+        for j in range(i + 1, n):
+            xi, yi = pts[i]; xj, yj = pts[j]
+            if xj == xi:
+                continue
+            slope = (yj - yi) / (xj - xi)
+            intercept = yi - slope * xi
+            ok, touches = True, 0
+            for x, y in pts:
+                v = slope * x + intercept
+                if want_upper and y > v + tol:
+                    ok = False; break
+                if (not want_upper) and y < v - tol:
+                    ok = False; break
+                if abs(y - v) <= tol:
+                    touches += 1
+            if ok:
+                key = (xj - xi, touches)
+                if best is None or key > best[0]:
+                    best = (key, slope, intercept)
+    if best:
+        return best[1], best[2]
+    return None
+
+
 def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                             window: int = TW_PIVOT_WINDOW) -> List[Dict]:
     """Detect ascending/descending/symmetrical triangles and rising/falling wedges
@@ -1542,22 +1584,26 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
 
     hs = ph[-4:] if len(ph) >= 4 else ph[-TW_MIN_PIVOTS:]
     ls = pl[-4:] if len(pl) >= 4 else pl[-TW_MIN_PIVOTS:]
-    h_slope, _ = _fit_line([(p["index"], p["price"]) for p in hs])
-    l_slope, _ = _fit_line([(p["index"], p["price"]) for p in ls])
 
     start_i = min(hs[0]["index"], ls[0]["index"])
     last_i  = max(hs[-1]["index"], ls[-1]["index"])   # END OF STRUCTURE (last pivot),
                                                        # not the current bar — after a
                                                        # break the rails have already met.
 
-    # ENVELOPE rails: keep the regression SLOPE but shift each rail's intercept to
-    # the extreme so it actually BOUNDS the price — the upper rail sits on/above
-    # every high in the wedge, the lower rail on/below every low. A plain
-    # least-squares line runs through the MIDDLE of the swings, leaving ~half the
-    # candles poking outside the drawn rails (what looked wrong on the chart).
-    _rng = candles[start_i:last_i + 1] or [candles[last_i]]
-    h_int = max(c["high"] - h_slope * (start_i + k) for k, c in enumerate(_rng))
-    l_int = min(c["low"]  - l_slope * (start_i + k) for k, c in enumerate(_rng))
+    # Rails that TOUCH the swing pivots (a line through two swings keeping the rest
+    # on the correct side). Falls back to the regression SLOPE offset to the
+    # extreme (envelope) when no clean 2-touch boundary exists, so the rail still
+    # bounds the price rather than running through its middle.
+    _up = _trendline_through_pivots(hs, want_upper=True)
+    _lo = _trendline_through_pivots(ls, want_upper=False)
+    if _up and _lo:
+        (h_slope, h_int), (l_slope, l_int) = _up, _lo
+    else:
+        h_slope, _ = _fit_line([(p["index"], p["price"]) for p in hs])
+        l_slope, _ = _fit_line([(p["index"], p["price"]) for p in ls])
+        _rng = candles[start_i:last_i + 1] or [candles[last_i]]
+        h_int = max(c["high"] - h_slope * (start_i + k) for k, c in enumerate(_rng))
+        l_int = min(c["low"]  - l_slope * (start_i + k) for k, c in enumerate(_rng))
 
     upper = lambda i: h_slope * i + h_int
     lower = lambda i: l_slope * i + l_int
