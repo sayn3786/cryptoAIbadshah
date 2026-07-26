@@ -42,6 +42,13 @@ def test_double_top_forming():
     assert f["status"] == "forming" and f["confirmed"] is False
 
 
+def test_double_top_failed_breakout_dropped():
+    # Confirms a breakdown below the neckline, then RECLAIMS it (closes back above)
+    # → failed breakout → dropped (not shown as a confirmed reversal).
+    cs = _series(DT_BASE + [97, 93, 89, 95])
+    assert not _of(detect_reversals(cs, "1D"), "double_top", "triple_top")
+
+
 def test_double_top_invalidated_is_dropped():
     cs = _series(DT_BASE + [101, 102, 103])           # breaks above the tops
     assert not _of(detect_reversals(cs, "1D"), "double_top", "triple_top")
