@@ -401,6 +401,52 @@ class BinanceClient:
         except Exception:
             return None, None
 
+    def _cg_intraday_data(self, symbol: str, days: int):
+        """CoinGecko market_chart WITHOUT the daily-interval flag. For a 2-90 day
+        window CoinGecko auto-returns HOURLY points, so grouping them yields real
+        OHLC candles (a proper high/low range) instead of a flat open==close doji."""
+        cg_id = CG_IDS.get(symbol)
+        if not cg_id:
+            return None, None
+        try:
+            data = self._get(f"{CG_BASE}/coins/{cg_id}/market_chart",
+                             {"vs_currency": "usd", "days": str(min(days, 90))})
+            return data.get("prices", []), data.get("total_volumes", [])
+        except Exception:
+            return None, None
+
+    def _group_by_hours(self, prices, volumes, n_hours: int, limit: int) -> Optional[List[Dict]]:
+        """Group intraday CoinGecko price points into n_hours candles with real OHLC."""
+        bucket_ms = n_hours * 3600 * 1000
+        vol_map: Dict[int, float] = {}
+        for ts, vol in (volumes or []):
+            vol_map[int(ts // bucket_ms)] = vol_map.get(int(ts // bucket_ms), 0.0) + vol
+        buckets: List[dict] = []
+        bucket: Optional[dict] = None
+        b_idx = None
+        for ts, price in sorted(prices, key=lambda x: x[0]):
+            idx = int(ts // bucket_ms)
+            if bucket is None or idx != b_idx:
+                if bucket:
+                    buckets.append(bucket)
+                bucket = {"timestamp": idx * bucket_ms, "open": price, "high": price,
+                          "low": price, "close": price, "volume": vol_map.get(idx, 0.0)}
+                b_idx = idx
+            else:
+                bucket["high"]  = max(bucket["high"], price)
+                bucket["low"]   = min(bucket["low"],  price)
+                bucket["close"] = price
+        if bucket:
+            buckets.append(bucket)
+        out = []
+        for b in buckets[-limit:]:
+            vol = round(b["volume"], 2)
+            out.append({"timestamp": int(b["timestamp"]), "open": round(b["open"], 8),
+                        "high": round(b["high"], 8), "low": round(b["low"], 8),
+                        "close": round(b["close"], 8), "volume": vol,
+                        "taker_buy_volume": round(vol * 0.5, 2)})
+        return out if out else None
+
     def _cg_weekly_candles(self, symbol: str, limit: int = 100) -> Optional[List[Dict]]:
         prices, volumes = self._cg_daily_data(symbol, min(limit * 7 + 60, 730))
         if not prices:
@@ -425,21 +471,24 @@ class BinanceClient:
         hours = _HOURS.get(interval.lower())
         if not hours:
             return None
+
+        # Prefer HOURLY CoinGecko data (2-90 day window) so grouped candles carry
+        # a real high/low range — flat open==close candles (from the daily flag)
+        # render as invisible dashes and break wick/engulfing/pole detection.
+        hprices, hvolumes = self._cg_intraday_data(symbol, 90)
+        if hprices:
+            if hours >= 24:
+                return self._group_by_n_days(hprices, hvolumes, 1, limit)      # real daily OHLC
+            return self._group_by_hours(hprices, hvolumes, hours, limit)        # real intraday OHLC
+
+        # Fallback: only if hourly is unavailable, use daily points (flat candles).
         days_per_candle = hours / 24.0
-        # Fetch enough daily data to cover the requested limit
         fetch_days = min(int(limit * days_per_candle) + 10, 730)
         prices, volumes = self._cg_daily_data(symbol, fetch_days)
         if not prices:
             return None
-        if days_per_candle >= 1.0:
-            # Group daily data into N-day candles
-            n = int(days_per_candle)
-            return self._group_by_n_days(prices, volumes, n, limit)
-        else:
-            # Sub-day: CoinGecko only provides daily resolution, so use daily
-            # candles as the best available approximation (still much better
-            # than weekly data for a 2H request).
-            return self._group_by_n_days(prices, volumes, 1, limit)
+        n = max(1, int(days_per_candle))
+        return self._group_by_n_days(prices, volumes, n, limit)
 
     # ── Kraken ────────────────────────────────────────────────────────────────
 
