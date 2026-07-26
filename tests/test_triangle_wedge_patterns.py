@@ -105,6 +105,26 @@ def test_too_few_pivots_empty():
     assert detect_triangles_wedges([_bar(i, 100) for i in range(20)], "1D") == []
 
 
+def _line_at(pts, ts):
+    (t0, p0), (t1, p1) = (pts[0]["timestamp"], pts[0]["price"]), (pts[1]["timestamp"], pts[1]["price"])
+    return p0 if t1 == t0 else p0 + (p1 - p0) * (ts - t0) / (t1 - t0)
+
+
+def test_rails_are_envelopes_bounding_the_candles():
+    # The drawn rails must actually CONTAIN the price — every candle in the wedge
+    # window sits at/below the upper rail and at/above the lower rail (envelope),
+    # not a mean line that leaves half the candles outside.
+    cs = _zigzag([100, 106, 98, 103, 96, 101, 95, 100], tail=[101, 104, 103])
+    f = _one(cs)
+    assert f and f["upper_line"] and f["lower_line"]
+    ul, ll = f["upper_line"], f["lower_line"]
+    t0, t1 = ul[0]["timestamp"], ul[1]["timestamp"]
+    window = [c for c in cs if t0 <= c["timestamp"] <= t1]
+    assert len(window) >= 5
+    assert all(c["high"] <= _line_at(ul, c["timestamp"]) + 1e-6 for c in window), "a high pokes above the upper rail"
+    assert all(c["low"]  >= _line_at(ll, c["timestamp"]) - 1e-6 for c in window), "a low pokes below the lower rail"
+
+
 def test_drawable_rail_geometry_present():
     # The chart overlay needs two rail endpoints (start pivot → end of structure).
     f = _one(_zigzag([90, 100, 92, 100, 94, 100, 96, 100, 98], tail=[101, 103, 105]))
