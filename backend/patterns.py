@@ -399,9 +399,31 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                         status, confirmed, breakout_dir = "confirmed", True, "down"
                     break
 
-            # Invalidated patterns are never returned as active candidates.
-            if status == "invalidated":
-                _reject(7, "invalidated", is_bull, detail=invalidation_reason,
+            # ── Failed-breakout detection ────────────────────────────────────
+            # A CONFIRMED breakout that price then reverses back THROUGH the flag
+            # structure is a whipsaw / failed breakout — no longer a tradeable
+            # signal. A bull up-break FAILS when a later candle closes below the
+            # flag low; a bear down-break FAILS when a later candle closes above
+            # the flag high. (Chronological, first failure wins — a still-later
+            # recovery cannot resurrect it.) This stops a dumped bull flag from
+            # showing "confirmed · target up" while price sits below its own zone.
+            if confirmed and breakout_ts is not None:
+                bo_idx = next((k for k, c in enumerate(post)
+                               if c["timestamp"] == breakout_ts), None)
+                if bo_idx is not None:
+                    for c in post[bo_idx + 1:]:
+                        if breakout_dir == "up" and c["close"] < fl_:
+                            status, confirmed = "failed", False
+                            invalidation_reason = "breakout failed — closed back below the flag low"
+                            break
+                        if breakout_dir == "down" and c["close"] > fh:
+                            status, confirmed = "failed", False
+                            invalidation_reason = "breakout failed — closed back above the flag high"
+                            break
+
+            # Invalidated / failed patterns are never returned as active candidates.
+            if status in ("invalidated", "failed"):
+                _reject(7, status, is_bull, detail=invalidation_reason,
                         breakout_dir=breakout_dir, consolidation_bars=fl,
                         capped_at_max=capped_at_max,
                         flag_high=round(fh, 8), flag_low=round(fl_, 8))

@@ -190,6 +190,30 @@ def test_bear_wrong_side_breakout_stays_invalid():
 
 
 # ── D. breakout candle is not swallowed into the consolidation ──────────────────
+def test_confirmed_bull_breakout_that_reverses_below_flag_low_fails():
+    # A bull flag confirms an up-break, then a later candle closes BACK below the
+    # flag low — a whipsaw / failed breakout. It must NOT be returned as an active
+    # confirmed bullish flag (the TAO 1H "confirmed but dumped" case).
+    failed = build_flag(direction="up", flag_bars=5, flag_drift=-0.4,
+                        post_closes=[114.0, 105.0])
+    assert not [f for f in _bull_flags(detect_flags(failed, "1D", 1.0, 4.0))
+                if f["confirmed"] and f["is_active"]], \
+        "a confirmed up-break that closed back below the flag low must be dropped"
+
+    # Control: confirm then HOLD above the flag low → stays a confirmed flag.
+    held = build_flag(direction="up", flag_bars=5, flag_drift=-0.4,
+                      post_closes=[114.0, 115.0])
+    assert [f for f in _bull_flags(detect_flags(held, "1D", 1.0, 4.0)) if f["confirmed"]]
+
+
+def test_confirmed_bear_breakout_that_reverses_above_flag_high_fails():
+    # Mirror: a bear flag confirms a down-break, then closes back ABOVE the flag high.
+    failed = build_flag(direction="down", flag_bars=5, flag_drift=+0.4,
+                        post_closes=[86.0, 96.0])
+    assert not [f for f in _bear_flags(detect_flags(failed, "1D", 1.0, 4.0))
+                if f["confirmed"] and f["is_active"]]
+
+
 def test_breakout_not_swallowed_into_consolidation():
     candles = build_flag(direction="up", flag_bars=5, flag_drift=-0.3,
                          post_closes=[115.0, 116.0, 117.0])
