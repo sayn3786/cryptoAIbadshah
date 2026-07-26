@@ -520,21 +520,34 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
 
 def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
     """Scan for freshly-confirmed patterns not yet alerted; atomically CLAIM each
-    (exact-once via KV) and return only the newly-claimed ones."""
+    (exact-once via KV) and return only the newly-claimed ones. The candle fetches
+    run in PARALLEL over (symbol, timeframe) pairs so the scan stays well within
+    the serverless timeout; KV claims run sequentially afterwards (fast + keeps
+    the exact-once writes single-threaded)."""
     symbols = symbols or list(SYMBOLS.keys())
     tfs     = tfs or PATTERN_ALERT_TFS
+
+    def _scan(pair):
+        sym, tf = pair
+        try:
+            closed = _fetch_closed_spot(sym, tf)
+        except Exception:
+            return []
+        return [{"symbol": sym, "timeframe": tf, **pat}
+                for pat in _confirmed_patterns_for(closed, tf)]
+
+    pairs = [(sym, tf) for sym in symbols for tf in tfs]
+    found: list = []
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        for res in ex.map(_scan, pairs):
+            found.extend(res)
+
     new_alerts = []
-    for sym in symbols:
-        for tf in tfs:
-            try:
-                closed = _fetch_closed_spot(sym, tf)
-            except Exception:
-                continue
-            for pat in _confirmed_patterns_for(closed, tf):
-                # kv.claim is atomic SET-NX: True only for the first caller, so a
-                # confirmation alerts exactly once even across cold starts.
-                if _kv_claim(_pattern_alert_id(sym, tf, pat)):
-                    new_alerts.append({"symbol": sym, "timeframe": tf, **pat})
+    for pat in found:
+        # kv.claim is atomic SET-NX: True only for the first caller, so a
+        # confirmation alerts exactly once even across cold starts.
+        if _kv_claim(_pattern_alert_id(pat["symbol"], pat["timeframe"], pat)):
+            new_alerts.append(pat)
     return new_alerts
 
 def _fetch_fear_greed() -> Dict:
@@ -2395,14 +2408,10 @@ def api_cron_daily():
     except Exception as e:
         results["twitter"] = f"error: {e}"
 
-    # Chart-pattern confirmations → Telegram (only NEW ones, deduped)
-    try:
-        alerts = _scan_confirmed_patterns()
-        if alerts:
-            _send_pattern_alerts(alerts, results.get("date_label", ""))
-        results["pattern_alerts"] = len(alerts)
-    except Exception as e:
-        results["pattern_alerts"] = f"error: {e}"
+    # NOTE: chart-pattern confirmation alerts are intentionally NOT run here — the
+    # daily cron is already close to the serverless time budget (recommendations +
+    # Twitter). They run in their own workflow via /api/patterns/alert so neither
+    # can time the other out.
 
     print(f"[cron/daily] {results}")
     return jsonify({"ok": True, "results": results})

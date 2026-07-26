@@ -1,0 +1,31 @@
+name: Pattern Confirmation Alerts
+
+on:
+  schedule:
+    # All times UTC. Chart-pattern confirmations (1D/1W) don't change fast, so a
+    # few checks a day is plenty. Kept separate from the daily-recs cron so a slow
+    # scan can never time that job out (and vice-versa).
+    - cron: '10 0 * * *'    # ~08:10 SGT
+    - cron: '10 8 * * *'    # ~16:10 SGT
+    - cron: '10 16 * * *'   # ~00:10 SGT
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  send-pattern-alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan for confirmed patterns and push to Telegram
+        run: |
+          echo "Calling: ${{ secrets.APP_URL }}/api/patterns/alert"
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST "${{ secrets.APP_URL }}/api/patterns/alert" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            --max-time 90)
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
+          echo "Status: $HTTP_STATUS"
+          echo "Response: $BODY"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: API returned HTTP $HTTP_STATUS"
+            exit 1
+          fi

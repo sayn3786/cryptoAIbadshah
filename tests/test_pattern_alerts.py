@@ -83,6 +83,25 @@ def test_pattern_alerts_endpoint_returns_confirmed(monkeypatch):
     assert any(a["symbol"] == "BTC" and a["type"] in ("double_top", "triple_top") for a in alerts)
 
 
+def test_scan_confirmed_patterns_parallel_and_claims(monkeypatch):
+    # The cron/endpoint scan runs fetches in parallel and returns only newly
+    # KV-claimed confirmations (exact-once). Mock the fetch + claim (no network).
+    pytest.importorskip("flask")
+    import app
+    monkeypatch.setattr(app, "SYMBOLS", {"BTC": "BTCUSDT", "ETH": "ETHUSDT"})
+    monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
+    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT + [97, 93, 89, 87]))
+    claimed = set()
+    monkeypatch.setattr(app, "_kv_claim", lambda key: claimed.add(key) or True)
+    out = app._scan_confirmed_patterns()
+    syms = {a["symbol"] for a in out}
+    assert syms == {"BTC", "ETH"}                    # both scanned in parallel
+    assert all(a["kind"] == "reversal" for a in out if "Top" in a.get("label", ""))
+    # a second scan claims nothing new (exact-once)
+    monkeypatch.setattr(app, "_kv_claim", lambda key: key not in claimed)
+    assert app._scan_confirmed_patterns() == []
+
+
 def test_kv_file_fallback_claims_exactly_once(tmp_path, monkeypatch):
     # With no KV configured, claim() uses the local file and is exact-once.
     import kv
