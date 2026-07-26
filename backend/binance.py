@@ -546,6 +546,37 @@ class BinanceClient:
         except Exception:
             return None
 
+    # Gate.io intraday/daily candlesticks — real OHLC with deep history for alts
+    # (e.g. TAO) that recently-listed CEX spot markets don't carry. Gate has no
+    # 2h/12h bars, so those intervals fall through to the other sources.
+    _GATE_IV = {"1h": "1h", "4h": "4h", "8h": "8h", "1d": "1d",
+                "1w": "7d", "1W": "7d", "1M": "30d"}
+
+    def _gate_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
+        pair = GATE_PAIRS.get(symbol)
+        giv  = self._GATE_IV.get(interval)
+        if not pair or not giv:
+            return None
+        try:
+            data = self._get(f"{GATE_BASE}/spot/candlesticks",
+                             {"currency_pair": pair, "interval": giv, "limit": min(limit, 1000)})
+            out = []
+            for k in data:
+                # Gate.io: [timestamp, volume(quote), close, high, low, open, ...]
+                out.append({
+                    "timestamp":        int(k[0]) * 1000,
+                    "open":             float(k[5]),
+                    "high":             float(k[3]),
+                    "low":              float(k[4]),
+                    "close":            float(k[2]),
+                    "volume":           float(k[1]),
+                    "taker_buy_volume": float(k[1]) * 0.5,
+                })
+            out.sort(key=lambda c: c["timestamp"])
+            return out[-limit:] if out else None
+        except Exception:
+            return None
+
     # ── KuCoin ────────────────────────────────────────────────────────────────
 
     # UTC-aligned bars for 12H+ (…utc suffix) — OKX's default 1D/1W/1M open at
@@ -561,25 +592,42 @@ class BinanceClient:
         if not inst_id:
             return None
         bar = self._OKX_BAR_SPOT.get(interval, "1W")
+
+        def _parse(rows):
+            out = []
+            for k in rows:
+                vol = float(k[5])
+                out.append({"timestamp": int(k[0]), "open": float(k[1]), "high": float(k[2]),
+                            "low": float(k[3]), "close": float(k[4]), "volume": vol,
+                            "taker_buy_volume": vol * 0.5})
+            return out
+
         try:
             data = self._get(f"{OKX_BASE}/api/v5/market/candles",
-                             {"instId": inst_id, "bar": bar, "limit": min(limit, 300)})
+                             {"instId": inst_id, "bar": bar, "limit": 300})
             rows = data.get("data") if isinstance(data, dict) else None
             if not rows:
                 return None
-            out = []
-            for k in reversed(rows):
-                vol = float(k[5])
-                out.append({
-                    "timestamp":        int(k[0]),
-                    "open":             float(k[1]),
-                    "high":             float(k[2]),
-                    "low":              float(k[3]),
-                    "close":            float(k[4]),
-                    "volume":           vol,
-                    "taker_buy_volume": vol * 0.5,
-                })
-            return out[-limit:] if out else None
+            acc = _parse(rows)                       # newest-first
+            # Page OLDER history so a short recent window still gets full depth —
+            # /history-candles with `after` returns bars older than a timestamp.
+            pages = 0
+            while len(acc) < limit and pages < 6:
+                oldest = min(c["timestamp"] for c in acc)
+                hist = self._get(f"{OKX_BASE}/api/v5/market/history-candles",
+                                 {"instId": inst_id, "bar": bar, "after": str(oldest), "limit": 100})
+                hrows = hist.get("data") if isinstance(hist, dict) else None
+                more = _parse(hrows) if hrows else []
+                if not more:
+                    break
+                acc.extend(more)
+                pages += 1
+            seen, uniq = set(), []
+            for c in sorted(acc, key=lambda c: c["timestamp"]):
+                if c["timestamp"] in seen:
+                    continue
+                seen.add(c["timestamp"]); uniq.append(c)
+            return uniq[-limit:] if uniq else None
         except Exception:
             return None
 
@@ -972,6 +1020,7 @@ class BinanceClient:
             (self._binance_klines, "binance"),
             (self._okx_candles,    "okx"),
             (self._bybit_candles,  "bybit"),
+            (self._gate_candles,   "gateio"),
             (self._kucoin_candles, "kucoin"),
             (self._mexc_candles,   "mexc"),
             (self._htx_candles,    "htx"),

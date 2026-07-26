@@ -65,6 +65,48 @@ def test_real_exchange_preferred_over_longer_coingecko(monkeypatch):
     assert cg_called["n"] == 0, "CoinGecko must not be used when a real source cleared the floor"
 
 
+def test_gate_candles_parse_real_ohlc(monkeypatch):
+    c = BinanceClient()
+    # Gate row: [timestamp(s), volume(quote), close, high, low, open, ...]
+    rows = [[str(1_700_000_000 + i * 3600), "1000", str(100 + i), str(101 + i),
+             str(99 + i), str(100 + i - 0.5)] for i in range(50)]
+    monkeypatch.setattr(c, "_get", lambda url, params=None: rows)
+    out = c._gate_candles("TAOUSDT", "4h", 240)
+    assert out and len(out) == 50
+    assert out[0]["timestamp"] < out[-1]["timestamp"]      # ascending
+    assert all(cd["high"] >= cd["low"] for cd in out)
+    assert all(cd["high"] >= cd["open"] and cd["high"] >= cd["close"] for cd in out)
+
+
+def test_gate_skips_unsupported_interval(monkeypatch):
+    c = BinanceClient()
+    monkeypatch.setattr(c, "_get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no call")))
+    assert c._gate_candles("TAOUSDT", "2h", 240) is None    # Gate has no 2h bars
+
+
+def test_okx_paginates_history_for_depth(monkeypatch):
+    c = BinanceClient()
+    base = 1_700_000_000_000
+    def _okx_row(ts, p):
+        return [str(ts), str(p), str(p + 1), str(p - 1), str(p), "10", "10"]
+    # recent endpoint returns only 30 bars (short listing window); history-candles
+    # pages older bars until we have depth, then returns empty.
+    recent = [_okx_row(base - i * 86_400_000, 100 + i) for i in range(30)]      # newest-first
+    def fake_get(url, params=None):
+        if "history-candles" in url:
+            after = int(params["after"])
+            older = [_okx_row(after - (i + 1) * 86_400_000, 200 + i) for i in range(100)]
+            # stop after we've gone far enough back
+            if after < base - 200 * 86_400_000:
+                return {"data": []}
+            return {"data": older}
+        return {"data": recent}
+    monkeypatch.setattr(c, "_get", fake_get)
+    out = c._okx_candles("TAOUSDT", "1d", 240)
+    assert out and len(out) > 30, "history pagination must deepen a short recent window"
+    assert all(out[i]["timestamp"] < out[i + 1]["timestamp"] for i in range(len(out) - 1))
+
+
 def test_coingecko_daily_candles_have_real_range(monkeypatch):
     # CoinGecko fallback must produce candles with a real high/low range (from
     # hourly data), not flat open==close dashes that render invisibly.
