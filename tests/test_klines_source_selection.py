@@ -45,6 +45,26 @@ def test_daily_stops_early_on_first_rich_source(monkeypatch):
     assert len(out) == 240 and c.data_source == "binance"
 
 
+def test_real_exchange_preferred_over_longer_coingecko(monkeypatch):
+    # An exchange with FEWER but real-OHLC candles must beat CoinGecko's longer
+    # APPROXIMATED history (thin bodies / erratic wicks). No CoinGecko fallback
+    # once an exchange cleared the floor.
+    c = BinanceClient()
+    monkeypatch.setattr(c, "_binance_klines", lambda *a, **k: None)
+    monkeypatch.setattr(c, "_okx_candles",    lambda *a, **k: _candles(150))   # real, < rich(200)
+    for name in ("_bybit_candles", "_kucoin_candles", "_mexc_candles",
+                 "_htx_candles", "_lbank_candles"):
+        monkeypatch.setattr(c, name, lambda *a, **k: None)
+    cg_called = {"n": 0}
+    def _cg(*a, **k):
+        cg_called["n"] += 1
+        return _candles(240)          # longer, but approximated
+    monkeypatch.setattr(c, "_cg_daily_as_candles", _cg)
+    out = c.get_spot_klines("TAO", "4h", 240)
+    assert len(out) == 150 and c.data_source == "okx"
+    assert cg_called["n"] == 0, "CoinGecko must not be used when a real source cleared the floor"
+
+
 def test_coingecko_daily_candles_have_real_range(monkeypatch):
     # CoinGecko fallback must produce candles with a real high/low range (from
     # hourly data), not flat open==close dashes that render invisibly.

@@ -1020,11 +1020,17 @@ class BinanceClient:
                     self.data_source = "bybit"
                     return _best_r[-limit:]
 
-            # Last intraday resort: CoinGecko daily aggregated
-            result = self._cg_daily_as_candles(symbol, interval, limit)
-            if _consider(result, "coingecko"):
-                self.data_source = "coingecko"
-                return _best_r[-limit:]
+            # CoinGecko intraday is APPROXIMATED — built from periodic price
+            # SNAPSHOTS, not true tick OHLC, so its candles have thin bodies and
+            # erratic wicks (they don't match a real exchange chart). Use it ONLY
+            # when no exchange returned a usable real-OHLC result, so real candles
+            # are always preferred even when an exchange has fewer bars than
+            # CoinGecko's longer synthetic history.
+            if _blen(_best_r) < _floor:
+                result = self._cg_daily_as_candles(symbol, interval, limit)
+                if _consider(result, "coingecko"):
+                    self.data_source = "coingecko"
+                    return _best_r[-limit:]
 
         # Nothing was "rich", but a thin real result still beats synthetic data
         # (e.g. a genuinely young token with only a handful of weekly bars). Return
