@@ -45,6 +45,30 @@ def test_daily_stops_early_on_first_rich_source(monkeypatch):
     assert len(out) == 240 and c.data_source == "binance"
 
 
+def test_coingecko_daily_candles_have_real_range(monkeypatch):
+    # CoinGecko fallback must produce candles with a real high/low range (from
+    # hourly data), not flat open==close dashes that render invisibly.
+    import math
+    c = BinanceClient()
+    base = 1_700_000_000_000
+    prices = [[base + h * 3600_000, 100 + 10 * math.sin(h / 4.0)] for h in range(72)]
+    vols   = [[base + h * 3600_000, 5.0] for h in range(72)]
+    monkeypatch.setattr(c, "_cg_intraday_data", lambda sym, days: (prices, vols))
+    out = c._cg_daily_as_candles("TAO", "1d", 240)
+    assert out and len(out) >= 3
+    # the full-day candles must have high strictly above low (a real body/wick)
+    assert all(cd["high"] > cd["low"] for cd in out[1:]), "candles must not be flat"
+
+
+def test_coingecko_falls_back_to_daily_when_no_hourly(monkeypatch):
+    c = BinanceClient()
+    monkeypatch.setattr(c, "_cg_intraday_data", lambda sym, days: (None, None))
+    day = [[1_700_000_000_000 + d * 86_400_000, 100 + d] for d in range(40)]
+    monkeypatch.setattr(c, "_cg_daily_data", lambda sym, days: (day, [[p[0], 1.0] for p in day]))
+    out = c._cg_daily_as_candles("TAO", "1d", 240)
+    assert out and len(out) >= 30            # still usable, just flat (last resort)
+
+
 def test_genuinely_thin_everywhere_returns_best_real(monkeypatch):
     c = BinanceClient()
     # All real sources thin (young token) → return the deepest real result (still
