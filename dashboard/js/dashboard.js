@@ -2713,9 +2713,18 @@ function renderFlags(flags, candles, signal, diagnostics) {
   // fall back to the flat boundary for older payloads that predate the field.
   const brkLvl = f => (f.break_level != null ? f.break_level
                       : (f.direction === 'bullish' ? f.flag_high : f.flag_low));
+  // If the CURRENT (still-forming) candle is already beyond the rail, say so —
+  // it confirms only once it CLOSES there (a candle can poke past then fall back,
+  // which is exactly why we wait for the close, not the intrabar touch).
+  const _lc = S.analysis && S.analysis.live_candle;
+  const _bl = brkLvl(best);
+  const _liveBeyond = !best.confirmed && _lc && _lc.close != null &&
+    (best.direction === 'bullish' ? +_lc.close > _bl : +_lc.close < _bl);
   const bestStatus = best.confirmed
     ? '✅ breakout confirmed'
-    : `⏳ forming — awaiting a close ${best.direction === 'bullish' ? 'above' : 'below'} $${p(brkLvl(best))}${best.rail_break ? ' (rail)' : ''}`;
+    : `⏳ forming — awaiting a close ${best.direction === 'bullish' ? 'above' : 'below'} $${p(_bl)}${best.rail_break ? ' (rail)' : ''}`
+      + (_liveBeyond ? ` · ⚡ current candle is ${best.direction === 'bullish' ? 'above' : 'below'} the rail — confirms if it CLOSES there`
+                     : '');
   const bestNote = (bestAligned
     ? `aligned with the ${signal.direction} signal`
     : (wantDir ? `active pattern · note: your signal is ${signal.direction}` : 'strongest active pattern'))

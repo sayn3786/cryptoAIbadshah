@@ -190,6 +190,20 @@ def test_bear_wrong_side_breakout_stays_invalid():
 
 
 # ── D. breakout candle is not swallowed into the consolidation ──────────────────
+def test_bull_descending_flag_confirms_on_close_above_the_rail():
+    # A close ABOVE the descending upper rail (but still BELOW the flat flag high)
+    # must CONFIRM — the rail is the trigger, not the flat high. Regression for a
+    # bullish descending flag that stayed "forming" when a closed candle had
+    # already closed above the rail.
+    forming = _bull_flags(detect_flags(
+        build_flag(direction="up", flag_bars=5, flag_drift=-0.5), "1D", 1.0, 4.0))[0]
+    mid = round((forming["break_level"] + forming["flag_high"]) / 2, 3)
+    assert forming["break_level"] < mid < forming["flag_high"]
+    cs = build_flag(direction="up", flag_bars=5, flag_drift=-0.5, post_closes=[mid])
+    assert [f for f in _bull_flags(detect_flags(cs, "1D", 1.0, 4.0)) if f["confirmed"]], \
+        "a close above the descending rail must confirm even below the flat flag high"
+
+
 def test_confirmed_bull_breakout_that_reverses_below_flag_low_fails():
     # A bull flag confirms an up-break, then a later candle closes BACK below the
     # flag low — a whipsaw / failed breakout. It must NOT be returned as an active
