@@ -2955,6 +2955,14 @@ function drawPatternMiniChart(el, pat, rows, interval) {
   return chart;
 }
 
+// Append the live/forming candle so the mini-charts show TODAY's candle too —
+// the analysis `candles` are closed-only (for signal integrity), but the chart
+// should still display the in-progress bar like an exchange does.
+function _withLiveCandle(candles) {
+  const lc = S.analysis && S.analysis.live_candle;
+  return (lc && lc.timestamp) ? candles.concat([lc]) : candles;
+}
+
 // Build the candle rows once and draw a mini chart for EACH pattern into its
 // card container (id = `${prefix}Chart_${idx}`). Charts tracked in `bucket` for
 // teardown on the next render.
@@ -2963,7 +2971,7 @@ function renderPatternMiniCharts(patterns, candles, prefix, bucket) {
   S[bucket] = [];
   const list = (patterns || []).filter(Boolean);
   if (!list.length || !candles || !candles.length || !window.LightweightCharts) return;
-  const rows = candles
+  const rows = _withLiveCandle(candles)
     .map(c => ({ time: Math.floor(c.timestamp / 1000), open: +c.open, high: +c.high, low: +c.low, close: +c.close }))
     .sort((a, b) => a.time - b.time)
     .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
@@ -3034,7 +3042,7 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     });
     return;
   }
-  const rows = candles
+  const rows = _withLiveCandle(candles)
     .map(c => ({ time: Math.floor(c.timestamp / 1000), open: +c.open, high: +c.high, low: +c.low, close: +c.close }))
     .sort((a, b) => a.time - b.time)
     .filter((v, i, a) => i === 0 || v.time > a[i - 1].time);
