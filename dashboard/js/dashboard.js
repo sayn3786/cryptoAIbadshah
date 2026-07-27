@@ -2919,6 +2919,7 @@ function drawPatternMiniChart(el, pat, rows, interval) {
   });
   cs.setData(win);
   const ov = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+  const markers = [];
 
   if (pat.upper_line && pat.lower_line) {                       // triangle / wedge — two rails
     // Extend each rail FORWARD along its slope to the current candle so the
@@ -2946,12 +2947,22 @@ function drawPatternMiniChart(el, pat, rows, interval) {
       const pts = uniq(pat.points.filter(p => p.role !== 'neckline')
                                  .map(p => ({ ...p, time: t(p.timestamp) }))
                                  .sort((a, b) => a.time - b.time));
-      cs.setMarkers(pts.map(p => ({
+      pts.forEach(p => markers.push({
         time: p.time, position: isTop ? 'aboveBar' : 'belowBar',
         color: col, shape: 'circle', text: LBL[p.role] || '',
-      })));
+      }));
     }
   }
+
+  // Mark the still-forming (live) candle so it's clear which bar is unclosed.
+  const _liveC = S.analysis && S.analysis.live_candle;
+  if (_liveC && _liveC.timestamp) {
+    const _lt = t(_liveC.timestamp);
+    if (win.some(c => c.time === _lt)) {
+      markers.push({ time: _lt, position: 'aboveBar', color: '#eab308', shape: 'arrowDown', text: 'LIVE' });
+    }
+  }
+  if (markers.length) cs.setMarkers(markers.sort((a, b) => a.time - b.time));
 
   // Target line — included in autoscale (own last-value label) so it stays visible.
   if (pat.target != null && anchorTs < lastRowT) {
@@ -3108,6 +3119,17 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     // Markers accumulate here — setMarkers() REPLACES the whole set, so pole and
     // breakout markers must go through one call (sorted by time) at the end.
     const markers = [];
+
+    // Mark the still-forming (live) candle so it's unmistakable which bar hasn't
+    // closed yet — the breakout confirms only when THIS candle closes past the rail
+    // (a closed candle above the rail already confirms).
+    const _liveC = S.analysis && S.analysis.live_candle;
+    if (_liveC && _liveC.timestamp) {
+      const _lt = Math.floor(_liveC.timestamp / 1000);
+      if (win.some(c => c.time === _lt)) {
+        markers.push({ time: _lt, position: 'aboveBar', color: '#eab308', shape: 'arrowDown', text: 'LIVE (unclosed)' });
+      }
+    }
 
     // pole (solid, thick) with a start marker
     if (poleStart && f.pole_start_price && f.pole_end_price) {
