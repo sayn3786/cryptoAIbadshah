@@ -54,6 +54,12 @@ def _swing_levels(candles: List[Dict], window: int = 2):
     return ph, pl
 
 
+# TP3 may extend at most this multiple of the TP2 distance. Keeps the ladder
+# proportional: without it, a far deep-swing high could become TP3 while TP1/TP2
+# sat ~2% away, producing a huge unreachable gap (e.g. TP2 +2.9%, TP3 +54%).
+TP3_MAX_MULT_OF_TP2 = 2.2
+
+
 def _snap_tp_to_structure(direction: str, entry: float, sl: float, timeframe: str,
                           levels: list, max_tp3_abs: float):
     """Anchor TP1/TP2/TP3 to REAL opposing structure (supply/demand zones,
@@ -85,8 +91,14 @@ def _snap_tp_to_structure(direction: str, entry: float, sl: float, timeframe: st
     d2 = min(q)                                 # nearest wall clearing the R gate
     t1 = [d for d in dists if 0.5 * risk <= d <= d2 * 0.85]
     d1 = min(t1) if t1 else d2 * 0.55           # closer wall, else partway
-    t3 = [d for d in dists if d2 * 1.12 <= d <= reach]
-    d3 = max(t3) if t3 else min(d2 * 1.45, reach)   # further wall, else extension
+    # TP3 = the NEXT structural wall beyond TP2 — not the furthest one in reach.
+    # Taking max() let a distant deep-swing high (e.g. a prior cycle high 50%+
+    # away) become TP3 while TP1/TP2 sat ~2% out, leaving an absurd gap that no
+    # runner would realistically reach. Cap the TP2→TP3 extension so the ladder
+    # stays proportional; if the next wall is beyond that cap, use the cap.
+    _d3_cap = min(d2 * TP3_MAX_MULT_OF_TP2, reach)
+    t3 = [d for d in dists if d2 * 1.12 <= d <= _d3_cap]
+    d3 = min(t3) if t3 else min(d2 * 1.45, _d3_cap)   # next wall, else extension
     tp = [round(entry + sgn * d1 * 0.97, 8),    # front-run the walls a touch
           round(entry + sgn * d2 * 0.97, 8),
           round(entry + sgn * d3, 8)]
