@@ -402,6 +402,13 @@ a:hover { color: var(--gold2); }
 .flag-stat span { color: var(--text); font-weight: 600; }
 .flag-target { font-size: .72rem; font-family: var(--mono); }
 .flag-target span { color: var(--gold); font-weight: 600; }
+/* Chased-entry warning under the trade levels */
+.chase-warn {
+  margin-top: 8px; padding: 8px 10px; border-radius: 8px;
+  font-size: .72rem; line-height: 1.45;
+  background: rgba(245,158,11,.10); border: 1px solid rgba(245,158,11,.35);
+  color: var(--gold, #f59e0b);
+}
 .flag-rail-tag { font-size: .6rem; font-weight: 700; padding: 0 5px; border-radius: 100px;
                  background: rgba(148,163,184,.16); color: var(--muted2); letter-spacing: .3px;
                  text-transform: uppercase; vertical-align: middle; }
