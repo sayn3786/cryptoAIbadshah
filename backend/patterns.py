@@ -40,6 +40,21 @@ def _breakout_volume(candles: List[Dict], break_idx: int,
 # (or vice-versa) confirms the break was real. One that fails is the whipsaw.
 RETEST_BAND_PCT = 0.015   # within 1.5% of the level = "at the level"
 
+# A recorded FAILURE is only worth showing while it's recent news. After this
+# many closed candles the pattern disappears entirely rather than cluttering the
+# card with an old post-mortem.
+FAILURE_SHOW_BARS = 3
+
+
+def _failure_is_fresh(candles: List[Dict], failed_ts, max_bars: int = FAILURE_SHOW_BARS) -> bool:
+    """True when `failed_ts` is within `max_bars` CLOSED candles of the latest."""
+    if failed_ts is None:
+        return False
+    for k in range(len(candles) - 1, -1, -1):
+        if candles[k].get("timestamp") == failed_ts:
+            return (len(candles) - 1 - k) <= max_bars
+    return False
+
 
 def _retest_state(candles: List[Dict], break_idx: int, break_level: float,
                   bullish: bool) -> Optional[Dict]:
@@ -530,6 +545,10 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                         breakout_dir=breakout_dir, consolidation_bars=fl,
                         capped_at_max=capped_at_max,
                         flag_high=round(fh, 8), flag_low=round(fl_, 8))
+                # Only surface a failure while it's recent — older post-mortems
+                # just disappear instead of cluttering the card.
+                if not _failure_is_fresh(closed, failed_ts):
+                    continue
                 candidates.append({
                     "direction": direction, "timeframe": tf_label, "tf_weight": tf_weight,
                     "pole_pct": pole_pct, "flag_high": round(fh, 8), "flag_low": round(fl_, 8),
@@ -1486,10 +1505,14 @@ def _resolve_neckline_break(candles: List[Dict], start_idx: int, neckline: float
         return {"status": "forming", "confirmed": False, "break_ts": None}
     break_ts = scan[conf_k]["timestamp"]
     for c in scan[conf_k + 1:]:
+        # `failed_ts` is the candle that BROKE the pattern — not the earlier
+        # breakout candle — so the card reports the right failure date.
         if bearish and c["close"] > neckline:
-            return {"status": "failed", "confirmed": False, "break_ts": break_ts}
+            return {"status": "failed", "confirmed": False,
+                    "break_ts": break_ts, "failed_ts": c["timestamp"]}
         if (not bearish) and c["close"] < neckline:
-            return {"status": "failed", "confirmed": False, "break_ts": break_ts}
+            return {"status": "failed", "confirmed": False,
+                    "break_ts": break_ts, "failed_ts": c["timestamp"]}
     return {"status": "confirmed", "confirmed": True, "break_ts": break_ts}
 
 
@@ -1551,6 +1574,9 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
         # and alerts skip it) so the card can trace the failure.
         if res["status"] == "invalidated":
             continue
+        # A FAILED pattern only shows while the failure is recent.
+        if res["status"] == "failed" and not _failure_is_fresh(candles, res.get("failed_ts")):
+            continue
         out.append({
             "type":        ("triple_top" if triple else "double_top") if want_top
                            else ("triple_bottom" if triple else "double_bottom"),
@@ -1563,7 +1589,7 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             "target":      target,
             "height_pct":  round(depth * 100, 2),
             "status":      res["status"], "confirmed": res["confirmed"],
-            "failed_ts":   res["break_ts"] if res["status"] == "failed" else None,
+            "failed_ts":   res.get("failed_ts") if res["status"] == "failed" else None,
             "failure_reason": ("retest failed — closed back through the neckline"
                                if res["status"] == "failed" else None),
             "break_ts":    res["break_ts"],
@@ -1618,6 +1644,9 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
         # and alerts skip it) so the card can trace the failure.
         if res["status"] == "invalidated":
             continue
+        # A FAILED pattern only shows while the failure is recent.
+        if res["status"] == "failed" and not _failure_is_fresh(candles, res.get("failed_ts")):
+            continue
         out.append({
             "type":        "head_shoulders" if want_top else "inverse_head_shoulders",
             "label":       "Head & Shoulders" if want_top else "Inverse Head & Shoulders",
@@ -1628,7 +1657,7 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             "target":      target,
             "height_pct":  round(height / (head["price"] + 1e-12) * 100, 2),
             "status":      res["status"], "confirmed": res["confirmed"],
-            "failed_ts":   res["break_ts"] if res["status"] == "failed" else None,
+            "failed_ts":   res.get("failed_ts") if res["status"] == "failed" else None,
             "failure_reason": ("retest failed — closed back through the neckline"
                                if res["status"] == "failed" else None),
             "break_ts":    res["break_ts"],
@@ -1893,6 +1922,8 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
                              direction == "bullish")
                if (confirmed and bo_i is not None) else None)
     if failed_ts is not None:
+        if not _failure_is_fresh(candles, failed_ts):
+            return []                      # old failure — disappear entirely
         status, confirmed = "failed", False
         if (_retest or {}).get("status") == "retest_failed":
             failure_reason = "retest failed — broke back through the level"

@@ -99,3 +99,26 @@ def test_unequal_tops_not_a_double_top():
     # second top 20% higher than the first → not "equal" → no double top
     cs = _series([80, 88, 96, 100, 96, 92, 90, 94, 100, 108, 120, 110, 100])
     assert not _of(detect_reversals(cs, "1D"), "double_top", "triple_top")
+
+
+# ── failure visibility window ───────────────────────────────────────────────
+def test_failure_disappears_after_three_candles():
+    # A recorded failure is only shown while it's recent news: visible for up to
+    # 3 closed candles, gone from the 4th onward.
+    from patterns import FAILURE_SHOW_BARS
+    assert FAILURE_SHOW_BARS == 3
+    for extra in range(0, 6):
+        cs = _series(DT_BASE + [97, 93, 89, 95] + [95.0] * extra)
+        tops = _of(detect_reversals(cs, "1D"), "double_top", "triple_top")
+        if extra <= FAILURE_SHOW_BARS:
+            assert tops, f"failure {extra} candles ago should still show"
+            assert tops[0]["status"] == "failed"
+        else:
+            assert not tops, f"failure {extra} candles ago should be gone"
+
+
+def test_failed_ts_is_the_failing_candle_not_the_breakout():
+    cs = _series(DT_BASE + [97, 93, 89, 95])
+    f = _of(detect_reversals(cs, "1D"), "double_top", "triple_top")[0]
+    assert f["failed_ts"] != f["break_ts"], "failure date must be the breaking candle"
+    assert f["failed_ts"] == cs[-1]["timestamp"]
