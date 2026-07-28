@@ -142,6 +142,55 @@ def _mcap_tier(market_cap):
     return "micro", "Micro Cap (<$200M)", 4.0
 
 
+# A pattern break only counts toward the radar while it's FRESH — an old
+# confirmation says nothing about whether a reversal is starting NOW.
+PATTERN_BREAK_FRESH_BARS = 5
+
+
+def _counter_trend_break(analysis: Dict, want: str) -> Optional[Dict]:
+    """Find a FRESH, CONFIRMED pattern break in the `want` direction
+    ('bearish' during an uptrend = topping; 'bullish' during a downtrend =
+    bottoming) across flags, reversals and triangles/wedges.
+
+    A reversal PATTERN (Double/Triple Top-Bottom, H&S) outranks a flag or
+    triangle, and a volume-backed break outranks a thin one — a breakdown on
+    heavy volume is the classic "the reversal has started" tell, while the same
+    break on weak volume is far more likely to fail.
+
+    Returns {label, kind, volume_level, volume_ratio} for the best candidate,
+    or None."""
+    candles = analysis.get("candles") or []
+    ts_list = [c.get("timestamp") for c in candles]
+    if not ts_list:
+        return None
+    last_i = len(ts_list) - 1
+
+    def _fresh(ts):
+        return ts is not None and ts in ts_list and (last_i - ts_list.index(ts)) <= PATTERN_BREAK_FRESH_BARS
+
+    cands = []
+    for f in (analysis.get("flags") or []):
+        if f.get("confirmed") and f.get("is_active") and f.get("direction") == want and _fresh(f.get("breakout_ts")):
+            slope = f.get("flag_slope") or ""
+            lbl = f"{want.capitalize()}{(' ' + slope.capitalize()) if slope and slope != 'neutral' else ''} Flag"
+            cands.append((1, lbl, "flag", f.get("breakout_volume")))
+    for r in (analysis.get("reversal_patterns") or []):
+        if r.get("confirmed") and r.get("direction") == want and _fresh(r.get("break_ts")):
+            cands.append((2, r.get("label") or "Reversal pattern", "reversal", r.get("breakout_volume")))
+    for t in (analysis.get("triangle_patterns") or []):
+        if t.get("confirmed") and t.get("direction") == want and _fresh(t.get("break_ts")):
+            cands.append((1, t.get("label") or "Triangle/Wedge", "triangle", t.get("breakout_volume")))
+    if not cands:
+        return None
+    # reversal patterns first, then volume-backed breaks
+    _vrank = {"strong": 2, "normal": 1, "weak": 0}
+    cands.sort(key=lambda c: (c[0], _vrank.get((c[3] or {}).get("level"), 1)), reverse=True)
+    rank, label, kind, bv = cands[0]
+    return {"label": label, "kind": kind,
+            "volume_level": (bv or {}).get("level"),
+            "volume_ratio": (bv or {}).get("ratio")}
+
+
 def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
     """Exhaustion / reversal detector — flips the question from "go with the
     trend?" to "is this trend running out of fuel?".
@@ -272,6 +321,17 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
               "Cycle-top cluster", "Pi Cycle / Mayer / MVRV top metrics clustered")
         check(stretch_pct is not None, stretch_pct is not None and stretch_pct >= 12,
               "Stretched above EMA50", (f"price {stretch_pct:+.1f}% over EMA50 — extended, mean-reversion pull" if stretch_pct is not None else ""))
+        # A fresh BEARISH pattern break inside an uptrend = structure turning
+        # over. Volume grades conviction: heavy volume is the classic "reversal
+        # has started" tell; a thin break is far more likely to fail, so it does
+        # NOT fire the signal (it stays evaluable, just doesn't count).
+        _ctb = _counter_trend_break(analysis, "bearish")
+        check(True, bool(_ctb) and _ctb.get("volume_level") != "weak",
+              "Bearish pattern break",
+              (f"{_ctb['label']} broke down"
+               + (f" on {_ctb['volume_level']} volume ({_ctb['volume_ratio']}× avg)"
+                  if _ctb.get("volume_level") else "")
+               + " — structure turning over") if _ctb else "")
 
     elif mode == "bottom":
         # ── BOTTOMING checklist (downtrend reversal) ───────────────────────────
@@ -305,6 +365,15 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
               "Price below realized", "average holder underwater — deep-value bottom signal")
         check(stretch_pct is not None, stretch_pct is not None and stretch_pct <= -12,
               "Stretched below EMA50", (f"price {stretch_pct:+.1f}% under EMA50 — oversold, mean-reversion pull" if stretch_pct is not None else ""))
+        # Mirror: a fresh BULLISH pattern break inside a downtrend = structure
+        # turning up. Weak-volume breaks don't count (likely to fail).
+        _ctb = _counter_trend_break(analysis, "bullish")
+        check(True, bool(_ctb) and _ctb.get("volume_level") != "weak",
+              "Bullish pattern break",
+              (f"{_ctb['label']} broke out"
+               + (f" on {_ctb['volume_level']} volume ({_ctb['volume_ratio']}× avg)"
+                  if _ctb.get("volume_level") else "")
+               + " — structure turning up") if _ctb else "")
 
     count = len(signals)
     pct = (count / applicable) if applicable else 0.0
