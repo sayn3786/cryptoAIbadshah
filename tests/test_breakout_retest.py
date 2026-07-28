@@ -42,10 +42,13 @@ def test_bearish_mirror():
     assert "support now resistance" in st["note"]
 
 
-def test_failure_side_returns_none():
-    # Price beyond the level on the WRONG side is the failure path (handled by
-    # the invalidation rules), not a retest state.
-    assert _retest_state(_bars([100, 104, 90]), 0, LVL, True) is None
+def test_retest_failed_is_distinguished_from_never_retesting():
+    # Came back to the level, then broke through it → the textbook FAILED RETEST.
+    st = _retest_state(_bars([100, 106, 100.2, 90]), 0, LVL, True)
+    assert st["status"] == "retest_failed" and "FAILED" in st["note"]
+    # Ran away then collapsed through the level without ever retesting it.
+    st2 = _retest_state(_bars([100, 112, 90]), 0, LVL, True)
+    assert st2["status"] == "lost_level"
 
 
 def test_no_bars_after_breakout_returns_none():

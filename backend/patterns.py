@@ -76,7 +76,13 @@ def _retest_state(candles: List[Dict], break_idx: int, break_level: float,
         status = "extended"
         note = f"running from the breakout — no retest of ${break_level:,.4f} yet"
     else:
-        return None                       # below/above the level = failure path
+        # Price is back through the level on the wrong side. If it had come back
+        # to the level first, this is a FAILED RETEST — the textbook false
+        # breakout — which is worth distinguishing from never retesting at all.
+        status = "retest_failed" if touched else "lost_level"
+        note = (f"retested ${break_level:,.4f} and FAILED — breakout rejected"
+                if touched else
+                f"lost the broken level (${break_level:,.4f}) without a retest")
     return {"status": status, "level": round(break_level, 8),
             "distance_pct": round((price - break_level) / break_level * 100, 2),
             "note": note}
@@ -1780,14 +1786,20 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
     # extrapolated forward (which keeps descending/rising and would run past price,
     # so a full round-trip back into the wedge slips through). An up-break fails on
     # a close below that flat lower level; a down-break above the flat upper level.
+    # Failures are RECORDED (status='failed' + failed_ts) rather than dropped, so
+    # the card can trace "this pattern failed on <candle>". confirmed is cleared,
+    # so scoring/alerts (which gate on `confirmed`) ignore them automatically.
+    failed_ts = failure_reason = None
     if confirmed and bo_i is not None:
         fail_lo = lower(bo_i)
         fail_hi = upper(bo_i)
         for c in candles[bo_i + 1:]:
             if brk_dir == "up" and c["close"] < fail_lo:
-                return []
+                failed_ts, failure_reason = c["timestamp"], "closed back below the lower rail"
+                break
             if brk_dir == "down" and c["close"] > fail_hi:
-                return []
+                failed_ts, failure_reason = c["timestamp"], "closed back above the upper rail"
+                break
 
     height = gap_start                              # widest part of the structure
     current_price = candles[-1]["close"]
@@ -1811,13 +1823,15 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         if direction == "bullish":
             peak   = max(c["high"] for c in after)
             floor_ = brk_lvl - max((peak - brk_lvl) * BREAK_GIVEBACK_FRAC, buf)
-            if current_price < floor_:
-                return []
+            if current_price < floor_ and failed_ts is None:
+                failed_ts = candles[-1]["timestamp"]
+                failure_reason = "gave back the whole breakout move"
         else:
             trough = min(c["low"] for c in after)
             ceil_  = brk_lvl + max((brk_lvl - trough) * BREAK_GIVEBACK_FRAC, buf)
-            if current_price > ceil_:
-                return []
+            if current_price > ceil_ and failed_ts is None:
+                failed_ts = candles[-1]["timestamp"]
+                failure_reason = "gave back the whole breakout move"
 
     if direction == "bullish":
         target = round(upper(last_i) + height, 8)
@@ -1825,6 +1839,17 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         target = round(max(lower(last_i) - height, current_price * 0.2), 8)
     else:
         target = None                               # neutral & still forming — break decides
+
+    # A recorded failure clears `confirmed` (so scoring/alerts skip it) but keeps
+    # the pattern visible with status='failed' and the candle it failed on.
+    _retest = (_retest_state(candles, bo_i,
+                             upper(bo_i) if direction == "bullish" else lower(bo_i),
+                             direction == "bullish")
+               if (confirmed and bo_i is not None) else None)
+    if failed_ts is not None:
+        status, confirmed = "failed", False
+        if (_retest or {}).get("status") == "retest_failed":
+            failure_reason = "retest failed — broke back through the level"
 
     out = [{
         "type":       kind, "label": label, "direction": direction,
@@ -1836,12 +1861,10 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         "converge_pct": round((1 - gap_end / gap_start) * 100, 1),
         "target":     target,
         "status":     status, "confirmed": confirmed,
+        "failed_ts":  failed_ts, "failure_reason": failure_reason,
         "breakout_dir": brk_dir, "break_ts": break_ts,
-        "breakout_volume": _breakout_volume(candles, bo_i) if confirmed else None,
-        "retest": (_retest_state(candles, bo_i,
-                                 upper(bo_i) if direction == "bullish" else lower(bo_i),
-                                 direction == "bullish")
-                   if (confirmed and bo_i is not None) else None),
+        "breakout_volume": _breakout_volume(candles, bo_i) if break_ts else None,
+        "retest": _retest,
         "pattern_end_ts": candles[scan_from]["timestamp"],
         # Drawable rail endpoints (start pivot → end of structure) for the chart.
         "upper_line": [
