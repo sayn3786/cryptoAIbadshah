@@ -2699,6 +2699,14 @@ function _retestTag(rt) {
   return ` · <span class="${m[2]}" title="${(rt.note || '').replace(/"/g, '')}">${m[0]} ${m[1]}</span>`;
 }
 
+// "failed on <date>" trace — which candle invalidated the pattern.
+function _failedWhen(ts) {
+  if (!ts) return '';
+  const d = new Date(+ts);
+  if (isNaN(d)) return '';
+  return ` · on ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} candle`;
+}
+
 function renderFlags(flags, candles, signal, diagnostics) {
   const el    = document.getElementById('flagList');
   const badge = document.getElementById('flagCount');
@@ -2891,18 +2899,22 @@ function renderTriangles(patterns, candles) {
     const dir  = t.direction;                         // bullish | bearish | neutral
     const cls  = dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
     const icon = dir === 'bullish' ? '▲' : dir === 'bearish' ? '▼' : '◆';
-    const statusTxt = t.confirmed
-      ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}${_volTag(t.breakout_volume)}${_retestTag(t.retest)}`
-      : dir === 'neutral'
-        ? '⏳ forming — awaiting a break either way'
-        : `⏳ forming — awaiting a ${dir === 'bullish' ? 'break above' : 'break below'} the rail`;
-    const tgt = t.target != null ? `Target: <span>$${p(t.target)}</span> &nbsp;·&nbsp; ` : '';
-    return `<div class="flag-item ${cls}">
+    const isFailed = t.status === 'failed';
+    const statusTxt = isFailed
+      ? `❌ FAILED${t.failure_reason ? ` — ${t.failure_reason}` : ''}${_failedWhen(t.failed_ts)}`
+      : t.confirmed
+        ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}${_volTag(t.breakout_volume)}${_retestTag(t.retest)}`
+        : dir === 'neutral'
+          ? '⏳ forming — awaiting a break either way'
+          : `⏳ forming — awaiting a ${dir === 'bullish' ? 'break above' : 'break below'} the rail`;
+    const tgt = (t.target != null && !isFailed) ? `Target: <span>$${p(t.target)}</span> &nbsp;·&nbsp; ` : '';
+    return `<div class="flag-item ${isFailed ? 'pattern-failed' : cls}">
       <div class="flag-top">
-        <span class="flag-name ${cls}">${icon} ${t.label}</span>
+        <span class="flag-name ${isFailed ? '' : cls}">${icon} ${t.label}</span>
         <span class="flag-tf">${t.timeframe}</span>
-        ${t.confirmed ? `<span class="flag-confirmed">${t.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>`
-                      : '<span class="flag-active">Forming</span>'}
+        ${isFailed ? '<span class="flag-failed-badge">✕ Failed</span>'
+          : t.confirmed ? `<span class="flag-confirmed">${t.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>`
+                        : '<span class="flag-active">Forming</span>'}
       </div>
       <div class="flag-stats">
         <span class="flag-stat">Upper <span>$${p(t.upper_now)}</span></span>

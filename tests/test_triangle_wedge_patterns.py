@@ -83,24 +83,38 @@ def test_wedge_breakout_retest_stays_confirmed():
     assert f and f["type"] == "falling_wedge" and f["confirmed"]
 
 
-def test_wedge_failed_breakout_dropped():
-    # Breaks up, then collapses well BELOW the wedge → failed → dropped.
+def test_wedge_failed_breakout_is_recorded_not_dropped():
+    # Breaks up, then collapses well BELOW the wedge → FAILED. It stays visible
+    # (so the card can trace it) but is no longer `confirmed`, so scoring and
+    # alerts — which gate on `confirmed` — ignore it.
     f = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 90]))
-    assert f is None or f["type"] != "falling_wedge"
+    assert f and f["status"] == "failed"
+    assert f["confirmed"] is False
+    assert f["failed_ts"] is not None and f["failure_reason"]
 
 
 def test_wedge_breakout_giveback_dropped_but_retest_survives():
     # Invalidation is PROPORTIONAL to the breakout move (plus a retest buffer),
     # not the wedge's geometric midline — a tall wedge shouldn't die to a routine
     # 2-3% retest while its target is far away (the TAO 1D case).
-    # Giving back the whole move → dropped.
-    dropped = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 90]))
-    assert dropped is None or dropped["type"] != "falling_wedge"
+    # Giving back the whole move → marked failed (not confirmed).
+    failed = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 90]))
+    assert failed and failed["status"] == "failed" and failed["confirmed"] is False
     # A retest that holds within the move → still confirmed.
     for end in (103, 97, 95):
         held = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, end]))
         assert held and held["type"] == "falling_wedge" and held["confirmed"], \
             f"a retest to {end} should survive"
+
+
+def test_failure_after_a_retest_is_traceable():
+    # The trace the card needs: which candle failed, why, and that the RETEST
+    # itself failed (broke back through the level) rather than never happening.
+    f = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 90]))
+    assert f["status"] == "failed" and f["confirmed"] is False
+    assert f["failed_ts"] is not None
+    assert "retest failed" in f["failure_reason"]
+    assert f["retest"]["status"] == "retest_failed"
 
 
 def test_tall_wedge_survives_small_retest():
