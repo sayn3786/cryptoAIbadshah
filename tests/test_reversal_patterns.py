@@ -42,11 +42,16 @@ def test_double_top_forming():
     assert f["status"] == "forming" and f["confirmed"] is False
 
 
-def test_double_top_failed_breakout_dropped():
-    # Confirms a breakdown below the neckline, then RECLAIMS it (closes back above)
-    # → failed breakout → dropped (not shown as a confirmed reversal).
+def test_double_top_failed_breakout_is_recorded_not_confirmed():
+    # Confirms a breakdown below the neckline, then RECLAIMS it (closes back
+    # above) → FAILED. Kept as a traceable record, but never as a confirmed
+    # signal (scoring/alerts gate on `confirmed`).
     cs = _series(DT_BASE + [97, 93, 89, 95])
-    assert not _of(detect_reversals(cs, "1D"), "double_top", "triple_top")
+    tops = _of(detect_reversals(cs, "1D"), "double_top", "triple_top")
+    assert tops, "the failure should be recorded, not dropped"
+    f = tops[0]
+    assert f["status"] == "failed" and f["confirmed"] is False
+    assert f["failed_ts"] is not None and f["failure_reason"]
 
 
 def test_double_top_invalidated_is_dropped():

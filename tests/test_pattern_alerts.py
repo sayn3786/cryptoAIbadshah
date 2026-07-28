@@ -138,3 +138,32 @@ def test_kv_rest_claim_uses_set_nx(monkeypatch):
     assert kv.claim(key) is False
     assert kv.exists(key) is True
     assert kv.exists("patalert:none") is False
+
+
+# ── failure events ──────────────────────────────────────────────────────────
+def test_failure_alert_message():
+    msg = build_pattern_alert_message([
+        {"symbol": "TAO", "timeframe": "1D", "label": "Falling Wedge",
+         "direction": "bullish", "event": "failed", "level": 199.2,
+         "reason": "gave back the whole breakout move", "retest": "retest_failed"}])
+    assert "FAILED" in msg and "TAO/USDT 1D" in msg
+    assert "retest failed" in msg
+
+
+def test_mixed_confirmed_and_failed_message():
+    msg = build_pattern_alert_message([
+        {"symbol": "TAO", "timeframe": "1D", "label": "Falling Wedge",
+         "direction": "bullish", "event": "failed", "level": 199.2},
+        {"symbol": "BTC", "timeframe": "1W", "label": "Double Bottom",
+         "direction": "bullish", "break_dir": "up", "level": 100.0, "target": 120.0}])
+    assert "Pattern Update" in msg
+    assert "FAILED" in msg and "confirmed" in msg
+
+
+def test_alert_id_separates_confirmed_from_failed(monkeypatch):
+    pytest.importorskip("flask")
+    import app
+    base = {"kind": "triangle", "type": "falling_wedge", "break_ts": 123}
+    a = app._pattern_alert_id("TAO", "1D", {**base, "event": "confirmed"})
+    b = app._pattern_alert_id("TAO", "1D", {**base, "event": "failed"})
+    assert a != b, "a failure must alert separately from its confirmation"

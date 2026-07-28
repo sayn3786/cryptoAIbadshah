@@ -455,7 +455,10 @@ _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 
 
 def _pattern_alert_id(sym: str, tf: str, pat: dict) -> str:
-    return f"{_PATTERN_ALERT_NS}{sym}:{tf}:{pat['kind']}:{pat.get('type','')}:{pat.get('break_ts')}"
+    # `event` separates a confirmation from a later FAILURE of the same pattern,
+    # so both alert exactly once instead of the failure being swallowed.
+    ev = pat.get("event", "confirmed")
+    return f"{_PATTERN_ALERT_NS}{sym}:{tf}:{pat['kind']}:{pat.get('type','')}:{ev}:{pat.get('break_ts')}"
 
 
 def _fetch_closed_spot(sym: str, tf: str):
@@ -482,9 +485,24 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
         return ts is not None and ts in ts_list and (last_i - ts_list.index(ts)) <= PATTERN_ALERT_FRESH_BARS
 
     out = []
+
+    def _failure(pat, kind, label, direction, level):
+        """Record a freshly-FAILED pattern as an alert event."""
+        return {"kind": kind, "event": "failed", "type": pat.get("type", kind),
+                "label": label, "direction": direction,
+                "break_dir": pat.get("breakout_dir"), "level": level,
+                "target": None, "break_ts": pat.get("failed_ts"),
+                "reason": pat.get("failure_reason"),
+                "retest": (pat.get("retest") or {}).get("status")}
+
     try:
         min_pole = TF_MIN_POLE_PCT.get(tf, 5.0)
         for f in pick_dominant_flags(detect_flags(closed, tf, 1.0, min_pole_pct=min_pole)):
+            if f.get("status") == "failed" and _fresh(f.get("failed_ts")):
+                slope = f.get("flag_slope", "")
+                lbl = f"{(f.get('direction') or '').capitalize()}{(' ' + slope.capitalize()) if slope and slope != 'neutral' else ''} Flag"
+                out.append(_failure(f, "flag", lbl, f.get("direction"), f.get("break_level")))
+                continue
             if f.get("confirmed") and f.get("is_active") and _fresh(f.get("breakout_ts")):
                 slope = f.get("flag_slope", "")
                 lbl = f"{f['direction'].capitalize()}{(' ' + slope.capitalize()) if slope and slope != 'neutral' else ''} Flag"
@@ -497,6 +515,10 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
         pass
     try:
         for r in detect_reversals(closed, tf):
+            if r.get("status") == "failed" and _fresh(r.get("failed_ts")):
+                out.append(_failure(r, "reversal", r.get("label") or "Reversal",
+                                    r.get("direction"), r.get("neckline")))
+                continue
             if r.get("confirmed") and _fresh(r.get("break_ts")):
                 out.append({"kind": "reversal", "type": r.get("type"),
                             "label": r.get("label"), "direction": r.get("direction"),
@@ -507,6 +529,11 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
         pass
     try:
         for t in detect_triangles_wedges(closed, tf):
+            if t.get("status") == "failed" and _fresh(t.get("failed_ts")):
+                out.append(_failure(t, "triangle", t.get("label") or "Triangle/Wedge",
+                                    t.get("direction"),
+                                    t.get("upper_now") if t.get("breakout_dir") == "up" else t.get("lower_now")))
+                continue
             if t.get("confirmed") and _fresh(t.get("break_ts")):
                 out.append({"kind": "triangle", "type": t.get("type"),
                             "label": t.get("label"), "direction": t.get("direction"),
