@@ -2781,6 +2781,7 @@ function renderFlags(flags, candles, signal, diagnostics) {
     ? `<div class="flag-conflict">⚠ <b>Mixed signal.</b> The flag structure is <b>${best.direction}</b> (target $${p(best.target)} ${best.direction === 'bullish' ? 'up' : 'down'}), but the current trade signal is <b>${signal.direction}</b> — usually from lower-timeframe weakness. They disagree, so treat the flag as <b>unconfirmed</b>: wait for a decisive ${best.direction === 'bullish' ? 'breakout <b>above</b> the channel to confirm the flag' : 'breakdown <b>below</b> the channel to confirm the flag'}, or a ${signal.direction === 'LONG' ? 'hold above' : 'close below'} the flag zone to confirm the ${signal.direction}.</div>`
     : '';
   el.innerHTML = flags.map((f, idx) => {
+    const flagFailed = f.status === 'failed';
     const cls        = f.direction === 'bullish' ? 'bull' : 'bear';
     const domCls     = f.dominant ? ' dominant' : '';
     const isBull     = f.direction === 'bullish';
@@ -2795,8 +2796,10 @@ function renderFlags(flags, candles, signal, diagnostics) {
       ? '<span class="flag-active">Active</span>' : '';
     const domBadge   = f.dominant
       ? '<span class="flag-active" style="background:rgba(245,158,11,.15);color:var(--gold)">Dominant</span>' : '';
-    const confirmBadge = f.confirmed
-      ? `<span class="flag-confirmed">${f.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>` : '';
+    const confirmBadge = flagFailed
+      ? '<span class="flag-failed-badge">✕ Failed</span>'
+      : f.confirmed
+        ? `<span class="flag-confirmed">${f.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>` : '';
 
     const slopeIcon  = f.flag_slope === 'ascending'  ? '↗'
                      : f.flag_slope === 'descending' ? '↘' : '→';
@@ -2805,7 +2808,7 @@ function renderFlags(flags, candles, signal, diagnostics) {
     const slopeStat  = f.flag_slope && f.flag_slope !== 'neutral'
       ? `<span class="flag-stat">Channel <span class="${slopeCls}">${slopeIcon} ${f.flag_slope} (${f.slope_pct_per_bar > 0 ? '+' : ''}${f.slope_pct_per_bar}%/bar)</span></span>` : '';
 
-    return `<div class="flag-item ${cls}${domCls}">
+    return `<div class="flag-item ${flagFailed ? 'pattern-failed' : cls + domCls}">
       <div class="flag-top">
         <span class="flag-name ${cls}">${icon} ${flagLabel}</span>
         <span class="flag-tf">${f.timeframe}</span>
@@ -2818,7 +2821,9 @@ function renderFlags(flags, candles, signal, diagnostics) {
         <span class="flag-stat">Strength <span>${f.strength}</span></span>
         ${slopeStat}
       </div>
-      <div class="flag-target">Target: <span>$${p(f.target)}</span>
+      <div class="flag-target">${flagFailed
+        ? `❌ FAILED${f.failure_reason ? ` — ${f.failure_reason}` : ''}${_failedWhen(f.failed_ts)}`
+        : `Target: <span>$${p(f.target)}</span>`}
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
         ${f.rail_break ? `&nbsp;·&nbsp; Break ${isBull ? 'above' : 'below'} <span>$${p(brkLvl(f))}</span> <span class="flag-rail-tag">rail</span>` : ''}
       </div>
@@ -2855,17 +2860,21 @@ function renderReversals(patterns, candles) {
     const isBull = r.direction === 'bullish';
     const cls    = isBull ? 'bull' : 'bear';
     const icon   = isBull ? '▲' : '▼';
-    const statusTxt = r.confirmed
-      ? `✅ confirmed — closed ${isBull ? 'above' : 'below'} the neckline${_volTag(r.breakout_volume)}${_retestTag(r.retest)}`
-      : `⏳ forming — awaiting a close ${isBull ? 'above' : 'below'} $${p(r.neckline)}`;
+    const revFailed = r.status === 'failed';
+    const statusTxt = revFailed
+      ? `❌ FAILED${r.failure_reason ? ` — ${r.failure_reason}` : ''}${_failedWhen(r.failed_ts)}`
+      : r.confirmed
+        ? `✅ confirmed — closed ${isBull ? 'above' : 'below'} the neckline${_volTag(r.breakout_volume)}${_retestTag(r.retest)}`
+        : `⏳ forming — awaiting a close ${isBull ? 'above' : 'below'} $${p(r.neckline)}`;
     const anchorLbl = r.head_level != null ? 'Head' : 'Peaks';
     const anchorVal = r.head_level != null ? r.head_level : r.peak_level;
-    return `<div class="flag-item ${cls}">
+    return `<div class="flag-item ${revFailed ? 'pattern-failed' : cls}">
       <div class="flag-top">
-        <span class="flag-name ${cls}">${icon} ${r.label}</span>
+        <span class="flag-name ${revFailed ? '' : cls}">${icon} ${r.label}</span>
         <span class="flag-tf">${r.timeframe}</span>
-        ${r.confirmed ? `<span class="flag-confirmed">${isBull ? '↑' : '↓'} Confirmed</span>`
-                      : '<span class="flag-active">Forming</span>'}
+        ${revFailed ? '<span class="flag-failed-badge">✕ Failed</span>'
+          : r.confirmed ? `<span class="flag-confirmed">${isBull ? '↑' : '↓'} Confirmed</span>`
+                        : '<span class="flag-active">Forming</span>'}
       </div>
       <div class="flag-stats">
         <span class="flag-stat">${anchorLbl} <span>$${p(anchorVal)}</span></span>
@@ -4154,7 +4163,8 @@ let   _patternAlerts   = [];    // confirmed chart patterns (Double Top/Bottom, 
 // Stable per-confirmation id for client-side "seen" tracking (in the shared
 // strength-seen store, same as whale alerts).
 function _patternSeenId(a) {
-  return `pattern_${a.symbol}_${a.timeframe}_${a.type || a.kind}_${a.break_ts}`;
+  // include the event so a later FAILURE of the same pattern is its own alert
+  return `pattern_${a.symbol}_${a.timeframe}_${a.type || a.kind}_${a.event || 'confirmed'}_${a.break_ts}`;
 }
 
 // Single source of truth for the bell badge: total UNSEEN across every alert type.
@@ -4296,19 +4306,27 @@ function _renderNotifList() {
   });
 
   _patternAlerts.forEach(a => {
+    const failed = a.event === 'failed';
     const dir   = a.direction;
-    const cls   = dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
-    const icon  = dir === 'bullish' ? '🟢' : dir === 'bearish' ? '🔴' : '⚪';
+    const cls   = failed ? 'bear' : dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
+    const icon  = failed ? '❌' : dir === 'bullish' ? '🟢' : dir === 'bearish' ? '🔴' : '⚪';
     const arrow = a.break_dir === 'up' ? '↑' : a.break_dir === 'down' ? '↓' : '•';
     const tgt   = a.target != null ? ` · 🎯 ${fmtPrice(a.target)}` : '';
     const isNew = !strengthSeen[_patternSeenId(a)];
-    const msg   = dir === 'bullish' ? 'Confirmed bullish break'
-                : dir === 'bearish' ? 'Confirmed bearish break' : 'Breakout confirmed';
+    const sub   = failed
+      ? `${a.timeframe} · pattern FAILED${a.level != null ? ` @ ${fmtPrice(a.level)}` : ''}`
+      : `${a.timeframe} confirmed · broke ${arrow}${tgt}`;
+    const msg   = failed
+      ? (a.retest === 'retest_failed'
+          ? 'Retest failed — broke back through the level'
+          : (a.reason || 'Breakout failed'))
+      : dir === 'bullish' ? 'Confirmed bullish break'
+      : dir === 'bearish' ? 'Confirmed bearish break' : 'Breakout confirmed';
     items.push({ ts: a.break_ts || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${a.label} — <strong>${a.symbol}/USDT</strong></div>
-        <div class="notif-item-sub">${a.timeframe} confirmed · broke ${arrow}${tgt}</div>
+        <div class="notif-item-sub">${sub}</div>
         <div class="notif-item-msg">${msg}</div>
         ${a.detected_at ? `<div class="notif-item-time">🕐 Detected: ${a.detected_at}</div>` : ''}
       </div>

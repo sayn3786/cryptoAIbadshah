@@ -497,6 +497,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             # the flag high. (Chronological, first failure wins — a still-later
             # recovery cannot resurrect it.) This stops a dumped bull flag from
             # showing "confirmed · target up" while price sits below its own zone.
+            failed_ts = None
             if confirmed and breakout_ts is not None:
                 bo_idx = next((k for k, c in enumerate(post)
                                if c["timestamp"] == breakout_ts), None)
@@ -504,19 +505,52 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                     for c in post[bo_idx + 1:]:
                         if breakout_dir == "up" and c["close"] < fl_:
                             status, confirmed = "failed", False
+                            failed_ts = c["timestamp"]
                             invalidation_reason = "breakout failed — closed back below the flag low"
                             break
                         if breakout_dir == "down" and c["close"] > fh:
                             status, confirmed = "failed", False
+                            failed_ts = c["timestamp"]
                             invalidation_reason = "breakout failed — closed back above the flag high"
                             break
 
-            # Invalidated / failed patterns are never returned as active candidates.
-            if status in ("invalidated", "failed"):
+            # INVALIDATED (broke the wrong way before ever confirming) is dropped —
+            # it was never a live signal. A FAILED breakout is kept as a RECORD so
+            # the card can trace "confirmed, then failed on <candle>"; it carries
+            # confirmed=False / is_active=False, so it ranks last in the dedup and
+            # is ignored by scoring and alerts (which gate on `confirmed`).
+            if status == "invalidated":
                 _reject(7, status, is_bull, detail=invalidation_reason,
                         breakout_dir=breakout_dir, consolidation_bars=fl,
                         capped_at_max=capped_at_max,
                         flag_high=round(fh, 8), flag_low=round(fl_, 8))
+                continue
+            if status == "failed":
+                _reject(7, status, is_bull, detail=invalidation_reason,
+                        breakout_dir=breakout_dir, consolidation_bars=fl,
+                        capped_at_max=capped_at_max,
+                        flag_high=round(fh, 8), flag_low=round(fl_, 8))
+                candidates.append({
+                    "direction": direction, "timeframe": tf_label, "tf_weight": tf_weight,
+                    "pole_pct": pole_pct, "flag_high": round(fh, 8), "flag_low": round(fl_, 8),
+                    "retrace_pct": round(retrace * 100, 2), "target": target,
+                    "strength": 0.0, "consolidation_bars": fl, "flag_slope": flag_slope,
+                    "slope_pct_per_bar": round(slope_pct_per_bar, 4),
+                    "confirmed": False, "is_active": False, "dominant": False,
+                    "status": "failed", "failed_ts": failed_ts,
+                    "failure_reason": invalidation_reason,
+                    "breakout_dir": breakout_dir, "breakout_ts": breakout_ts,
+                    "break_level": round(break_level, 8), "rail_break": sloped,
+                    "pole_start_ts": pole_bars[0]["timestamp"],
+                    "flag_end_ts": flag[-1]["timestamp"],
+                    "invalidation_reason": invalidation_reason,
+                    "breakout_volume": _breakout_volume(closed, breakout_idx),
+                    "retest": (_retest_state(closed, breakout_idx,
+                                             (_up_break(breakout_idx - pe) if sloped else fh)
+                                             if is_bull else
+                                             (_dn_break(breakout_idx - pe) if sloped else fl_),
+                                             is_bull) if breakout_idx is not None else None),
+                })
                 continue
 
             # ── Activity / adverse-price / target-hit (existing behaviour) ────
@@ -1512,7 +1546,10 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             target = round(neck + height, 8)
             invalid_level = min(a["price"], b["price"])
         res = _resolve_neckline_break(candles, b["index"], neck, invalid_level, bearish=want_top)
-        if res["status"] in ("invalidated", "failed"):
+        # INVALIDATED never confirmed -> drop. FAILED confirmed then broke back
+        # through the neckline -> keep as a record (confirmed=False so scoring
+        # and alerts skip it) so the card can trace the failure.
+        if res["status"] == "invalidated":
             continue
         out.append({
             "type":        ("triple_top" if triple else "double_top") if want_top
@@ -1526,6 +1563,9 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             "target":      target,
             "height_pct":  round(depth * 100, 2),
             "status":      res["status"], "confirmed": res["confirmed"],
+            "failed_ts":   res["break_ts"] if res["status"] == "failed" else None,
+            "failure_reason": ("retest failed — closed back through the neckline"
+                               if res["status"] == "failed" else None),
             "break_ts":    res["break_ts"],
             "breakout_volume": (_breakout_volume(
                 candles, next((k for k, c in enumerate(candles)
@@ -1573,7 +1613,10 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             target = round(neck + height, 8)
             invalid_level = head["price"]
         res = _resolve_neckline_break(candles, rs["index"], neck, invalid_level, bearish=want_top)
-        if res["status"] in ("invalidated", "failed"):
+        # INVALIDATED never confirmed -> drop. FAILED confirmed then broke back
+        # through the neckline -> keep as a record (confirmed=False so scoring
+        # and alerts skip it) so the card can trace the failure.
+        if res["status"] == "invalidated":
             continue
         out.append({
             "type":        "head_shoulders" if want_top else "inverse_head_shoulders",
@@ -1585,6 +1628,9 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             "target":      target,
             "height_pct":  round(height / (head["price"] + 1e-12) * 100, 2),
             "status":      res["status"], "confirmed": res["confirmed"],
+            "failed_ts":   res["break_ts"] if res["status"] == "failed" else None,
+            "failure_reason": ("retest failed — closed back through the neckline"
+                               if res["status"] == "failed" else None),
             "break_ts":    res["break_ts"],
             "breakout_volume": (_breakout_volume(
                 candles, next((k for k, c in enumerate(candles)

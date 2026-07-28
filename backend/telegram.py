@@ -138,8 +138,12 @@ def _pat_dot(d: str) -> str:
 
 
 def build_pattern_alert_message(alerts: List[Dict], date_label: str = "") -> str:
-    """Format a batch of freshly-CONFIRMED chart patterns into a Telegram alert."""
-    lines = ["🔔 *CryptoMonk — Pattern Confirmed*"]
+    """Format a batch of chart-pattern events (confirmations AND failures)."""
+    has_fail = any(a.get("event") == "failed" for a in alerts)
+    has_conf = any(a.get("event", "confirmed") == "confirmed" for a in alerts)
+    title = ("Pattern Update" if (has_fail and has_conf)
+             else "Pattern FAILED" if has_fail else "Pattern Confirmed")
+    lines = [f"🔔 *CryptoMonk — {title}*"]
     if date_label:
         lines.append(f"🗓 {date_label}")
     lines.append("")
@@ -147,6 +151,16 @@ def build_pattern_alert_message(alerts: List[Dict], date_label: str = "") -> str
         arrow = "↑" if a.get("break_dir") == "up" else "↓" if a.get("break_dir") == "down" else "•"
         lvl = a.get("level")
         lvl_s = f" @ {_fmt_price(lvl)}" if lvl is not None else ""
+        if a.get("event") == "failed":
+            lines.append(
+                f"❌ *{a.get('symbol')}/USDT {a.get('timeframe')}* — "
+                f"{a.get('label')} FAILED")
+            why = a.get("reason") or "breakout failed"
+            if a.get("retest") == "retest_failed":
+                why = "retest failed — broke back through the level"
+            lines.append(f"   {why}{lvl_s}")
+            lines.append("")
+            continue
         tgt = a.get("target")
         tgt_s = f"  ·  🎯 {_fmt_price(tgt)}" if tgt is not None else ""
         lines.append(
