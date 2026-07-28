@@ -1,6 +1,39 @@
 from typing import List, Dict, Optional, Tuple
 
 
+# ── Breakout volume confirmation ──────────────────────────────────────────────
+# Textbook: a breakout should come on EXPANDING volume. A break on thin volume is
+# more likely to fail, so we grade (never gate) it — the pattern still confirms on
+# price, but the card can say whether volume backed the move.
+VOL_CONFIRM_MULT = 1.5    # ≥ this × the pre-breakout average = "strong"
+VOL_WEAK_MULT    = 0.8    # < this = "weak" (suspect breakout)
+VOL_LOOKBACK     = 20     # bars of baseline average before the breakout
+
+
+def _breakout_volume(candles: List[Dict], break_idx: int,
+                     lookback: int = VOL_LOOKBACK) -> Optional[Dict]:
+    """Grade the breakout candle's volume vs the preceding average.
+
+    Returns {volume, avg_volume, ratio, level} where level is
+    'strong' | 'normal' | 'weak', or None when volume data is unusable
+    (missing/zero — several sources don't carry real volume)."""
+    if break_idx is None or break_idx <= 0 or break_idx >= len(candles):
+        return None
+    base = candles[max(0, break_idx - lookback):break_idx]
+    if not base:
+        return None
+    vols = [float(c.get("volume") or 0) for c in base]
+    avg  = sum(vols) / len(vols)
+    vol  = float(candles[break_idx].get("volume") or 0)
+    if avg <= 0 or vol <= 0:
+        return None                     # no usable volume → report nothing
+    ratio = vol / avg
+    level = ("strong" if ratio >= VOL_CONFIRM_MULT
+             else "weak" if ratio < VOL_WEAK_MULT else "normal")
+    return {"volume": round(vol, 2), "avg_volume": round(avg, 2),
+            "ratio": round(ratio, 2), "level": level}
+
+
 def _line_slope(values: list) -> float:
     """Linear regression slope (units per bar)."""
     n = len(values)
@@ -378,12 +411,14 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             breakout_dir        = None
             breakout_ts         = None
             invalidation_reason = None
+            breakout_idx = None                  # absolute index into `closed`
             for j, c in enumerate(post):
                 x = fl + j                       # bar index of this post candle
                 up_lvl = _up_break(x) if sloped else fh
                 dn_lvl = _dn_break(x) if sloped else fl_
                 if c["close"] > up_lvl:
                     breakout_ts = c["timestamp"]
+                    breakout_idx = pe + fl + j
                     if is_bull:
                         status, confirmed, breakout_dir = "confirmed", True, "up"
                     else:
@@ -392,6 +427,7 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                     break
                 if c["close"] < dn_lvl:
                     breakout_ts = c["timestamp"]
+                    breakout_idx = pe + fl + j
                     if is_bull:
                         status, breakout_dir = "invalidated", "down"
                         invalidation_reason = "closed below lower rail before bullish breakout"
@@ -494,6 +530,9 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 "status":             status,
                 "breakout_ts":        breakout_ts,
                 "invalidation_reason": invalidation_reason,
+                # Volume on the breakout candle vs the prior average (None when
+                # the data source carries no usable volume).
+                "breakout_volume":    _breakout_volume(closed, breakout_idx) if confirmed else None,
             })
 
     # Deduplicate by pole start — keep the BEST per unique pole origin by
@@ -1428,6 +1467,10 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             "height_pct":  round(depth * 100, 2),
             "status":      res["status"], "confirmed": res["confirmed"],
             "break_ts":    res["break_ts"],
+            "breakout_volume": (_breakout_volume(
+                candles, next((k for k, c in enumerate(candles)
+                               if c["timestamp"] == res["break_ts"]), None))
+                if res["confirmed"] else None),
             "points": [
                 {"role": "peak1" if want_top else "trough1", "price": round(a["price"], 8), "timestamp": a["timestamp"]},
                 {"role": "neckline", "price": round(neck, 8), "timestamp": neck_piv["timestamp"]},
@@ -1483,6 +1526,10 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
             "height_pct":  round(height / (head["price"] + 1e-12) * 100, 2),
             "status":      res["status"], "confirmed": res["confirmed"],
             "break_ts":    res["break_ts"],
+            "breakout_volume": (_breakout_volume(
+                candles, next((k for k, c in enumerate(candles)
+                               if c["timestamp"] == res["break_ts"]), None))
+                if res["confirmed"] else None),
             "points": [
                 {"role": "left_shoulder",  "price": round(ls["price"], 8),   "timestamp": ls["timestamp"]},
                 {"role": "head",           "price": round(head["price"], 8), "timestamp": head["timestamp"]},
@@ -1713,6 +1760,7 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         "target":     target,
         "status":     status, "confirmed": confirmed,
         "breakout_dir": brk_dir, "break_ts": break_ts,
+        "breakout_volume": _breakout_volume(candles, bo_i) if confirmed else None,
         "pattern_end_ts": candles[scan_from]["timestamp"],
         # Drawable rail endpoints (start pivot → end of structure) for the chart.
         "upper_line": [

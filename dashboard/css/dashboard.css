@@ -402,6 +402,10 @@ a:hover { color: var(--gold2); }
 .flag-stat span { color: var(--text); font-weight: 600; }
 .flag-target { font-size: .72rem; font-family: var(--mono); }
 .flag-target span { color: var(--gold); font-weight: 600; }
+/* Breakout volume confirmation badges */
+.vol-strong { color: var(--bull, #22c55e); font-weight: 600; }
+.vol-normal { color: var(--muted2, #94a3b8); }
+.vol-weak   { color: var(--gold, #f59e0b); font-weight: 600; }
 /* Chased-entry warning under the trade levels */
 .chase-warn {
   margin-top: 8px; padding: 8px 10px; border-radius: 8px;
