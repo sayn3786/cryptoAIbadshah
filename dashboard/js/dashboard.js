@@ -2673,6 +2673,18 @@ function flagSvg(f) {
   </svg>`;
 }
 
+// Volume confirmation badge for a confirmed breakout. `bv` = {ratio, level} from
+// the backend (null when the data source carries no usable volume — then we say
+// nothing rather than imply weakness).
+function _volTag(bv) {
+  if (!bv || bv.ratio == null) return '';
+  const m = { strong: ['🔊', 'strong volume', 'vol-strong'],
+              normal: ['🔉', 'normal volume', 'vol-normal'],
+              weak:   ['🔈', 'weak volume — suspect', 'vol-weak'] }[bv.level]
+          || ['🔉', 'volume', 'vol-normal'];
+  return ` · <span class="${m[2]}">${m[0]} ${m[1]} (${bv.ratio}× avg)</span>`;
+}
+
 function renderFlags(flags, candles, signal, diagnostics) {
   const el    = document.getElementById('flagList');
   const badge = document.getElementById('flagCount');
@@ -2733,7 +2745,7 @@ function renderFlags(flags, candles, signal, diagnostics) {
   const _liveBeyond = !best.confirmed && _lc && _lc.close != null &&
     (best.direction === 'bullish' ? +_lc.close > _bl : +_lc.close < _bl);
   const bestStatus = best.confirmed
-    ? '✅ breakout confirmed'
+    ? `✅ breakout confirmed${_volTag(best.breakout_volume)}`
     : `⏳ forming — awaiting a close ${best.direction === 'bullish' ? 'above' : 'below'} $${p(_bl)}${best.rail_break ? ' (rail)' : ''}`
       + (_liveBeyond ? ` · ⚡ current candle is ${best.direction === 'bullish' ? 'above' : 'below'} the rail — confirms if it CLOSES there`
                      : '');
@@ -2822,7 +2834,7 @@ function renderReversals(patterns, candles) {
     const cls    = isBull ? 'bull' : 'bear';
     const icon   = isBull ? '▲' : '▼';
     const statusTxt = r.confirmed
-      ? `✅ confirmed — closed ${isBull ? 'above' : 'below'} the neckline`
+      ? `✅ confirmed — closed ${isBull ? 'above' : 'below'} the neckline${_volTag(r.breakout_volume)}`
       : `⏳ forming — awaiting a close ${isBull ? 'above' : 'below'} $${p(r.neckline)}`;
     const anchorLbl = r.head_level != null ? 'Head' : 'Peaks';
     const anchorVal = r.head_level != null ? r.head_level : r.peak_level;
@@ -2866,7 +2878,7 @@ function renderTriangles(patterns, candles) {
     const cls  = dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
     const icon = dir === 'bullish' ? '▲' : dir === 'bearish' ? '▼' : '◆';
     const statusTxt = t.confirmed
-      ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}`
+      ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}${_volTag(t.breakout_volume)}`
       : dir === 'neutral'
         ? '⏳ forming — awaiting a break either way'
         : `⏳ forming — awaiting a ${dir === 'bullish' ? 'break above' : 'break below'} the rail`;
