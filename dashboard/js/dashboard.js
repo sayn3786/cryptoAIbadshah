@@ -583,6 +583,18 @@ function renderSignal(s) {
   document.getElementById('lvlTP2').textContent = price(tps[1]);
   document.getElementById('lvlTP3').textContent = price(tps[2]);
   document.getElementById('lvlRR').textContent  = s.rr_ratio ? `${s.rr_ratio}x` : '—';
+
+  // Chased-entry warning — price already ran past the pattern's breakout, so the
+  // R/R at the live entry is poor. Shown right under the levels.
+  const cw = document.getElementById('chaseWarn');
+  if (cw) {
+    if (s.chase_warning && s.chase_warning.message) {
+      cw.textContent = s.chase_warning.message;
+      cw.style.display = '';
+    } else {
+      cw.style.display = 'none';
+    }
+  }
 }
 
 /* ─── RSI gauge (canvas arc) ──────────────────────────────────────────────── */

@@ -54,6 +54,11 @@ def _swing_levels(candles: List[Dict], window: int = 2):
     return ph, pl
 
 
+# Chased-entry thresholds: warn when a CONFIRMED pattern's breakout is already
+# this far behind price AND the resulting R/R at the live entry is below the gate.
+CHASE_RR_MIN      = 1.5    # R/R at the current entry below this = poor chase
+CHASE_MIN_RUN_PCT = 1.0    # price must have run at least this % past the break
+
 # TP3 may extend at most this multiple of the TP2 distance. Keeps the ladder
 # proportional: without it, a far deep-swing high could become TP3 while TP1/TP2
 # sat ~2% away, producing a huge unreachable gap (e.g. TP2 +2.9%, TP3 +54%).
@@ -2270,6 +2275,7 @@ def generate_signal(analysis: Dict) -> Dict:
     rr_ratio = None
     sl_pct = tp1_pct = tp2_pct = tp3_pct = None
     suggested_lev = None
+    chase_warning = None
 
     # SL distance multiplier — same across market caps; wider ATR cap does the work
     TF_SL_MULT = {
@@ -2587,6 +2593,40 @@ def generate_signal(analysis: Dict) -> Dict:
 
         if sl and sl != entry and tp_targets and tp_targets[0] is not None:
             rr_ratio = round(abs((tp_targets[1] or tp_targets[0]) - entry) / abs(sl - entry), 2)
+            # ── Chased-entry warning ────────────────────────────────────────
+            # Entry follows the LIVE price. When price has already run past a
+            # confirmed pattern's breakout level, the good entry is gone: risk is
+            # now measured to a stop beyond the whole structure while most of the
+            # move to target is spent, so R/R collapses. Flag it and point at the
+            # breakout level as the retest zone to wait for.
+            try:
+                _chase_from = None
+                for _f in (analysis.get("flags") or []):
+                    if not (_f.get("confirmed") and _f.get("is_active")):
+                        continue
+                    if (_f.get("direction") == "bullish") != (direction == "LONG"):
+                        continue
+                    _lvl = _f.get("break_level")
+                    if _lvl:
+                        _chase_from = float(_lvl)
+                        break
+                if _chase_from and rr_ratio is not None and rr_ratio < CHASE_RR_MIN:
+                    # moved beyond the break level in the trade's direction?
+                    _past = (entry < _chase_from) if direction == "SHORT" else (entry > _chase_from)
+                    _run  = abs(entry - _chase_from) / (_chase_from or 1) * 100
+                    if _past and _run >= CHASE_MIN_RUN_PCT:
+                        chase_warning = {
+                            "breakout_level": round(_chase_from, 8),
+                            "run_pct":        round(_run, 2),
+                            "rr":             rr_ratio,
+                            "message": (
+                                f"⚠ Chased entry — price already ran {_run:.1f}% past the "
+                                f"breakout (${_chase_from:,.4f}). R/R here is {rr_ratio}:1. "
+                                f"Consider waiting for a retest near ${_chase_from:,.4f} "
+                                f"for a tighter stop, or skip."),
+                        }
+            except Exception:
+                pass
             sl_pct  = round(abs(sl - entry) / entry * 100, 2)
             tp1_pct = round(abs(tp_targets[0] - entry) / entry * 100, 2) if tp_targets[0] else None
             tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
@@ -2704,6 +2744,7 @@ def generate_signal(analysis: Dict) -> Dict:
         "tp_targets": tp_targets,
         "tp_pcts": [tp1_pct, tp2_pct, tp3_pct],
         "rr_ratio": rr_ratio,
+        "chase_warning": chase_warning,
         "leverage": suggested_lev,
         "current_price": round(current_price, 8) if current_price else None,
         "exhaustion_flag":    exhaustion_flag,
