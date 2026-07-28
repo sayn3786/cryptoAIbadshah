@@ -34,6 +34,54 @@ def _breakout_volume(candles: List[Dict], break_idx: int,
             "ratio": round(ratio, 2), "level": level}
 
 
+# ── Breakout retest tracking ──────────────────────────────────────────────────
+# After a breakout, price often returns to the broken level ("retest"). A retest
+# that HOLDS is the highest-quality entry — broken resistance becoming support
+# (or vice-versa) confirms the break was real. One that fails is the whipsaw.
+RETEST_BAND_PCT = 0.015   # within 1.5% of the level = "at the level"
+
+
+def _retest_state(candles: List[Dict], break_idx: int, break_level: float,
+                  bullish: bool) -> Optional[Dict]:
+    """Classify where price sits relative to the broken level after a breakout.
+
+    status:
+      'extended'  — ran away from the level, no retest yet
+      'retesting' — price is AT the level right now (inside the band)
+      'held'      — came back to the level and pushed away again (valid retest)
+    Returns None when there's nothing to measure."""
+    if break_idx is None or break_level is None or break_idx >= len(candles) - 1:
+        return None
+    after = candles[break_idx + 1:]
+    if not after:
+        return None
+    band = abs(break_level) * RETEST_BAND_PCT
+    lo, hi = break_level - band, break_level + band
+
+    # Did any bar after the breakout trade back into the band?
+    touched = any(c["low"] <= hi and c["high"] >= lo for c in after)
+    price   = candles[-1]["close"]
+    in_band = lo <= price <= hi
+    beyond  = price > hi if bullish else price < lo
+
+    if in_band:
+        status = "retesting"
+        note = (f"price is retesting the broken level (${break_level:,.4f}) — "
+                f"holding it keeps the breakout valid")
+    elif touched and beyond:
+        status = "held"
+        note = (f"retested ${break_level:,.4f} and held — broken "
+                f"{'resistance now support' if bullish else 'support now resistance'}")
+    elif beyond:
+        status = "extended"
+        note = f"running from the breakout — no retest of ${break_level:,.4f} yet"
+    else:
+        return None                       # below/above the level = failure path
+    return {"status": status, "level": round(break_level, 8),
+            "distance_pct": round((price - break_level) / break_level * 100, 2),
+            "note": note}
+
+
 def _line_slope(values: list) -> float:
     """Linear regression slope (units per bar)."""
     n = len(values)
@@ -533,6 +581,12 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 # Volume on the breakout candle vs the prior average (None when
                 # the data source carries no usable volume).
                 "breakout_volume":    _breakout_volume(closed, breakout_idx) if confirmed else None,
+                "retest":             (_retest_state(closed, breakout_idx,
+                                                     (_up_break(breakout_idx - pe) if sloped else fh)
+                                                     if is_bull else
+                                                     (_dn_break(breakout_idx - pe) if sloped else fl_),
+                                                     is_bull)
+                                       if (confirmed and breakout_idx is not None) else None),
             })
 
     # Deduplicate by pole start — keep the BEST per unique pole origin by
@@ -1784,6 +1838,10 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         "status":     status, "confirmed": confirmed,
         "breakout_dir": brk_dir, "break_ts": break_ts,
         "breakout_volume": _breakout_volume(candles, bo_i) if confirmed else None,
+        "retest": (_retest_state(candles, bo_i,
+                                 upper(bo_i) if direction == "bullish" else lower(bo_i),
+                                 direction == "bullish")
+                   if (confirmed and bo_i is not None) else None),
         "pattern_end_ts": candles[scan_from]["timestamp"],
         # Drawable rail endpoints (start pivot → end of structure) for the chart.
         "upper_line": [
