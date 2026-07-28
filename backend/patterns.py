@@ -1559,6 +1559,14 @@ TW_PIVOT_WINDOW  = 3
 TW_MIN_PIVOTS    = 3       # ≥3 highs and ≥3 lows → real trendlines (2 touches each)
 TW_FLAT_PCT      = 0.10    # |slope| ≤ this (%/bar of mid price) counts as "flat"
 TW_CONVERGE_FRAC = 0.75    # end gap must be ≤ this fraction of the start gap
+# How much of the post-breakout move may be given back before a confirmed
+# breakout is treated as failed. Proportional to the ACTUAL move (not the wedge
+# height), so a tall wedge isn't killed by a routine retest while a genuine
+# round-trip still fails. 1.0 = all the way back to the breakout level.
+BREAK_GIVEBACK_FRAC = 1.0
+# Minimum room below/above the broken level before a retest counts as a failure —
+# retesting broken resistance/support is healthy price action, not invalidation.
+MIN_RETEST_BUFFER = 0.03   # 3% of the break level
 TW_MAX_RETURNED  = 3
 
 
@@ -1730,17 +1738,32 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
     height = gap_start                              # widest part of the structure
     current_price = candles[-1]["close"]
 
-    # A CONFIRMED directional breakout is only live while price still holds the
-    # breakout side of the structure. If price has round-tripped back through the
-    # MIDLINE (bullish break but now below mid, or bearish break but now above),
-    # the breakout has stalled/failed — don't keep showing an up/down target while
-    # price sits on the other side of the wedge.
-    if confirmed and direction in ("bullish", "bearish"):
-        mid_now = (upper(last_i) + lower(last_i)) / 2.0
-        if direction == "bullish" and current_price < mid_now:
-            return []
-        if direction == "bearish" and current_price > mid_now:
-            return []
+    # A CONFIRMED breakout stays live while price holds the breakout side. The
+    # test is PROPORTIONAL to the breakout move, not the wedge's geometric
+    # midline: on a tall wedge the midline can sit a routine 2-3% retest away
+    # while the target is 60%+ out, which killed valid patterns (e.g. TAO 1D:
+    # midline 194.79 vs a breakout near 199 with a 331 target). Instead, allow a
+    # retest that gives back up to BREAK_GIVEBACK_FRAC of the move from the
+    # breakout level to the extreme reached since — and always fail on a close
+    # back through the opposite rail (handled above).
+    if confirmed and direction in ("bullish", "bearish") and bo_i is not None:
+        brk_lvl = upper(bo_i) if direction == "bullish" else lower(bo_i)
+        after   = candles[bo_i:]
+        # A fresh breakout hasn't travelled far yet, so the proportional floor
+        # would sit right under the rail and any retest would kill it. Give every
+        # breakout at least MIN_RETEST_BUFFER of room below/above the level it
+        # broke — a retest of broken resistance is healthy, not a failure.
+        buf = brk_lvl * MIN_RETEST_BUFFER
+        if direction == "bullish":
+            peak   = max(c["high"] for c in after)
+            floor_ = brk_lvl - max((peak - brk_lvl) * BREAK_GIVEBACK_FRAC, buf)
+            if current_price < floor_:
+                return []
+        else:
+            trough = min(c["low"] for c in after)
+            ceil_  = brk_lvl + max((brk_lvl - trough) * BREAK_GIVEBACK_FRAC, buf)
+            if current_price > ceil_:
+                return []
 
     if direction == "bullish":
         target = round(upper(last_i) + height, 8)

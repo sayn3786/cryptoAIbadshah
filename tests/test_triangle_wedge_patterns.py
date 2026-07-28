@@ -89,14 +89,25 @@ def test_wedge_failed_breakout_dropped():
     assert f is None or f["type"] != "falling_wedge"
 
 
-def test_wedge_breakout_roundtrip_to_lower_half_dropped():
-    # Breaks up, then price round-trips back into the LOWER half of the wedge
-    # (below the midline ≈96.1) — a stalled/failed breakout that must not keep
-    # showing an up-target (the odd TAO 1H case).
-    dropped = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 95]))
+def test_wedge_breakout_giveback_dropped_but_retest_survives():
+    # Invalidation is PROPORTIONAL to the breakout move (plus a retest buffer),
+    # not the wedge's geometric midline — a tall wedge shouldn't die to a routine
+    # 2-3% retest while its target is far away (the TAO 1D case).
+    # Giving back the whole move → dropped.
+    dropped = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 90]))
     assert dropped is None or dropped["type"] != "falling_wedge"
-    # Control: a shallow pullback that stays in the UPPER half remains confirmed.
-    held = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 103]))
+    # A retest that holds within the move → still confirmed.
+    for end in (103, 97, 95):
+        held = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, end]))
+        assert held and held["type"] == "falling_wedge" and held["confirmed"], \
+            f"a retest to {end} should survive"
+
+
+def test_tall_wedge_survives_small_retest():
+    # Regression for the TAO 1D wedge (upper ~203, lower ~187, target ~331): the
+    # old midline rule sat ~2% under the breakout and killed it on a normal dip.
+    # A tall structure must tolerate a modest retest.
+    held = _one(_zigzag(FALLING_WEDGE, tail=[101, 104, 100]))
     assert held and held["type"] == "falling_wedge" and held["confirmed"]
 
 
