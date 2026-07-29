@@ -129,3 +129,30 @@ def test_panel_attaches_sessions_and_position():
     assert p["sessions"], "sessions should ride along for the chart overlay"
     r = _rows(p)
     assert r["Session Position"]["value"].endswith("%")
+
+
+# ── BOS staleness / validity ────────────────────────────────────────────────
+def test_bos_reports_held_and_bars_ago():
+    cs = _zigzag([100, 110, 106, 118, 114, 126, 122, 134])
+    r = detect_bos_streak(cs)
+    assert r["held"] is True                      # price still above the break
+    assert r["bars_ago"] is not None
+
+
+def test_given_back_bos_is_flagged_and_neutral():
+    # The BTC case: a bullish BOS whose level price has since slipped back under,
+    # without a swing low being taken out. It must NOT read as a live bullish
+    # signal against a bearish trend — it is stale context.
+    from test_triangle_wedge_patterns import _bar
+    up = _zigzag([100, 110, 106, 118, 114, 126, 122, 134])
+    given = up + [_bar(len(up) + i, p) for i, p in enumerate([128, 126, 124.5, 124, 123.5])]
+    r = detect_bos_streak(given)
+    assert r["direction"] == "bullish" and r["held"] is False
+
+    a = _analysis(up=False)
+    a["candles"] = given
+    a["bos_streak"] = r
+    row = _rows(build_structure_panel(a))["BOS Streak"]
+    assert "given back" in row["value"]
+    assert row["tone"] == "neutral", "a given-back break must not read as live bullish"
+    assert "bars ago" in row["detail"]
