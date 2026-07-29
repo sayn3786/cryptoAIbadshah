@@ -1,0 +1,47 @@
+-- ============================================================================
+-- 001_rollback_signal_schema.sql   — FOR REVIEW ONLY. DO NOT RUN CASUALLY.
+--
+--   *** THIS SCRIPT IS DESTRUCTIVE. IT PERMANENTLY DELETES EVERY STORED   ***
+--   *** SIGNAL, TARGET, INDICATOR SNAPSHOT, LIFECYCLE EVENT AND           ***
+--   *** POSTMORTEM. THERE IS NO UNDO.                                     ***
+--
+-- Nothing in this repository executes this file. No migration runner, no
+-- test, no API route and no deployment step references it. It exists so the
+-- rollback path is reviewable, not so it is automatic.
+--
+-- Before even considering running it:
+--   1. Take a Neon branch or backup of the database.
+--   2. Export anything you want to keep:
+--        \copy (SELECT * FROM signals) TO 'signals.csv' CSV HEADER
+--        \copy (SELECT * FROM signal_targets) TO 'signal_targets.csv' CSV HEADER
+--        \copy (SELECT * FROM signal_indicator_snapshots) TO 'snapshots.csv' CSV HEADER
+--        \copy (SELECT * FROM signal_events) TO 'signal_events.csv' CSV HEADER
+--        \copy (SELECT * FROM signal_postmortems) TO 'postmortems.csv' CSV HEADER
+--   3. Deploy the application code that does not require these tables first,
+--      or set DB_REQUIRED=false, otherwise signal publishing will 503.
+--   4. Have a second person confirm.
+--
+-- In almost every case the correct rollback is to revert the APPLICATION code
+-- and LEAVE THE TABLES IN PLACE. Unused tables on the free tier cost a few
+-- kilobytes; deleted trade history cannot be recovered. See the README section
+-- "Rolling back".
+--
+-- To run deliberately, uncomment the block below.
+-- ============================================================================
+
+-- BEGIN;
+--
+-- -- Child tables first; each also has ON DELETE CASCADE from signals.
+-- DROP TABLE IF EXISTS signal_postmortems;
+-- DROP TABLE IF EXISTS signal_events;
+-- DROP TABLE IF EXISTS signal_indicator_snapshots;
+-- DROP TABLE IF EXISTS signal_targets;
+-- DROP TABLE IF EXISTS signals;
+--
+-- -- Leaves schema_migrations itself in place: other migrations may be tracked
+-- -- there. Only this migration's row is removed.
+-- DELETE FROM schema_migrations WHERE version = '001';
+--
+-- -- pgcrypto is intentionally NOT dropped: other objects may depend on it.
+--
+-- COMMIT;

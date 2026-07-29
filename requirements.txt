@@ -1,4 +1,8 @@
 flask==3.1.0
 requests==2.32.3
 python-dotenv==1.0.1
+# Persistent signal tracking (Neon Postgres). psycopg 3 with the binary wheel
+# so no local libpq/compiler is needed on Vercel.
+SQLAlchemy>=2.0,<3.0
+psycopg[binary]>=3.1,<4.0
 # waitress is only needed for local Windows deployment — install manually: pip install waitress
