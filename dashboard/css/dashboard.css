@@ -2005,3 +2005,6 @@ a:hover { color: var(--gold2); }
 }
 .struct-chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
 .sc-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+/* Collapse an empty mini-chart so it stops absorbing leftover card height */
+.mini-chart-container.mini-chart-empty { flex: 0 0 auto; height: 0; min-height: 0; }
