@@ -2233,3 +2233,53 @@ def session_ranges(candles: List[Dict], timeframe: str, max_sessions: int = 6) -
         b["high"] = round(b["high"], 8)
         b["low"]  = round(b["low"], 8)
     return out
+
+
+# ── Liquidity pools (multiple) ────────────────────────────────────────────────
+# detect_equal_levels returns only the single best EQH/EQL. For the structure
+# chart we want the whole ladder of resting-stop levels above and below price, so
+# swing highs/lows are clustered into pools and ranked by touch count.
+LIQ_POOL_TOL      = 0.004   # highs/lows within 0.4% are the same pool
+LIQ_MIN_TOUCHES   = 2       # a pool needs at least two touches to matter
+LIQ_MAX_POOLS     = 8
+
+
+def detect_liquidity_pools(candles: List[Dict], window: int = 3,
+                           max_pools: int = LIQ_MAX_POOLS) -> List[Dict]:
+    """Cluster swing highs/lows into liquidity pools (resting stops).
+
+    Returns [{price, touches, side, last_ts}] sorted by touch count then
+    recency — `side` is 'above'/'below' relative to the latest close."""
+    if len(candles) < window * 2 + 3:
+        return []
+    ph, pl = find_pivots(candles, window=window)
+    price = candles[-1]["close"]
+
+    def _cluster(pivots):
+        out = []
+        for p in sorted(pivots, key=lambda x: x["price"]):
+            placed = False
+            for c in out:
+                if abs(p["price"] - c["ref"]) / (c["ref"] or 1) <= LIQ_POOL_TOL:
+                    c["prices"].append(p["price"])
+                    c["last_ts"] = max(c["last_ts"], p["timestamp"])
+                    c["ref"] = sum(c["prices"]) / len(c["prices"])
+                    placed = True
+                    break
+            if not placed:
+                out.append({"ref": p["price"], "prices": [p["price"]],
+                            "last_ts": p["timestamp"]})
+        return out
+
+    pools = []
+    for group in (_cluster(ph), _cluster(pl)):
+        for c in group:
+            if len(c["prices"]) < LIQ_MIN_TOUCHES:
+                continue
+            lvl = sum(c["prices"]) / len(c["prices"])
+            pools.append({"price": round(lvl, 8), "touches": len(c["prices"]),
+                          "side": "above" if lvl > price else "below",
+                          "last_ts": c["last_ts"]})
+    # strongest (most touched) first, then most recent
+    pools.sort(key=lambda p: (p["touches"], p["last_ts"]), reverse=True)
+    return pools[:max_pools]

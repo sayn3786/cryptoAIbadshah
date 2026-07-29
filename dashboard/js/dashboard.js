@@ -2728,20 +2728,33 @@ class RegimeShade {
             const ctx = scope.context;
             const H = scope.mediaSize.height;
             const tx = t => self._chart.timeScale().timeToCoordinate(t);
+            const py = p => self._series.priceToCoordinate(p);
             self._segs.forEach(sg => {
               const x0 = tx(sg.t0), x1 = tx(sg.t1);
               if (x0 == null || x1 == null) return;
-              // FADE from the flip: strongest at the signal bar, decaying across
-              // the regime. A flat block reads as a solid wall of colour; the
-              // fade shows WHERE the signal fired and lets it die out naturally.
               const xa = Math.min(x0, x1), w = Math.max(1, Math.abs(x1 - x0));
-              const g = ctx.createLinearGradient(xa, 0, xa + w, 0);
               const rgb = sg.bullish ? '34,197,94' : '239,68,68';
-              g.addColorStop(0,    `rgba(${rgb},.20)`);
-              g.addColorStop(0.35, `rgba(${rgb},.08)`);
-              g.addColorStop(1,    `rgba(${rgb},.01)`);
+              // Anchor the band to the SUPERTREND LINE rather than the whole
+              // pane: bullish fills DOWNWARD from the line (green under price),
+              // bearish fills UPWARD from it (red above price) — the classic
+              // SuperTrend look. The fade runs away from the line, so colour is
+              // densest at the line and dissolves into the background.
+              const yLine = sg.level != null ? py(sg.level) : null;
+              let yTop, yBot;
+              if (yLine == null) { yTop = 0; yBot = H; }
+              else if (sg.bullish) { yTop = yLine; yBot = H; }
+              else { yTop = 0; yBot = yLine; }
+              if (!(yBot > yTop)) return;
+              const g = ctx.createLinearGradient(0, yTop, 0, yBot);
+              if (sg.bullish) {            // densest at the line (top), fades down
+                g.addColorStop(0, `rgba(${rgb},.22)`);
+                g.addColorStop(1, `rgba(${rgb},.01)`);
+              } else {                      // densest at the line (bottom), fades up
+                g.addColorStop(0, `rgba(${rgb},.01)`);
+                g.addColorStop(1, `rgba(${rgb},.22)`);
+              }
               ctx.fillStyle = g;
-              ctx.fillRect(xa, 0, w, H);
+              ctx.fillRect(xa, yTop, w, yBot - yTop);
             });
           });
         },
@@ -2765,8 +2778,10 @@ function _regimeSegmentsAndFlips(stSeries) {
       flips.push({ time: t, bullish, value: +p.value });
     }
     prevTrend = bullish;
-    if (!cur || cur.bullish !== bullish) { if (cur) segs.push(cur); cur = { t0: t, t1: t, bullish }; }
-    else cur.t1 = t;
+    if (!cur || cur.bullish !== bullish) {
+      if (cur) segs.push(cur);
+      cur = { t0: t, t1: t, bullish, level: +p.value };
+    } else { cur.t1 = t; cur.level = +p.value; }
   });
   if (cur) segs.push(cur);
   for (let i = 0; i < segs.length; i++) {
@@ -2783,7 +2798,8 @@ function renderStructureChart(a) {
   if (!el) return;
   try { if (S.structChart) { S.structChart.remove(); S.structChart = null; } } catch (_) {}
   el.innerHTML = '';
-  const candles = a && a.candles;
+  // Prefer the deeper structure window so past liquidity is visible.
+  const candles = (a && (a.structure_candles || a.candles));
   if (!candles || !candles.length || !window.LightweightCharts) {
     el.innerHTML = '<p class="empty">Chart unavailable</p>';
     return;
@@ -2827,14 +2843,28 @@ function renderStructureChart(a) {
   }
 
   // Liquidity pools (equal highs/lows = resting stops) — the yellow levels.
-  const eq = a.equal_levels || {};
-  [['eqh', 'Liquidity ↑'], ['eql', 'Liquidity ↓']].forEach(([k, title]) => {
-    const lv = eq[k];
-    if (lv && lv.price) {
-      cs.createPriceLine({ price: +lv.price, color: '#eab308', lineWidth: 2, lineStyle: 0,
-        axisLabelVisible: true, title: `${title} (${lv.touches || 0}x)` });
-    }
-  });
+  const pools = (a.liquidity_pools || []);
+  if (pools.length) {
+    // The whole ladder of resting-stop levels. Weight tracks touch count, so the
+    // most-defended pools read strongest and weaker ones stay faint.
+    pools.forEach(pl => {
+      const strong = (pl.touches || 0) >= 3;
+      cs.createPriceLine({
+        price: +pl.price, color: strong ? '#eab308' : '#eab30877',
+        lineWidth: strong ? 2 : 1, lineStyle: strong ? 0 : 2,
+        axisLabelVisible: true,
+        title: `Liq ${pl.side === 'above' ? '↑' : '↓'} (${pl.touches}x)` });
+    });
+  } else {
+    const eq = a.equal_levels || {};
+    [['eqh', 'Liquidity ↑'], ['eql', 'Liquidity ↓']].forEach(([k, title]) => {
+      const lv = eq[k];
+      if (lv && lv.price) {
+        cs.createPriceLine({ price: +lv.price, color: '#eab308', lineWidth: 2, lineStyle: 0,
+          axisLabelVisible: true, title: `${title} (${lv.touches || 0}x)` });
+      }
+    });
+  }
 
   // Structure envelope + the level of the last BOS.
   const win = rows.slice(-30);
