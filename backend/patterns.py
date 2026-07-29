@@ -1952,3 +1952,96 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
             {"timestamp": candles[last_i]["timestamp"],   "price": round(lower(last_i), 8)}],
     }]
     return out[:TW_MAX_RETURNED]
+
+
+# ── Market-structure status panel ─────────────────────────────────────────────
+# A dense, at-a-glance read of trend + structure + liquidity, computed entirely
+# from data the analysis already produces (no extra fetches). Mirrors the kind of
+# status table traders pin to a TradingView layout.
+def build_structure_panel(analysis: Dict) -> Optional[Dict]:
+    candles = analysis.get("candles") or []
+    if len(candles) < 10:
+        return None
+    price = candles[-1].get("close") or 0.0
+    if price <= 0:
+        return None
+
+    rows: List[Dict] = []
+
+    def row(label, value, tone="neutral", detail=""):
+        rows.append({"label": label, "value": value, "tone": tone, "detail": detail})
+
+    # ── Trend state / power ──────────────────────────────────────────────────
+    ema   = analysis.get("ema_trend") or {}
+    above = ema.get("above", []) or []
+    below = ema.get("below", []) or []
+    st    = (analysis.get("supertrend") or {}).get("direction")
+    bias  = (len(above) - len(below)) + (1 if st == "bullish" else -1 if st == "bearish" else 0)
+    trend = "BULLISH" if bias > 0 else "BEARISH" if bias < 0 else "NEUTRAL"
+    row("Trend State", trend, "bull" if bias > 0 else "bear" if bias < 0 else "neutral")
+    # power = how much of the available trend evidence agrees
+    _max = len(above) + len(below) + (1 if st in ("bullish", "bearish") else 0)
+    power = int(round(abs(bias) / _max * 100)) if _max else 0
+    row("Trend Power", f"{power}%", "bull" if bias > 0 else "bear" if bias < 0 else "neutral")
+
+    # ── Structure bias / last structure event ────────────────────────────────
+    ch = analysis.get("choch") or {}
+    if ch.get("signal") in ("bullish", "bearish"):
+        ago = ch.get("candles_ago")
+        row("Structure Bias", ch["signal"].upper(),
+            "bull" if ch["signal"] == "bullish" else "bear")
+        row("Last Structure Event",
+            f"CHoCH{f' ({ago} bars ago)' if ago is not None else ''}",
+            "bull" if ch["signal"] == "bullish" else "bear",
+            f"broke {ch.get('level')}")
+    else:
+        row("Structure Bias", "RANGE", "neutral")
+        row("Last Structure Event", "—", "neutral")
+
+    # Alignment: does structure agree with trend?
+    if ch.get("signal") in ("bullish", "bearish") and trend != "NEUTRAL":
+        aligned = (ch["signal"] == "bullish") == (trend == "BULLISH")
+        row("Alignment", "ALIGNED" if aligned else "CONFLICTED",
+            "bull" if aligned else "bear")
+    else:
+        row("Alignment", "—", "neutral")
+
+    # ── Structure high / low (recent swing envelope) ─────────────────────────
+    win = candles[-30:]
+    s_hi = max(c["high"] for c in win)
+    s_lo = min(c["low"]  for c in win)
+    row("Structure High", f"{s_hi:,.4f}", "neutral", f"{(s_hi - price) / price * 100:+.1f}%")
+    row("Structure Low",  f"{s_lo:,.4f}", "neutral", f"{(s_lo - price) / price * 100:+.1f}%")
+
+    # ── Liquidity pools (equal highs/lows = resting stops) ───────────────────
+    eq = analysis.get("equal_levels") or {}
+    for key, label, tone in (("eqh", "Liquidity Above", "bear"), ("eql", "Liquidity Below", "bull")):
+        lv = eq.get(key)
+        if lv and lv.get("price"):
+            d = (lv["price"] - price) / price * 100
+            row(label, f"{lv['price']:,.4f}", tone,
+                f"{abs(d):.1f}% away · {lv.get('touches', 0)} touches")
+        else:
+            row(label, "—", "neutral")
+
+    # ── Range position / midline stretch ─────────────────────────────────────
+    rng = s_hi - s_lo
+    if rng > 0:
+        pos = (price - s_lo) / rng * 100
+        mid = (s_hi + s_lo) / 2.0
+        stretch = (price - mid) / mid * 100
+        zone = "UPPER" if pos >= 66 else "LOWER" if pos <= 33 else "MIDDLE"
+        row("Range Position", f"{zone} {pos:.0f}%",
+            "bear" if pos >= 80 else "bull" if pos <= 20 else "neutral")
+        row("Midline Stretch", f"{stretch:+.1f}%",
+            "bear" if stretch > 0 else "bull" if stretch < 0 else "neutral")
+
+    # ── Last signal ──────────────────────────────────────────────────────────
+    sig = analysis.get("signal") or {}
+    d   = sig.get("direction", "NEUTRAL")
+    row("Last Signal", f"{d} ({sig.get('strength', 0)}/100)",
+        "bull" if d == "LONG" else "bear" if d == "SHORT" else "neutral")
+
+    return {"rows": rows, "price": round(price, 8),
+            "timeframe": analysis.get("timeframe"),
+            "symbol": analysis.get("symbol")}

@@ -312,6 +312,7 @@ function renderAll(a) {
   renderCVDDivergence(a.cvd_divergence);
   renderFVGTable(a.fvgs);
   renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
+  renderStructurePanel(a.structure_panel);
   renderReversals(a.reversal_patterns, a.candles);
   renderTriangles(a.triangle_patterns, a.candles);
   renderEngulfing(a.engulfing, a.timeframe);
@@ -2671,6 +2672,21 @@ function flagSvg(f) {
     <text x="${xP0}" y="${H - 3}" fill="var(--muted2,#94a3b8)" font-size="8.5">pole ${isBull ? '+' : ''}${f.pole_pct}%</text>
     <text x="${(xPE + xFE) / 2}" y="${H - 3}" fill="var(--muted2,#94a3b8)" font-size="8.5" text-anchor="middle">flag ${bars} bars</text>
   </svg>`;
+}
+
+// Dense market-structure status panel — trend, structure and liquidity in one
+// table (our native equivalent of a pinned TradingView status widget).
+function renderStructurePanel(panel) {
+  const el = document.getElementById('structurePanel');
+  if (!el) return;
+  const rows = (panel && panel.rows) || [];
+  if (!rows.length) { el.innerHTML = '<p class="empty">No structure data</p>'; return; }
+  el.innerHTML = `<table class="struct-tbl">${rows.map(r => `
+    <tr>
+      <td class="sp-label">${r.label}</td>
+      <td class="sp-val ${r.tone || 'neutral'}">${r.value}</td>
+      <td class="sp-detail">${r.detail || ''}</td>
+    </tr>`).join('')}</table>`;
 }
 
 // Volume confirmation badge for a confirmed breakout. `bv` = {ratio, level} from
