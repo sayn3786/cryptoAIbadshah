@@ -26,6 +26,11 @@ const S = {
   ichimokuSpanBSeries: null,
 };
 
+// How far a measured-move target may sit from price before the chart stops
+// stretching its y-axis to include it. Past this the target is an axis label
+// only, so the candles stay readable instead of collapsing into a thin band.
+const TARGET_ANCHOR_MAX_PCT = 0.25;
+
 const API = location.port === '' || location.port === '80' || location.port === '443'
   ? '/api'
   : `${location.protocol}//${location.hostname}:8000/api`;
@@ -1085,8 +1090,10 @@ function renderCVDCharts(spot, fut, futuresAvailable) {
     document.getElementById('futCvdTrend').textContent = 'No perp market';
     document.getElementById('futCvdTrend').className   = 'cvd-trend neutral';
     S.futCvdSeries.setData([]);
+    _setFutCvdEmpty(true);
   } else {
     renderCVDPanel('fut', fut, S.futCvdSeries, 'futCvdVal', 'futCvdTrend', false);
+    _setFutCvdEmpty(false);
   }
 }
 
@@ -3465,16 +3472,22 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
         axisLabelVisible: true, title: 'Break' });
     }
 
-    // target — labelled horizontal line. A createPriceLine alone does NOT stretch
-    // the price scale here, so a far-away measured-move target (e.g. a 1W pole
-    // projecting ~40% below price) falls off the bottom. Add an invisible anchor
-    // series AT the target so the y-range always expands to include it.
+    // target — labelled horizontal line, always on the price axis.
     cs.createPriceLine({ price: +f.target, color: col, lineWidth: 2, lineStyle: 0,
       axisLabelVisible: true, title: '🎯 Target' });
-    chart.addLineSeries({ color: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false,
-      lastValueVisible: false, crosshairMarkerVisible: false })
-      .setData([{ time: win[0].time, value: +f.target },
-                { time: win[win.length - 1].time, value: +f.target }]);
+    // Only PULL the y-axis out to the target when it is reasonably close. A
+    // measured move can sit ~50% away (e.g. a 1W pole), and anchoring to it
+    // stretched the scale so far that the candles collapsed into a thin band
+    // with huge empty space above and below. Beyond the cap the target still
+    // shows as an axis label — the price action stays readable instead.
+    const _lastPx  = win[win.length - 1].close;
+    const _tgtDist = Math.abs(+f.target - _lastPx) / (_lastPx || 1);
+    if (_tgtDist <= TARGET_ANCHOR_MAX_PCT) {
+      chart.addLineSeries({ color: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false,
+        lastValueVisible: false, crosshairMarkerVisible: false })
+        .setData([{ time: win[0].time, value: +f.target },
+                  { time: win[win.length - 1].time, value: +f.target }]);
+    }
 
     // Breakout projection: a dashed arrow-line from the flag's breakout edge to
     // the target, drawn only once the flag is CONFIRMED (an idealised path, not a
@@ -4219,12 +4232,21 @@ async function loadCvdFromSource(cvdType) {
 }
 
 // Show a clear "no perpetual market" state on the futures CVD panel.
+// Collapse the futures-CVD chart area when there is no perp market. Its
+// container is flex:1, so an empty chart otherwise absorbs the whole leftover
+// card height and renders as a large blank gap next to the spot card.
+function _setFutCvdEmpty(empty) {
+  const el = document.getElementById('futCvdChart');
+  if (el) el.classList.toggle('mini-chart-empty', !!empty);
+}
+
 function setFutCvdNA() {
   const v = document.getElementById('futCvdVal');
   const t = document.getElementById('futCvdTrend');
   if (v) { v.textContent = 'N/A'; v.style.color = 'var(--muted)'; }
   if (t) { t.textContent = 'No perp market'; t.className = 'cvd-trend neutral'; }
   if (S.futCvdSeries) S.futCvdSeries.setData([]);
+  _setFutCvdEmpty(true);
   const auto = document.querySelector('#futCvdSource option[value="auto"]');
   if (auto) auto.textContent = 'Auto';
 }
