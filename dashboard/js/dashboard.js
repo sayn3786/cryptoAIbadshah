@@ -17,6 +17,7 @@ const S = {
   fvgPriceLines: [],   // track FVG overlays so they can be cleared on token/TF switch
   overlayPriceLines: [], // swing high/low + realized price horizontal lines
   sessionShade: null,      // trading-session range boxes
+  structChart: null,       // dedicated market-structure chart
   supertrendUpSeries: null,
   supertrendDownSeries: null,
   revCharts: [],           // per-pattern mini charts (reversal card)
@@ -328,6 +329,7 @@ function renderAll(a) {
   renderFVGTable(a.fvgs);
   renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
   renderStructurePanel(a.structure_panel);
+  renderStructureChart(a);
   renderReversals(a.reversal_patterns, a.candles);
   renderTriangles(a.triangle_patterns, a.candles);
   renderEngulfing(a.engulfing, a.timeframe);
@@ -2699,6 +2701,103 @@ function flagSvg(f) {
     <text x="${xP0}" y="${H - 3}" fill="var(--muted2,#94a3b8)" font-size="8.5">pole ${isBull ? '+' : ''}${f.pole_pct}%</text>
     <text x="${(xPE + xFE) / 2}" y="${H - 3}" fill="var(--muted2,#94a3b8)" font-size="8.5" text-anchor="middle">flag ${bars} bars</text>
   </svg>`;
+}
+
+// Dedicated market-structure chart: candles + session boxes + liquidity pools +
+// structure high/low + CHoCH/BOS markers. Kept SEPARATE from the main chart so
+// these structural levels are readable instead of buried under 18 overlays.
+function renderStructureChart(a) {
+  const el = document.getElementById('structureChart');
+  if (!el) return;
+  try { if (S.structChart) { S.structChart.remove(); S.structChart = null; } } catch (_) {}
+  el.innerHTML = '';
+  const candles = a && a.candles;
+  if (!candles || !candles.length || !window.LightweightCharts) {
+    el.innerHTML = '<p class="empty">Chart unavailable</p>';
+    return;
+  }
+  const t = ts => Math.floor(ts / 1000);
+  const rows = _withLiveCandle(candles)
+    .map(c => ({ time: t(c.timestamp), open: +c.open, high: +c.high, low: +c.low, close: +c.close }))
+    .sort((x, y) => x.time - y.time)
+    .filter((v, i, arr) => i === 0 || v.time > arr[i - 1].time);
+  if (rows.length < 3) { el.innerHTML = '<p class="empty">Not enough candles</p>'; return; }
+
+  const px = rows[rows.length - 1].close;
+  const prec = px >= 1000 ? 2 : px >= 1 ? 4 : 6;
+  const chart = LightweightCharts.createChart(el, {
+    ...CHART_OPTS,
+    layout: { ...CHART_OPTS.layout, fontSize: 11 },
+    width: el.clientWidth || 320,
+    height: 380,
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+    handleScale:  { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
+    rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true, scaleMargins: { top: 0.1, bottom: 0.1 } },
+  });
+  const cs = chart.addCandlestickSeries({
+    upColor: '#10b981', downColor: '#ef4444', borderUpColor: '#10b981',
+    borderDownColor: '#ef4444', wickUpColor: '#10b981', wickDownColor: '#ef4444',
+    priceFormat: { type: 'price', precision: prec, minMove: Math.pow(10, -prec) },
+  });
+  cs.setData(rows);
+
+  // Session boxes (intraday only — backend returns [] on daily+).
+  const sess = (a.session_ranges || []);
+  if (sess.length) {
+    const SC = { ASIA: '#38bdf8', LONDON: '#a855f7', US: '#22c55e' };
+    const shade = new SessionShade(chart, cs);
+    shade.setData(sess.map(b => {
+      const c = SC[b.session] || '#94a3b8';
+      return { t0: t(b.start_ts), t1: t(b.end_ts), high: +b.high, low: +b.low,
+               label: b.session, fill: c + '18', stroke: c + '77' };
+    }));
+    try { cs.attachPrimitive(shade); } catch (_) {}
+  }
+
+  // Liquidity pools (equal highs/lows = resting stops) — the yellow levels.
+  const eq = a.equal_levels || {};
+  [['eqh', 'Liquidity ↑'], ['eql', 'Liquidity ↓']].forEach(([k, title]) => {
+    const lv = eq[k];
+    if (lv && lv.price) {
+      cs.createPriceLine({ price: +lv.price, color: '#eab308', lineWidth: 2, lineStyle: 0,
+        axisLabelVisible: true, title: `${title} (${lv.touches || 0}x)` });
+    }
+  });
+
+  // Structure envelope + the level of the last BOS.
+  const win = rows.slice(-30);
+  const sHi = Math.max(...win.map(c => c.high));
+  const sLo = Math.min(...win.map(c => c.low));
+  cs.createPriceLine({ price: sHi, color: '#94a3b8aa', lineWidth: 1, lineStyle: 3,
+    axisLabelVisible: true, title: 'Structure High' });
+  cs.createPriceLine({ price: sLo, color: '#94a3b8aa', lineWidth: 1, lineStyle: 3,
+    axisLabelVisible: true, title: 'Structure Low' });
+
+  // CHoCH / BOS markers — where structure actually changed hands.
+  const markers = [];
+  const ch = a.choch || {};
+  if (ch.signal === 'bullish' || ch.signal === 'bearish') {
+    const bull = ch.signal === 'bullish';
+    const ago = ch.candles_ago;
+    const idx = (ago != null && rows.length - 1 - ago >= 0) ? rows.length - 1 - ago : rows.length - 1;
+    markers.push({ time: rows[idx].time, position: bull ? 'belowBar' : 'aboveBar',
+                   color: bull ? '#22c55e' : '#ef4444',
+                   shape: bull ? 'arrowUp' : 'arrowDown', text: 'CHoCH' });
+  }
+  const bos = a.bos_streak || {};
+  if (bos.last_ts && bos.direction) {
+    const bt = t(bos.last_ts);
+    if (rows.some(r => r.time === bt)) {
+      const bull = bos.direction === 'bullish';
+      markers.push({ time: bt, position: bull ? 'belowBar' : 'aboveBar',
+                     color: bull ? '#22c55e' : '#ef4444', shape: 'circle',
+                     text: `BOS ×${bos.count || 1}` });
+    }
+  }
+  if (markers.length) cs.setMarkers(markers.sort((x, y) => x.time - y.time));
+
+  chart.timeScale().fitContent();
+  S.structChart = chart;
 }
 
 // Dense market-structure status panel — trend, structure and liquidity in one

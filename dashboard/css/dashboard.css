@@ -1992,3 +1992,16 @@ a:hover { color: var(--gold2); }
 .sp-val.bear { color: var(--bear, #ef4444); }
 .sp-val.neutral { color: var(--text); }
 .sp-detail { text-align: right; color: var(--muted2); font-size: .66rem; white-space: nowrap; }
+
+/* Dedicated market-structure chart */
+.struct-chart {
+  width: 100%; height: 380px; margin-top: 6px;
+  border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border, #1e2d44);
+}
+.struct-chart-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+  margin-top: 10px; font-size: .65rem; color: var(--muted2);
+}
+.struct-chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.sc-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
