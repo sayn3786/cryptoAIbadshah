@@ -2952,7 +2952,7 @@ function renderStructureChart(a) {
     const bar = byTime.get(time);
     if (!bar) return;
     const color = bull ? '#22c55e' : '#ef4444';
-    markers.push({ time, position: bull ? 'belowBar' : 'aboveBar', color, shape });
+    markers.push({ time, position: bull ? 'belowBar' : 'aboveBar', color, shape, size: 2 });
     chips.push({ time, price: bull ? bar.low : bar.high, above: !bull, text, color });
   };
 
@@ -3394,17 +3394,19 @@ function renderPatternMiniCharts(patterns, candles, prefix, bucket) {
 // Thin coloured text on a candle chart is hard to read at a glance. These draw
 // the label as a filled, rounded, bold-white-on-colour box instead, so BUY /
 // SELL / BOS / CHoCH and the session names all read as badges.
-const CHIP_FONT = '700 10px ui-sans-serif, -apple-system, system-ui, sans-serif';
-const CHIP_H    = 16;
+const CHIP_FONT   = '800 12px ui-sans-serif, -apple-system, system-ui, sans-serif';
+const CHIP_H      = 22;   // tall enough to read over candles, not so tall it hides them
+const CHIP_PAD_X  = 9;    // per side
+const CHIP_BORDER = 2;    // heavy rim so the box holds its edge against wicks
 
 function _chipSize(ctx, text) {
   ctx.font = CHIP_FONT;
-  return { w: Math.ceil(ctx.measureText(text).width) + 12, h: CHIP_H };
+  return { w: Math.ceil(ctx.measureText(text).width) + CHIP_PAD_X * 2, h: CHIP_H };
 }
 
 function _drawChipAt(ctx, text, bx, by, bg) {
   const { w, h } = _chipSize(ctx, text);
-  const r = 3;
+  const r = 4;
   ctx.beginPath();
   ctx.moveTo(bx + r, by);
   ctx.arcTo(bx + w, by,     bx + w, by + h, r);
@@ -3412,16 +3414,23 @@ function _drawChipAt(ctx, text, bx, by, bg) {
   ctx.arcTo(bx,     by + h, bx,     by,     r);
   ctx.arcTo(bx,     by,     bx + w, by,     r);
   ctx.closePath();
+  // Solid fill, then a heavy dark rim — on a dark chart a plain box bleeds into
+  // the background, and against a bright candle it loses its edge. The rim
+  // separates it from both.
   ctx.fillStyle = bg;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,.5)';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(0,0,0,.72)';
+  ctx.lineWidth = CHIP_BORDER;
   ctx.stroke();
   const ta = ctx.textAlign, tb = ctx.textBaseline;
-  ctx.fillStyle = '#fff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = CHIP_FONT;
+  // Dark halo under the glyphs keeps the white readable on the lighter fills.
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(0,0,0,.35)';
+  ctx.strokeText(text, bx + w / 2, by + h / 2 + 0.5);
+  ctx.fillStyle = '#fff';
   ctx.fillText(text, bx + w / 2, by + h / 2 + 0.5);
   ctx.textAlign = ta;
   ctx.textBaseline = tb;
