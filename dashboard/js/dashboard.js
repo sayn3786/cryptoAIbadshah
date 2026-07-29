@@ -239,10 +239,20 @@ async function loadLivePrices() {
 async function loadAnalysis() {
   setLoading(true);
   try {
-    const res = await fetch(`${API}/analysis/${S.symbol}?timeframe=${S.timeframe}`);
+    const url = `${API}/analysis/${S.symbol}?timeframe=${S.timeframe}`;
+    const res = await fetch(url);
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+      // Surface the SERVER's message when there is one. A JSON body means the
+      // Flask app answered (e.g. unsupported symbol); a non-JSON 404 means the
+      // request never reached it — the serverless function isn't deployed.
+      const raw = await res.text().catch(() => '');
+      let err = {};
+      try { err = JSON.parse(raw); } catch (_) {}
+      const detail = err.error || err.detail;
+      if (detail) throw new Error(`HTTP ${res.status} — ${detail}`);
+      throw new Error(res.status === 404
+        ? `HTTP 404 — API not reachable at ${url} (deployment issue, not the app)`
+        : `HTTP ${res.status}`);
     }
     S.analysis = await res.json();
     renderAll(S.analysis);
