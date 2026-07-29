@@ -229,3 +229,24 @@ def test_liquidity_pools_empty_on_thin_data():
     from patterns import detect_liquidity_pools
     assert detect_liquidity_pools([]) == []
     assert detect_liquidity_pools(_make_candles(5)) == []
+
+
+# ── structure-chart overlay coverage ────────────────────────────────────────
+def test_structure_supertrend_spans_the_whole_structure_window():
+    # The structure chart draws STRUCTURE_CHART_BARS candles. Its SuperTrend
+    # overlay must cover the SAME span — reusing the main chart's 60-bar series
+    # left the older two thirds of the pane with no line and no regime shading.
+    from app import STRUCTURE_CHART_BARS
+    from indicators import calculate_supertrend
+
+    spot = _make_candles(STRUCTURE_CHART_BARS + 40, up=True)
+    st = calculate_supertrend(spot)
+    cutoff = spot[-STRUCTURE_CHART_BARS]["timestamp"]
+    deep = [p for p in st["series"] if p["timestamp"] >= cutoff]
+
+    candles = spot[-STRUCTURE_CHART_BARS:]
+    assert deep, "structure supertrend series must not be empty"
+    assert deep[0]["timestamp"] <= candles[0]["timestamp"] + (
+        candles[1]["timestamp"] - candles[0]["timestamp"]), \
+        "overlay must start at (or before) the first structure candle"
+    assert len(deep) > 60, "must be deeper than the main chart's 60-bar window"
