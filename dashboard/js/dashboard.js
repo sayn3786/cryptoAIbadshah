@@ -35,7 +35,6 @@ const S = {
   overlayPriceLines: [], // swing high/low + realized price horizontal lines
   sessionShade: null,      // trading-session range boxes
   structChart: null,       // dedicated market-structure chart
-  supertrendLegSeries: [],  // one line series per SuperTrend leg (see renderMainChart)
   revCharts: [],           // per-pattern mini charts (reversal card)
   triCharts: [],           // per-pattern mini charts (triangle card)
   ichimokuSpanASeries: null,
@@ -99,14 +98,9 @@ function initCharts() {
     wickUpColor: '#10b981', wickDownColor: '#ef4444',
   });
 
-  // SuperTrend — blue while bullish, orange while bearish. Deliberately NOT
-  // green/red so it never reads as another FVG zone or candle color.
   // autoscaleInfoProvider: () => null prevents these overlay series from
   // stretching the Y-axis — only candles drive the price scale.
   const _overlayOpts = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
-  // SuperTrend is NOT created here — it needs one series per leg so a leg ends
-  // at its flip, and the leg count only becomes known once data arrives.
-  // renderMainChart builds and tears them down each pass.
 
   // Ichimoku cloud boundaries (Span A / Span B) — purple/cyan, distinct from
   // every other overlay color on the chart.
@@ -912,9 +906,6 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     });
   }
 
-  // SuperTrend line — split into bullish/bearish segments so color flips with trend.
-  // Each series gets the full timeline but with nulls where the other trend is
-  // active, so lightweight-charts draws a gap instead of a flat connecting line.
   // Session boxes — only present on intraday TFs (backend returns [] otherwise).
   if (S.sessionShade) {
     const _SC = { ASIA: '#38bdf8', LONDON: '#a855f7', US: '#22c55e' };
@@ -927,30 +918,10 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     }));
   }
 
-  // SuperTrend — ONE SERIES PER LEG, so a leg stops at the bar where the trend
-  // was overtaken. A single up-series plus a single down-series could not do
-  // this: dropping the off-regime bars left each series with a hole, and the
-  // line was drawn straight across that hole, joining a leg to the NEXT
-  // same-colour leg right through the opposite trend.
-  (S.supertrendLegSeries || []).forEach(s => {
-    try { S.mainChart.removeSeries(s); } catch (_) {}
-  });
-  S.supertrendLegSeries = [];
-  const _stVis = _layerVisible('supertrend');
-  const stSeries = supertrend?.series || [];
-  if (stSeries.length) {
-    const stOpts = { priceLineVisible: false, lastValueVisible: false,
-                     crosshairMarkerVisible: false, autoscaleInfoProvider: () => null,
-                     lineWidth: 3, visible: _stVis };
-    // Same leg split the structure chart uses — one code path, one behaviour.
-    _regimeSegmentsAndFlips(stSeries).segs.forEach(sg => {
-      const data = (sg.pts || []).map(p => ({ time: p.t, value: p.v }));
-      if (!data.length) return;
-      const s = S.mainChart.addLineSeries({ ...stOpts, color: sg.bullish ? '#3b82f6' : '#fb923c' });
-      s.setData(data);
-      S.supertrendLegSeries.push(s);
-    });
-  }
+  // SuperTrend is deliberately NOT drawn here. It lives on the dedicated
+  // structure chart, where it anchors the regime fade and the BUY/SELL flips.
+  // Duplicating it here only crowded an already busy chart. The SuperTrend
+  // CARD still reads from the same data, so nothing is lost.
 
   // Ichimoku cloud — Span A / Span B boundary lines tracking every candle.
   const ichiSeries = ichimoku?.series || [];
