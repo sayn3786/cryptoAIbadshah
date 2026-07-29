@@ -2875,7 +2875,7 @@ function renderStructureChart(a) {
     shade.setData(sess.map(b => {
       const c = SC[b.session] || '#94a3b8';
       return { t0: t(b.start_ts), t1: t(b.end_ts), high: +b.high, low: +b.low,
-               label: b.session, fill: c + '18', stroke: c + '77' };
+               label: b.session, fill: c + '18', stroke: c + '77', chip: c };
     }));
     try { cs.attachPrimitive(shade); } catch (_) {}
   }
@@ -2944,35 +2944,39 @@ function renderStructureChart(a) {
     });
   }
 
-  // CHoCH / BOS markers — where structure actually changed hands.
-  const markers = [];
+  // CHoCH / BOS / BUY / SELL. The arrow stays a built-in marker; the LABEL is a
+  // bold chip drawn by ChipLabels, so it reads as a badge rather than thin text.
+  const markers = [], chips = [];
+  const byTime = new Map(rows.map(r => [r.time, r]));
+  const _mark = (time, bull, shape, text) => {
+    const bar = byTime.get(time);
+    if (!bar) return;
+    const color = bull ? '#22c55e' : '#ef4444';
+    markers.push({ time, position: bull ? 'belowBar' : 'aboveBar', color, shape });
+    chips.push({ time, price: bull ? bar.low : bar.high, above: !bull, text, color });
+  };
+
   // BUY / SELL where the trend regime flipped.
   _flips.filter(f => f.time >= _rowT0 && f.time <= _rowT1).forEach(f => {
-    markers.push({ time: f.time, position: f.bullish ? 'belowBar' : 'aboveBar',
-                   color: f.bullish ? '#22c55e' : '#ef4444',
-                   shape: f.bullish ? 'arrowUp' : 'arrowDown',
-                   text: f.bullish ? 'BUY' : 'SELL' });
+    _mark(f.time, f.bullish, f.bullish ? 'arrowUp' : 'arrowDown', f.bullish ? 'BUY' : 'SELL');
   });
   const ch = a.choch || {};
   if (ch.signal === 'bullish' || ch.signal === 'bearish') {
     const bull = ch.signal === 'bullish';
     const ago = ch.candles_ago;
     const idx = (ago != null && rows.length - 1 - ago >= 0) ? rows.length - 1 - ago : rows.length - 1;
-    markers.push({ time: rows[idx].time, position: bull ? 'belowBar' : 'aboveBar',
-                   color: bull ? '#22c55e' : '#ef4444',
-                   shape: bull ? 'arrowUp' : 'arrowDown', text: 'CHoCH' });
+    _mark(rows[idx].time, bull, bull ? 'arrowUp' : 'arrowDown', 'CHoCH');
   }
   const bos = a.bos_streak || {};
   if (bos.last_ts && bos.direction) {
-    const bt = t(bos.last_ts);
-    if (rows.some(r => r.time === bt)) {
-      const bull = bos.direction === 'bullish';
-      markers.push({ time: bt, position: bull ? 'belowBar' : 'aboveBar',
-                     color: bull ? '#22c55e' : '#ef4444', shape: 'circle',
-                     text: `BOS ×${bos.count || 1}` });
-    }
+    _mark(t(bos.last_ts), bos.direction === 'bullish', 'circle', `BOS ×${bos.count || 1}`);
   }
   if (markers.length) cs.setMarkers(markers.sort((x, y) => x.time - y.time));
+  if (chips.length) {
+    const cl = new ChipLabels(chart, cs);
+    cl.setData(chips.sort((x, y) => x.time - y.time));
+    try { cs.attachPrimitive(cl); } catch (_) {}
+  }
 
   chart.timeScale().fitContent();
   S.structChart = chart;
@@ -3386,6 +3390,89 @@ function renderPatternMiniCharts(patterns, candles, prefix, bucket) {
 // Series primitive that shades trading-session ranges (Asia / London / US) as
 // translucent boxes behind the candles — the session high/low band over the
 // hours that session was open. Intraday timeframes only.
+// ── Bold label chips ────────────────────────────────────────────────────────
+// Thin coloured text on a candle chart is hard to read at a glance. These draw
+// the label as a filled, rounded, bold-white-on-colour box instead, so BUY /
+// SELL / BOS / CHoCH and the session names all read as badges.
+const CHIP_FONT = '700 10px ui-sans-serif, -apple-system, system-ui, sans-serif';
+const CHIP_H    = 16;
+
+function _chipSize(ctx, text) {
+  ctx.font = CHIP_FONT;
+  return { w: Math.ceil(ctx.measureText(text).width) + 12, h: CHIP_H };
+}
+
+function _drawChipAt(ctx, text, bx, by, bg) {
+  const { w, h } = _chipSize(ctx, text);
+  const r = 3;
+  ctx.beginPath();
+  ctx.moveTo(bx + r, by);
+  ctx.arcTo(bx + w, by,     bx + w, by + h, r);
+  ctx.arcTo(bx + w, by + h, bx,     by + h, r);
+  ctx.arcTo(bx,     by + h, bx,     by,     r);
+  ctx.arcTo(bx,     by,     bx + w, by,     r);
+  ctx.closePath();
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  const ta = ctx.textAlign, tb = ctx.textBaseline;
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = CHIP_FONT;
+  ctx.fillText(text, bx + w / 2, by + h / 2 + 0.5);
+  ctx.textAlign = ta;
+  ctx.textBaseline = tb;
+}
+
+// Series primitive drawing the chips, anchored to a bar and pushed clear of it.
+// Chips that would land on top of each other stack outward instead of
+// overprinting — several events often share one bar.
+class ChipLabels {
+  static GAP = 6;
+  constructor(chart, series) { this._chart = chart; this._series = series; this._chips = []; }
+  setData(chips) { this._chips = chips || []; }
+  updateAllViews() {}
+  paneViews() {
+    const self = this;
+    return [{
+      zOrder: () => 'top',
+      renderer: () => ({
+        draw: (target) => {
+          target.useMediaCoordinateSpace((scope) => {
+            const ctx = scope.context;
+            const H = scope.mediaSize.height, W = scope.mediaSize.width;
+            const tx = t => self._chart.timeScale().timeToCoordinate(t);
+            const py = p => self._series.priceToCoordinate(p);
+            const placed = [];
+            const hits = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x &&
+                                   a.y < b.y + b.h && a.y + a.h > b.y;
+            self._chips.forEach(c => {
+              const x = tx(c.time), yAnchor = py(c.price);
+              if (x == null || yAnchor == null) return;
+              const { w, h } = _chipSize(ctx, c.text);
+              let bx = Math.round(x - w / 2);
+              bx = Math.max(1, Math.min(bx, W - w - 1));   // keep on screen
+              let by = c.above ? yAnchor - ChipLabels.GAP - h : yAnchor + ChipLabels.GAP;
+              let box = { x: bx, y: by, w, h };
+              let guard = 0;
+              while (placed.some(p => hits(box, p)) && guard++ < 12) {
+                by += (c.above ? -1 : 1) * (h + 3);
+                box = { x: bx, y: by, w, h };
+              }
+              box.y = Math.max(1, Math.min(box.y, H - h - 1));
+              placed.push(box);
+              _drawChipAt(ctx, c.text, box.x, box.y, c.color);
+            });
+          });
+        },
+      }),
+    }];
+  }
+}
+
 class SessionShade {
   constructor(chart, series) { this._chart = chart; this._series = series; this._boxes = []; }
   setData(boxes) { this._boxes = boxes || []; }
@@ -3410,9 +3497,9 @@ class SessionShade {
               ctx.strokeStyle = b.stroke;
               ctx.lineWidth = 1;
               ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
-              ctx.fillStyle = b.stroke;
-              ctx.font = '9px sans-serif';
-              ctx.fillText(b.label, Math.min(x0, x1) + 3, Math.min(y0, y1) + 10);
+              // Session name as a solid chip in the box corner, not thin text.
+              _drawChipAt(ctx, b.label, Math.min(x0, x1) + 3, Math.min(y0, y1) + 3,
+                          b.chip || b.stroke);
             });
           });
         },
