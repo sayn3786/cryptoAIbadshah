@@ -16,6 +16,7 @@ const S = {
   futCvdSource: 'auto',
   fvgPriceLines: [],   // track FVG overlays so they can be cleared on token/TF switch
   overlayPriceLines: [], // swing high/low + realized price horizontal lines
+  sessionShade: null,      // trading-session range boxes
   supertrendUpSeries: null,
   supertrendDownSeries: null,
   revCharts: [],           // per-pattern mini charts (reversal card)
@@ -100,6 +101,10 @@ function initCharts() {
   // stretch the price axis (candles drive the scale).
   S.ema50Series  = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#f472b6', lineWidth: 1 });
   S.ema200Series = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#facc15', lineWidth: 2 });
+
+  // Trading-session range boxes (intraday) behind the candles.
+  S.sessionShade = new SessionShade(S.mainChart, S.candleSeries);
+  try { S.candleSeries.attachPrimitive(S.sessionShade); } catch (_) {}
 
   // Chart patterns (reversals / triangles / wedges) are drawn in their OWN mini
   // charts inside their cards — NOT overlaid here — so the main chart stays clean.
@@ -876,6 +881,18 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   // SuperTrend line — split into bullish/bearish segments so color flips with trend.
   // Each series gets the full timeline but with nulls where the other trend is
   // active, so lightweight-charts draws a gap instead of a flat connecting line.
+  // Session boxes — only present on intraday TFs (backend returns [] otherwise).
+  if (S.sessionShade) {
+    const _SC = { ASIA: '#38bdf8', LONDON: '#a855f7', US: '#22c55e' };
+    const _sr = (S.analysis && S.analysis.session_ranges) || [];
+    S.sessionShade.setData(_sr.map(b => {
+      const c = _SC[b.session] || '#94a3b8';
+      return { t0: Math.floor(b.start_ts / 1000), t1: Math.floor(b.end_ts / 1000),
+               high: +b.high, low: +b.low, label: b.session,
+               fill: c + '14', stroke: c + '66' };
+    }));
+  }
+
   const stSeries = supertrend?.series || [];
   if (stSeries.length) {
     const allTimes = stSeries.map(p => Math.floor(p.timestamp / 1000));
@@ -3077,6 +3094,44 @@ function renderPatternMiniCharts(patterns, candles, prefix, bucket) {
     const chart = drawPatternMiniChart(el, pat, rows, interval);
     if (chart) S[bucket].push(chart);
   });
+}
+
+// Series primitive that shades trading-session ranges (Asia / London / US) as
+// translucent boxes behind the candles — the session high/low band over the
+// hours that session was open. Intraday timeframes only.
+class SessionShade {
+  constructor(chart, series) { this._chart = chart; this._series = series; this._boxes = []; }
+  setData(boxes) { this._boxes = boxes || []; }
+  updateAllViews() {}
+  paneViews() {
+    const self = this;
+    return [{
+      zOrder: () => 'bottom',
+      renderer: () => ({
+        draw: (target) => {
+          target.useMediaCoordinateSpace((scope) => {
+            const ctx = scope.context;
+            const px = p => self._series.priceToCoordinate(p);
+            const tx = t => self._chart.timeScale().timeToCoordinate(t);
+            self._boxes.forEach(b => {
+              const x0 = tx(b.t0), x1 = tx(b.t1);
+              const y0 = px(b.high), y1 = px(b.low);
+              if (x0 == null || x1 == null || y0 == null || y1 == null) return;
+              const w = Math.max(1, Math.abs(x1 - x0));
+              ctx.fillStyle = b.fill;
+              ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
+              ctx.strokeStyle = b.stroke;
+              ctx.lineWidth = 1;
+              ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
+              ctx.fillStyle = b.stroke;
+              ctx.font = '9px sans-serif';
+              ctx.fillText(b.label, Math.min(x0, x1) + 3, Math.min(y0, y1) + 10);
+            });
+          });
+        },
+      }),
+    }];
+  }
 }
 
 // Series primitive (lightweight-charts v4) that shades the flag chart: a
