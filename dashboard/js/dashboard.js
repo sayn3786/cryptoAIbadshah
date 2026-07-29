@@ -2926,22 +2926,22 @@ function renderStructureChart(a) {
     rs.setData(_segs);
     try { cs.attachPrimitive(rs); } catch (_) {}
 
-    // The SuperTrend line itself — the boundary the fade hangs off. Two series
-    // with whitespace gaps so each leg keeps its own colour and the line breaks
-    // cleanly at every flip instead of slashing across the pane.
+    // The SuperTrend line itself — the boundary the fade hangs off. ONE SERIES
+    // PER LEG, each holding only its own points. When the trend flips, that
+    // leg's line ends there and the opposite colour starts: the old band has
+    // been overtaken and must not run on. Whitespace gaps inside a single
+    // two-colour pair did NOT achieve this — the series drew straight through
+    // the gap, joining a leg to its next same-colour leg across the flip.
     const _stOpts = { lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
                       crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
-    const bullLine = chart.addLineSeries({ ..._stOpts, color: '#22c55e' });
-    const bearLine = chart.addLineSeries({ ..._stOpts, color: '#ef4444' });
-    const bullData = [], bearData = [];
-    _stSeries.forEach(p => {
-      const time = Math.floor(p.timestamp / 1000);
-      if (time < _rowT0 || time > _rowT1) return;
-      const bull = p.trend === 'bullish';
-      bullData.push(bull ? { time, value: +p.value } : { time });
-      bearData.push(bull ? { time } : { time, value: +p.value });
+    _segs.forEach(sg => {
+      const data = (sg.pts || [])
+        .filter(p => p.t >= _rowT0 && p.t <= _rowT1)
+        .map(p => ({ time: p.t, value: p.v }));
+      if (!data.length) return;
+      const line = chart.addLineSeries({ ..._stOpts, color: sg.bullish ? '#22c55e' : '#ef4444' });
+      line.setData(data);
     });
-    if (bullData.length) { bullLine.setData(bullData); bearLine.setData(bearData); }
   }
 
   // CHoCH / BOS markers — where structure actually changed hands.
