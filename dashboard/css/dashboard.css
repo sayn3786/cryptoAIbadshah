@@ -2008,3 +2008,20 @@ a:hover { color: var(--gold2); }
 
 /* Collapse an empty mini-chart so it stops absorbing leftover card height */
 .mini-chart-container.mini-chart-empty { flex: 0 0 auto; height: 0; min-height: 0; }
+
+/* ── Layout containment: stop cards overflowing the viewport ──────────────────
+   A wide child (a data table, a long unbroken string) could push the page wider
+   than the screen. The page then scrolled sideways and the extra width rendered
+   as blank space beside the cards. Guard at every level. */
+html { overflow-x: hidden; }
+.card { min-width: 0; }                       /* flex/grid children may shrink */
+.dashboard, .dashboard > section { min-width: 0; max-width: 100%; }
+
+/* The wide FVG table scrolls INSIDE its card instead of widening the page.
+   Chart cards are left alone so panning the charts still works. */
+.fvg-card { overflow-x: auto; }
+
+/* CVD divergence banner: let the detail text use the remaining width instead of
+   collapsing to its longest word (which made a tall, near-empty ribbon). */
+.cvd-div-banner { flex-wrap: wrap; }
+.cvd-div-detail { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
