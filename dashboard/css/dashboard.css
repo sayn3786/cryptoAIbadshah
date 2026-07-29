@@ -1991,7 +1991,20 @@ a:hover { color: var(--gold2); }
 .sp-val.bull { color: var(--bull, #22c55e); }
 .sp-val.bear { color: var(--bear, #ef4444); }
 .sp-val.neutral { color: var(--text); }
-.sp-detail { text-align: right; color: var(--muted2); font-size: .66rem; white-space: nowrap; }
+.sp-detail { text-align: right; color: var(--muted2); font-size: .66rem;
+             white-space: normal; overflow-wrap: anywhere; }
+/* Narrow screens: stack each row as label+value on one line and the detail
+   underneath, full width. The detail used to be nowrap in a third column, so it
+   was simply clipped ("last 65000.0 · 7 ba…"). */
+@media (max-width: 720px) {
+  .struct-tbl, .struct-tbl tbody, .struct-tbl tr, .struct-tbl td { display: block; }
+  .struct-tbl tr {
+    display: grid; grid-template-columns: 1fr auto;
+    align-items: baseline; column-gap: 10px; padding: 6px 0;
+  }
+  .struct-tbl td { padding: 0; }
+  .sp-detail { grid-column: 1 / -1; text-align: left; margin-top: 2px; opacity: .85; }
+}
 
 /* Dedicated market-structure chart */
 .struct-chart {

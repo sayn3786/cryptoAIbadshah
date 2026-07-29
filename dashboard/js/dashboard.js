@@ -3373,7 +3373,7 @@ function renderFlagCharts(flagList, candles, idxList, signal) {
     if (_liveC && _liveC.timestamp) {
       const _lt = Math.floor(_liveC.timestamp / 1000);
       if (win.some(c => c.time === _lt)) {
-        markers.push({ time: _lt, position: 'aboveBar', color: '#eab308', shape: 'arrowDown', text: 'LIVE (unclosed)' });
+        markers.push({ time: _lt, position: 'aboveBar', color: '#eab308', shape: 'arrowDown', text: 'LIVE' });
       }
     }
 
