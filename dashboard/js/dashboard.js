@@ -1,3 +1,20 @@
+/* ─── Build stamp ─────────────────────────────────────────────────────────────
+   Read straight off this script's own ?v= query string, so it can never drift
+   from what the browser actually loaded. Answers "am I looking at the new
+   build, or a cached one?" without guesswork.                                */
+const APP_BUILD = (() => {
+  try {
+    const src = (document.currentScript && document.currentScript.src) || '';
+    return (/[?&]v=([^&]+)/.exec(src) || [, '?'])[1];
+  } catch (_) { return '?'; }
+})();
+window.CM_BUILD = APP_BUILD;
+console.log(`CryptoMonk build ${APP_BUILD}`);
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('buildTag');
+  if (el) el.textContent = `build ${APP_BUILD}`;
+});
+
 /* ─── State ───────────────────────────────────────────────────────────────── */
 const S = {
   symbol: 'BTC',
