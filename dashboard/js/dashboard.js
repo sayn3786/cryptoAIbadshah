@@ -18,8 +18,7 @@ const S = {
   overlayPriceLines: [], // swing high/low + realized price horizontal lines
   sessionShade: null,      // trading-session range boxes
   structChart: null,       // dedicated market-structure chart
-  supertrendUpSeries: null,
-  supertrendDownSeries: null,
+  supertrendLegSeries: [],  // one line series per SuperTrend leg (see renderMainChart)
   revCharts: [],           // per-pattern mini charts (reversal card)
   triCharts: [],           // per-pattern mini charts (triangle card)
   ichimokuSpanASeries: null,
@@ -88,8 +87,9 @@ function initCharts() {
   // autoscaleInfoProvider: () => null prevents these overlay series from
   // stretching the Y-axis — only candles drive the price scale.
   const _overlayOpts = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
-  S.supertrendUpSeries   = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#3b82f6', lineWidth: 3 });
-  S.supertrendDownSeries = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#fb923c', lineWidth: 3 });
+  // SuperTrend is NOT created here — it needs one series per leg so a leg ends
+  // at its flip, and the leg count only becomes known once data arrives.
+  // renderMainChart builds and tears them down each pass.
 
   // Ichimoku cloud boundaries (Span A / Span B) — purple/cyan, distinct from
   // every other overlay color on the chart.
@@ -910,20 +910,30 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     }));
   }
 
+  // SuperTrend — ONE SERIES PER LEG, so a leg stops at the bar where the trend
+  // was overtaken. A single up-series plus a single down-series could not do
+  // this: dropping the off-regime bars left each series with a hole, and the
+  // line was drawn straight across that hole, joining a leg to the NEXT
+  // same-colour leg right through the opposite trend.
+  (S.supertrendLegSeries || []).forEach(s => {
+    try { S.mainChart.removeSeries(s); } catch (_) {}
+  });
+  S.supertrendLegSeries = [];
+  const _stVis = _layerVisible('supertrend');
   const stSeries = supertrend?.series || [];
   if (stSeries.length) {
-    const allTimes = stSeries.map(p => Math.floor(p.timestamp / 1000));
-    const upData = stSeries.map((p, i) => p.trend === 'bullish' ? { time: allTimes[i], value: p.value } : null).filter(Boolean);
-    const dnData = stSeries.map((p, i) => p.trend === 'bearish' ? { time: allTimes[i], value: p.value } : null).filter(Boolean);
-    S.supertrendUpSeries.setData(upData);
-    S.supertrendDownSeries.setData(dnData);
-  } else {
-    S.supertrendUpSeries.setData([]);
-    S.supertrendDownSeries.setData([]);
+    const stOpts = { priceLineVisible: false, lastValueVisible: false,
+                     crosshairMarkerVisible: false, autoscaleInfoProvider: () => null,
+                     lineWidth: 3, visible: _stVis };
+    // Same leg split the structure chart uses — one code path, one behaviour.
+    _regimeSegmentsAndFlips(stSeries).segs.forEach(sg => {
+      const data = (sg.pts || []).map(p => ({ time: p.t, value: p.v }));
+      if (!data.length) return;
+      const s = S.mainChart.addLineSeries({ ...stOpts, color: sg.bullish ? '#3b82f6' : '#fb923c' });
+      s.setData(data);
+      S.supertrendLegSeries.push(s);
+    });
   }
-  const _stVis = _layerVisible('supertrend');
-  S.supertrendUpSeries.applyOptions({ visible: _stVis });
-  S.supertrendDownSeries.applyOptions({ visible: _stVis });
 
   // Ichimoku cloud — Span A / Span B boundary lines tracking every candle.
   const ichiSeries = ichimoku?.series || [];
