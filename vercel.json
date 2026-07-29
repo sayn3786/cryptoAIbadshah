@@ -7,7 +7,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "/api/index.py"
+      "destination": "/api/index.py?__vpath=/api/:path*"
     },
     {
       "source": "/",
