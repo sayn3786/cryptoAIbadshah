@@ -156,3 +156,14 @@ def test_given_back_bos_is_flagged_and_neutral():
     assert "given back" in row["value"]
     assert row["tone"] == "neutral", "a given-back break must not read as live bullish"
     assert "bars ago" in row["detail"]
+
+
+def test_structure_rows_name_their_lookback_window():
+    # 1D and 1W legitimately disagree on Range Position because the window is
+    # 30 BARS of that timeframe. Stating the window makes that scale difference
+    # readable instead of looking like a contradiction.
+    from patterns import STRUCTURE_WINDOW_BARS
+    r = _rows(build_structure_panel(_analysis()))
+    assert f"{STRUCTURE_WINDOW_BARS} bars" in r["Structure High"]["detail"]
+    assert f"{STRUCTURE_WINDOW_BARS} bars" in r["Structure Low"]["detail"]
+    assert "last" in r["Range Position"]["detail"]

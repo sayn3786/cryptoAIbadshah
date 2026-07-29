@@ -1958,6 +1958,11 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
 # A dense, at-a-glance read of trend + structure + liquidity, computed entirely
 # from data the analysis already produces (no extra fetches). Mirrors the kind of
 # status table traders pin to a TradingView layout.
+# Lookback for the structure envelope / range position. Reported alongside the
+# values so a 1D vs 1W difference reads as scale, not contradiction.
+STRUCTURE_WINDOW_BARS = 30
+
+
 def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     candles = analysis.get("candles") or []
     if len(candles) < 10:
@@ -2027,11 +2032,17 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         row("Alignment", "—", "neutral")
 
     # ── Structure high / low (recent swing envelope) ─────────────────────────
-    win = candles[-30:]
+    win = candles[-STRUCTURE_WINDOW_BARS:]
+    _n  = len(win)
     s_hi = max(c["high"] for c in win)
     s_lo = min(c["low"]  for c in win)
-    row("Structure High", f"{s_hi:,.4f}", "neutral", f"{(s_hi - price) / price * 100:+.1f}%")
-    row("Structure Low",  f"{s_lo:,.4f}", "neutral", f"{(s_lo - price) / price * 100:+.1f}%")
+    # Name the lookback. The same price can sit HIGH in a 30-bar range and LOW in
+    # a longer one, so 1D and 1W legitimately differ — without the window shown
+    # that reads as a contradiction rather than a multi-timeframe picture.
+    row("Structure High", f"{s_hi:,.4f}", "neutral",
+        f"{(s_hi - price) / price * 100:+.1f}% · {_n} bars")
+    row("Structure Low",  f"{s_lo:,.4f}", "neutral",
+        f"{(s_lo - price) / price * 100:+.1f}% · {_n} bars")
 
     # ── Liquidity pools (equal highs/lows = resting stops) ───────────────────
     eq = analysis.get("equal_levels") or {}
@@ -2052,7 +2063,8 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         stretch = (price - mid) / mid * 100
         zone = "UPPER" if pos >= 66 else "LOWER" if pos <= 33 else "MIDDLE"
         row("Range Position", f"{zone} {pos:.0f}%",
-            "bear" if pos >= 80 else "bull" if pos <= 20 else "neutral")
+            "bear" if pos >= 80 else "bull" if pos <= 20 else "neutral",
+            f"of the last {_n} bars")
         row("Midline Stretch", f"{stretch:+.1f}%",
             "bear" if stretch > 0 else "bull" if stretch < 0 else "neutral")
 
