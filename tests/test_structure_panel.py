@@ -250,3 +250,40 @@ def test_structure_supertrend_spans_the_whole_structure_window():
         candles[1]["timestamp"] - candles[0]["timestamp"]), \
         "overlay must start at (or before) the first structure candle"
     assert len(deep) > 60, "must be deeper than the main chart's 60-bar window"
+
+
+def test_structure_trendline_finds_the_rising_support():
+    # The structure chart draws its own trendline over the deeper window. On a
+    # steadily rising market that must produce a SUPPORT line with anchor/end
+    # points to draw, otherwise the chart has nothing to render.
+    from app import STRUCTURE_CHART_BARS
+    from patterns import detect_trendline
+
+    spot = _make_candles(STRUCTURE_CHART_BARS + 20, up=True)
+    tl = detect_trendline(spot[-STRUCTURE_CHART_BARS:], window=3)
+    assert tl, "a trending window must yield a trendline"
+
+    sup = [tl[k] for k in ("macro", "local") if (tl.get(k) or {}).get("type") == "support"]
+    assert sup, "a rising market must give at least one support line"
+    for ln in sup:
+        assert ln["anchor"]["timestamp"] < ln["end"]["timestamp"], "line must span forward in time"
+        assert ln["touches"] >= 2, "a line is defined by at least its two anchors"
+        assert ln["broken"] in (None, "up", "down")
+
+
+def test_structure_trendline_spans_the_structure_window():
+    # It must be built on the SAME window the structure chart draws — a line
+    # anchored outside those candles would render as a stub at the right edge.
+    from app import STRUCTURE_CHART_BARS
+    from patterns import detect_trendline
+
+    spot = _make_candles(STRUCTURE_CHART_BARS + 20, up=True)
+    win = spot[-STRUCTURE_CHART_BARS:]
+    tl = detect_trendline(win, window=3)
+    lo, hi = win[0]["timestamp"], win[-1]["timestamp"]
+    for k in ("macro", "local"):
+        ln = tl.get(k)
+        if not ln:
+            continue
+        assert lo <= ln["anchor"]["timestamp"] <= hi
+        assert lo <= ln["end"]["timestamp"] <= hi

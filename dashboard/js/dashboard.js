@@ -2931,6 +2931,31 @@ function renderStructureChart(a) {
     });
   }
 
+  // Rising support trendline(s) — the diagonal floor price keeps defending.
+  // Drawn from the deeper structure-window trendline so a support that has been
+  // running longer than the main chart's 60 bars still shows. A line with only
+  // its two anchor touches is still FORMING and is drawn dashed; three or more
+  // touches is an established line and goes solid. A broken one stays on the
+  // chart, greyed, because where support failed is worth seeing.
+  const _tl = a.structure_trendline || a.trendline || {};
+  ['macro', 'local'].forEach(scale => {
+    const ln = _tl[scale];
+    if (!ln || ln.type !== 'support' || !ln.anchor || !ln.end) return;
+    const t0 = t(ln.anchor.timestamp), t1 = t(ln.end.timestamp);
+    if (!(t1 > t0)) return;
+    const touches = ln.touches || 2;
+    const broken  = ln.broken === 'down';
+    const forming = touches < 3;
+    const color   = broken ? '#94a3b8' : (scale === 'macro' ? '#14b8a6' : '#22c55e');
+    chart.addLineSeries({
+      color, lineWidth: scale === 'macro' ? 2 : 3,
+      lineStyle: broken ? 3 : (forming ? 2 : 0),   // dashed while forming
+      priceLineVisible: false, crosshairMarkerVisible: false,
+      lastValueVisible: true, autoscaleInfoProvider: () => null,
+      title: `${scale === 'macro' ? 'Macro' : 'Local'} support${broken ? ' (broken)' : forming ? ' (forming)' : ''} ${touches}x`,
+    }).setData([{ time: t0, value: +ln.anchor.value }, { time: t1, value: +ln.end.value }]);
+  });
+
   // Structure envelope + the level of the last BOS.
   const win = rows.slice(-30);
   const sHi = Math.max(...win.map(c => c.high));
