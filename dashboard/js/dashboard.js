@@ -2875,7 +2875,7 @@ function renderStructureChart(a) {
     shade.setData(sess.map(b => {
       const c = SC[b.session] || '#94a3b8';
       return { t0: t(b.start_ts), t1: t(b.end_ts), high: +b.high, low: +b.low,
-               label: b.session, fill: c + '18', stroke: c + '77', chip: c };
+               label: b.session, fill: c + '18', stroke: c + '77' };
     }));
     try { cs.attachPrimitive(shade); } catch (_) {}
   }
@@ -2944,32 +2944,42 @@ function renderStructureChart(a) {
     });
   }
 
-  // CHoCH / BOS / BUY / SELL. The arrow stays a built-in marker; the LABEL is a
-  // bold chip drawn by ChipLabels, so it reads as a badge rather than thin text.
+  // BUY / SELL are the ones worth spotting instantly, so they alone get the
+  // chip treatment: the arrow stays a built-in marker and the label is drawn as
+  // a badge. CHoCH and BOS keep the ordinary marker text they always had —
+  // badging every event turned the chart into a wall of boxes.
   const markers = [], chips = [];
   const byTime = new Map(rows.map(r => [r.time, r]));
-  const _mark = (time, bull, shape, text) => {
-    const bar = byTime.get(time);
-    if (!bar) return;
-    const color = bull ? '#22c55e' : '#ef4444';
-    markers.push({ time, position: bull ? 'belowBar' : 'aboveBar', color, shape, size: 2 });
-    chips.push({ time, price: bull ? bar.low : bar.high, above: !bull, text, color });
-  };
 
   // BUY / SELL where the trend regime flipped.
   _flips.filter(f => f.time >= _rowT0 && f.time <= _rowT1).forEach(f => {
-    _mark(f.time, f.bullish, f.bullish ? 'arrowUp' : 'arrowDown', f.bullish ? 'BUY' : 'SELL');
+    const bar = byTime.get(f.time);
+    if (!bar) return;
+    const bull = f.bullish;
+    const color = bull ? '#22c55e' : '#ef4444';
+    markers.push({ time: f.time, position: bull ? 'belowBar' : 'aboveBar', color,
+                   shape: bull ? 'arrowUp' : 'arrowDown', size: 2 });
+    chips.push({ time: f.time, price: bull ? bar.low : bar.high, above: !bull,
+                 text: bull ? 'BUY' : 'SELL', color });
   });
   const ch = a.choch || {};
   if (ch.signal === 'bullish' || ch.signal === 'bearish') {
     const bull = ch.signal === 'bullish';
     const ago = ch.candles_ago;
     const idx = (ago != null && rows.length - 1 - ago >= 0) ? rows.length - 1 - ago : rows.length - 1;
-    _mark(rows[idx].time, bull, bull ? 'arrowUp' : 'arrowDown', 'CHoCH');
+    markers.push({ time: rows[idx].time, position: bull ? 'belowBar' : 'aboveBar',
+                   color: bull ? '#22c55e' : '#ef4444',
+                   shape: bull ? 'arrowUp' : 'arrowDown', text: 'CHoCH' });
   }
   const bos = a.bos_streak || {};
   if (bos.last_ts && bos.direction) {
-    _mark(t(bos.last_ts), bos.direction === 'bullish', 'circle', `BOS ×${bos.count || 1}`);
+    const bt = t(bos.last_ts);
+    if (byTime.has(bt)) {
+      const bull = bos.direction === 'bullish';
+      markers.push({ time: bt, position: bull ? 'belowBar' : 'aboveBar',
+                     color: bull ? '#22c55e' : '#ef4444', shape: 'circle',
+                     text: `BOS ×${bos.count || 1}` });
+    }
   }
   if (markers.length) cs.setMarkers(markers.sort((x, y) => x.time - y.time));
   if (chips.length) {
@@ -3392,8 +3402,9 @@ function renderPatternMiniCharts(patterns, candles, prefix, bucket) {
 // hours that session was open. Intraday timeframes only.
 // ── Bold label chips ────────────────────────────────────────────────────────
 // Thin coloured text on a candle chart is hard to read at a glance. These draw
-// the label as a filled, rounded, bold-white-on-colour box instead, so BUY /
-// SELL / BOS / CHoCH and the session names all read as badges.
+// the label as a rounded, bold-white-on-colour box instead. Reserved for BUY /
+// SELL — the two events worth spotting instantly. Everything else keeps plain
+// marker text, since badging every event just crowds the chart.
 const CHIP_FONT   = '800 12px ui-sans-serif, -apple-system, system-ui, sans-serif';
 const CHIP_H      = 22;   // tall enough to read over candles, not so tall it hides them
 const CHIP_PAD_X  = 9;    // per side
@@ -3521,9 +3532,9 @@ class SessionShade {
               ctx.strokeStyle = b.stroke;
               ctx.lineWidth = 1;
               ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
-              // Session name as a solid chip in the box corner, not thin text.
-              _drawChipAt(ctx, b.label, Math.min(x0, x1) + 3, Math.min(y0, y1) + 3,
-                          b.chip || b.stroke);
+              ctx.fillStyle = b.stroke;
+              ctx.font = '9px sans-serif';
+              ctx.fillText(b.label, Math.min(x0, x1) + 3, Math.min(y0, y1) + 10);
             });
           });
         },
