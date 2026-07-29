@@ -2896,7 +2896,11 @@ function renderStructureChart(a) {
     axisLabelVisible: true, title: 'Structure Low' });
 
   // Trend regime shading + BUY/SELL flips from SuperTrend.
-  const _stSeries = (a.supertrend || {}).series || [];
+  // Prefer the deep SuperTrend series — the main chart's is trimmed to 60 bars
+  // and would leave the older part of this chart unshaded.
+  const _stSeries = (a.structure_supertrend && a.structure_supertrend.length)
+    ? a.structure_supertrend
+    : ((a.supertrend || {}).series || []);
   const _rowT0 = rows[0].time, _rowT1 = rows[rows.length - 1].time;
   const { segs: _segs, flips: _flips } = _regimeSegmentsAndFlips(_stSeries);
   if (_segs.length) {

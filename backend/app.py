@@ -490,6 +490,11 @@ PATTERN_BELL_TFS         = ["1H", "4H", "1D", "1W"]  # in-app bell: also intrada
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
 _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 
+# The dedicated structure chart draws a deeper window than the main chart's 60
+# bars — past liquidity pools need room to show. Candles AND the SuperTrend
+# overlay both use this, so the line and shading span the whole pane.
+STRUCTURE_CHART_BARS = 150
+
 
 def _pattern_alert_id(sym: str, tf: str, pat: dict) -> str:
     # `event` separates a confirmation from a later FAILURE of the same pattern,
@@ -1037,6 +1042,14 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Trim chart overlay series to the same 60-candle window sent to the chart
     # so the SuperTrend line / Ichimoku cloud line up with the visible candles.
     _chart_cutoff_ts = spot[-60]["timestamp"] if len(spot) >= 60 else (spot[0]["timestamp"] if spot else 0)
+    # The structure chart draws a DEEPER window (STRUCTURE_CHART_BARS), so it
+    # needs its own untrimmed SuperTrend series — reusing the 60-bar one left
+    # the older two thirds of that chart with no line and no regime shading.
+    _struct_cutoff_ts = (spot[-STRUCTURE_CHART_BARS]["timestamp"]
+                         if len(spot) >= STRUCTURE_CHART_BARS
+                         else (spot[0]["timestamp"] if spot else 0))
+    structure_supertrend = [p for p in (supertrend.get("series") or [])
+                            if p["timestamp"] >= _struct_cutoff_ts]
     if supertrend.get("series"):
         supertrend["series"] = [p for p in supertrend["series"] if p["timestamp"] >= _chart_cutoff_ts]
     if ichimoku.get("series"):
@@ -1269,7 +1282,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "liquidity_pools":        liquidity_pools,
         # Deeper window for the structure chart — 60 bars is too few to
         # show where past liquidity actually sits.
-        "structure_candles":      spot[-150:],
+        "structure_candles":      spot[-STRUCTURE_CHART_BARS:],
+        "structure_supertrend":   structure_supertrend,
         "session_ranges":         sess_ranges,
         "generated_at":           int(time.time() * 1000),
     }
