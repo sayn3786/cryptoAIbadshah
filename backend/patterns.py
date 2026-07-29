@@ -2055,6 +2055,29 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         else:
             row(label, "—", "neutral")
 
+    # ── Pool distance — how far the nearest liquidity sits, in ATR ───────────
+    # Percent alone is scale-dependent; ATR says whether a pool is "one candle
+    # away" or "a week away" in this market's own units.
+    _tr = []
+    for i in range(1, len(candles)):
+        h, l, pc = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
+        _tr.append(max(h - l, abs(h - pc), abs(l - pc)))
+    atr = (sum(_tr[-14:]) / len(_tr[-14:])) if _tr else 0.0
+    _eqh = (eq.get("eqh") or {}).get("price")
+    _eql = (eq.get("eql") or {}).get("price")
+    if atr > 0 and (_eqh or _eql):
+        _up = f"up {abs(_eqh - price) / atr:.1f} ATR" if _eqh else "up —"
+        _dn = f"dn {abs(price - _eql) / atr:.1f} ATR" if _eql else "dn —"
+        # Whichever pool is nearer is the more likely draw on price.
+        _near = None
+        if _eqh and _eql:
+            _near = "above" if abs(_eqh - price) < abs(price - _eql) else "below"
+        row("Pool Distance", f"{_up} · {_dn}",
+            "bear" if _near == "above" else "bull" if _near == "below" else "neutral",
+            f"nearest: {_near}" if _near else "")
+    else:
+        row("Pool Distance", "—", "neutral")
+
     # ── Range position / midline stretch ─────────────────────────────────────
     rng = s_hi - s_lo
     if rng > 0:
@@ -2073,6 +2096,31 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     d   = sig.get("direction", "NEUTRAL")
     row("Last Signal", f"{d} ({sig.get('strength', 0)}/100)",
         "bull" if d == "LONG" else "bear" if d == "SHORT" else "neutral")
+
+    # ── Filter window — is this setup permitted to trade right now? ──────────
+    # Gated by data quality and by whether the signal agrees with the trend; a
+    # counter-trend signal is allowed but marked, matching how the engine
+    # discounts it.
+    if analysis.get("tradeable") is False:
+        row("Filter Window", "CLOSED", "neutral", "data quality — not tradeable")
+    elif d == "NEUTRAL":
+        row("Filter Window", "FLAT", "neutral", "no directional setup")
+    else:
+        _with = (d == "LONG") == (trend == "BULLISH")
+        row("Filter Window", f"{'BULL' if d == 'LONG' else 'BEAR'} OPEN",
+            "bull" if d == "LONG" else "bear",
+            "with trend" if _with else "counter-trend — discounted")
+
+    # ── Fired / filtered — how much of the checklist actually triggered ──────
+    _rr = analysis.get("reversal_radar") or {}
+    _fired, _appl = _rr.get("count"), _rr.get("applicable")
+    if _appl:
+        row("Fired / Filtered Out", f"{_fired} / {_appl}",
+            "bear" if _rr.get("mode") == "top" and _fired >= 4
+            else "bull" if _rr.get("mode") == "bottom" and _fired >= 4 else "neutral",
+            f"{_rr.get('mode') or 'no'} signals · {_appl - _fired} filtered")
+    else:
+        row("Fired / Filtered Out", "—", "neutral")
 
     # Current session range (intraday only) + where price sits inside it.
     sess = analysis.get("session_ranges") or []

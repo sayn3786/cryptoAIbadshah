@@ -2731,8 +2731,17 @@ class RegimeShade {
             self._segs.forEach(sg => {
               const x0 = tx(sg.t0), x1 = tx(sg.t1);
               if (x0 == null || x1 == null) return;
-              ctx.fillStyle = sg.bullish ? 'rgba(34,197,94,.07)' : 'rgba(239,68,68,.07)';
-              ctx.fillRect(Math.min(x0, x1), 0, Math.max(1, Math.abs(x1 - x0)), H);
+              // FADE from the flip: strongest at the signal bar, decaying across
+              // the regime. A flat block reads as a solid wall of colour; the
+              // fade shows WHERE the signal fired and lets it die out naturally.
+              const xa = Math.min(x0, x1), w = Math.max(1, Math.abs(x1 - x0));
+              const g = ctx.createLinearGradient(xa, 0, xa + w, 0);
+              const rgb = sg.bullish ? '34,197,94' : '239,68,68';
+              g.addColorStop(0,    `rgba(${rgb},.20)`);
+              g.addColorStop(0.35, `rgba(${rgb},.08)`);
+              g.addColorStop(1,    `rgba(${rgb},.01)`);
+              ctx.fillStyle = g;
+              ctx.fillRect(xa, 0, w, H);
             });
           });
         },

@@ -167,3 +167,47 @@ def test_structure_rows_name_their_lookback_window():
     assert f"{STRUCTURE_WINDOW_BARS} bars" in r["Structure High"]["detail"]
     assert f"{STRUCTURE_WINDOW_BARS} bars" in r["Structure Low"]["detail"]
     assert "last" in r["Range Position"]["detail"]
+
+
+# ── pool distance / filter window / fired-filtered ──────────────────────────
+def _with_pools(up=True, **over):
+    a = _analysis(up=up)
+    px = a["candles"][-1]["close"]
+    a["equal_levels"] = {"eqh": {"price": px * 1.01, "touches": 5},
+                         "eql": {"price": px * 0.985, "touches": 5}}
+    a.update(over)
+    return a
+
+
+def test_pool_distance_reported_in_atr():
+    r = _rows(build_structure_panel(_with_pools()))["Pool Distance"]
+    assert "ATR" in r["value"] and "up" in r["value"] and "dn" in r["value"]
+    assert "nearest" in r["detail"]
+
+
+def test_pool_distance_blank_without_pools():
+    assert _rows(build_structure_panel(_analysis()))["Pool Distance"]["value"] == "—"
+
+
+def test_filter_window_states():
+    # with-trend long
+    r = _rows(build_structure_panel(_with_pools(up=True, tradeable=True)))["Filter Window"]
+    assert r["value"] == "BULL OPEN" and "with trend" in r["detail"]
+    # counter-trend is allowed but marked
+    a = _with_pools(up=False, tradeable=True)
+    a["signal"] = {"direction": "LONG", "strength": 20}
+    assert "counter-trend" in _rows(build_structure_panel(a))["Filter Window"]["detail"]
+    # gated by data quality
+    a2 = _with_pools(tradeable=False)
+    assert _rows(build_structure_panel(a2))["Filter Window"]["value"] == "CLOSED"
+    # no directional setup
+    a3 = _with_pools(tradeable=True)
+    a3["signal"] = {"direction": "NEUTRAL", "strength": 0}
+    assert _rows(build_structure_panel(a3))["Filter Window"]["value"] == "FLAT"
+
+
+def test_fired_filtered_counts_from_radar():
+    a = _with_pools(reversal_radar={"mode": "top", "count": 2, "applicable": 13})
+    r = _rows(build_structure_panel(a))["Fired / Filtered Out"]
+    assert r["value"] == "2 / 13" and "11 filtered" in r["detail"]
+    assert _rows(build_structure_panel(_with_pools()))["Fired / Filtered Out"]["value"] == "—"
