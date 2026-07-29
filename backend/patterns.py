@@ -1998,6 +1998,16 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         row("Structure Bias", "RANGE", "neutral")
         row("Last Structure Event", "—", "neutral")
 
+    # BOS streak — how persistently structure is being taken out one way.
+    bos = analysis.get("bos_streak") or {}
+    if bos.get("direction") and bos.get("count"):
+        _bd = bos["direction"]
+        row("BOS Streak", f"{bos['count']}× {_bd.upper()}",
+            "bull" if _bd == "bullish" else "bear",
+            f"last {bos.get('last_level')}")
+    else:
+        row("BOS Streak", "—", "neutral")
+
     # Alignment: does structure agree with trend?
     if ch.get("signal") in ("bullish", "bearish") and trend != "NEUTRAL":
         aligned = (ch["signal"] == "bullish") == (trend == "BULLISH")
@@ -2042,6 +2052,99 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     row("Last Signal", f"{d} ({sig.get('strength', 0)}/100)",
         "bull" if d == "LONG" else "bear" if d == "SHORT" else "neutral")
 
-    return {"rows": rows, "price": round(price, 8),
+    # Current session range (intraday only) + where price sits inside it.
+    sess = analysis.get("session_ranges") or []
+    if sess:
+        cur = sess[-1]
+        rng = cur["high"] - cur["low"]
+        pos = ((price - cur["low"]) / rng * 100) if rng > 0 else 50
+        row("Session Range", f"{cur['session']} {cur['low']:,.4f}–{cur['high']:,.4f}", "neutral")
+        row("Session Position", f"{pos:.0f}%",
+            "bear" if pos >= 80 else "bull" if pos <= 20 else "neutral")
+
+    return {"rows": rows, "sessions": sess, "price": round(price, 8),
             "timeframe": analysis.get("timeframe"),
             "symbol": analysis.get("symbol")}
+
+
+# ── Break of Structure (BOS) streak ───────────────────────────────────────────
+# BOS = price CLOSING beyond the previous swing in the SAME direction as the
+# trend (continuation). A run of same-direction BOS events measures how
+# persistently structure is being taken out — a long streak is a strong,
+# one-directional leg; a broken streak is where momentum stalls.
+def detect_bos_streak(candles: List[Dict], window: int = 3) -> Dict:
+    """Return {direction, count, last_ts, last_level, events} for the CURRENT
+    run of same-direction breaks of structure."""
+    out = {"direction": None, "count": 0, "last_ts": None, "last_level": None, "events": 0}
+    if len(candles) < window * 2 + 4:
+        return out
+    ph, pl = find_pivots(candles, window=window)
+    if not ph and not pl:
+        return out
+
+    # Walk forward; each time a close takes out the most recent prior swing
+    # high/low, record a BOS in that direction.
+    seq: List[Dict] = []
+    for i, c in enumerate(candles):
+        prior_h = [p for p in ph if p["index"] < i]
+        prior_l = [p for p in pl if p["index"] < i]
+        if prior_h and c["close"] > prior_h[-1]["price"]:
+            if not seq or seq[-1]["dir"] != "bullish" or seq[-1]["level"] != prior_h[-1]["price"]:
+                seq.append({"dir": "bullish", "level": prior_h[-1]["price"], "ts": c["timestamp"]})
+        elif prior_l and c["close"] < prior_l[-1]["price"]:
+            if not seq or seq[-1]["dir"] != "bearish" or seq[-1]["level"] != prior_l[-1]["price"]:
+                seq.append({"dir": "bearish", "level": prior_l[-1]["price"], "ts": c["timestamp"]})
+    if not seq:
+        return out
+
+    # Count the trailing run of same-direction breaks.
+    last_dir = seq[-1]["dir"]
+    count = 0
+    for ev in reversed(seq):
+        if ev["dir"] != last_dir:
+            break
+        count += 1
+    return {"direction": last_dir, "count": count, "last_ts": seq[-1]["ts"],
+            "last_level": round(seq[-1]["level"], 8), "events": len(seq)}
+
+
+# ── Trading-session ranges (Asia / London / US) ───────────────────────────────
+# Session hours in UTC. Range boxes are only meaningful on INTRADAY timeframes —
+# a daily candle spans every session, so a box would be the whole bar.
+SESSIONS = (
+    ("ASIA",   0,  8,  "#38bdf8"),
+    ("LONDON", 7,  16, "#a855f7"),
+    ("US",     13, 21, "#22c55e"),
+)
+SESSION_MAX_TFS = ("1H", "2H", "4H")
+
+
+def session_ranges(candles: List[Dict], timeframe: str, max_sessions: int = 6) -> List[Dict]:
+    """High/low of each recent trading session, newest last. Empty on daily+ TFs
+    (a session box would cover the entire candle)."""
+    if timeframe not in SESSION_MAX_TFS or not candles:
+        return []
+    from datetime import datetime, timezone as _tz
+    buckets: Dict[tuple, Dict] = {}
+    for c in candles:
+        ts = c.get("timestamp")
+        if not ts:
+            continue
+        dt = datetime.fromtimestamp(ts / 1000, _tz.utc)
+        for name, sh, eh, colour in SESSIONS:
+            if sh <= dt.hour < eh:
+                key = (dt.date(), name)
+                b = buckets.get(key)
+                if b is None:
+                    buckets[key] = {"session": name, "colour": colour,
+                                    "start_ts": ts, "end_ts": ts,
+                                    "high": c["high"], "low": c["low"]}
+                else:
+                    b["end_ts"] = ts
+                    b["high"] = max(b["high"], c["high"])
+                    b["low"]  = min(b["low"],  c["low"])
+    out = sorted(buckets.values(), key=lambda b: b["start_ts"])[-max_sessions:]
+    for b in out:
+        b["high"] = round(b["high"], 8)
+        b["low"]  = round(b["low"], 8)
+    return out
