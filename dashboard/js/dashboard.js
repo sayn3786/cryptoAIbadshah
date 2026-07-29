@@ -2710,11 +2710,16 @@ function flagSvg(f) {
   </svg>`;
 }
 
-// Series primitive that tints the background by trend regime — translucent green
-// while SuperTrend is bullish, red while bearish. Drawn at the BOTTOM so candles
-// stay crisp. Used ONLY on the dedicated structure chart, so the main chart
-// stays clean.
+// Series primitive that marks the trend regime with a translucent band hugging
+// the SuperTrend line — green reaching up while bullish, red reaching down while
+// bearish. A BAND, not a pane fill: it shows which side of the line the regime
+// sits on without washing the candles out. Drawn at the BOTTOM so candles stay
+// crisp. Used ONLY on the dedicated structure chart, so the main chart stays
+// clean.
 class RegimeShade {
+  // How far the fade reaches past the SuperTrend line, in px. A band, not a
+  // pane fill — the colour marks the side of the line, it doesn't flood it.
+  static BAND_PX = 60;
   constructor(chart, series) { this._chart = chart; this._series = series; this._segs = []; }
   setData(segs) { this._segs = segs || []; }
   updateAllViews() {}
@@ -2745,32 +2750,45 @@ class RegimeShade {
               const pts = (sg.pts || []).map(p => ({ x: tx(p.t), y: py(p.v) }))
                                         .filter(p => p.x != null && p.y != null);
               if (!pts.length) return;
-              const ys = pts.map(p => p.y);
+
+              // Only a BAND hugging the line, not a fill out to the pane edge —
+              // enough to read which side the regime is on without washing the
+              // candles out. Scales with pane height so it holds on any device.
+              const depth = Math.max(28, Math.min(RegimeShade.BAND_PX, H * 0.16));
+              const dir   = sg.bullish ? -1 : 1;      // up for green, down for red
+
+              // Stepped polyline along the line, then back along it offset by
+              // `depth` — a ribbon that follows the SuperTrend staircase.
+              const edge = [];
+              pts.forEach((p, i) => {
+                if (i) edge.push({ x: p.x, y: pts[i - 1].y });   // step across…
+                edge.push({ x: p.x, y: p.y });                   // …then to the new level
+              });
+              edge.push({ x: xa + w, y: pts[pts.length - 1].y });
+
+              const ys = edge.map(p => p.y);
               const yMin = Math.min(...ys), yMax = Math.max(...ys);
-              const gTop = sg.bullish ? 0 : yMin;
-              const gBot = sg.bullish ? yMax : H;
+              const gTop = sg.bullish ? yMin - depth : yMin;
+              const gBot = sg.bullish ? yMax : yMax + depth;
               const g = ctx.createLinearGradient(0, gTop, 0, Math.max(gBot, gTop + 1));
               if (sg.bullish) {            // densest at the line (bottom), fades up
-                g.addColorStop(0, `rgba(${rgb},.02)`);
-                g.addColorStop(1, `rgba(${rgb},.24)`);
+                g.addColorStop(0, `rgba(${rgb},0)`);
+                g.addColorStop(1, `rgba(${rgb},.30)`);
               } else {                      // densest at the line (top), fades down
-                g.addColorStop(0, `rgba(${rgb},.24)`);
-                g.addColorStop(1, `rgba(${rgb},.02)`);
+                g.addColorStop(0, `rgba(${rgb},.30)`);
+                g.addColorStop(1, `rgba(${rgb},0)`);
               }
+
               ctx.save();
               ctx.beginPath();
               ctx.rect(xa, 0, w, H);        // keep the leg inside its own span
               ctx.clip();
               ctx.beginPath();
-              ctx.moveTo(pts[0].x, pts[0].y);
-              for (let i = 1; i < pts.length; i++) {
-                ctx.lineTo(pts[i].x, pts[i - 1].y);   // step across…
-                ctx.lineTo(pts[i].x, pts[i].y);       // …then to the new level
+              ctx.moveTo(edge[0].x, edge[0].y);
+              for (let i = 1; i < edge.length; i++) ctx.lineTo(edge[i].x, edge[i].y);
+              for (let i = edge.length - 1; i >= 0; i--) {
+                ctx.lineTo(edge[i].x, edge[i].y + dir * depth);
               }
-              const yEnd = sg.bullish ? 0 : H;        // close out to the pane edge
-              ctx.lineTo(xa + w, pts[pts.length - 1].y);
-              ctx.lineTo(xa + w, yEnd);
-              ctx.lineTo(pts[0].x, yEnd);
               ctx.closePath();
               ctx.fillStyle = g;
               ctx.fill();
