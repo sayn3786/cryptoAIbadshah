@@ -211,3 +211,21 @@ def test_fired_filtered_counts_from_radar():
     r = _rows(build_structure_panel(a))["Fired / Filtered Out"]
     assert r["value"] == "2 / 13" and "11 filtered" in r["detail"]
     assert _rows(build_structure_panel(_with_pools()))["Fired / Filtered Out"]["value"] == "—"
+
+
+# ── liquidity pool ladder ───────────────────────────────────────────────────
+def test_liquidity_pools_cluster_and_rank():
+    from patterns import detect_liquidity_pools, LIQ_MIN_TOUCHES
+    cs = _zigzag([100, 110, 100, 110, 100, 110, 102, 109, 101])
+    pools = detect_liquidity_pools(cs)
+    assert pools, "repeated highs/lows should form pools"
+    assert all(p["touches"] >= LIQ_MIN_TOUCHES for p in pools)
+    assert all(p["side"] in ("above", "below") for p in pools)
+    # ranked strongest first
+    assert pools == sorted(pools, key=lambda p: (p["touches"], p["last_ts"]), reverse=True)
+
+
+def test_liquidity_pools_empty_on_thin_data():
+    from patterns import detect_liquidity_pools
+    assert detect_liquidity_pools([]) == []
+    assert detect_liquidity_pools(_make_candles(5)) == []
