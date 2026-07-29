@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/dashboard.css?v=114" />
+  <link rel="stylesheet" href="css/dashboard.css?v=115" />
 </head>
 <body>
 
@@ -329,7 +329,7 @@
       <div class="chart-header">
         <span class="chart-title" id="chartTitle">BTC/USDT · 1W</span>
         <div class="chart-legend-group" id="chartLegend">
-          <div class="chart-legend-tip">Tap a legend item to show / hide that layer</div>
+          <div class="chart-legend-tip">Tap a legend item to show / hide that layer<span id="buildTag" class="build-tag"></span></div>
           <div class="chart-legend">
             <span class="legend-item" data-layer="fvg"><span class="legend-dot bull"></span>Bullish FVG</span>
             <span class="legend-item" data-layer="fvg"><span class="legend-dot bear"></span>Bearish FVG</span>
@@ -776,7 +776,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="js/dashboard.js?v=168"></script>
+<script src="js/dashboard.js?v=169"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
