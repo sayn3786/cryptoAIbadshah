@@ -2734,27 +2734,47 @@ class RegimeShade {
               if (x0 == null || x1 == null) return;
               const xa = Math.min(x0, x1), w = Math.max(1, Math.abs(x1 - x0));
               const rgb = sg.bullish ? '34,197,94' : '239,68,68';
-              // Anchor the band to the SUPERTREND LINE rather than the whole
-              // pane: bullish fills DOWNWARD from the line (green under price),
-              // bearish fills UPWARD from it (red above price) — the classic
-              // SuperTrend look. The fade runs away from the line, so colour is
-              // densest at the line and dissolves into the background.
-              const yLine = sg.level != null ? py(sg.level) : null;
-              let yTop, yBot;
-              if (yLine == null) { yTop = 0; yBot = H; }
-              else if (sg.bullish) { yTop = yLine; yBot = H; }
-              else { yTop = 0; yBot = yLine; }
-              if (!(yBot > yTop)) return;
-              const g = ctx.createLinearGradient(0, yTop, 0, yBot);
-              if (sg.bullish) {            // densest at the line (top), fades down
-                g.addColorStop(0, `rgba(${rgb},.22)`);
-                g.addColorStop(1, `rgba(${rgb},.01)`);
-              } else {                      // densest at the line (bottom), fades up
-                g.addColorStop(0, `rgba(${rgb},.01)`);
-                g.addColorStop(1, `rgba(${rgb},.22)`);
+              // The SuperTrend line is the boundary. A BUY leg fills UPWARD from
+              // the line (green above it, line acting as support under price); a
+              // SELL leg fills DOWNWARD (red below it, line as resistance over
+              // price). Colour is densest right at the line and dissolves away
+              // from it, so the line reads as the edge of the regime.
+              //
+              // The edge follows the line bar by bar rather than sitting at one
+              // flat level, so the fill hugs the SuperTrend staircase.
+              const pts = (sg.pts || []).map(p => ({ x: tx(p.t), y: py(p.v) }))
+                                        .filter(p => p.x != null && p.y != null);
+              if (!pts.length) return;
+              const ys = pts.map(p => p.y);
+              const yMin = Math.min(...ys), yMax = Math.max(...ys);
+              const gTop = sg.bullish ? 0 : yMin;
+              const gBot = sg.bullish ? yMax : H;
+              const g = ctx.createLinearGradient(0, gTop, 0, Math.max(gBot, gTop + 1));
+              if (sg.bullish) {            // densest at the line (bottom), fades up
+                g.addColorStop(0, `rgba(${rgb},.02)`);
+                g.addColorStop(1, `rgba(${rgb},.24)`);
+              } else {                      // densest at the line (top), fades down
+                g.addColorStop(0, `rgba(${rgb},.24)`);
+                g.addColorStop(1, `rgba(${rgb},.02)`);
               }
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(xa, 0, w, H);        // keep the leg inside its own span
+              ctx.clip();
+              ctx.beginPath();
+              ctx.moveTo(pts[0].x, pts[0].y);
+              for (let i = 1; i < pts.length; i++) {
+                ctx.lineTo(pts[i].x, pts[i - 1].y);   // step across…
+                ctx.lineTo(pts[i].x, pts[i].y);       // …then to the new level
+              }
+              const yEnd = sg.bullish ? 0 : H;        // close out to the pane edge
+              ctx.lineTo(xa + w, pts[pts.length - 1].y);
+              ctx.lineTo(xa + w, yEnd);
+              ctx.lineTo(pts[0].x, yEnd);
+              ctx.closePath();
               ctx.fillStyle = g;
-              ctx.fillRect(xa, yTop, w, yBot - yTop);
+              ctx.fill();
+              ctx.restore();
             });
           });
         },
@@ -2780,8 +2800,8 @@ function _regimeSegmentsAndFlips(stSeries) {
     prevTrend = bullish;
     if (!cur || cur.bullish !== bullish) {
       if (cur) segs.push(cur);
-      cur = { t0: t, t1: t, bullish, level: +p.value };
-    } else { cur.t1 = t; cur.level = +p.value; }
+      cur = { t0: t, t1: t, bullish, level: +p.value, pts: [{ t, v: +p.value }] };
+    } else { cur.t1 = t; cur.level = +p.value; cur.pts.push({ t, v: +p.value }); }
   });
   if (cur) segs.push(cur);
   for (let i = 0; i < segs.length; i++) {
@@ -2876,18 +2896,36 @@ function renderStructureChart(a) {
     axisLabelVisible: true, title: 'Structure Low' });
 
   // Trend regime shading + BUY/SELL flips from SuperTrend.
-  const { segs: _segs, flips: _flips } = _regimeSegmentsAndFlips((a.supertrend || {}).series || []);
+  const _stSeries = (a.supertrend || {}).series || [];
+  const _rowT0 = rows[0].time, _rowT1 = rows[rows.length - 1].time;
+  const { segs: _segs, flips: _flips } = _regimeSegmentsAndFlips(_stSeries);
   if (_segs.length) {
     const rs = new RegimeShade(chart, cs);
     rs.setData(_segs);
     try { cs.attachPrimitive(rs); } catch (_) {}
+
+    // The SuperTrend line itself — the boundary the fade hangs off. Two series
+    // with whitespace gaps so each leg keeps its own colour and the line breaks
+    // cleanly at every flip instead of slashing across the pane.
+    const _stOpts = { lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+                      crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+    const bullLine = chart.addLineSeries({ ..._stOpts, color: '#22c55e' });
+    const bearLine = chart.addLineSeries({ ..._stOpts, color: '#ef4444' });
+    const bullData = [], bearData = [];
+    _stSeries.forEach(p => {
+      const time = Math.floor(p.timestamp / 1000);
+      if (time < _rowT0 || time > _rowT1) return;
+      const bull = p.trend === 'bullish';
+      bullData.push(bull ? { time, value: +p.value } : { time });
+      bearData.push(bull ? { time } : { time, value: +p.value });
+    });
+    if (bullData.length) { bullLine.setData(bullData); bearLine.setData(bearData); }
   }
 
   // CHoCH / BOS markers — where structure actually changed hands.
   const markers = [];
   // BUY / SELL where the trend regime flipped.
-  const _firstT = rows[0].time, _lastT = rows[rows.length - 1].time;
-  _flips.filter(f => f.time >= _firstT && f.time <= _lastT).forEach(f => {
+  _flips.filter(f => f.time >= _rowT0 && f.time <= _rowT1).forEach(f => {
     markers.push({ time: f.time, position: f.bullish ? 'belowBar' : 'aboveBar',
                    color: f.bullish ? '#22c55e' : '#ef4444',
                    shape: f.bullish ? 'arrowUp' : 'arrowDown',
