@@ -50,6 +50,39 @@ app = Flask(__name__)
 # that appends a trailing slash would otherwise fall through to the catch-all
 # and return {"error": "not found"} for every API call.
 app.url_map.strict_slashes = False
+
+
+class _RestoreOriginalPath:
+    """Restore the real request path when the platform rewrites it away.
+
+    Vercel's rewrite (`/api/:path*` → `/api/index.py`) replaces the URL, so the
+    WSGI app receives `/api/index.py` for EVERY request and no Flask rule
+    matches — every /api/* call fell through to the catch-all 404. The rewrite
+    now carries the original path in `__vpath`; this middleware puts it back
+    into PATH_INFO and strips the marker from the query string.
+
+    No-ops when `__vpath` is absent, so local dev and any platform that
+    preserves the path are unaffected.
+    """
+
+    def __init__(self, wsgi_app):
+        self.wsgi_app = wsgi_app
+
+    def __call__(self, environ, start_response):
+        qs = environ.get("QUERY_STRING", "") or ""
+        if "__vpath=" in qs:
+            from urllib.parse import parse_qsl, urlencode, unquote
+            pairs = parse_qsl(qs, keep_blank_values=True)
+            vpath = next((v for k, v in pairs if k == "__vpath"), None)
+            # Ignore an uninterpolated template (e.g. literal ":path*").
+            if vpath and vpath.startswith("/") and ":" not in vpath:
+                environ["PATH_INFO"] = unquote(vpath)
+            environ["QUERY_STRING"] = urlencode(
+                [(k, v) for k, v in pairs if k != "__vpath"])
+        return self.wsgi_app(environ, start_response)
+
+
+app.wsgi_app = _RestoreOriginalPath(app.wsgi_app)
 client = BinanceClient()
 cg_client  = CoinGlassClient()
 etf_client = ETFFlowClient()
