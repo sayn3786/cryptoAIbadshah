@@ -1979,3 +1979,16 @@ a:hover { color: var(--gold2); }
             flex-wrap: wrap; gap: 5px; align-items: center; }
 .gtk-hist-chip { background: rgba(255,255,255,.05); border: 1px solid var(--border);
                  border-radius: 10px; padding: 1px 7px; font-family: var(--mono); }
+
+/* ── Market-structure status panel ─────────────────────────────────────────── */
+.struct-panel { margin-top: 2px; }
+.struct-tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: .72rem; }
+.struct-tbl tr { border-bottom: 1px solid rgba(148,163,184,.10); }
+.struct-tbl tr:last-child { border-bottom: none; }
+.struct-tbl td { padding: 5px 4px; vertical-align: middle; }
+.sp-label  { color: var(--muted2); white-space: nowrap; }
+.sp-val    { text-align: right; font-weight: 600; white-space: nowrap; }
+.sp-val.bull { color: var(--bull, #22c55e); }
+.sp-val.bear { color: var(--bear, #ef4444); }
+.sp-val.neutral { color: var(--text); }
+.sp-detail { text-align: right; color: var(--muted2); font-size: .66rem; white-space: nowrap; }

@@ -37,7 +37,7 @@ from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
     candle_direction)
 from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
-from patterns import detect_flags, pick_dominant_flags, summarize_flag_diagnostics, detect_reversals, detect_triangles_wedges, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
+from patterns import detect_equal_levels, detect_flags, pick_dominant_flags, summarize_flag_diagnostics, detect_reversals, detect_triangles_wedges, build_structure_panel, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
 from signals import generate_signal, _swing_levels
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs, send_pattern_alerts as _send_pattern_alerts
@@ -965,6 +965,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     choch    = detect_choch(spot, window=3)
     liq_grab = detect_liquidity_grab(spot, window=3, lookback=5)
     acc_setup = detect_acc_eql_fvg_setup(spot, fvgs, window=20)
+    # Equal highs/lows = resting liquidity pools (feeds the structure panel).
+    equal_levels = detect_equal_levels(spot)
     # Diagonal trendline + supply/demand zones — computed on the same 60-candle
     # window the chart draws so the overlay lines up with the visible candles.
     _chart_win = spot[-60:] if len(spot) >= 60 else spot
@@ -1220,9 +1222,16 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "vol_regime":             vol_regime,
         "gomining_tokenomics":    gomining_tokenomics,
         "tao_ecosystem":          tao_ecosystem,
+        "equal_levels":           equal_levels,
         "generated_at":           int(time.time() * 1000),
     }
     analysis["signal"] = generate_signal(analysis)
+    # Dense market-structure status panel (trend / structure / liquidity),
+    # built from data already in `analysis` — no extra fetches.
+    try:
+        analysis["structure_panel"] = build_structure_panel(analysis)
+    except Exception:
+        analysis["structure_panel"] = None
 
     # ── Data-integrity assessment (gates whether this is tradeable) ───────────
     _dq_level, _dq_reasons, _dq_extra = _assess_data_quality(
