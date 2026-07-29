@@ -2001,10 +2001,20 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     # BOS streak — how persistently structure is being taken out one way.
     bos = analysis.get("bos_streak") or {}
     if bos.get("direction") and bos.get("count"):
-        _bd = bos["direction"]
-        row("BOS Streak", f"{bos['count']}× {_bd.upper()}",
-            "bull" if _bd == "bullish" else "bear",
-            f"last {bos.get('last_level')}")
+        _bd   = bos["direction"]
+        _held = bos.get("held", True)
+        _ago  = bos.get("bars_ago")
+        _when = f"{_ago} bars ago" if _ago is not None else ""
+        # A given-back break is stale context, not a live bullish/bearish read —
+        # colour it neutral and say so, otherwise it reads as a contradiction
+        # against the trend row.
+        _detail = " · ".join(x for x in (
+            f"last {bos.get('last_level')}", _when,
+            "" if _held else "given back") if x)
+        row("BOS Streak",
+            f"{bos['count']}× {_bd.upper()}" + ("" if _held else " (given back)"),
+            ("bull" if _bd == "bullish" else "bear") if _held else "neutral",
+            _detail)
     else:
         row("BOS Streak", "—", "neutral")
 
@@ -2104,8 +2114,23 @@ def detect_bos_streak(candles: List[Dict], window: int = 3) -> Dict:
         if ev["dir"] != last_dir:
             break
         count += 1
-    return {"direction": last_dir, "count": count, "last_ts": seq[-1]["ts"],
-            "last_level": round(seq[-1]["level"], 8), "events": len(seq)}
+
+    # A BOS describes a PAST event, so report whether it still stands. Without
+    # this the panel can show "2x BULLISH" while price has slipped back under the
+    # level it broke — reading as a contradiction against a bearish trend when it
+    # is really a stale, given-back break.
+    last_level = seq[-1]["level"]
+    last_ts    = seq[-1]["ts"]
+    price      = candles[-1]["close"]
+    held = price > last_level if last_dir == "bullish" else price < last_level
+    bars_ago = None
+    for k in range(len(candles) - 1, -1, -1):
+        if candles[k].get("timestamp") == last_ts:
+            bars_ago = len(candles) - 1 - k
+            break
+    return {"direction": last_dir, "count": count, "last_ts": last_ts,
+            "last_level": round(last_level, 8), "events": len(seq),
+            "held": bool(held), "bars_ago": bars_ago}
 
 
 # ── Trading-session ranges (Asia / London / US) ───────────────────────────────
