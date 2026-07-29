@@ -46,6 +46,10 @@ from twitter import post_daily_signals as _post_twitter_signals
 from video import create_talk, get_talk
 
 app = Flask(__name__)
+# Treat "/api/x" and "/api/x/" as the same route. A proxy or platform setting
+# that appends a trailing slash would otherwise fall through to the catch-all
+# and return {"error": "not found"} for every API call.
+app.url_map.strict_slashes = False
 client = BinanceClient()
 cg_client  = CoinGlassClient()
 etf_client = ETFFlowClient()
@@ -2686,11 +2690,35 @@ DASHBOARD = os.path.join(ROOT, "dashboard")
 def serve_dashboard(filename="index.html"):
     return send_from_directory(DASHBOARD, filename)
 
+@app.get("/api/_whoami")
+def api_whoami():
+    """Diagnostic: echo the request EXACTLY as Flask received it.
+
+    When every /api/* call 404s, the question is whether the platform forwarded
+    the original URL or a rewritten one. This shows the path Flask actually saw,
+    so a routing/rewrite problem can be told apart from an app problem."""
+    return jsonify({
+        "ok": True,
+        "path": request.path,
+        "full_path": request.full_path,
+        "script_root": request.script_root,
+        "url": request.url,
+        "method": request.method,
+        "args": dict(request.args),
+        "analysis_route_registered": any(
+            str(r.rule) == "/api/analysis/<symbol>" for r in app.url_map.iter_rules()),
+        "strict_slashes": app.url_map.strict_slashes,
+    })
+
+
 @app.route("/<path:filename>")
 def serve_root(filename):
-    # Don't catch API routes
+    # Don't catch API routes — but say WHICH path missed, so a 404 here is
+    # diagnosable instead of an anonymous "not found".
     if filename.startswith("api/"):
-        return jsonify({"error": "not found"}), 404
+        return jsonify({"error": "not found",
+                        "path_seen_by_flask": request.path,
+                        "hint": "no API route matched this path"}), 404
     return send_from_directory(ROOT, filename)
 
 @app.route("/")
