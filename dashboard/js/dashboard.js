@@ -2710,6 +2710,62 @@ function flagSvg(f) {
   </svg>`;
 }
 
+// Series primitive that tints the background by trend regime — translucent green
+// while SuperTrend is bullish, red while bearish. Drawn at the BOTTOM so candles
+// stay crisp. Used ONLY on the dedicated structure chart, so the main chart
+// stays clean.
+class RegimeShade {
+  constructor(chart, series) { this._chart = chart; this._series = series; this._segs = []; }
+  setData(segs) { this._segs = segs || []; }
+  updateAllViews() {}
+  paneViews() {
+    const self = this;
+    return [{
+      zOrder: () => 'bottom',
+      renderer: () => ({
+        draw: (target) => {
+          target.useMediaCoordinateSpace((scope) => {
+            const ctx = scope.context;
+            const H = scope.mediaSize.height;
+            const tx = t => self._chart.timeScale().timeToCoordinate(t);
+            self._segs.forEach(sg => {
+              const x0 = tx(sg.t0), x1 = tx(sg.t1);
+              if (x0 == null || x1 == null) return;
+              ctx.fillStyle = sg.bullish ? 'rgba(34,197,94,.07)' : 'rgba(239,68,68,.07)';
+              ctx.fillRect(Math.min(x0, x1), 0, Math.max(1, Math.abs(x1 - x0)), H);
+            });
+          });
+        },
+      }),
+    }];
+  }
+}
+
+// Collapse a SuperTrend series into contiguous same-regime segments, and pick out
+// the FLIP bars — those are the BUY / SELL signals.
+function _regimeSegmentsAndFlips(stSeries) {
+  const segs = [], flips = [];
+  if (!stSeries || !stSeries.length) return { segs, flips };
+  const sec = p => Math.floor(p.timestamp / 1000);
+  const interval = stSeries.length > 1 ? (sec(stSeries[1]) - sec(stSeries[0])) : 86400;
+  let cur = null, prevTrend = null;
+  stSeries.forEach(p => {
+    const bullish = p.trend === 'bullish';
+    const t = sec(p);
+    if (prevTrend !== null && bullish !== prevTrend) {
+      flips.push({ time: t, bullish, value: +p.value });
+    }
+    prevTrend = bullish;
+    if (!cur || cur.bullish !== bullish) { if (cur) segs.push(cur); cur = { t0: t, t1: t, bullish }; }
+    else cur.t1 = t;
+  });
+  if (cur) segs.push(cur);
+  for (let i = 0; i < segs.length; i++) {
+    segs[i].t1 = (i < segs.length - 1) ? segs[i + 1].t0 : segs[i].t1 + interval;
+  }
+  return { segs, flips };
+}
+
 // Dedicated market-structure chart: candles + session boxes + liquidity pools +
 // structure high/low + CHoCH/BOS markers. Kept SEPARATE from the main chart so
 // these structural levels are readable instead of buried under 18 overlays.
@@ -2780,8 +2836,24 @@ function renderStructureChart(a) {
   cs.createPriceLine({ price: sLo, color: '#94a3b8aa', lineWidth: 1, lineStyle: 3,
     axisLabelVisible: true, title: 'Structure Low' });
 
+  // Trend regime shading + BUY/SELL flips from SuperTrend.
+  const { segs: _segs, flips: _flips } = _regimeSegmentsAndFlips((a.supertrend || {}).series || []);
+  if (_segs.length) {
+    const rs = new RegimeShade(chart, cs);
+    rs.setData(_segs);
+    try { cs.attachPrimitive(rs); } catch (_) {}
+  }
+
   // CHoCH / BOS markers — where structure actually changed hands.
   const markers = [];
+  // BUY / SELL where the trend regime flipped.
+  const _firstT = rows[0].time, _lastT = rows[rows.length - 1].time;
+  _flips.filter(f => f.time >= _firstT && f.time <= _lastT).forEach(f => {
+    markers.push({ time: f.time, position: f.bullish ? 'belowBar' : 'aboveBar',
+                   color: f.bullish ? '#22c55e' : '#ef4444',
+                   shape: f.bullish ? 'arrowUp' : 'arrowDown',
+                   text: f.bullish ? 'BUY' : 'SELL' });
+  });
   const ch = a.choch || {};
   if (ch.signal === 'bullish' || ch.signal === 'bearish') {
     const bull = ch.signal === 'bullish';
