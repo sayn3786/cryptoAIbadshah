@@ -1019,6 +1019,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     _chart_win = spot[-60:] if len(spot) >= 60 else spot
     trendline = detect_trendline(_chart_win, window=3)
     sr_zones  = detect_sr_zones(_chart_win, window=3)
+    # The structure chart draws a deeper window, so it gets its own trendline.
+    # Reusing the 60-bar one would strand the line in the right-hand third and
+    # miss any support that has been running for longer than that.
+    structure_trendline = detect_trendline(spot[-STRUCTURE_CHART_BARS:], window=3)
 
     # Flag patterns — detect on the same candles already fetched for this TF.
     # One flag set per timeframe, no cross-TF duplication.
@@ -1284,6 +1288,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         # show where past liquidity actually sits.
         "structure_candles":      spot[-STRUCTURE_CHART_BARS:],
         "structure_supertrend":   structure_supertrend,
+        "structure_trendline":    structure_trendline,
         "session_ranges":         sess_ranges,
         "generated_at":           int(time.time() * 1000),
     }
