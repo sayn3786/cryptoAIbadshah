@@ -3398,6 +3398,20 @@ const CHIP_FONT   = '800 12px ui-sans-serif, -apple-system, system-ui, sans-seri
 const CHIP_H      = 22;   // tall enough to read over candles, not so tall it hides them
 const CHIP_PAD_X  = 9;    // per side
 const CHIP_BORDER = 2;    // heavy rim so the box holds its edge against wicks
+const CHIP_FILL_ALPHA = 0.62;   // candles stay visible through the box
+
+// #rgb / #rrggbb (with or without a trailing alpha pair) → rgba() at `a`.
+// Anything already in a functional form is returned untouched.
+function _rgba(color, a) {
+  const m = /^#([0-9a-f]{3,8})$/i.exec(String(color || '').trim());
+  if (!m) return color;
+  let h = m[1];
+  if (h.length === 3 || h.length === 4) h = h.slice(0, 3).split('').map(c => c + c).join('');
+  h = h.slice(0, 6);
+  if (h.length !== 6) return color;
+  const n = parseInt(h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
 
 function _chipSize(ctx, text) {
   ctx.font = CHIP_FONT;
@@ -3414,21 +3428,22 @@ function _drawChipAt(ctx, text, bx, by, bg) {
   ctx.arcTo(bx,     by + h, bx,     by,     r);
   ctx.arcTo(bx,     by,     bx + w, by,     r);
   ctx.closePath();
-  // Solid fill, then a heavy dark rim — on a dark chart a plain box bleeds into
-  // the background, and against a bright candle it loses its edge. The rim
-  // separates it from both.
-  ctx.fillStyle = bg;
+  // Translucent fill so a chip sitting over candles lets them read through
+  // instead of blanking them out, with a SOLID rim in the same colour to hold
+  // the box's edge — transparency alone would let it dissolve into the chart.
+  ctx.fillStyle = _rgba(bg, CHIP_FILL_ALPHA);
   ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,.72)';
+  ctx.strokeStyle = bg;
   ctx.lineWidth = CHIP_BORDER;
   ctx.stroke();
   const ta = ctx.textAlign, tb = ctx.textBaseline;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = CHIP_FONT;
-  // Dark halo under the glyphs keeps the white readable on the lighter fills.
+  // Dark halo under the glyphs — with a see-through fill the wording would
+  // otherwise have to compete with whatever candle is behind it.
   ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(0,0,0,.35)';
+  ctx.strokeStyle = 'rgba(0,0,0,.6)';
   ctx.strokeText(text, bx + w / 2, by + h / 2 + 0.5);
   ctx.fillStyle = '#fff';
   ctx.fillText(text, bx + w / 2, by + h / 2 + 0.5);
