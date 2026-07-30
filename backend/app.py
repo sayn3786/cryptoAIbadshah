@@ -2285,7 +2285,8 @@ def _rec_cache_key() -> str:
     #      which also changes R/R and therefore which candidates qualify.
     # v40: liquidity pools are candidate TP walls, so the ladder can trade to
     #      where resting orders actually sit.
-    return f"v40_tppools_{date}_{slot}"
+    # v41: pool weight decays with how long ago the level was last touched.
+    return f"v41_poolage_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

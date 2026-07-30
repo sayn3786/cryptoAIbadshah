@@ -36,6 +36,72 @@ STRUCT_ADJ_FLOOR     = -18
 STRUCT_ADJ_CEILING   = 8
 
 
+# ── Pool recency ─────────────────────────────────────────────────────────────
+# Resting stops are not permanent. Orders at a level get filled, cancelled or
+# moved, so a cluster last touched 29 bars ago is weaker evidence that stops are
+# sitting there NOW than one touched on the last candle. Without this a pool held
+# full weight forever — the same flaw BOS had before it gained a decay.
+#
+# The floor is deliberately non-zero: a level defended eight times is still a
+# level, even when it was last defended a while back. Staleness discounts the
+# claim "stops are resting here", it does not erase the price.
+POOL_DECAY_BARS = 40          # 20 bars -> exactly half weight
+POOL_STALE_FLOOR = 0.35       # never fully discounted
+
+# A stale pool should not WIDEN a stop. Moving a stop spends real risk on the
+# claim that a sweep is coming, and that claim weakens with age.
+SL_POOL_MIN_FRESHNESS = 0.5   # i.e. touched within ~20 bars
+
+
+def _candle_interval_ms(candles: List[Dict]) -> Optional[int]:
+    """Bar length in ms, from the most recent pair that gives a positive gap."""
+    if not candles or len(candles) < 2:
+        return None
+    for i in range(len(candles) - 1, 0, -1):
+        try:
+            gap = int(candles[i]["timestamp"]) - int(candles[i - 1]["timestamp"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if gap > 0:
+            return gap
+    return None
+
+
+def pool_bars_ago(pool: Dict, candles: List[Dict]) -> Optional[int]:
+    """
+    How many bars since the pool was last touched. None when unknowable.
+
+    Returns None rather than 0 for a missing `last_ts`, so callers can treat
+    "no age information" as full weight instead of silently discounting a pool
+    that simply came from an older payload.
+    """
+    try:
+        last_ts = int(pool.get("last_ts"))
+    except (TypeError, ValueError):
+        return None
+    interval = _candle_interval_ms(candles)
+    if not interval or not candles:
+        return None
+    try:
+        latest = int(candles[-1]["timestamp"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return max(0, int((latest - last_ts) / interval))
+
+
+def pool_freshness(pool: Dict, candles: List[Dict]) -> float:
+    """
+    Age discount for a pool, in [POOL_STALE_FLOOR, 1.0].
+
+    Linear over POOL_DECAY_BARS, floored. A pool with no `last_ts` scores 1.0 —
+    absence of age information must not be read as staleness.
+    """
+    bars = pool_bars_ago(pool, candles)
+    if bars is None:
+        return 1.0
+    return max(POOL_STALE_FLOOR, 1.0 - bars / POOL_DECAY_BARS)
+
+
 # ── Liquidity pools as take-profit anchors ───────────────────────────────────
 # A pool ahead of the trade is where resting orders sit, so price is drawn to
 # it. TP snapping already anchored to zones, trend-lines and swings but ignored
@@ -147,6 +213,10 @@ def clear_stop_of_liquidity(analysis: Dict, *, entry: float, sl_dist: float,
             continue
         if lvl <= 0 or tch < SL_POOL_MIN_TOUCHES:
             continue
+        # A stale pool must not widen a stop. Moving it spends real risk on the
+        # claim that a sweep is coming, and that claim decays with age.
+        if pool_freshness(pool, analysis.get("candles") or []) < SL_POOL_MIN_FRESHNESS:
+            continue
         beyond = (stop_price - lvl) if is_long else (lvl - stop_price)
         if not (0 <= beyond <= danger):
             continue
@@ -190,8 +260,9 @@ def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
     """
     The nearest liquidity pool on the side that threatens the trade.
 
-    Returns ``(pool_price, touches, source)`` — all None/0/None when there is
-    nothing usable.
+    Returns ``(pool_price, touches, source, pool)`` — the raw pool dict rides
+    along so the caller can read its recency. All None/0/None/None when there
+    is nothing usable.
 
     Prefers ``liquidity_pools``, the full clustered ladder, over
     ``equal_levels``, which carries only ONE level per side. On a live BTC 2H
@@ -210,7 +281,7 @@ def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
     def _threatens(level: float) -> bool:
         return level <= price if is_long else level >= price
 
-    best_price, best_touches = None, 0
+    best_price, best_touches, best_pool = None, 0, None
 
     # Preferred source: the clustered ladder. `side` is computed against the
     # latest close in detect_liquidity_pools, but re-check against `price` here
@@ -224,9 +295,9 @@ def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
         if lvl <= 0 or not _threatens(lvl) or tch < STOP_RUN_MIN_TOUCHES:
             continue
         if best_price is None or abs(price - lvl) < abs(price - best_price):
-            best_price, best_touches = lvl, tch
+            best_price, best_touches, best_pool = lvl, tch, pool
     if best_price is not None:
-        return best_price, best_touches, "liquidity_pools"
+        return best_price, best_touches, "liquidity_pools", best_pool
 
     # Fallback: the single equal-high/equal-low pair.
     eq = analysis.get("equal_levels") or {}
@@ -235,10 +306,11 @@ def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
         lvl = float(lv.get("price"))
         tch = int(lv.get("touches") or 0)
     except (TypeError, ValueError):
-        return None, 0, None
+        return None, 0, None, None
     if lvl > 0 and _threatens(lvl):
-        return lvl, tch, "equal_levels"
-    return None, 0, None
+        # equal_levels carries no last_ts, so it scores as fresh by design.
+        return lvl, tch, "equal_levels", dict(lv)
+    return None, 0, None, None
 
 
 def structure_confluence(analysis: Dict, direction: str) -> Dict:
@@ -279,27 +351,41 @@ def structure_confluence(analysis: Dict, direction: str) -> Dict:
     # Stops for a LONG rest BELOW price, so the pool that threatens it sits
     # below; mirrored for a SHORT.
     atr = average_true_range(candles)
-    pool_price, touches, pool_source = _nearest_threatening_pool(analysis, price, is_long)
+    pool_price, touches, pool_source, pool_obj = _nearest_threatening_pool(
+        analysis, price, is_long)
 
     if atr > 0 and pool_price and touches >= STOP_RUN_MIN_TOUCHES:
         dist_atr = abs(price - pool_price) / atr
         if dist_atr <= STOP_RUN_ATR:
             closeness = 1.0 - (dist_atr / STOP_RUN_ATR)          # 1.0 at price
             conviction = min(1.0, touches / 5.0)                  # 5+ touches = full
-            pts = -int(round(STOP_RUN_MAX_PENALTY * max(closeness, 0.35) * conviction))
+            # Age discount — stops resting at a level get pulled over time.
+            fresh = pool_freshness(pool_obj or {}, candles)
+            bars_ago = pool_bars_ago(pool_obj or {}, candles)
+            pts = -int(round(STOP_RUN_MAX_PENALTY * max(closeness, 0.35)
+                             * conviction * fresh))
             if pts:
                 delta += pts
                 side = "below" if is_long else "above"
+                _age = f", last touched {bars_ago} bars ago" if bars_ago is not None else ""
                 msg = (f"Liquidity pool {dist_atr:.2f} ATR {side} price "
-                       f"({touches} touches) — stop-run risk before the {direction} works "
-                       f"({pts} pts)")
+                       f"({touches} touches{_age}) — stop-run risk before the "
+                       f"{direction} works ({pts} pts)")
                 out["factors"].append({"factor": "stop_run_risk", "points": pts,
                                        "pool_distance_atr": round(dist_atr, 3),
                                        "pool_price": pool_price,
                                        "touches": touches,
+                                       "bars_ago": bars_ago,
+                                       "freshness": round(fresh, 2),
                                        "source": pool_source})
                 # A sweep below price is a bearish-side risk for a LONG.
                 (out["bear_reasons"] if is_long else out["bull_reasons"]).append(msg)
+            else:
+                # Discounted all the way to nothing — recorded, not scored.
+                out["factors"].append({"factor": "stop_run_stale", "points": 0,
+                                       "pool_price": pool_price, "touches": touches,
+                                       "bars_ago": bars_ago,
+                                       "freshness": round(fresh, 2)})
 
     # ── 2. Chase ─────────────────────────────────────────────────────────────
     rng = structure_range(candles)
