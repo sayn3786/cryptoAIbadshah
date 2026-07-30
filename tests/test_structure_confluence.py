@@ -455,7 +455,7 @@ def test_the_live_btc_long_is_correctly_unaffected():
 
 def test_ladder_is_preferred_over_equal_levels():
     price, a = _live_btc()
-    lvl, touches, src = _nearest_threatening_pool(a, price, is_long=False)
+    lvl, touches, src, _pool = _nearest_threatening_pool(a, price, is_long=False)
     assert src == "liquidity_pools"
     assert lvl == 64368.425, "must take the NEAREST threatening pool"
 
@@ -471,9 +471,9 @@ def test_only_the_nearest_pool_scores():
 def test_pools_on_the_safe_side_are_ignored():
     price, a = _live_btc()
     # For a SHORT, everything BELOW price is irrelevant to its stops.
-    lvl, _, _ = _nearest_threatening_pool(a, price, is_long=False)
+    lvl, _, _, _ = _nearest_threatening_pool(a, price, is_long=False)
     assert lvl > price
-    lvl_long, _, _ = _nearest_threatening_pool(a, price, is_long=True)
+    lvl_long, _, _, _ = _nearest_threatening_pool(a, price, is_long=True)
     assert lvl_long <= price
 
 
@@ -483,7 +483,7 @@ def test_thinly_touched_pools_are_skipped_in_favour_of_a_real_one():
         {"price": price + 1.0, "touches": 1},                 # nearer but 1 touch
         {"price": price + 60.0, "touches": 6},                # the real pool
     ]
-    lvl, touches, _ = _nearest_threatening_pool(a, price, is_long=False)
+    lvl, touches, _, _ = _nearest_threatening_pool(a, price, is_long=False)
     assert lvl == price + 60.0 and touches == 6
 
 
@@ -491,7 +491,7 @@ def test_falls_back_to_equal_levels_without_a_ladder():
     price, a = _live_btc()
     a.pop("liquidity_pools")
     a["equal_levels"] = {"eqh": {"price": price + 50.0, "touches": 6}}
-    lvl, touches, src = _nearest_threatening_pool(a, price, is_long=False)
+    lvl, touches, src, _pool = _nearest_threatening_pool(a, price, is_long=False)
     assert src == "equal_levels" and lvl == price + 50.0 and touches == 6
 
 
@@ -499,7 +499,7 @@ def test_fallback_still_rejects_an_already_breached_level():
     # The original bug: eqh BELOW price cannot hold a short's stops.
     price, a = _live_btc()
     a.pop("liquidity_pools")
-    lvl, _, src = _nearest_threatening_pool(a, price, is_long=False)
+    lvl, _, src, _ = _nearest_threatening_pool(a, price, is_long=False)
     assert lvl is None and src is None
 
 
@@ -523,3 +523,171 @@ def test_pool_exactly_at_price_is_the_worst_case_not_an_exemption():
         out = structure_confluence(a, d)
         sr = [f for f in out["factors"] if f["factor"] == "stop_run_risk"]
         assert sr and sr[0]["pool_distance_atr"] == 0.0, f"{d} should register"
+
+
+# ── Pool recency decay ──────────────────────────────────────────────────────
+# Resting stops are not permanent — orders get filled, cancelled or moved. A
+# cluster last touched 29 bars ago is weaker evidence that stops sit there NOW
+# than one touched on the last candle. Pools previously held full weight forever,
+# the same flaw BOS had before it gained a decay.
+from signals import (                                                  # noqa: E402
+    POOL_DECAY_BARS, POOL_STALE_FLOOR, SL_POOL_MIN_FRESHNESS,
+    _candle_interval_ms, pool_bars_ago, pool_freshness,
+)
+
+_LATEST = 1785369600000
+_INTERVAL = 7200000                       # 2H
+
+
+def _aged_candles(n=40):
+    px = 64266.4
+    spread = (px * 0.009) / 2
+    return [{"timestamp": _LATEST - (n - 1 - i) * _INTERVAL, "open": px,
+             "high": px + spread, "low": px - spread, "close": px} for i in range(n)]
+
+
+def _pool_aged(bars_ago, *, price=64368.425, touches=4):
+    return {"price": price, "touches": touches,
+            "last_ts": _LATEST - bars_ago * _INTERVAL}
+
+
+def test_candle_interval_is_detected():
+    assert _candle_interval_ms(_aged_candles()) == _INTERVAL
+    assert _candle_interval_ms([]) is None
+    assert _candle_interval_ms([{"timestamp": 1}]) is None
+
+
+def test_bars_ago_from_last_touch():
+    c = _aged_candles()
+    for n in (0, 8, 16, 29, 56):
+        assert pool_bars_ago(_pool_aged(n), c) == n
+
+
+def test_freshness_curve():
+    c = _aged_candles()
+    assert pool_freshness(_pool_aged(0), c) == pytest.approx(1.0)
+    # The headline: 20 bars is exactly half weight.
+    assert pool_freshness(_pool_aged(20), c) == pytest.approx(0.5)
+    assert pool_freshness(_pool_aged(POOL_DECAY_BARS), c) == POOL_STALE_FLOOR
+
+
+def test_freshness_decays_monotonically():
+    c = _aged_candles()
+    vals = [pool_freshness(_pool_aged(n), c) for n in (0, 5, 10, 20, 30)]
+    assert all(a >= b for a, b in zip(vals, vals[1:])), vals
+
+
+def test_freshness_never_reaches_zero():
+    # A level defended eight times is still a level. Staleness discounts the
+    # claim "stops rest here", it does not erase the price.
+    c = _aged_candles()
+    for n in (POOL_DECAY_BARS, 100, 5000):
+        assert pool_freshness(_pool_aged(n), c) == POOL_STALE_FLOOR
+        assert POOL_STALE_FLOOR > 0
+
+
+def test_missing_last_ts_counts_as_fresh_not_stale():
+    # Absence of age information must not be read as staleness, or an older
+    # payload would silently lose every pool.
+    c = _aged_candles()
+    assert pool_bars_ago({"price": 1.0, "touches": 5}, c) is None
+    assert pool_freshness({"price": 1.0, "touches": 5}, c) == 1.0
+
+
+@pytest.mark.parametrize("bad", [None, "abc", {}, []])
+def test_malformed_last_ts_is_treated_as_unknown(bad):
+    c = _aged_candles()
+    assert pool_freshness({"price": 1.0, "touches": 5, "last_ts": bad}, c) == 1.0
+
+
+def test_freshness_needs_candles_to_measure_against():
+    assert pool_freshness(_pool_aged(20), []) == 1.0
+
+
+# ── Decay applied to the stop-run penalty ──────────────────────────────────
+
+def _aged_analysis(bars_ago, touches=4):
+    c = _aged_candles()
+    px = c[-1]["close"]
+    atr = px * 0.009
+    return {"candles": c,
+            "liquidity_pools": [{"price": px + atr * 0.18, "touches": touches,
+                                 "last_ts": _LATEST - bars_ago * _INTERVAL}]}
+
+
+def test_stop_run_penalty_decays_with_pool_age():
+    fresh = structure_confluence(_aged_analysis(0), "SHORT")["delta"]
+    mid = structure_confluence(_aged_analysis(20), "SHORT")["delta"]
+    old = structure_confluence(_aged_analysis(40), "SHORT")["delta"]
+    assert fresh < mid < old <= 0, f"{fresh} / {mid} / {old}"
+
+
+def test_the_live_29_bar_pool_is_heavily_discounted():
+    """The reported case: a 4-touch pool 29 bars old was charging full price."""
+    out = structure_confluence(_aged_analysis(29), "SHORT")
+    sr = [f for f in out["factors"] if f["factor"] == "stop_run_risk"]
+    assert sr, "it should still register, just cheaply"
+    assert sr[0]["bars_ago"] == 29
+    assert sr[0]["freshness"] == POOL_STALE_FLOOR
+    assert abs(sr[0]["points"]) <= 2, f"expected a token charge, got {sr[0]['points']}"
+
+
+def test_the_reason_states_the_pool_age():
+    out = structure_confluence(_aged_analysis(29), "SHORT")
+    assert any("29 bars ago" in r for r in out["bull_reasons"]), \
+        "the age must be visible so the discount can be judged"
+
+
+def test_a_fully_discounted_pool_is_recorded_as_stale():
+    # Weak + old + far enough that the discount rounds it to nothing.
+    c = _aged_candles()
+    px, atr = c[-1]["close"], c[-1]["close"] * 0.009
+    a = {"candles": c,
+         "liquidity_pools": [{"price": px + atr * 0.34, "touches": 2,
+                              "last_ts": _LATEST - 60 * _INTERVAL}]}
+    out = structure_confluence(a, "SHORT")
+    kinds = {f["factor"] for f in out["factors"]}
+    assert out["delta"] == 0
+    assert "stop_run_stale" in kinds
+
+
+def test_factors_carry_age_and_freshness():
+    sr = [f for f in structure_confluence(_aged_analysis(10), "SHORT")["factors"]
+          if f["factor"] == "stop_run_risk"][0]
+    assert sr["bars_ago"] == 10
+    assert 0 < sr["freshness"] < 1
+
+
+# ── Decay gates stop WIDENING ──────────────────────────────────────────────
+
+def test_a_stale_pool_cannot_widen_a_stop():
+    # Spending real risk needs a live claim that a sweep is coming.
+    from signals import clear_stop_of_liquidity
+    c = _aged_candles()
+    entry, sl_dist, atr = 64278.446, 643.6, 64266.4 * 0.009
+    stale = {"candles": c,
+             "liquidity_pools": [{"price": entry + sl_dist + atr * 0.05,
+                                  "touches": 8,
+                                  "last_ts": _LATEST - 40 * _INTERVAL}]}
+    r = clear_stop_of_liquidity(stale, entry=entry, sl_dist=sl_dist,
+                                is_long=False, atr=atr, max_sl_abs=entry * 0.02)
+    assert r["moved"] is False and r["blocked"] is False
+    assert r["sl_dist"] == sl_dist
+
+
+def test_a_fresh_pool_still_widens_a_stop():
+    from signals import clear_stop_of_liquidity
+    c = _aged_candles()
+    entry, sl_dist, atr = 64278.446, 643.6, 64266.4 * 0.009
+    fresh = {"candles": c,
+             "liquidity_pools": [{"price": entry + sl_dist + atr * 0.05,
+                                  "touches": 8,
+                                  "last_ts": _LATEST - 2 * _INTERVAL}]}
+    r = clear_stop_of_liquidity(fresh, entry=entry, sl_dist=sl_dist,
+                                is_long=False, atr=atr, max_sl_abs=entry * 0.02)
+    assert r["moved"] is True
+
+
+def test_stop_widening_threshold_is_stricter_than_the_scoring_floor():
+    # A pool may be too stale to move a stop while still worth a small penalty.
+    assert SL_POOL_MIN_FRESHNESS > POOL_STALE_FLOOR

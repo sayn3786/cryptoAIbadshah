@@ -478,6 +478,22 @@ points     = −round(10 × max(closeness, 0.35) × conviction)
 | 0.30 ATR | 3 | −2 |
 | > 0.35 ATR | any | 0 |
 
+**Age discount.** Resting stops are not permanent — orders get filled, cancelled
+or moved — so the penalty is scaled by how long ago the level was last touched:
+
+```
+freshness = max(0.35, 1 − bars_ago / 40)     # 20 bars = exactly half weight
+points    = round(base × freshness)
+```
+
+The floor is deliberately **non-zero**: a level defended eight times is still a
+level even when last defended a while back. Staleness discounts the claim *"stops
+are resting here"*, it does not erase the price. A pool with no `last_ts` scores
+as **fresh** — absence of age information must not read as staleness.
+
+On the reported BTC 2H SHORT the penalising pool was **29 bars old**, which took
+it from −4 to −1.
+
 For a LONG the threatening pool is the equal-**low** cluster at or below price;
 for a SHORT, the equal-**high** cluster at or above.
 
@@ -536,6 +552,7 @@ moves the stop past it with `0.10 ATR` (min 0.15%) of clearance.
 | Only the risk side | Below entry for a LONG, above for a SHORT |
 | Only pools just beyond | A distant pool is not what takes the stop out |
 | Needs 3+ touches | Stricter than the 2 required merely to dock conviction — widening real risk demands a better-defended level |
+| Needs freshness ≥ 0.5 | A **stale** pool cannot widen a stop at all (≈ touched within 20 bars). Spending real risk needs a live claim that a sweep is coming — stricter than the 0.35 scoring floor. |
 
 Exposed on the signal as `stop_liquidity`
 (`{sl_dist, moved, pool_price, touches, blocked, note}`), with the note added to
