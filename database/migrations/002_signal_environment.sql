@@ -29,12 +29,41 @@
 -- The whole thing runs in ONE transaction, so a failure leaves the old index in
 -- place and schema_migrations unchanged.
 --
--- ORDER OF OPERATIONS
--- -------------------
--- Application code probes for this column and writes without it when it is
--- absent, so migrating BEFORE or AFTER deploying both work and neither breaks
--- writes. After migrating, redeploy (or wait for a cold start) so running
--- instances pick the column up.
+-- ORDER OF OPERATIONS  ***  DEPLOY THE CODE FIRST  ***
+-- ----------------------------------------------------
+-- This migration is NOT safe to run ahead of the matching application code.
+--
+-- The pre-002 code sends `ON CONFLICT (symbol, exchange, timeframe,
+-- strategy_name, strategy_version, candle_close_time)`. PostgreSQL infers the
+-- arbiter index by matching that column list EXACTLY — a wider index does not
+-- satisfy it. The moment `signals_idempotency_uidx` is dropped below, every
+-- insert from the old code fails with:
+--
+--     ERROR: there is no unique or exclusion constraint matching the
+--            ON CONFLICT specification
+--
+-- With DB_REQUIRED=true that means publishing stops and /api/recommendations
+-- returns 503. (Verified against PostgreSQL 16, not inferred.)
+--
+-- The NEW code handles both schemas: it probes for the column and targets
+-- whichever idempotency index exists. So:
+--
+--     1. Merge and deploy the application code.
+--     2. Then run this migration.
+--     3. Redeploy, or wait for a cold start, so warm instances re-probe.
+--
+-- IF THIS WAS ALREADY RUN AGAINST THE OLD CODE, writes are failing right now.
+-- Either deploy the new code (the real fix), or restore the narrow index as a
+-- stopgap so the old code works again:
+--
+--     CREATE UNIQUE INDEX IF NOT EXISTS signals_idempotency_uidx
+--         ON signals (symbol, exchange, timeframe,
+--                     strategy_name, strategy_version, candle_close_time);
+--
+-- That stopgap is safe for production but re-imposes cross-environment
+-- uniqueness: while it exists, a preview write for a candle production already
+-- holds raises a duplicate-key error instead of being deduplicated. Drop it
+-- again once the new code is live.
 -- ============================================================================
 
 BEGIN;

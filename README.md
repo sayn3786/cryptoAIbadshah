@@ -117,8 +117,18 @@ Creating the database does not create the tables. Continue below.
 9. Never paste `DATABASE_URL` into a chat, an issue, or a support ticket.
 
 Then repeat steps 4-6 for `database/migrations/002_signal_environment.sql`,
-which tags each signal with the deployment that wrote it. It is additive except
-for one deliberate index replacement — read the header comment before running it.
+which tags each signal with the deployment that wrote it.
+
+> **Deploy the application code BEFORE running 002.** It replaces the
+> idempotency index, and the pre-002 code names the old index's exact columns in
+> its `ON CONFLICT` clause. PostgreSQL infers an arbiter index by matching that
+> list exactly, so once the narrow index is gone every insert from the old code
+> fails with *"there is no unique or exclusion constraint matching the ON
+> CONFLICT specification"* — and with `DB_REQUIRED=true` that means
+> `/api/recommendations` returns 503. The new code targets whichever index
+> exists, so deploy-then-migrate is safe; migrate-then-deploy is not. Recovery
+> if it was run early is in the migration's header comment.
+
 After it applies, `/api/db/health` reports `"environment_tagging": true`.
 
 Re-running either migration is safe (every object uses `IF NOT EXISTS` and the
@@ -220,7 +230,8 @@ How it behaves:
 | Reads | Scoped to the *current* environment by default, so production never serves a preview deploy's signals. `?environment=all` shows everything; `?environment=preview` shows one. |
 | Storage cost | One short text column plus two indexes. |
 | Deployment detail | The branch and commit sha are recorded on the `CREATED` event (`metadata.deployment`), not in a column, and are **not** exposed by `/api/db/health`. |
-| Before the migration | The code probes for the column and writes untagged when it is absent, so deploying before migrating cannot break publishing. |
+| Deploying before migrating | Safe. The code probes for the column and writes untagged while it is absent. |
+| Migrating before deploying | **Not safe** — 002 replaces the idempotency index and the old code's `ON CONFLICT` can no longer infer an arbiter, so every write fails. See the warning under *Running the migration*. |
 
 `/api/db/health` reports `environment` (which deployment answered) and
 `environment_tagging` (whether 002 has been applied). `/api/db/usage` adds
