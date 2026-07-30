@@ -287,3 +287,100 @@ def test_structure_trendline_spans_the_structure_window():
             continue
         assert lo <= ln["anchor"]["timestamp"] <= hi
         assert lo <= ln["end"]["timestamp"] <= hi
+
+
+# ── Pool Distance must report the side a pool ACTUALLY sits on ───────────────
+# Regression: an equal-HIGH that price had already traded above was still
+# labelled "up 0.1 ATR · nearest: above", claiming resting stops overhead when
+# price was already through them. It also disagreed with the confluence scorer,
+# which correctly ignored the breached level.
+def _pool_analysis(price, eqh=None, eql=None, spread=400.0, n=40):
+    candles = []
+    for i in range(n):
+        mid = price
+        candles.append({"timestamp": 1785000000000 + i * 7200000, "open": mid,
+                        "high": mid + spread, "low": mid - spread, "close": mid,
+                        "volume": 100})
+    candles[-1].update(close=price, high=price + 10, low=price - 10)
+    eq = {}
+    if eqh is not None:
+        eq["eqh"] = {"price": eqh, "touches": 10}
+    if eql is not None:
+        eq["eql"] = {"price": eql, "touches": 11}
+    a = _analysis(up=True)
+    a["candles"] = candles
+    a["equal_levels"] = eq
+    return a
+
+
+def test_breached_equal_high_is_not_reported_as_overhead_liquidity():
+    # The live BTC case: eqh 64197 sat BELOW price 64266.4.
+    r = _rows(build_structure_panel(_pool_analysis(64266.4, eqh=64197.0, eql=63365.4)))
+    pd = r["Pool Distance"]
+    assert "up —" in pd["value"], f"nothing is above price, got {pd['value']!r}"
+    assert "nearest: below" in pd["detail"]
+    assert "breached" in pd["detail"], "should say the equal-high was already taken"
+    assert pd["tone"] == "bull"
+
+
+def test_pool_above_price_is_reported_as_above():
+    r = _rows(build_structure_panel(_pool_analysis(64000.0, eqh=64400.0, eql=63000.0)))
+    pd = r["Pool Distance"]
+    assert "up " in pd["value"] and "up —" not in pd["value"]
+    assert "dn " in pd["value"] and "dn —" not in pd["value"]
+    assert "breached" not in pd["detail"], "eqh is genuinely overhead here"
+
+
+def test_nearest_pool_picks_the_genuinely_closer_side():
+    # eqh far above, eql just below -> nearest must be below.
+    r = _rows(build_structure_panel(_pool_analysis(64000.0, eqh=68000.0, eql=63990.0)))
+    assert "nearest: below" in r["Pool Distance"]["detail"]
+    # Mirror.
+    r2 = _rows(build_structure_panel(_pool_analysis(64000.0, eqh=64010.0, eql=60000.0)))
+    assert "nearest: above" in r2["Pool Distance"]["detail"]
+
+
+def test_pool_distance_blank_when_no_levels():
+    assert _rows(build_structure_panel(_pool_analysis(64000.0)))["Pool Distance"]["value"] == "—"
+
+
+# ── Trend State must weight structural EMAs above short-term ────────────────
+# Regression: above EMA7/21 and below EMA50/200 cancelled out, so SuperTrend
+# alone tipped it to "BULLISH" on a chart whose structural trend was bearish
+# and whose published signal was SHORT.
+def _trend_analysis(above, below, supertrend):
+    a = _analysis(up=True)
+    a["ema_trend"] = {"above": above, "below": below,
+                      "trend": "bearish" if below else "bullish"}
+    a["supertrend"] = {"direction": supertrend}
+    return a
+
+
+def test_structural_emas_outweigh_short_term_emas():
+    # The live BTC case: above EMA7/21, below EMA50/200, SuperTrend bullish.
+    r = _rows(build_structure_panel(_trend_analysis([7, 21], [50, 200], "bullish")))
+    assert r["Trend State"]["value"] == "BEARISH", \
+        "below EMA50/200 must outweigh above EMA7/21 plus SuperTrend"
+    assert r["Trend State"]["tone"] == "bear"
+
+
+def test_mirror_case_short_term_bearish_but_structurally_bullish():
+    r = _rows(build_structure_panel(_trend_analysis([50, 200], [7, 21], "bearish")))
+    assert r["Trend State"]["value"] == "BULLISH"
+
+
+def test_full_agreement_still_reads_cleanly():
+    r = _rows(build_structure_panel(_trend_analysis([7, 21, 50, 200], [], "bullish")))
+    assert r["Trend State"]["value"] == "BULLISH"
+    assert r["Trend Power"]["value"] == "100%"
+    rb = _rows(build_structure_panel(_trend_analysis([], [7, 21, 50, 200], "bearish")))
+    assert rb["Trend State"]["value"] == "BEARISH"
+    assert rb["Trend Power"]["value"] == "100%"
+
+
+def test_trend_state_names_its_evidence():
+    d = _rows(build_structure_panel(
+        _trend_analysis([7, 21], [50, 200], "bullish")))["Trend State"]["detail"]
+    assert "above EMA7/EMA21" in d
+    assert "below EMA50/EMA200" in d
+    assert "SuperTrend bullish" in d, "a mixed read must be readable, not just a label"

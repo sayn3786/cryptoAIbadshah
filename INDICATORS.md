@@ -487,11 +487,21 @@ chasing and is not penalised.
 
 **3. BOS persistence** — structure repeatedly taken out, and still holding.
 
+```
+freshness = max(0, 1 − bars_ago / 10)      # same decay window as CHoCH
+points    = round(base × freshness)
+```
+
 | Condition | Points |
 |---|---|
-| BOS aligned with direction, `held` | +3 per break, max **+8** |
-| BOS opposing direction, `held` | −3 per break, max **−6** |
+| BOS aligned with direction, `held` | +3 per break, max **+8**, × freshness |
+| BOS opposing direction, `held` | −3 per break, max **−6**, × freshness |
 | BOS `given back` (level lost again) | **0** — stale context, not a live read |
+| BOS ≥ 10 bars old | **0** — recorded as `bos_stale`, not scored |
+
+A break nine bars back is not the same evidence as one on the last candle.
+Without the decay a stale break moved conviction forever; a 1× break 9 bars ago
+went from −3 to 0.
 
 **Total clamp:** `[−18, +8]`. Asymmetric on purpose — risk should be able to cut
 conviction harder than confirmation can inflate it.
