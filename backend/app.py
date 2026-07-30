@@ -2277,8 +2277,9 @@ def _rec_cache_key() -> str:
     # Bump the version prefix whenever the scoring changes, or the cache would
     # keep serving strengths computed by the OLD rules for the rest of the slot.
     # v36: market-structure confluence (stop-run risk / chase / BOS persistence)
-    # now adjusts strength.
-    return f"v36_struct_{date}_{slot}"
+    #      now adjusts strength.
+    # v37: BOS confluence decays with age, so a stale break no longer scores.
+    return f"v37_struct2_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

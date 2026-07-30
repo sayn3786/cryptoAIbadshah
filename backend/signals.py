@@ -27,6 +27,8 @@ CHASE_MAX_PENALTY    = 8
 # Structure being taken out repeatedly, and still holding.
 BOS_MAX_BONUS        = 8
 BOS_OPPOSED_PENALTY  = 6
+# Age at which a break stops being evidence, matching the CHoCH decay window.
+BOS_DECAY_BARS       = 10
 
 # Asymmetric on purpose: risk should be able to cut conviction harder than
 # confirmation can inflate it.
@@ -125,27 +127,54 @@ def structure_confluence(analysis: Dict, direction: str) -> Dict:
     bos_dir, bos_count = bos.get("direction"), int(bos.get("count") or 0)
     if bos_dir and bos_count:
         aligned = (bos_dir == "bullish") == is_long
+        # Decay with age, exactly as CHoCH does. A break nine bars back is not
+        # the same evidence as one on the last candle; without this a stale
+        # break carried full weight forever.
+        bars_ago = bos.get("bars_ago")
+        freshness = 1.0 if bars_ago is None else max(0.0, 1.0 - bars_ago / BOS_DECAY_BARS)
+        _when = "" if bars_ago is None else f", {bars_ago} bars ago"
+
         if not bos.get("held", True):
             # Given back: explicitly worth nothing. Recorded so the reason why
             # it did not count is visible.
             out["factors"].append({"factor": "bos_given_back", "points": 0,
-                                   "direction": bos_dir, "count": bos_count})
+                                   "direction": bos_dir, "count": bos_count,
+                                   "bars_ago": bars_ago})
+        elif freshness <= 0:
+            # Too old to be evidence either way — recorded, not scored.
+            out["factors"].append({"factor": "bos_stale", "points": 0,
+                                   "direction": bos_dir, "count": bos_count,
+                                   "bars_ago": bars_ago})
         elif aligned:
-            pts = min(BOS_MAX_BONUS, bos_count * 3)
-            delta += pts
-            msg = (f"{bos_count}x {bos_dir} break of structure, still holding — "
-                   f"structure agrees with the {direction} (+{pts} pts)")
-            out["factors"].append({"factor": "bos_aligned", "points": pts,
-                                   "direction": bos_dir, "count": bos_count})
-            (out["bull_reasons"] if is_long else out["bear_reasons"]).append(msg)
+            pts = round(min(BOS_MAX_BONUS, bos_count * 3) * freshness)
+            if pts:
+                delta += pts
+                msg = (f"{bos_count}x {bos_dir} break of structure, still holding{_when} — "
+                       f"structure agrees with the {direction} (+{pts} pts)")
+                out["factors"].append({"factor": "bos_aligned", "points": pts,
+                                       "direction": bos_dir, "count": bos_count,
+                                       "bars_ago": bars_ago,
+                                       "freshness": round(freshness, 2)})
+                (out["bull_reasons"] if is_long else out["bear_reasons"]).append(msg)
+            else:
+                out["factors"].append({"factor": "bos_stale", "points": 0,
+                                       "direction": bos_dir, "count": bos_count,
+                                       "bars_ago": bars_ago})
         else:
-            pts = -min(BOS_OPPOSED_PENALTY, bos_count * 3)
-            delta += pts
-            msg = (f"{bos_count}x {bos_dir} break of structure, still holding — "
-                   f"structure opposes the {direction} ({pts} pts)")
-            out["factors"].append({"factor": "bos_opposed", "points": pts,
-                                   "direction": bos_dir, "count": bos_count})
-            (out["bear_reasons"] if is_long else out["bull_reasons"]).append(msg)
+            pts = -round(min(BOS_OPPOSED_PENALTY, bos_count * 3) * freshness)
+            if pts:
+                delta += pts
+                msg = (f"{bos_count}x {bos_dir} break of structure, still holding{_when} — "
+                       f"structure opposes the {direction} ({pts} pts)")
+                out["factors"].append({"factor": "bos_opposed", "points": pts,
+                                       "direction": bos_dir, "count": bos_count,
+                                       "bars_ago": bars_ago,
+                                       "freshness": round(freshness, 2)})
+                (out["bear_reasons"] if is_long else out["bull_reasons"]).append(msg)
+            else:
+                out["factors"].append({"factor": "bos_stale", "points": 0,
+                                       "direction": bos_dir, "count": bos_count,
+                                       "bars_ago": bars_ago})
 
     out["delta"] = max(STRUCT_ADJ_FLOOR, min(STRUCT_ADJ_CEILING, delta))
     return out

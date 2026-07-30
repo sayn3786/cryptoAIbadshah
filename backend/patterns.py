@@ -1967,6 +1967,27 @@ STRUCTURE_WINDOW_BARS = 30
 # in this market's own units.
 ATR_PERIOD = 14
 
+# Trend-state weights. EMA50/200 define the structural trend; EMA7/21 are
+# short-term and must not be able to cancel them out. Mirrors the signal
+# engine, which scores EMA50/200 at 18 pts and EMA7/21 far lower.
+EMA_STRUCTURAL_WEIGHT = 3      # EMA50 / EMA200
+EMA_SHORT_WEIGHT      = 1      # EMA7 / EMA21
+SUPERTREND_WEIGHT     = 2
+
+
+def _trend_detail(above, below, supertrend) -> str:
+    """Spell out WHICH evidence is on each side, so a mixed read is readable."""
+    def _fmt(periods):
+        return "/".join(f"EMA{p}" for p in sorted(periods, key=int)) if periods else "—"
+    parts = []
+    if above:
+        parts.append(f"above {_fmt(above)}")
+    if below:
+        parts.append(f"below {_fmt(below)}")
+    if supertrend in ("bullish", "bearish"):
+        parts.append(f"SuperTrend {supertrend}")
+    return " · ".join(parts)
+
 
 def average_true_range(candles: List[Dict], period: int = ATR_PERIOD) -> float:
     """
@@ -2025,17 +2046,32 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         rows.append({"label": label, "value": value, "tone": tone, "detail": detail})
 
     # ── Trend state / power ──────────────────────────────────────────────────
+    # EMA50/200 are STRUCTURAL trend; EMA7/21 are short-term noise by
+    # comparison, and the signal engine scores them very differently (EMA50/200
+    # is worth 18 pts). Counting all four equally let price-above-EMA7/21 cancel
+    # price-below-EMA50/200 and print "BULLISH" on a chart whose structural
+    # trend — and whose published signal — were bearish.
     ema   = analysis.get("ema_trend") or {}
     above = ema.get("above", []) or []
     below = ema.get("below", []) or []
     st    = (analysis.get("supertrend") or {}).get("direction")
-    bias  = (len(above) - len(below)) + (1 if st == "bullish" else -1 if st == "bearish" else 0)
+
+    def _ema_weight(period):
+        return EMA_STRUCTURAL_WEIGHT if int(period) >= 50 else EMA_SHORT_WEIGHT
+
+    bias = (sum(_ema_weight(p) for p in above)
+            - sum(_ema_weight(p) for p in below)
+            + (SUPERTREND_WEIGHT if st == "bullish"
+               else -SUPERTREND_WEIGHT if st == "bearish" else 0))
     trend = "BULLISH" if bias > 0 else "BEARISH" if bias < 0 else "NEUTRAL"
-    row("Trend State", trend, "bull" if bias > 0 else "bear" if bias < 0 else "neutral")
-    # power = how much of the available trend evidence agrees
-    _max = len(above) + len(below) + (1 if st in ("bullish", "bearish") else 0)
+    row("Trend State", trend, "bull" if bias > 0 else "bear" if bias < 0 else "neutral",
+        _trend_detail(above, below, st))
+    # power = how much of the available (weighted) trend evidence agrees
+    _max = (sum(_ema_weight(p) for p in above) + sum(_ema_weight(p) for p in below)
+            + (SUPERTREND_WEIGHT if st in ("bullish", "bearish") else 0))
     power = int(round(abs(bias) / _max * 100)) if _max else 0
-    row("Trend Power", f"{power}%", "bull" if bias > 0 else "bear" if bias < 0 else "neutral")
+    row("Trend Power", f"{power}%", "bull" if bias > 0 else "bear" if bias < 0 else "neutral",
+        "weighted: structural EMAs count more than short-term")
 
     # ── Structure bias / last structure event ────────────────────────────────
     ch = analysis.get("choch") or {}
@@ -2109,16 +2145,32 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     atr = average_true_range(candles)
     _eqh = (eq.get("eqh") or {}).get("price")
     _eql = (eq.get("eql") or {}).get("price")
-    if atr > 0 and (_eqh or _eql):
-        _up = f"up {abs(_eqh - price) / atr:.1f} ATR" if _eqh else "up —"
-        _dn = f"dn {abs(price - _eql) / atr:.1f} ATR" if _eql else "dn —"
+
+    # Report each pool by WHERE IT ACTUALLY SITS relative to price, not by which
+    # field it came from. An equal-HIGH that price has already traded above is no
+    # longer overhead liquidity — labelling it "up 0.1 ATR" claimed there were
+    # resting stops just overhead when price was already through them, which is
+    # the opposite of the truth and disagreed with the confluence scorer.
+    _above, _below = [], []
+    for _lv in (_eqh, _eql):
+        if not _lv:
+            continue
+        (_above if _lv > price else _below).append(_lv)
+
+    if atr > 0 and (_above or _below):
+        _up_d = (min(_above) - price) / atr if _above else None      # nearest overhead
+        _dn_d = (price - max(_below)) / atr if _below else None      # nearest underfoot
+        _up = f"up {_up_d:.1f} ATR" if _up_d is not None else "up —"
+        _dn = f"dn {_dn_d:.1f} ATR" if _dn_d is not None else "dn —"
         # Whichever pool is nearer is the more likely draw on price.
-        _near = None
-        if _eqh and _eql:
-            _near = "above" if abs(_eqh - price) < abs(price - _eql) else "below"
+        if _up_d is not None and _dn_d is not None:
+            _near = "above" if _up_d < _dn_d else "below"
+        else:
+            _near = "above" if _up_d is not None else "below"
+        _breached = (_eqh is not None and _eqh <= price and _eql is not None and _eql <= price)
         row("Pool Distance", f"{_up} · {_dn}",
-            "bear" if _near == "above" else "bull" if _near == "below" else "neutral",
-            f"nearest: {_near}" if _near else "")
+            "bear" if _near == "above" else "bull",
+            f"nearest: {_near}" + (" · equal-high already breached" if _breached else ""))
     else:
         row("Pool Distance", "—", "neutral")
 

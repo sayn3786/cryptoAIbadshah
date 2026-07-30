@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 from signals import (                                                 # noqa: E402
-    BOS_MAX_BONUS, BOS_OPPOSED_PENALTY, CHASE_MAX_PENALTY,
+    BOS_DECAY_BARS, BOS_MAX_BONUS, BOS_OPPOSED_PENALTY, CHASE_MAX_PENALTY,
     CHASE_LOWER_PCT, CHASE_UPPER_PCT, STOP_RUN_ATR, STOP_RUN_MAX_PENALTY,
     STOP_RUN_MIN_TOUCHES, STRUCT_ADJ_CEILING, STRUCT_ADJ_FLOOR,
     structure_confluence,
@@ -210,10 +210,10 @@ def test_chase_threshold_boundaries_are_respected():
 
 # ── BOS persistence ─────────────────────────────────────────────────────────
 
-def _with_bos(direction, count=2, held=True):
+def _with_bos(direction, count=2, held=True, bars_ago=2):
     return {"candles": _candles(),
             "bos_streak": {"direction": direction, "count": count, "held": held,
-                           "last_level": 100.0, "bars_ago": 2}}
+                           "last_level": 100.0, "bars_ago": bars_ago}}
 
 
 def test_aligned_holding_bos_is_a_bonus():
@@ -338,3 +338,67 @@ def test_strength_stays_within_bounds():
                                      "touches": 99}},
         })
         assert 0 <= sig["strength"] <= 100
+
+
+# ── BOS freshness decay ─────────────────────────────────────────────────────
+# Regression: a break nine bars old carried the SAME weight as one on the last
+# candle. CHoCH already decays over ten bars; BOS did not decay at all, so stale
+# structure kept moving conviction forever.
+
+def test_bos_bonus_decays_with_age():
+    fresh = structure_confluence(_with_bos("bullish", count=3, bars_ago=0), "LONG")["delta"]
+    mid = structure_confluence(_with_bos("bullish", count=3, bars_ago=5), "LONG")["delta"]
+    old = structure_confluence(_with_bos("bullish", count=3, bars_ago=9), "LONG")["delta"]
+    assert fresh > mid > old >= 0, f"expected decay, got {fresh} / {mid} / {old}"
+
+
+def test_bos_penalty_decays_with_age():
+    fresh = structure_confluence(_with_bos("bearish", count=3, bars_ago=0), "LONG")["delta"]
+    old = structure_confluence(_with_bos("bearish", count=3, bars_ago=9), "LONG")["delta"]
+    assert fresh < old <= 0, f"expected decay, got {fresh} / {old}"
+
+
+def test_bos_older_than_the_decay_window_is_worth_nothing():
+    for age in (BOS_DECAY_BARS, BOS_DECAY_BARS + 5, 99):
+        out = structure_confluence(_with_bos("bullish", count=9, bars_ago=age), "LONG")
+        assert out["delta"] == 0, f"a {age}-bar-old break must not score"
+        stale = [f for f in out["factors"] if f["factor"] == "bos_stale"]
+        assert stale, "the stale break should still be recorded, just not scored"
+        assert stale[0]["points"] == 0
+        assert not out["bull_reasons"] and not out["bear_reasons"]
+
+
+def test_the_live_btc_case_now_scores_zero():
+    """1x bullish BOS, held, 9 bars ago, against a SHORT — was -3, should be 0."""
+    a = _with_bos("bullish", count=1, held=True, bars_ago=9)
+    out = structure_confluence(a, "SHORT")
+    assert out["delta"] == 0
+    assert [f["factor"] for f in out["factors"]] == ["bos_stale"]
+
+
+def test_missing_bars_ago_is_treated_as_fresh():
+    # Older payloads may omit bars_ago; assuming stale would silently drop the
+    # factor, so absence means "no age information" = full weight.
+    a = {"candles": _candles(),
+         "bos_streak": {"direction": "bullish", "count": 2, "held": True}}
+    assert structure_confluence(a, "LONG")["delta"] > 0
+
+
+def test_factors_record_age_and_freshness():
+    out = structure_confluence(_with_bos("bullish", count=3, bars_ago=4), "LONG")
+    f = [x for x in out["factors"] if x["factor"] == "bos_aligned"][0]
+    assert f["bars_ago"] == 4
+    assert 0 < f["freshness"] < 1
+
+
+def test_reason_text_states_the_age():
+    out = structure_confluence(_with_bos("bullish", count=3, bars_ago=3), "LONG")
+    assert any("3 bars ago" in r for r in out["bull_reasons"]), \
+        "the reason must say how old the break is, so it can be judged"
+
+
+def test_given_back_beats_freshness_check():
+    # A given-back break is worth nothing even when it is brand new.
+    out = structure_confluence(_with_bos("bullish", count=5, held=False, bars_ago=0), "LONG")
+    assert out["delta"] == 0
+    assert [f["factor"] for f in out["factors"]] == ["bos_given_back"]
