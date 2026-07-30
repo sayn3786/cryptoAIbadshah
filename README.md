@@ -272,7 +272,24 @@ A signal that fails **price-structure validation** is never published under
 either setting — that is broken data, not a risky trade.
 
 Error codes: `DB_NOT_CONFIGURED`, `DB_WRITE_FAILED`, `DB_UNAVAILABLE`,
-`NO_CLOSED_CANDLE`, `INVALID_SIGNAL`, `PERSISTENCE_ERROR`.
+`DB_NOT_MIGRATED`, `DB_SCHEMA_UNREADABLE`, `NO_CLOSED_CANDLE`, `INVALID_SIGNAL`,
+`PERSISTENCE_ERROR`.
+
+### Reading `/api/db/health`
+
+`reachable` and `migrated` are reported separately, because they need different
+fixes:
+
+| `error_code` | Means | Fix |
+|---|---|---|
+| `DB_NOT_CONFIGURED` | no `DATABASE_URL` | set it, redeploy |
+| `DB_UNAVAILABLE` | cannot connect | check the URL, the Neon project, and that the variable is enabled for this environment |
+| `DB_NOT_MIGRATED` | **connects fine**, tables absent | run the migration |
+| `DB_SCHEMA_UNREADABLE` | connects, cannot inspect schema | check the role's privileges on `public` |
+
+`"reachable": true` with `"migrated": false` is the expected state immediately
+after wiring `DATABASE_URL` but **before** running the migration. It is not a
+connection fault.
 
 ## Free-tier storage
 

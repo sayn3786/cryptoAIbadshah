@@ -3022,10 +3022,21 @@ def api_signal_postmortem(signal_id):
 @app.get("/api/db/health")
 def api_db_health():
     """
-    Connectivity + applied migrations.
+    Connectivity + migration state, reported separately.
+
+    `reachable` and `migrated` are distinct fields with distinct error codes,
+    because they need different fixes:
+
+      DB_NOT_CONFIGURED  — no DATABASE_URL; set it and redeploy
+      DB_UNAVAILABLE     — cannot connect; check the URL / Neon / environment
+      DB_NOT_MIGRATED    — connects fine, tables absent; RUN THE MIGRATION
+      DB_SCHEMA_UNREADABLE — connects, but the role cannot inspect the schema
+
+    Still 503 for anything but fully healthy, since persistence is genuinely
+    unavailable in every one of those states — the code says which.
 
     Deliberately exposes NO connection string, host, username, password or
-    database name — only whether it is configured, reachable and migrated.
+    database name.
     """
     import db as _db
     info = _db.healthcheck()

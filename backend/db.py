@@ -28,9 +28,16 @@ from typing import Optional
 __all__ = [
     "DatabaseNotConfigured", "DatabaseUnavailable",
     "db_configured", "db_required", "db_enabled",
-    "get_engine", "session_scope", "healthcheck", "reset_engine",
+    "get_engine", "session_scope", "healthcheck", "reset_engine", "EXPECTED_TABLES",
     "sanitize_db_error", "safe_dsn_summary",
 ]
+
+
+# Tables the initial migration creates. Used by the health probe to tell
+# "connected but not migrated" apart from "cannot connect".
+EXPECTED_TABLES = ("schema_migrations", "signals", "signal_targets",
+                   "signal_indicator_snapshots", "signal_events",
+                   "signal_postmortems")
 
 
 class DatabaseNotConfigured(RuntimeError):
@@ -245,26 +252,69 @@ def session_scope():
 
 def healthcheck() -> dict:
     """
-    Connectivity probe for the health endpoint.
+    Connectivity + migration probe for the health endpoint.
+
+    Reports REACHABILITY and MIGRATION STATE separately, because they are
+    different problems with different fixes:
+
+      * not reachable  -> check DATABASE_URL, the Neon project, the network
+      * reachable but not migrated -> run the migration
+
+    An earlier version ran `SELECT 1` and the migrations query in one try block,
+    so a perfectly healthy but unmigrated database reported DB_UNAVAILABLE and
+    sent you looking for a connection fault that did not exist.
 
     Returns a dict that is always safe to serialise to a client: no DSN, host,
-    user or password, and any driver error is sanitized.
+    user or password, and any driver error is sanitized away entirely.
     """
     info = safe_dsn_summary()
     if not info["configured"]:
-        return {**info, "ok": False, "error_code": "DB_NOT_CONFIGURED"}
+        return {**info, "ok": False, "reachable": False, "migrated": False,
+                "error_code": "DB_NOT_CONFIGURED",
+                "hint": "Set DATABASE_URL in the server environment, then redeploy."}
+
+    from sqlalchemy import text
+
+    # ── 1. Can we reach it at all? ───────────────────────────────────────────
     try:
-        from sqlalchemy import text
         with session_scope() as s:
             s.execute(text("SELECT 1"))
-            applied = s.execute(text(
-                "SELECT version FROM schema_migrations ORDER BY version"
-            )).scalars().all()
-        return {**info, "ok": True, "migrations_applied": list(applied)}
     except Exception as exc:
-        # The health endpoint is reachable without auth, so it returns a CODE
-        # ONLY. Even a sanitized driver message can disclose infrastructure
-        # (hostnames, database names, driver versions). The detail goes to the
-        # server log, where operators can see it and clients cannot.
-        print(f"[db] healthcheck failed: {sanitize_db_error(exc)}")
-        return {**info, "ok": False, "error_code": "DB_UNAVAILABLE"}
+        print(f"[db] not reachable: {sanitize_db_error(exc)}")
+        return {**info, "ok": False, "reachable": False, "migrated": False,
+                "error_code": "DB_UNAVAILABLE",
+                "hint": "Check DATABASE_URL, the Neon project state and that the "
+                        "variable is enabled for this environment."}
+
+    # ── 2. Reachable. Has the migration been run? ───────────────────────────
+    try:
+        with session_scope() as s:
+            # Unqualified names resolve through search_path, so this works
+            # whether the tables live in public or in a custom schema — some
+            # Neon setups use one, and tests isolate into a throwaway schema.
+            has_table = s.execute(text(
+                "SELECT to_regclass('schema_migrations') IS NOT NULL"
+            )).scalar()
+            applied = list(s.execute(text(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            )).scalars().all()) if has_table else []
+            missing = [t for t in EXPECTED_TABLES if not s.execute(text(
+                "SELECT to_regclass(:t) IS NOT NULL"), {"t": t}).scalar()]
+    except Exception as exc:
+        print(f"[db] migration probe failed: {sanitize_db_error(exc)}")
+        return {**info, "ok": False, "reachable": True, "migrated": False,
+                "error_code": "DB_SCHEMA_UNREADABLE",
+                "hint": "Connected, but the schema could not be inspected. Check "
+                        "the role's privileges on the public schema."}
+
+    if missing:
+        return {**info, "ok": False, "reachable": True, "migrated": False,
+                "error_code": "DB_NOT_MIGRATED",
+                "migrations_applied": applied,
+                "missing_tables": missing,
+                "hint": "Connection works. Run database/migrations/"
+                        "001_initial_signal_schema.sql once (Neon Console -> SQL "
+                        "Editor), then verify with database/verify_schema.sql."}
+
+    return {**info, "ok": True, "reachable": True, "migrated": True,
+            "migrations_applied": applied}

@@ -239,3 +239,49 @@ def test_usage_report_is_internal_only(client, fake, monkeypatch):
     monkeypatch.setenv("CRON_SECRET", "right")
     assert client.get("/api/db/usage",
                       headers={"x-cron-secret": "right"}).status_code == 200
+
+
+# ── Health route must surface the migration state distinctly ────────────────
+
+def test_health_route_reports_not_migrated_as_its_own_code(client, monkeypatch):
+    import db as _db
+    monkeypatch.setattr(_db, "healthcheck", lambda: {
+        "configured": True, "required": False, "driver": "psycopg3",
+        "pooled_endpoint": True, "tls": True,
+        "ok": False, "reachable": True, "migrated": False,
+        "error_code": "DB_NOT_MIGRATED", "migrations_applied": [],
+        "missing_tables": ["signals"],
+        "hint": "Connection works. Run database/migrations/… once.",
+    })
+    r = client.get("/api/db/health")
+    body = r.get_json()
+    assert r.status_code == 503, "persistence really is unavailable"
+    assert body["reachable"] is True, "must not look like a connection fault"
+    assert body["error_code"] == "DB_NOT_MIGRATED"
+    assert "Run database/migrations" in body["hint"]
+
+
+def test_health_route_reports_unreachable_distinctly(client, monkeypatch):
+    import db as _db
+    monkeypatch.setattr(_db, "healthcheck", lambda: {
+        "configured": True, "required": False, "driver": "psycopg3",
+        "pooled_endpoint": True, "tls": True,
+        "ok": False, "reachable": False, "migrated": False,
+        "error_code": "DB_UNAVAILABLE", "hint": "Check DATABASE_URL…",
+    })
+    body = client.get("/api/db/health").get_json()
+    assert body["reachable"] is False
+    assert body["error_code"] == "DB_UNAVAILABLE"
+
+
+def test_health_route_200_only_when_fully_healthy(client, monkeypatch):
+    import db as _db
+    monkeypatch.setattr(_db, "healthcheck", lambda: {
+        "configured": True, "required": True, "driver": "psycopg3",
+        "pooled_endpoint": True, "tls": True,
+        "ok": True, "reachable": True, "migrated": True,
+        "migrations_applied": ["001"],
+    })
+    r = client.get("/api/db/health")
+    assert r.status_code == 200
+    assert r.get_json()["migrations_applied"] == ["001"]

@@ -40,14 +40,22 @@ def _guard_not_production(url: str) -> None:
         pytest.fail("TEST_DATABASE_URL looks like a production database — refusing to run")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def engine():
+    """
+    The engine the code under test will actually use.
+
+    Function-scoped and resolved through db.get_engine() every time, because
+    tests that simulate an outage call reset_engine(). A module-scoped object
+    would go stale after that, and any `connect` listener pinned on it (see the
+    `store` fixture's search_path) would silently stop applying to the engine
+    the code is really talking to.
+    """
     _guard_not_production(TEST_URL)
     os.environ["DATABASE_URL"] = TEST_URL
     import db
     db.reset_engine()
-    eng = db.get_engine()
-    yield eng
+    yield db.get_engine()
     db.reset_engine()
 
 
@@ -59,6 +67,7 @@ def store(engine):
     Isolating by schema (rather than by transaction) means the tests exercise
     the real COMMIT path — which is exactly what "the signal was persisted"
     has to mean.
+
     """
     from sqlalchemy import text
     schema = f"t_{uuid.uuid4().hex[:12]}"
@@ -567,3 +576,75 @@ def test_database_outage_produces_a_controlled_failure(monkeypatch):
         db.reset_engine()
         monkeypatch.undo()
         db.reset_engine()
+
+
+# ── Health probe must separate reachability from migration state ────────────
+# Regression: `SELECT 1` and the migrations query ran in one try block, so a
+# perfectly healthy but UNMIGRATED database reported DB_UNAVAILABLE — sending
+# you to look for a connection fault that did not exist.
+
+def test_health_on_a_reachable_but_unmigrated_database(engine):
+    """The reported preview state: connected fine, migration never run."""
+    import db
+    from sqlalchemy import text
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+    # Point search_path at an EMPTY schema and hide public, so nothing is found.
+    from sqlalchemy import event
+
+    def _empty_path(dbapi_conn, _rec):
+        with dbapi_conn.cursor() as cur:
+            cur.execute(f'SET search_path TO "{schema}"')
+
+    event.listen(engine, "connect", _empty_path)
+    try:
+        h = db.healthcheck()
+        assert h["reachable"] is True, "the connection itself works"
+        assert h["migrated"] is False
+        assert h["ok"] is False
+        assert h["error_code"] == "DB_NOT_MIGRATED", \
+            "must NOT be reported as an unreachable database"
+        assert h["missing_tables"], "say which tables are absent"
+        assert "SQL Editor" in h["hint"], "the hint must be actionable"
+    finally:
+        event.remove(engine, "connect", _empty_path)
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
+
+
+def test_health_on_a_fully_migrated_database(store, engine):
+    import db
+    h = db.healthcheck()
+    assert h["ok"] is True, f"unexpected: {h}"
+    assert h["reachable"] is True and h["migrated"] is True
+    assert "001" in h["migrations_applied"]
+    assert "error_code" not in h
+    assert "missing_tables" not in h
+
+
+def test_health_still_flags_a_genuinely_unreachable_database(monkeypatch):
+    import db
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:secret@127.0.0.1:1/x?sslmode=disable&connect_timeout=1")
+    db.reset_engine()
+    try:
+        h = db.healthcheck()
+        assert h["reachable"] is False and h["migrated"] is False
+        assert h["error_code"] == "DB_UNAVAILABLE"
+        assert "secret" not in repr(h), "still must not leak the password"
+    finally:
+        db.reset_engine()
+        monkeypatch.undo()
+        db.reset_engine()
+
+
+def test_health_reports_expected_tables_consistently_with_the_migration(engine):
+    """EXPECTED_TABLES must match what the migration actually creates."""
+    import db
+    from sqlalchemy import text
+    sql = open(MIGRATION, encoding="utf-8").read()
+    for table in db.EXPECTED_TABLES:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, \
+            f"{table} is expected by the health probe but not created by the migration"
