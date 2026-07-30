@@ -281,3 +281,64 @@ def test_health_reports_the_failure_class_when_unreachable(monkeypatch):
         assert "hunter2" not in repr(h)
     finally:
         db.reset_engine()
+
+
+# ── Which database am I actually talking to? ────────────────────────────────
+# Production reported DB_NOT_MIGRATED with every table absent, while the Neon
+# branch that had been migrated clearly had them. Nothing in the health output
+# could tell the two targets apart, so the mismatch was invisible.
+
+_PROD    = "postgresql://u:pw@ep-prod-aaa-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+_PREVIEW = "postgresql://u:pw@ep-prev-bbb-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+_PROD_ROTATED = "postgresql://u:NEWpw@ep-prod-aaa-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+
+
+def _summary(url, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", url)
+    return db.safe_dsn_summary()
+
+
+def test_different_branches_have_different_fingerprints(monkeypatch):
+    a = _summary(_PROD, monkeypatch)["target_fingerprint"]
+    b = _summary(_PREVIEW, monkeypatch)["target_fingerprint"]
+    assert a and b and a != b, "two Neon branches must be distinguishable"
+
+
+def test_the_same_host_fingerprints_identically_across_a_password_rotation(monkeypatch):
+    a = _summary(_PROD, monkeypatch)["target_fingerprint"]
+    b = _summary(_PROD_ROTATED, monkeypatch)["target_fingerprint"]
+    assert a == b, "the fingerprint identifies the target, not the credential"
+
+
+def test_the_database_name_is_reported(monkeypatch):
+    assert _summary(_PROD, monkeypatch)["database"] == "neondb"
+
+
+def test_the_fingerprint_does_not_leak_the_host_or_password(monkeypatch):
+    blob = repr(_summary(_PROD, monkeypatch))
+    for secret in ("neon.tech", "ep-prod-aaa", "pw", "u:"):
+        assert secret not in blob, f"{secret!r} leaked into the health summary"
+
+
+def test_the_fingerprint_is_not_reversible(monkeypatch):
+    fp = _summary(_PROD, monkeypatch)["target_fingerprint"]
+    assert len(fp) == 12 and all(c in "0123456789abcdef" for c in fp)
+    assert "neon" not in fp and "prod" not in fp
+
+
+@pytest.mark.parametrize("url", ["", "not-a-url", "postgresql://", "postgresql:///db"])
+def test_unusable_urls_fingerprint_to_none_without_raising(monkeypatch, url):
+    s = _summary(url, monkeypatch)
+    assert s["target_fingerprint"] is None
+
+
+def test_health_carries_the_fingerprint_so_environments_can_be_compared(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL",
+                       "postgresql://u:pw@127.0.0.1:1/neondb?sslmode=disable&connect_timeout=1")
+    db.reset_engine()
+    try:
+        h = db.healthcheck()
+        assert h["target_fingerprint"], "must be present even when unreachable"
+        assert h["database"] == "neondb"
+    finally:
+        db.reset_engine()
