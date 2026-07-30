@@ -19,11 +19,13 @@ Design notes
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import threading
 from contextlib import contextmanager
 from typing import Optional
+from urllib.parse import urlsplit
 
 __all__ = [
     "DatabaseNotConfigured", "DatabaseUnavailable",
@@ -170,12 +172,51 @@ def classify_db_failure(exc: BaseException) -> str:
     return "other"
 
 
+def _target_fingerprint(raw: str) -> Optional[str]:
+    """
+    Short one-way hash of the host this environment connects to.
+
+    Exists to answer "am I talking to the SAME database as that other
+    environment?" — a question that cost real confusion when production turned
+    out to be pointed at a different Neon branch than the one that had been
+    migrated. Comparing fingerprints settles it in one glance.
+
+    A hash, not the host: it permits comparison and nothing else. You cannot
+    recover the hostname from it, so it is safe on an unauthenticated endpoint.
+    """
+    if not raw:
+        return None
+    try:
+        host = urlsplit(raw).hostname or ""
+    except ValueError:
+        return None
+    if not host:
+        return None
+    return hashlib.sha256(host.encode("utf-8")).hexdigest()[:12]
+
+
+def _target_database(raw: str) -> Optional[str]:
+    """
+    The database NAME (e.g. `neondb`). Not a credential, and knowing it is often
+    the difference between migrating the right database and the wrong one.
+    """
+    if not raw:
+        return None
+    try:
+        path = (urlsplit(raw).path or "").lstrip("/")
+    except ValueError:
+        return None
+    return path or None
+
+
 def safe_dsn_summary() -> dict:
     """
     Non-identifying description of the configured target, for health output.
 
-    Deliberately excludes host, username, password, database name and the
-    connection string itself — a health endpoint is often public.
+    Excludes the host, username, password and the connection string itself — a
+    health endpoint is often public. Includes a HASHED host fingerprint and the
+    database name, which are safe and make "which database is this?" answerable
+    without revealing where it lives.
     """
     raw = _env("DATABASE_URL")
     return {
@@ -184,6 +225,9 @@ def safe_dsn_summary() -> dict:
         "driver":     "psycopg3" if raw else None,
         "pooled_endpoint": ("-pooler." in raw) if raw else None,
         "tls":        ("sslmode=disable" not in raw) if raw else None,
+        # Compare these across environments to see whether they share a database.
+        "target_fingerprint": _target_fingerprint(raw),
+        "database":           _target_database(raw),
     }
 
 

@@ -314,6 +314,33 @@ host, database name or credential on this unauthenticated endpoint.
 after wiring `DATABASE_URL` but **before** running the migration. It is not a
 connection fault.
 
+### Which database is this environment using?
+
+`/api/db/health` also returns `target_fingerprint` (a short one-way hash of the
+host) and `database` (the database name). Compare the fingerprint across
+environments:
+
+```
+production : "target_fingerprint": "157cdc35b389", "database": "neondb"
+preview    : "target_fingerprint": "9ee3912dbb0d", "database": "neondb"
+```
+
+**Different fingerprints mean different databases** — so migrating one does not
+migrate the other. This matters because Vercel's Neon integration creates an
+isolated branch per preview deployment, and `DATABASE_URL` can differ per
+environment. Production reporting `DB_NOT_MIGRATED` while a branch you migrated
+clearly has the tables means production is pointed somewhere else.
+
+The fingerprint survives a password rotation (it identifies the target, not the
+credential) and cannot be reversed to a hostname, so it is safe on this
+unauthenticated endpoint.
+
+**To migrate the database production actually uses:** reveal `DATABASE_URL` in
+Vercel → Settings → Environment Variables (Production scope), find the matching
+branch in the Neon console via **Connect**, and run the migration on *that*
+branch. Then re-check health — `migrated` must become `true` with the SAME
+fingerprint.
+
 ## Free-tier storage
 
 Phase 1 is deliberately frugal:
