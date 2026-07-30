@@ -445,6 +445,63 @@ points    = max(8, round(25 × (strength − 55) / 45))
 
 ---
 
+### Market-Structure Confluence · `pattern`
+*Applied to **strength**, after direction is settled. Never changes direction —
+resting stops below a LONG are a reason to size down or wait, not to go short.*
+
+These three reads are also what the Market Structure panel displays; the panel
+and the score share `average_true_range()` and `structure_range()` so the
+numbers on screen are the numbers being scored.
+
+**1. Stop-run risk** — a liquidity pool (equal highs/lows) sitting *against* the
+trade within `0.35 ATR`. That is where the stops of everyone already positioned
+rest, and price tends to take them first. Needs ≥ 2 touches; a single touch is
+not a pool.
+
+```
+closeness  = 1 − (distance_atr / 0.35)          # 1.0 when at price
+conviction = min(1.0, touches / 5)              # 5+ touches = full weight
+points     = −round(10 × max(closeness, 0.35) × conviction)
+```
+
+| Pool distance | Touches | Points |
+|---|---|---|
+| 0.05 ATR | 5 | −9 |
+| 0.30 ATR | 3 | −2 |
+| > 0.35 ATR | any | 0 |
+
+For a LONG the threatening pool is the equal-**low** cluster at or below price;
+for a SHORT, the equal-**high** cluster at or above.
+
+**2. Range chase** — entering where the move has already happened, measured on
+the same 30-bar window the panel reports.
+
+| Condition | Points |
+|---|---|
+| LONG, range position ≥ 80% | −1 to −8, scaling to the extreme |
+| SHORT, range position ≤ 20% | −1 to −8, scaling to the extreme |
+| Anything between | 0 |
+
+A LONG at the range *low* (or a SHORT at the range high) is the opposite of
+chasing and is not penalised.
+
+**3. BOS persistence** — structure repeatedly taken out, and still holding.
+
+| Condition | Points |
+|---|---|
+| BOS aligned with direction, `held` | +3 per break, max **+8** |
+| BOS opposing direction, `held` | −3 per break, max **−6** |
+| BOS `given back` (level lost again) | **0** — stale context, not a live read |
+
+**Total clamp:** `[−18, +8]`. Asymmetric on purpose — risk should be able to cut
+conviction harder than confirmation can inflate it.
+
+Exposed on the signal as `structure_adjustment` (signed delta) and
+`structure_factors` (per-factor breakdown), and the individual reasons appear in
+the normal bullish/bearish factor lists.
+
+---
+
 ### BTC-Only Indicators
 
 These only score when the symbol is `BTCUSDT`.

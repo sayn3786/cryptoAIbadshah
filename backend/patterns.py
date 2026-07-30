@@ -1962,6 +1962,54 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
 # values so a 1D vs 1W difference reads as scale, not contradiction.
 STRUCTURE_WINDOW_BARS = 30
 
+# ATR period used for pool-distance measurement. Percent alone is
+# scale-dependent; ATR says whether a pool is "one candle away" or "a week away"
+# in this market's own units.
+ATR_PERIOD = 14
+
+
+def average_true_range(candles: List[Dict], period: int = ATR_PERIOD) -> float:
+    """
+    Wilder true range, simple-averaged over `period` bars. 0.0 when unmeasurable.
+
+    Shared by the status panel and the confluence scorer on purpose: if the
+    panel showed "0.3 ATR" while the score measured something else, the two
+    would disagree on screen and be impossible to reconcile.
+    """
+    if not candles or len(candles) < 2:
+        return 0.0
+    tr = []
+    for i in range(1, len(candles)):
+        h, l = candles[i]["high"], candles[i]["low"]
+        pc = candles[i - 1]["close"]
+        tr.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if not tr:
+        return 0.0
+    window = tr[-period:]
+    return sum(window) / len(window)
+
+
+def structure_range(candles: List[Dict], bars: int = STRUCTURE_WINDOW_BARS) -> Dict:
+    """
+    Recent swing envelope and where price sits inside it.
+
+    Returns {"high", "low", "bars", "position_pct", "midline"} — position_pct is
+    None when the range has no width. Same window the panel reports, so
+    "UPPER 85%" on screen and the chase penalty are the same measurement.
+    """
+    win = (candles or [])[-bars:]
+    if not win:
+        return {"high": None, "low": None, "bars": 0, "position_pct": None, "midline": None}
+    hi = max(c["high"] for c in win)
+    lo = min(c["low"] for c in win)
+    price = win[-1]["close"]
+    rng = hi - lo
+    return {
+        "high": hi, "low": lo, "bars": len(win),
+        "position_pct": ((price - lo) / rng * 100) if rng > 0 else None,
+        "midline": (hi + lo) / 2.0,
+    }
+
 
 def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     candles = analysis.get("candles") or []
@@ -2032,10 +2080,10 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         row("Alignment", "—", "neutral")
 
     # ── Structure high / low (recent swing envelope) ─────────────────────────
-    win = candles[-STRUCTURE_WINDOW_BARS:]
-    _n  = len(win)
-    s_hi = max(c["high"] for c in win)
-    s_lo = min(c["low"]  for c in win)
+    _rng_info = structure_range(candles)
+    _n   = _rng_info["bars"]
+    s_hi = _rng_info["high"]
+    s_lo = _rng_info["low"]
     # Name the lookback. The same price can sit HIGH in a 30-bar range and LOW in
     # a longer one, so 1D and 1W legitimately differ — without the window shown
     # that reads as a contradiction rather than a multi-timeframe picture.
@@ -2058,11 +2106,7 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     # ── Pool distance — how far the nearest liquidity sits, in ATR ───────────
     # Percent alone is scale-dependent; ATR says whether a pool is "one candle
     # away" or "a week away" in this market's own units.
-    _tr = []
-    for i in range(1, len(candles)):
-        h, l, pc = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
-        _tr.append(max(h - l, abs(h - pc), abs(l - pc)))
-    atr = (sum(_tr[-14:]) / len(_tr[-14:])) if _tr else 0.0
+    atr = average_true_range(candles)
     _eqh = (eq.get("eqh") or {}).get("price")
     _eql = (eq.get("eql") or {}).get("price")
     if atr > 0 and (_eqh or _eql):
