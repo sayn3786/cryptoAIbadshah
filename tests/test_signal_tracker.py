@@ -245,6 +245,121 @@ def test_a_symbol_with_no_price_still_renders():
     assert view["live"][0]["move_pct"] is None
 
 
+# ── Publication batches ─────────────────────────────────────────────────────
+
+SGT = timezone(timedelta(hours=8))
+
+
+def _at(y, m, d, hh, mm=0):
+    """A wall-clock SGT moment, as the UTC instant the database would store."""
+    return datetime(y, m, d, hh, mm, tzinfo=SGT).astimezone(timezone.utc)
+
+
+@pytest.mark.parametrize("hour,expected", [
+    (8, "8:00 AM"), (12, "8:00 AM"), (15, "8:00 AM"),
+    (16, "4:00 PM"), (19, "4:00 PM"),
+    (20, "8:00 PM"), (23, "8:00 PM"),
+])
+def test_a_signal_lands_in_the_slot_it_was_published_in(hour, expected):
+    slot = tracker.slot_for(_at(2026, 3, 5, hour))
+    assert slot["label"] == expected
+    assert slot["date_label"] == "Mar 05, 2026"
+
+
+@pytest.mark.parametrize("hour", [0, 3, 7])
+def test_the_small_hours_belong_to_the_previous_evening_batch(hour):
+    # 00:00-07:59 SGT is served the previous 8pm recommendation set, so a signal
+    # written then is part of THAT batch, not a new day's.
+    slot = tracker.slot_for(_at(2026, 3, 5, hour))
+    assert slot["label"] == "8:00 PM"
+    assert slot["date_label"] == "Mar 04, 2026", "the previous day's evening slot"
+    assert slot["key"] == "20260304-20"
+
+
+def test_slot_boundaries_are_exact():
+    assert tracker.slot_for(_at(2026, 3, 5, 7, 59))["key"] == "20260304-20"
+    assert tracker.slot_for(_at(2026, 3, 5, 8, 0))["key"] == "20260305-08"
+    assert tracker.slot_for(_at(2026, 3, 5, 15, 59))["key"] == "20260305-08"
+    assert tracker.slot_for(_at(2026, 3, 5, 16, 0))["key"] == "20260305-16"
+    assert tracker.slot_for(_at(2026, 3, 5, 19, 59))["key"] == "20260305-16"
+    assert tracker.slot_for(_at(2026, 3, 5, 20, 0))["key"] == "20260305-20"
+
+
+def test_the_stored_utc_instant_is_read_in_sgt():
+    # 15:00 UTC is 23:00 SGT — the same day's 8pm batch, not the afternoon one.
+    slot = tracker.slot_for(datetime(2026, 3, 5, 15, tzinfo=timezone.utc))
+    assert slot["title"] == "Mar 05 · 8:00 PM SGT"
+
+
+def test_slot_keys_sort_chronologically_as_plain_strings():
+    keys = [tracker.slot_for(_at(2026, 3, d, h))["key"]
+            for d, h in ((4, 20), (5, 8), (5, 16), (5, 20), (12, 8))]
+    assert keys == sorted(keys)
+
+
+def test_a_row_carries_its_batch():
+    row = tracker.build_row(_sig(generated_at=_at(2026, 3, 5, 21)),
+                            _targets(110), now=NOW)
+    assert row["slot"]["title"] == "Mar 05 · 8:00 PM SGT"
+
+
+def test_a_row_with_no_timestamp_has_no_slot_rather_than_a_wrong_one():
+    row = tracker.build_row(_sig(generated_at=None), _targets(110), now=NOW)
+    assert row["slot"] is None
+
+
+def test_signals_are_grouped_into_their_batches_newest_first():
+    live = [_sig(id="a", generated_at=_at(2026, 3, 5, 20, 5), targets=_targets(110)),
+            _sig(id="b", generated_at=_at(2026, 3, 5, 20, 8), targets=_targets(110)),
+            _sig(id="c", generated_at=_at(2026, 3, 5, 16, 2), targets=_targets(110)),
+            _sig(id="d", generated_at=_at(2026, 3, 4, 8, 1), targets=_targets(110))]
+    batches = tracker.build_tracker(live, [], now=NOW)["live_batches"]
+
+    assert [b["title"] for b in batches] == [
+        "Mar 05 · 8:00 PM SGT", "Mar 05 · 4:00 PM SGT", "Mar 04 · 8:00 AM SGT"]
+    assert [b["count"] for b in batches] == [2, 1, 1]
+    assert {r["signal_id"] for r in batches[0]["rows"]} == {"a", "b"}
+
+
+def test_every_row_appears_in_exactly_one_batch():
+    live = [_sig(id=str(i), generated_at=_at(2026, 3, 5, h), targets=_targets(110))
+            for i, h in enumerate((8, 9, 16, 20, 23))]
+    view = tracker.build_tracker(live, [], now=NOW)
+    grouped = [r["signal_id"] for b in view["live_batches"] for r in b["rows"]]
+    assert sorted(grouped) == sorted(r["signal_id"] for r in view["live"])
+    assert len(grouped) == len(set(grouped)), "no row may be listed twice"
+
+
+def test_a_row_with_no_date_is_kept_in_an_ungrouped_batch_at_the_end():
+    # Hiding a signal because its timestamp could not be read would be the worst
+    # possible failure for a tracking view.
+    live = [_sig(id="ok", generated_at=_at(2026, 3, 5, 20), targets=_targets(110)),
+            _sig(id="odd", generated_at=None, targets=_targets(110))]
+    batches = tracker.build_tracker(live, [], now=NOW)["live_batches"]
+    assert batches[-1]["title"] == "Ungrouped"
+    assert [r["signal_id"] for r in batches[-1]["rows"]] == ["odd"]
+
+
+def test_each_batch_carries_its_own_scoreboard():
+    closed = [_closed("w1", "TP_HIT", "110", 1), _closed("w2", "TP_HIT", "110", 1),
+              _closed("l1", "SL_HIT", "95", 1)]
+    for r, hour in zip(closed, (20, 20, 16)):
+        r["generated_at"] = _at(2026, 3, 5, hour)
+    batches = tracker.build_tracker([], closed, now=NOW)["closed_batches"]
+    evening = next(b for b in batches if b["label"] == "8:00 PM")
+    afternoon = next(b for b in batches if b["label"] == "4:00 PM")
+    assert (evening["summary"]["wins"], evening["summary"]["losses"]) == (2, 0)
+    assert (afternoon["summary"]["wins"], afternoon["summary"]["losses"]) == (0, 1)
+    assert evening["summary"]["win_rate_pct"] == 100.0
+
+
+def test_a_live_batch_scoreboard_counts_nothing_yet():
+    live = [_sig(id="a", generated_at=_at(2026, 3, 5, 20), targets=_targets(110))]
+    batch = tracker.build_tracker(live, [], now=NOW)["live_batches"][0]
+    assert batch["summary"]["closed"] == 0
+    assert batch["summary"]["win_rate_pct"] is None
+
+
 # ── The scoreboard ──────────────────────────────────────────────────────────
 
 def test_win_rate_counts_only_decided_trades():

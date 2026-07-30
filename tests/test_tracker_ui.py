@@ -83,6 +83,44 @@ def test_the_ui_never_writes():
         assert forbidden not in block, "the tracker view must stay read-only"
 
 
+# ── Publication batches ─────────────────────────────────────────────────────
+
+def test_rows_are_rendered_grouped_into_batches():
+    block = JS[JS.index("function _tkBatches"):JS.index("async function loadTracker")]
+    assert "b.title" in block and "b.rows" in block
+    load = JS[JS.index("async function loadTracker"):]
+    assert "live_batches" in load and "closed_batches" in load
+
+
+def test_the_grouping_falls_back_to_a_flat_table():
+    # An older API build returns no batches. The section must still render its
+    # rows rather than going blank.
+    block = JS[JS.index("function _tkBatches"):JS.index("async function loadTracker")]
+    assert "_tkTable(flatRows)" in block
+
+
+def test_every_batch_field_the_js_reads_exists():
+    row = _row()
+    batches = tracker.group_by_slot([row])
+    block = JS[JS.index("function _tkBatches"):JS.index("async function loadTracker")]
+    used = set(re.findall(r"\bb\.([a-z_]+)", block))
+    assert used, "the batch renderer reads nothing — the test is not looking at it"
+    assert not used - set(batches[0]), \
+        f"the batch header reads fields the API does not return: {used - set(batches[0])}"
+
+
+def test_the_batch_scoreboard_matches_the_backend_summary():
+    summary = tracker.summarise([_row()])
+    block = JS[JS.index("function _tkBatchScore"):JS.index("function _tkBatches")]
+    for key in re.findall(r"\bsum\.([a-z_]+)", block):
+        assert key in summary, f"batch header reads sum.{key}, which is not returned"
+
+
+def test_batches_are_styled():
+    for cls in (".tk-batch-hdr", ".tk-batch-title", ".tk-batch-score"):
+        assert cls in CSS, f"{cls} has no styling"
+
+
 # ── Contract: every field the table reads is one the API produces ───────────
 
 def test_every_row_field_the_js_reads_exists_in_the_api_response():
