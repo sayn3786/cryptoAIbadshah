@@ -1973,6 +1973,11 @@ def _compute_recommendations() -> dict:
                     # root. Reading data.get("reversal_radar") always yielded {},
                     # so the reversal-against penalty in _rec_quality never fired.
                     "reversal_radar": sig.get("reversal_radar") or {},
+                    # Full analysis kept for the 2H view only — entry/SL/TP come
+                    # from the 2H signal, so that is the decision snapshot we
+                    # persist. Keeping all three would triple the retained data
+                    # for no benefit.
+                    "analysis":      data if tf == "2H" else None,
                 }
             except Exception:
                 pass
@@ -2198,6 +2203,42 @@ def _compute_recommendations() -> dict:
 
     intraday_recs = top[:3]
 
+    # ── Persist before publishing ────────────────────────────────────────
+    # Each recommendation is written with its targets, decision snapshot and
+    # CREATED event in ONE transaction. Re-evaluating the same closed candle
+    # returns the existing row instead of creating a duplicate, so this is
+    # safe to run on every slot and on every on-demand recompute.
+    #
+    # When DB_REQUIRED=true and a write fails, the set is marked
+    # not-actionable and api_recommendations returns 503 rather than
+    # publishing a signal that was never recorded.
+    _persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
+                "failed": [], "error_code": None}
+    try:
+        import signal_publish as _sp
+        _analyses = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
+                     for r in intraday_recs}
+        for _r in intraday_recs:
+            _r.setdefault("generated_at_utc", now)
+        _out = _sp.persist_recommendations(intraday_recs, _analyses)
+        _persist = {k: v for k, v in _out.items() if k != "results"}
+        for _r, _res in zip(intraday_recs, _out["results"]):
+            _r["signal_id"]  = _res.get("signal_id")
+            _r["persisted"]  = bool(_res.get("ok"))
+            _r["actionable"] = bool(_res.get("actionable"))
+        if not _out["all_actionable"]:
+            print(f"[recs] NOT actionable — persistence failed for "
+                  f"{', '.join(_out['failed'])} ({_out.get('error_code')})")
+    except Exception as _exc:
+        # A bug in the persistence layer must not take down analysis. It only
+        # blocks publication when the database is REQUIRED.
+        import db as _db
+        _msg = _db.sanitize_db_error(_exc)
+        print(f"[recs] persistence layer error: {_msg}")
+        _persist = {"all_actionable": not _db.db_required(), "persisted": 0,
+                    "duplicates": 0, "failed": [r["symbol"] for r in intraday_recs],
+                    "error_code": "PERSISTENCE_ERROR"}
+
     # Next signal slot at 8AM / 4PM / 8PM SGT
     _slots   = [now_sgt.replace(hour=h, minute=0, second=0, microsecond=0) for h in (8, 16, 20)]
     _slots  += [s + timedelta(days=1) for s in _slots]
@@ -2222,6 +2263,10 @@ def _compute_recommendations() -> dict:
         "btc_1d_str":       0,
         "options_expiry":   _opts,
         "recommendations":  intraday_recs,
+        # Publication gate. When false these recommendations were NOT recorded
+        # and must be treated as analysis only, never as tradeable output.
+        "actionable":       bool(_persist.get("all_actionable", True)),
+        "persistence":      _persist,
     }
 
     # Audit log — record snapshot of each slot generation (last 9 kept in memory)
@@ -2322,9 +2367,15 @@ def _daily_rec_scheduler():
         try:
             print(f"[scheduler] Running recommendation scan (key={key})")
             result = _compute_recommendations()
-            with _rec_lock:
-                _rec_cache_save(key, result)
-            print(f"[scheduler] Cached {len(result.get('recommendations', []))} recommendations")
+            if result.get("actionable", True):
+                with _rec_lock:
+                    _rec_cache_save(key, result)
+                print(f"[scheduler] Cached {len(result.get('recommendations', []))} recommendations")
+            else:
+                # Never warm the cache with an unrecorded set — it would be
+                # served for the rest of the slot and never re-attempted.
+                print(f"[scheduler] NOT cached — persistence failed "
+                      f"({(result.get('persistence') or {}).get('error_code')})")
         except Exception as exc:
             print(f"[scheduler] ERROR computing recommendations: {exc}")
 
@@ -2350,9 +2401,39 @@ def api_recommendations():
                 return jsonify(mem["data"])
 
     result = _compute_recommendations()
-    with _rec_lock:
-        _rec_cache_save(key, result)
+    # Only cache a set that was actually recorded. Caching a non-actionable set
+    # would keep serving it for the rest of the slot after the database
+    # recovered, so the signals would never get persisted.
+    if result.get("actionable", True):
+        with _rec_lock:
+            _rec_cache_save(key, result)
+    else:
+        return _not_actionable(result)
     return jsonify(result)
+
+
+def _not_actionable(result):
+    """
+    Controlled 503 when a signal could not be persisted and DB_REQUIRED=true.
+
+    The analysis is still returned so the dashboard can show context, but it is
+    explicitly flagged non-actionable and carries no tradeable output. The
+    error code is sanitized — never a driver message, never a DSN.
+    """
+    codes = {
+        "DB_NOT_CONFIGURED": "Signal persistence is required but DATABASE_URL is not set.",
+        "DB_WRITE_FAILED":   "Signal persistence failed; refusing to publish an unrecorded signal.",
+        "NO_CLOSED_CANDLE":  "No closed-candle timestamp available to identify the signal.",
+        "INVALID_SIGNAL":    "Signal failed price-structure validation.",
+        "PERSISTENCE_ERROR": "Signal persistence layer error.",
+    }
+    code = (result.get("persistence") or {}).get("error_code") or "DB_UNAVAILABLE"
+    payload = dict(result)
+    payload["recommendations"] = []          # nothing tradeable leaves this route
+    payload["actionable"] = False
+    payload["error_code"] = code
+    payload["error"] = codes.get(code, "Signal could not be persisted.")
+    return jsonify(payload), 503
 
 
 @app.get("/api/rec-audit")
@@ -2389,8 +2470,14 @@ def api_telegram_send():
         result = mem["data"]
     else:
         result = _compute_recommendations()
-        with _rec_lock:
-            _rec_cache_save(key, result)
+        if result.get("actionable", True):
+            with _rec_lock:
+                _rec_cache_save(key, result)
+
+    # Dispatching to Telegram IS publishing. A set that could not be persisted
+    # must not be sent to subscribers.
+    if not result.get("actionable", True):
+        return _not_actionable(result)
 
     ok = _send_telegram_recs(result)
     if ok:
@@ -2500,10 +2587,15 @@ def api_cron_daily():
     results = {}
     try:
         result = _compute_recommendations()
-        key = _rec_cache_key()
-        with _rec_lock:
-            _rec_cache_save(key, result)
-        results["recs"] = len(result.get("recommendations", []))
+        if result.get("actionable", True):
+            key = _rec_cache_key()
+            with _rec_lock:
+                _rec_cache_save(key, result)
+            results["recs"] = len(result.get("recommendations", []))
+        else:
+            # Do not cache or count an unrecorded set — the next run retries.
+            results["recs"] = 0
+            results["recs_not_actionable"] = (result.get("persistence") or {}).get("error_code")
     except Exception as e:
         results["recs_error"] = str(e)
 
@@ -2715,6 +2807,255 @@ def api_journal(symbol):
         return jsonify({"journal": journal, "symbol": symbol, "timeframe": timeframe})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Persisted signal history (Neon Postgres) ─────────────────────────────────
+# Reads are public (the dashboard shows them). Every MUTATION requires the
+# project's existing CRON_SECRET, the same protection the alert endpoints use —
+# arbitrary clients must never be able to close, cancel or archive a signal.
+
+def _signal_store():
+    """Import the store lazily so a deploy without a database still boots."""
+    import signal_store as _s
+    return _s
+
+
+def _db_guard():
+    """Return an error response when the database is unusable, else None."""
+    import db as _db
+    if not _db.db_configured():
+        return jsonify({"error": "Signal history is not configured",
+                        "error_code": "DB_NOT_CONFIGURED"}), 503
+    return None
+
+
+def _internal_auth_ok() -> bool:
+    """
+    Same convention as /api/patterns/alert: a shared CRON_SECRET via bearer
+    token or x-cron-secret header. When no secret is configured the mutation
+    routes stay CLOSED rather than open — failing safe.
+    """
+    import os as _os
+    secret = _os.getenv("CRON_SECRET", "")
+    if not secret:
+        return False
+    auth = request.headers.get("authorization", "")
+    hdr  = request.headers.get("x-cron-secret", "")
+    return auth == f"Bearer {secret}" or hdr == secret
+
+
+def _require_internal():
+    if not _internal_auth_ok():
+        return jsonify({"error": "Unauthorized", "error_code": "FORBIDDEN"}), 401
+    return None
+
+
+def _int_arg(name, default, lo, hi):
+    """Bounded integer query parameter — never trust the client's number."""
+    try:
+        v = int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(v, hi))
+
+
+def _db_error_response(exc):
+    import db as _db
+    msg = _db.sanitize_db_error(exc)
+    print(f"[signals-api] {msg}")
+    return jsonify({"error": "Signal history unavailable",
+                    "error_code": "DB_UNAVAILABLE"}), 503
+
+
+@app.get("/api/signals/active")
+def api_signals_active():
+    """Signals still working (OPEN / PARTIAL_TP). Archived rows excluded."""
+    guard = _db_guard()
+    if guard:
+        return guard
+    try:
+        items = _signal_store().list_active_signals(limit=_int_arg("limit", 50, 1, 100))
+        return jsonify({"items": items, "count": len(items)})
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
+@app.get("/api/signals/history")
+def api_signals_history():
+    """
+    Paginated history, newest first.
+
+    Filters: symbol, timeframe, direction, status (repeatable), strategy_version,
+    exchange, include_archived=1. Archived rows are hidden by default.
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    try:
+        return jsonify(store.list_signals(
+            statuses=request.args.getlist("status") or None,
+            symbol=request.args.get("symbol"),
+            timeframe=request.args.get("timeframe"),
+            direction=request.args.get("direction"),
+            strategy_version=request.args.get("strategy_version"),
+            exchange=request.args.get("exchange"),
+            include_archived=request.args.get("include_archived") == "1",
+            limit=_int_arg("limit", store.DEFAULT_PAGE_SIZE, 1, store.MAX_PAGE_SIZE),
+            offset=_int_arg("offset", 0, 0, 10_000_000),
+        ))
+    except store.SignalValidationError as exc:
+        return jsonify({"error": str(exc), "error_code": "BAD_REQUEST"}), 400
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
+@app.get("/api/signals/outcomes")
+def api_signals_outcomes():
+    """Completed signals only — the closed-outcome view."""
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    try:
+        return jsonify(store.list_signals(
+            statuses=["TP_HIT", "SL_HIT", "CLOSED", "EXPIRED", "CANCELLED"],
+            symbol=request.args.get("symbol"),
+            strategy_version=request.args.get("strategy_version"),
+            include_archived=request.args.get("include_archived") == "1",
+            limit=_int_arg("limit", store.DEFAULT_PAGE_SIZE, 1, store.MAX_PAGE_SIZE),
+            offset=_int_arg("offset", 0, 0, 10_000_000),
+        ))
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
+@app.get("/api/signals/postmortems")
+def api_signals_postmortems():
+    """Post-trade analyses, newest first."""
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    try:
+        return jsonify(store.list_postmortems(
+            outcome=request.args.get("outcome"),
+            strategy_version=request.args.get("strategy_version"),
+            limit=_int_arg("limit", store.DEFAULT_PAGE_SIZE, 1, store.MAX_PAGE_SIZE),
+            offset=_int_arg("offset", 0, 0, 10_000_000),
+        ))
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
+@app.get("/api/signals/<signal_id>")
+def api_signal_detail(signal_id):
+    """One signal with its targets, decision snapshot, events and postmortem."""
+    guard = _db_guard()
+    if guard:
+        return guard
+    try:
+        sig = _signal_store().get_signal(signal_id)
+    except Exception as exc:
+        return _db_error_response(exc)
+    if not sig:
+        return jsonify({"error": "Signal not found", "error_code": "NOT_FOUND"}), 404
+    return jsonify(sig)
+
+
+@app.post("/api/signals/<signal_id>/archive")
+def api_signal_archive(signal_id):
+    """Soft-archive a COMPLETED signal. Internal only. Nothing is deleted."""
+    unauth = _require_internal()
+    if unauth:
+        return unauth
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    try:
+        return jsonify(store.archive_signal(signal_id))
+    except store.InvalidTransition as exc:
+        return jsonify({"error": str(exc), "error_code": "INVALID_TRANSITION"}), 409
+    except store.SignalValidationError as exc:
+        return jsonify({"error": str(exc), "error_code": "NOT_FOUND"}), 404
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
+@app.post("/api/signals/<signal_id>/postmortem")
+def api_signal_postmortem(signal_id):
+    """
+    Attach or replace a post-trade analysis. Internal only.
+
+    Analysis output only — this never changes live strategy parameters.
+    """
+    unauth = _require_internal()
+    if unauth:
+        return unauth
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    body = request.get_json(silent=True) or {}
+    outcome = (body.get("outcome") or "").strip()
+    if not outcome:
+        return jsonify({"error": "outcome is required", "error_code": "BAD_REQUEST"}), 400
+    try:
+        import signal_publish as _sp
+        return jsonify(store.upsert_postmortem(
+            signal_id,
+            outcome=outcome,
+            strategy_version=(body.get("strategy_version") or _sp.strategy_version()),
+            mfe_pct=body.get("maximum_favorable_excursion_pct"),
+            mae_pct=body.get("maximum_adverse_excursion_pct"),
+            duration_minutes=body.get("duration_minutes"),
+            failed_conditions=body.get("failed_conditions"),
+            analysis_summary=body.get("analysis_summary"),
+        ))
+    except store.SignalValidationError as exc:
+        return jsonify({"error": str(exc), "error_code": "BAD_REQUEST"}), 400
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
+@app.get("/api/db/health")
+def api_db_health():
+    """
+    Connectivity + migration state, reported separately.
+
+    `reachable` and `migrated` are distinct fields with distinct error codes,
+    because they need different fixes:
+
+      DB_NOT_CONFIGURED  — no DATABASE_URL; set it and redeploy
+      DB_UNAVAILABLE     — cannot connect; check the URL / Neon / environment
+      DB_NOT_MIGRATED    — connects fine, tables absent; RUN THE MIGRATION
+      DB_SCHEMA_UNREADABLE — connects, but the role cannot inspect the schema
+
+    Still 503 for anything but fully healthy, since persistence is genuinely
+    unavailable in every one of those states — the code says which.
+
+    Deliberately exposes NO connection string, host, username, password or
+    database name.
+    """
+    import db as _db
+    info = _db.healthcheck()
+    return jsonify(info), (200 if info.get("ok") else 503)
+
+
+@app.get("/api/db/usage")
+def api_db_usage():
+    """Storage report for the free-tier budget. Internal only."""
+    unauth = _require_internal()
+    if unauth:
+        return unauth
+    guard = _db_guard()
+    if guard:
+        return guard
+    try:
+        return jsonify(_signal_store().usage_report())
+    except Exception as exc:
+        return _db_error_response(exc)
 
 
 # ── Video generation (D-ID + ElevenLabs) ──────────────────────────────────────
