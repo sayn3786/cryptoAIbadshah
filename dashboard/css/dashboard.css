@@ -2058,7 +2058,24 @@ html { overflow-x: hidden; }
   font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted2); margin: 12px 0 6px;
 }
-.tracker-table { width: 100%; border-collapse: collapse; font-size: .78rem; min-width: 880px; }
+.tracker-table {
+  width: 100%; border-collapse: collapse; font-size: .78rem; min-width: 880px;
+  /* Fixed layout with explicit widths so every batch's table lines up with the
+     others. Auto layout sizes each table to its OWN content, which made the
+     columns jump between one batch and the next. */
+  table-layout: fixed;
+}
+.tracker-table th:nth-child(1),  .tracker-table td:nth-child(1)  { width: 7%; }
+.tracker-table th:nth-child(2),  .tracker-table td:nth-child(2)  { width: 5%; }
+.tracker-table th:nth-child(3),  .tracker-table td:nth-child(3)  { width: 8%; }
+.tracker-table th:nth-child(4),  .tracker-table td:nth-child(4)  { width: 8%; }
+.tracker-table th:nth-child(5),  .tracker-table td:nth-child(5)  { width: 8%; }
+.tracker-table th:nth-child(6),  .tracker-table td:nth-child(6)  { width: 9%; }
+.tracker-table th:nth-child(7),  .tracker-table td:nth-child(7)  { width: 13%; }
+.tracker-table th:nth-child(8),  .tracker-table td:nth-child(8)  { width: 7%; }
+.tracker-table th:nth-child(9),  .tracker-table td:nth-child(9)  { width: 5%; }
+.tracker-table th:nth-child(10), .tracker-table td:nth-child(10) { width: 17%; }
+.tracker-table th:nth-child(11), .tracker-table td:nth-child(11) { width: 13%; }
 .tracker-table th {
   text-align: left; font-weight: 600; font-size: .68rem; text-transform: uppercase;
   letter-spacing: .05em; color: var(--muted2); padding: 6px 8px;
@@ -2098,11 +2115,23 @@ html { overflow-x: hidden; }
 .tk-status.cancelled  { background: rgba(148,163,184,.14); color: var(--muted2); }
 .tk-status.closed     { background: rgba(59,130,246,.18); color: #60a5fa; }
 
-.tk-remark { max-width: 260px; overflow-wrap: anywhere; }
-.tk-action { max-width: 300px; color: var(--muted); overflow-wrap: anywhere; }
+.tk-remark { overflow-wrap: anywhere; }
+.tk-action { color: var(--muted); overflow-wrap: anywhere; }
 .tk-empty { padding: 14px 4px; color: var(--muted2); font-size: .8rem; }
 
 @media (max-width: 640px) {
   .tracker-section { padding: 12px 10px; }
   .tracker-table { font-size: .74rem; }
 }
+
+/* Tracker batches: signals grouped by the slot they were published in. */
+.tk-batch { margin-bottom: 14px; }
+.tk-batch:last-child { margin-bottom: 0; }
+.tk-batch-hdr {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 6px 8px; margin-top: 4px;
+  background: rgba(148,163,184,.06); border-radius: 6px;
+}
+.tk-batch-title { font-size: .78rem; font-weight: 700; color: var(--text); }
+.tk-batch-count { font-size: .7rem; color: var(--muted2); }
+.tk-batch-score { font-size: .7rem; color: var(--muted2); margin-left: auto; }

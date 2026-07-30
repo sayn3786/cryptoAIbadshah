@@ -18,8 +18,18 @@ from typing import Any, Dict, List, Optional, Sequence
 
 __all__ = [
     "CLOSED_WINDOW_DAYS", "TERMINAL_STATUSES", "build_row", "build_tracker",
-    "summarise",
+    "summarise", "slot_for", "group_by_slot", "SGT", "SLOT_HOURS_SGT",
 ]
+
+# Recommendations are published in three daily slots (SGT), and a slot is the
+# unit people actually think in — "the 8pm batch", not "that signal from
+# Tuesday". Signals are grouped by the slot they were PUBLISHED in, which is why
+# this reads generated_at and not the candle time: two symbols in one batch can
+# sit on different candles, but they were still one decision.
+SGT = timezone(timedelta(hours=8))
+
+# Descending, so the first boundary at or below the hour is the signal's slot.
+SLOT_HOURS_SGT = ((20, "8:00 PM"), (16, "4:00 PM"), (8, "8:00 AM"))
 
 # Closed trades are shown for three days and then drop off the list. The point
 # of the view is the decisions in front of you; older outcomes belong in the
@@ -79,6 +89,43 @@ def _signed(direction: str, frm: Optional[Decimal],
     if raw is None:
         return None
     return raw if direction == "LONG" else round(-raw, 2)
+
+
+def slot_for(when) -> Optional[Dict[str, Any]]:
+    """
+    Which publication batch a signal belongs to.
+
+    Times are in SGT because that is what the slots are defined in — 08:00,
+    16:00 and 20:00. Anything published between midnight and 08:00 belongs to
+    the PREVIOUS day's 20:00 batch, matching the recommendation cache: those
+    hours are served the 8pm set, so a signal written then is part of it.
+
+    Returns ``{"key", "label", "date_label", "title", "at"}`` — key sorts
+    chronologically as a plain string, which is what the grouping relies on.
+    """
+    at = _utc(when)
+    if at is None:
+        return None
+    local = at.astimezone(SGT)
+
+    day = local
+    hour, label = None, None
+    for boundary, text in SLOT_HOURS_SGT:
+        if local.hour >= boundary:
+            hour, label = boundary, text
+            break
+    if hour is None:                      # 00:00–07:59 → yesterday's 8pm batch
+        day = local - timedelta(days=1)
+        hour, label = SLOT_HOURS_SGT[0]
+
+    return {
+        "key":        f"{day:%Y%m%d}-{hour:02d}",
+        "label":      label,
+        "date_label": f"{day:%b %d, %Y}",
+        "title":      f"{day:%b %d} · {label} SGT",
+        "at":         day.replace(hour=hour, minute=0, second=0,
+                                  microsecond=0).isoformat(),
+    }
 
 
 def build_row(signal: Dict[str, Any],
@@ -168,6 +215,7 @@ def build_row(signal: Dict[str, Any],
         # already traded through the stop and the record has not caught up.
         "stop_distance_pct": (_signed(direction, stop, live) if (live and stop) else None),
         "confidence":    _f(signal.get("confidence_score")),
+        "slot":          slot_for(opened),
         "opened_at":     opened.isoformat() if opened else None,
         "closed_at":     closed.isoformat() if closed else None,
         "age_hours":     age_h,
@@ -302,12 +350,55 @@ def build_tracker(active: Sequence[Dict[str, Any]],
     closed_rows.sort(key=lambda r: (r["closed_at"] or r["opened_at"] or ""), reverse=True)
 
     return {
+        # Flat lists are kept as well as the grouped ones: a caller that just
+        # wants "every live signal" should not have to walk batches to get it.
         "live": live_rows,
         "closed": closed_rows,
+        "live_batches": group_by_slot(live_rows),
+        "closed_batches": group_by_slot(closed_rows),
         "window_days": window_days,
         "summary": summarise(closed_rows),
         "generated_at": now.isoformat(),
     }
+
+
+def group_by_slot(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Split rows into the publication batches they came from, newest batch first.
+
+    Each batch carries its own scoreboard, so "the 4pm set went 2 for 3" is
+    readable at a glance rather than having to be reconstructed from the rows.
+
+    A row with no usable timestamp is not dropped — it lands in an "Ungrouped"
+    batch that sorts last. Silently hiding a signal because its date could not
+    be read would be the worst possible failure for a tracking view.
+    """
+    batches: Dict[str, Dict[str, Any]] = {}
+    for row in rows or []:
+        slot = row.get("slot")
+        key = slot["key"] if slot else "unknown"
+        batch = batches.get(key)
+        if batch is None:
+            batch = batches[key] = {
+                "key":        key,
+                "label":      slot["label"] if slot else "Ungrouped",
+                "date_label": slot["date_label"] if slot else "",
+                "title":      slot["title"] if slot else "Ungrouped",
+                "at":         slot["at"] if slot else None,
+                "rows":       [],
+            }
+        batch["rows"].append(row)
+
+    out = list(batches.values())
+    for batch in out:
+        batch["count"] = len(batch["rows"])
+        batch["summary"] = summarise([r for r in batch["rows"]
+                                      if r["state"] == "closed"])
+    # Newest batch first, with the ungrouped one pinned last. ("unknown" sorts
+    # ABOVE any date key as a string, so it needs its own rank rather than
+    # relying on the reverse sort to bury it.)
+    out.sort(key=lambda b: (b["key"] != "unknown", b["key"]), reverse=True)
+    return out
 
 
 def summarise(closed_rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:

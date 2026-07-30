@@ -359,6 +359,18 @@ live signal with its ladder state, distance to the next target, cushion above th
 stop, plain-language remarks and the next course of action — then trades that
 closed in the last 3 days, marked win or loss.
 
+Rows are grouped into the **publication batch** they came from — *"Jul 30 · 8:00
+PM SGT"* — because a slot is the unit these are decided and reviewed in, and each
+batch carries its own scoreboard. Grouping reads `generated_at`, not the candle
+time: two symbols in one batch can sit on different candles but were still one
+decision. Anything published between midnight and 08:00 SGT belongs to the
+previous day's 20:00 batch, matching the recommendation cache — those hours are
+served the 8pm set. A row whose timestamp cannot be read lands in an *Ungrouped*
+batch rather than disappearing.
+
+The API returns `live_batches` and `closed_batches` alongside the flat `live` and
+`closed` lists, so a caller that just wants every live signal need not walk them.
+
 The scoreboard counts only **decided** trades. Expired and cancelled signals are
 reported separately and excluded from the win-rate denominator, because a setup
 that never resolved is not evidence either way. With nothing decided the rate is

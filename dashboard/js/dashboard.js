@@ -6152,6 +6152,30 @@ function _tkTable(rows) {
   </table>`;
 }
 
+function _tkBatchScore(sum) {
+  // Only decided trades count. A batch still running shows nothing rather than
+  // an implied 0%.
+  if (!sum || !sum.decided) return '';
+  return `<span class="tk-batch-score">`
+    + `<span class="tk-win">${sum.wins}W</span> · <span class="tk-loss">${sum.losses}L</span>`
+    + ` · ${sum.win_rate_pct}%</span>`;
+}
+
+function _tkBatches(batches, flatRows) {
+  // Grouped by the slot each signal was PUBLISHED in — "the 8pm batch" is the
+  // unit these are decided and reviewed in. Falls back to one flat table if an
+  // older API build returns no batches, so the section never renders empty.
+  if (!batches?.length) return _tkTable(flatRows);
+  return batches.map(b => `<div class="tk-batch">
+      <div class="tk-batch-hdr">
+        <span class="tk-batch-title">${b.title}</span>
+        <span class="tk-batch-count">${b.count} signal${b.count === 1 ? '' : 's'}</span>
+        ${_tkBatchScore(b.summary)}
+      </div>
+      ${_tkTable(b.rows)}
+    </div>`).join('');
+}
+
 async function loadTracker(force) {
   const section = document.getElementById('trackerSection');
   const body    = document.getElementById('trackerBody');
@@ -6182,10 +6206,12 @@ async function loadTracker(force) {
 
     body.innerHTML =
       (live.length
-        ? `<div class="tracker-group-title">Live — ${live.length}</div>${_tkTable(live)}`
+        ? `<div class="tracker-group-title">Live — ${live.length}</div>`
+          + _tkBatches(data.live_batches, live)
         : `<div class="tk-empty">No live signals. The next set publishes at the next slot.</div>`)
       + (closed.length
-        ? `<div class="tracker-group-title">Closed — last ${data.window_days} days</div>${_tkTable(closed)}`
+        ? `<div class="tracker-group-title">Closed — last ${data.window_days} days</div>`
+          + _tkBatches(data.closed_batches, closed)
         : '');
   } catch (e) {
     console.warn('[tracker] load failed', e);
