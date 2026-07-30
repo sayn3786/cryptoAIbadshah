@@ -3055,6 +3055,112 @@ def api_signals_postmortems():
         return _db_error_response(exc)
 
 
+def _tracker_prices(symbols) -> dict:
+    """
+    Live price per symbol for the tracker, best-effort.
+
+    A missing price is NOT an error — the row renders without live progress
+    rather than reporting a move of zero. Uses the cached analysis so the
+    tracker costs no extra market data when the dashboard is already warm.
+    """
+    wanted = {s for s in symbols if s}
+    if not wanted:
+        return {}
+
+    def _one(sym):
+        data = get_analysis(sym, "2H")
+        return sym, (data.get("live_price")
+                     or (data.get("signal") or {}).get("current_price"))
+
+    out = {}
+    # In parallel: the tracker's wall-clock is then the slowest SINGLE symbol
+    # rather than the sum of them all. Serially, one slow upstream fetch would
+    # hold the whole table hostage.
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for fut in as_completed([ex.submit(_one, s) for s in wanted]):
+            try:
+                sym, price = fut.result()
+            except Exception:
+                continue
+            if price:
+                out[sym] = price
+    return out
+
+
+@app.get("/api/signals/tracker")
+def api_signals_tracker():
+    """
+    Working signals, plus trades that closed in the last few days.
+
+    This is the "how is it going" view: ladder state, distance to the next
+    target, distance to the stop, and the next course of action. Read-only —
+    it reports what the monitor recorded, and never advances a signal itself.
+
+    ?days=N widens the closed window (default 3, max 30).
+    ?environment=all includes rows written by other deployments.
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    import signal_tracker as tracker
+    days = _int_arg("days", tracker.CLOSED_WINDOW_DAYS, 1, 30)
+    env = request.args.get("environment")
+    try:
+        active = store.list_active_signals(limit=50, environment=env)
+        closed = store.list_signals(statuses=list(tracker.TERMINAL_STATUSES),
+                                    environment=env, limit=50)["items"]
+        store.attach_targets(active)
+        store.attach_targets(closed)
+    except store.SignalValidationError as exc:
+        return jsonify({"error": str(exc), "error_code": "BAD_REQUEST"}), 400
+    except Exception as exc:
+        return _db_error_response(exc)
+
+    prices = _tracker_prices([r.get("symbol") for r in active])
+    view = tracker.build_tracker(active, closed, prices, window_days=days)
+    view["environment"] = _deploy_env()
+    return jsonify(view)
+
+
+@app.post("/api/signals/monitor")
+def api_signals_monitor():
+    """
+    Advance every working signal against the market. Internal only.
+
+    This is what makes an outcome history exist: without it every signal stays
+    OPEN forever. Idempotent — each decision is keyed on the CANDLE that caused
+    it, so running it twice over the same candles changes nothing.
+    """
+    unauth = _require_internal()
+    if unauth:
+        return unauth
+    guard = _db_guard()
+    if guard:
+        return guard
+    import signal_monitor as monitor
+    store = _signal_store()
+
+    def _candles(symbol, timeframe):
+        # Closed candles only. A forming candle can un-touch a level before it
+        # closes, and recording a hit from one would write an outcome the market
+        # never confirmed.
+        return _fetch_closed_spot(symbol, timeframe or "2H")
+
+    try:
+        summary = monitor.run_monitor(
+            store, _candles,
+            max_age_hours=_int_arg("max_age_hours",
+                                   monitor.DEFAULT_MAX_AGE_HOURS, 1, 24 * 30),
+            limit=_int_arg("limit", 100, 1, 200))
+    except Exception as exc:
+        return _db_error_response(exc)
+    print(f"[monitor] checked={summary['checked']} tp={summary['targets_hit']} "
+          f"sl={summary['stopped']} expired={summary['expired']} "
+          f"errors={len(summary['errors'])}")
+    return jsonify(summary)
+
+
 @app.get("/api/signals/<signal_id>")
 def api_signal_detail(signal_id):
     """One signal with its targets, decision snapshot, events and postmortem."""

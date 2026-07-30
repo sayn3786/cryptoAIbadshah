@@ -2040,3 +2040,69 @@ html { overflow-x: hidden; }
    collapsing to its longest word (which made a tall, near-empty ribbon). */
 .cvd-div-banner { flex-wrap: wrap; }
 .cvd-div-detail { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+
+/* ── Signal Tracker ───────────────────────────────────────────────────────────
+   The "how is it going" table: one row per published signal, live ones first,
+   then anything that closed in the last few days. The table scrolls INSIDE the
+   section on narrow screens rather than widening the page. */
+.tracker-section {
+  margin: 0 auto 18px; padding: 14px 16px; max-width: 1400px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+}
+.tracker-score { font-size: .78rem; color: var(--muted2); letter-spacing: .02em; }
+.tracker-score .tk-win  { color: var(--bull); font-weight: 700; }
+.tracker-score .tk-loss { color: var(--bear); font-weight: 700; }
+
+.tracker-body { overflow-x: auto; }
+.tracker-group-title {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted2); margin: 12px 0 6px;
+}
+.tracker-table { width: 100%; border-collapse: collapse; font-size: .78rem; min-width: 880px; }
+.tracker-table th {
+  text-align: left; font-weight: 600; font-size: .68rem; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--muted2); padding: 6px 8px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.tracker-table td {
+  padding: 8px; border-bottom: 1px solid var(--border);
+  vertical-align: top; color: var(--text);
+}
+.tracker-table tr:last-child td { border-bottom: none; }
+.tk-sym { font-weight: 700; white-space: nowrap; }
+.tk-tf  { color: var(--muted2); font-weight: 400; font-size: .7rem; margin-left: 4px; }
+.tk-dir { font-weight: 700; font-size: .7rem; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+.tk-dir.long  { background: rgba(34,197,94,.16); color: var(--bull); }
+.tk-dir.short { background: rgba(239,68,68,.16); color: var(--bear); }
+.tk-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tk-pos { color: var(--bull); font-weight: 700; }
+.tk-neg { color: var(--bear); font-weight: 700; }
+.tk-muted { color: var(--muted2); }
+
+/* Ladder: one chip per target. Filled = reached. */
+.tk-ladder { display: flex; gap: 4px; flex-wrap: wrap; }
+.tk-tp {
+  font-size: .65rem; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--border); color: var(--muted2); white-space: nowrap;
+}
+.tk-tp.hit { background: rgba(34,197,94,.9); border-color: transparent; color: #04140a; }
+.tk-tp.next { border-color: var(--bull); color: var(--bull); }
+
+/* Status pill */
+.tk-status { font-size: .66rem; font-weight: 700; padding: 3px 7px; border-radius: 999px; white-space: nowrap; }
+.tk-status.open       { background: rgba(148,163,184,.18); color: var(--muted); }
+.tk-status.partial_tp { background: rgba(234,179,8,.18);  color: #eab308; }
+.tk-status.tp_hit     { background: rgba(34,197,94,.9);   color: #04140a; }
+.tk-status.sl_hit     { background: rgba(239,68,68,.9);   color: #1a0505; }
+.tk-status.expired,
+.tk-status.cancelled  { background: rgba(148,163,184,.14); color: var(--muted2); }
+.tk-status.closed     { background: rgba(59,130,246,.18); color: #60a5fa; }
+
+.tk-remark { max-width: 260px; overflow-wrap: anywhere; }
+.tk-action { max-width: 300px; color: var(--muted); overflow-wrap: anywhere; }
+.tk-empty { padding: 14px 4px; color: var(--muted2); font-size: .8rem; }
+
+@media (max-width: 640px) {
+  .tracker-section { padding: 12px 10px; }
+  .tracker-table { font-size: .74rem; }
+}

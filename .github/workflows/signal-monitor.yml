@@ -1,0 +1,36 @@
+name: Signal Outcome Monitor
+
+on:
+  schedule:
+    # All times UTC. Signals are published on 2H candles, so checking hourly is
+    # enough to catch every close without ever acting on a forming candle. The
+    # endpoint is idempotent — each decision is keyed on the CANDLE that caused
+    # it, so an extra run records nothing new and a missed run loses nothing.
+    - cron: '5 * * * *'
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  monitor-signals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Advance open signals against the market
+        run: |
+          echo "Calling: ${{ secrets.APP_URL }}/api/signals/monitor"
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST "${{ secrets.APP_URL }}/api/signals/monitor" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            --max-time 120)
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
+          echo "Status: $HTTP_STATUS"
+          echo "Response: $BODY"
+          # 503 means no database is configured — that is a deployment choice,
+          # not a failure of this job. Anything else non-200 is a real problem.
+          if [ "$HTTP_STATUS" = "503" ]; then
+            echo "Persistence not configured — nothing to monitor."
+            exit 0
+          fi
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: API returned HTTP $HTTP_STATUS"
+            exit 1
+          fi

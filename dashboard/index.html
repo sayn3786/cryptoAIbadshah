@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/dashboard/css/dashboard.css?v=116" />
+  <link rel="stylesheet" href="/dashboard/css/dashboard.css?v=117" />
 </head>
 <body>
 
@@ -95,6 +95,22 @@
     </button>
   </div>
   <div id="recCards" class="rec-cards"></div>
+</section>
+
+<!-- ── SIGNAL TRACKER ──────────────────────────────────────────────────────── -->
+<!-- How every published signal is actually going: ladder state, distance to the
+     next target and stop, and what to do about it. Closed trades stay for a few
+     days so the win/loss record is visible next to the live ones. -->
+<section id="trackerSection" class="tracker-section hidden">
+  <div class="rec-header">
+    <span class="rec-title">📋 Signal Tracker</span>
+    <span id="trackerScore" class="tracker-score"></span>
+    <span id="trackerMeta" class="rec-generated"></span>
+    <button class="btn-tg" id="trackerRefresh" onclick="loadTracker(true)" title="Refresh tracker">
+      ⟳ Refresh
+    </button>
+  </div>
+  <div id="trackerBody" class="tracker-body"></div>
 </section>
 
 <!-- ── LOADING OVERLAY ────────────────────────────────────────────────────── -->
@@ -775,7 +791,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="/dashboard/js/dashboard.js?v=172"></script>
+<script src="/dashboard/js/dashboard.js?v=173"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
