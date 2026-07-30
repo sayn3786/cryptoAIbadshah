@@ -88,9 +88,15 @@ def store(engine):
     event.listen(engine, "connect", _set_path)
 
     import signal_store
+    # Schema capabilities are probed once per process and cached, so a test that
+    # ran against a DIFFERENT migration level would otherwise leave a stale
+    # answer behind. This fixture applies 001 only, so the store must re-probe
+    # and find no `environment` column. See test_signal_environment.py.
+    signal_store.reset_capabilities()
     try:
         yield signal_store
     finally:
+        signal_store.reset_capabilities()
         event.remove(engine, "connect", _set_path)
         with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')

@@ -2903,6 +2903,12 @@ def _signal_store():
     return _s
 
 
+def _deploy_env() -> str:
+    """This deployment's environment label (production / preview / local)."""
+    import deploy_context as _dc
+    return _dc.environment()
+
+
 def _db_guard():
     """Return an error response when the database is unusable, else None."""
     import db as _db
@@ -2952,13 +2958,25 @@ def _db_error_response(exc):
 
 @app.get("/api/signals/active")
 def api_signals_active():
-    """Signals still working (OPEN / PARTIAL_TP). Archived rows excluded."""
+    """
+    Signals still working (OPEN / PARTIAL_TP). Archived rows excluded.
+
+    Scoped to THIS deployment's environment by default, so a production
+    deployment never serves signals a preview deploy wrote into the shared
+    database. ?environment=all to see every environment.
+    """
     guard = _db_guard()
     if guard:
         return guard
+    store = _signal_store()
     try:
-        items = _signal_store().list_active_signals(limit=_int_arg("limit", 50, 1, 100))
-        return jsonify({"items": items, "count": len(items)})
+        items = store.list_active_signals(
+            limit=_int_arg("limit", 50, 1, 100),
+            environment=request.args.get("environment"))
+        return jsonify({"items": items, "count": len(items),
+                        "environment": _deploy_env()})
+    except store.SignalValidationError as exc:
+        return jsonify({"error": str(exc), "error_code": "BAD_REQUEST"}), 400
     except Exception as exc:
         return _db_error_response(exc)
 
@@ -2969,7 +2987,9 @@ def api_signals_history():
     Paginated history, newest first.
 
     Filters: symbol, timeframe, direction, status (repeatable), strategy_version,
-    exchange, include_archived=1. Archived rows are hidden by default.
+    exchange, include_archived=1, environment. Archived rows are hidden by
+    default, and results are scoped to this deployment's environment unless
+    environment=all (or a specific slug) is given.
     """
     guard = _db_guard()
     if guard:
@@ -2984,6 +3004,7 @@ def api_signals_history():
             strategy_version=request.args.get("strategy_version"),
             exchange=request.args.get("exchange"),
             include_archived=request.args.get("include_archived") == "1",
+            environment=request.args.get("environment"),
             limit=_int_arg("limit", store.DEFAULT_PAGE_SIZE, 1, store.MAX_PAGE_SIZE),
             offset=_int_arg("offset", 0, 0, 10_000_000),
         ))
@@ -3006,9 +3027,12 @@ def api_signals_outcomes():
             symbol=request.args.get("symbol"),
             strategy_version=request.args.get("strategy_version"),
             include_archived=request.args.get("include_archived") == "1",
+            environment=request.args.get("environment"),
             limit=_int_arg("limit", store.DEFAULT_PAGE_SIZE, 1, store.MAX_PAGE_SIZE),
             offset=_int_arg("offset", 0, 0, 10_000_000),
         ))
+    except store.SignalValidationError as exc:
+        return jsonify({"error": str(exc), "error_code": "BAD_REQUEST"}), 400
     except Exception as exc:
         return _db_error_response(exc)
 
