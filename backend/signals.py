@@ -36,6 +36,96 @@ STRUCT_ADJ_FLOOR     = -18
 STRUCT_ADJ_CEILING   = 8
 
 
+# ── Liquidity-aware stop placement ───────────────────────────────────────────
+# A stop sitting just short of a liquidity pool is in the worst possible place:
+# price runs the pool, takes the stop, then reverses — stopped out by the exact
+# move the trade was positioned for. On a live BTC 2H SHORT the stop landed
+# 64922.05 with an 8-touch pool at 64941.62, twenty points above it.
+
+# A pool this far BEYOND the stop is inside the sweep zone.
+SL_POOL_DANGER_ATR = 0.25
+# Clearance to leave past the pool once the stop is moved.
+SL_POOL_CLEAR_ATR = 0.10
+# Moving a stop widens real risk, so demand a better-defended level than the
+# two touches that are enough merely to dock conviction.
+SL_POOL_MIN_TOUCHES = 3
+
+
+def clear_stop_of_liquidity(analysis: Dict, *, entry: float, sl_dist: float,
+                            is_long: bool, atr: float, max_sl_abs: float) -> Dict:
+    """
+    Move a stop clear of a liquidity pool sitting just beyond it.
+
+    Returns ``{"sl_dist", "moved", "pool_price", "touches", "blocked", "note"}``.
+
+    Rules, deliberately conservative — this changes real risk:
+
+    * **Never tightens.** The returned distance is always >= the one passed in.
+    * **Respects the hard cap.** If clearing the pool would exceed
+      ``max_sl_abs``, the stop is left alone and ``blocked`` is set, so the
+      caller can warn and cut size instead of silently widening risk.
+    * **Only pools that threaten** — below entry for a LONG, above for a SHORT.
+    * **Only pools just beyond the stop.** A pool far past the stop is not what
+      takes it out; reaching for it would inflate risk for no reason.
+    """
+    out = {"sl_dist": sl_dist, "moved": False, "pool_price": None,
+           "touches": 0, "blocked": False, "note": None}
+    if atr <= 0 or entry <= 0 or sl_dist <= 0:
+        return out
+
+    stop_price = entry - sl_dist if is_long else entry + sl_dist
+    danger = atr * SL_POOL_DANGER_ATR
+
+    # The pool that most threatens the stop: on the trade's risk side, beyond
+    # the stop, but close enough that a sweep of it would take the stop first.
+    worst = None
+    for pool in (analysis.get("liquidity_pools") or []):
+        try:
+            lvl = float(pool.get("price"))
+            tch = int(pool.get("touches") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lvl <= 0 or tch < SL_POOL_MIN_TOUCHES:
+            continue
+        beyond = (stop_price - lvl) if is_long else (lvl - stop_price)
+        if not (0 <= beyond <= danger):
+            continue
+        # Prefer the pool that forces the largest move — clearing that one
+        # clears any nearer pool too.
+        if worst is None or beyond > worst[1]:
+            worst = (lvl, beyond, tch)
+
+    if worst is None:
+        return out
+
+    pool_price, _, touches = worst
+    clearance = max(atr * SL_POOL_CLEAR_ATR, entry * 0.0015)
+    needed = (entry - (pool_price - clearance)) if is_long \
+        else ((pool_price + clearance) - entry)
+
+    out.update(pool_price=pool_price, touches=touches)
+
+    if needed <= sl_dist:                     # already clear
+        return out
+    if needed > max_sl_abs:
+        # Widening past the cap would break the risk budget. Leave the stop and
+        # tell the caller, so it becomes a size decision rather than a silent
+        # stop in the sweep path.
+        out["blocked"] = True
+        out["note"] = (
+            f"Stop sits inside a liquidity sweep zone — {touches}-touch pool at "
+            f"{pool_price:,.4f} just beyond it. Clearing it would exceed the max "
+            f"stop distance, so the stop is unchanged: reduce size or wait.")
+        return out
+
+    out.update(sl_dist=needed, moved=True)
+    out["note"] = (
+        f"Stop widened past the {touches}-touch liquidity pool at "
+        f"{pool_price:,.4f} — a sweep of that level would otherwise take the "
+        f"stop out before the move.")
+    return out
+
+
 def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
     """
     The nearest liquidity pool on the side that threatens the trade.
@@ -2587,6 +2677,9 @@ def generate_signal(analysis: Dict) -> Dict:
     sl_pct = tp1_pct = tp2_pct = tp3_pct = None
     suggested_lev = None
     chase_warning = None
+    # Liquidity check on the stop. Initialised here because the whole entry/SL
+    # block sits behind a candles/price guard that may not run at all.
+    _sl_liq = None
 
     # SL distance multiplier — same across market caps; wider ATR cap does the work
     TF_SL_MULT = {
@@ -2737,6 +2830,12 @@ def generate_signal(analysis: Dict) -> Dict:
                 sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
 
             sl_dist = min(sl_dist, _max_sl_abs)   # hard cap
+            # Keep the stop out of a liquidity sweep zone (never tightens; the
+            # hard cap still wins — see clear_stop_of_liquidity).
+            _sl_liq = clear_stop_of_liquidity(
+                analysis, entry=entry, sl_dist=sl_dist, is_long=True,
+                atr=eff_atr, max_sl_abs=_max_sl_abs)
+            sl_dist = _sl_liq["sl_dist"]
             sl = round(max(entry * 0.001, entry - sl_dist), 8)
 
         elif direction == "SHORT":
@@ -2770,12 +2869,17 @@ def generate_signal(analysis: Dict) -> Dict:
                 sl_dist = max(eff_atr * max(sl_m, 1.5), entry * 0.015)
 
             sl_dist = min(sl_dist, _max_sl_abs)   # hard cap
+            _sl_liq = clear_stop_of_liquidity(
+                analysis, entry=entry, sl_dist=sl_dist, is_long=False,
+                atr=eff_atr, max_sl_abs=_max_sl_abs)
+            sl_dist = _sl_liq["sl_dist"]
             sl = round(entry + sl_dist, 8)
 
         else:
             entry   = round(current_price, 8)
             sl      = None
             sl_dist = eff_atr * sl_m
+            _sl_liq = None          # no stop to place on a NEUTRAL read
 
         # ── TP multiplier: RSI headroom + EMA/MACD trend + BB squeeze ─────────
         rsi_val = analysis.get("rsi") or 50
@@ -2939,6 +3043,17 @@ def generate_signal(analysis: Dict) -> Dict:
             except Exception:
                 pass
             sl_pct  = round(abs(sl - entry) / entry * 100, 2)
+
+            # Surface the stop/liquidity outcome as a factor. A widened stop is
+            # a risk-side note either way, so it goes on the side that OPPOSES
+            # the trade — it is a cost, not a reason to be more confident.
+            if _sl_liq and _sl_liq.get("note"):
+                _side = bear_reasons if direction == "LONG" else bull_reasons
+                if _sl_liq.get("blocked"):
+                    _side.append(f"⚠️ {_sl_liq['note']}")
+                else:
+                    _side.append(f"🛡 {_sl_liq['note']}")
+
             tp1_pct = round(abs(tp_targets[0] - entry) / entry * 100, 2) if tp_targets[0] else None
             tp2_pct = round(abs(tp_targets[1] - entry) / entry * 100, 2) if tp_targets[1] else None
             tp3_pct = round(abs(tp_targets[2] - entry) / entry * 100, 2) if tp_targets[2] else None
@@ -3069,6 +3184,9 @@ def generate_signal(analysis: Dict) -> Dict:
         # factors, so the card can show WHY conviction was cut or raised.
         "structure_adjustment": struct_adj,
         "structure_factors":    _struct["factors"],
+        # Whether the stop had to be moved clear of a liquidity pool, or could
+        # not be (blocked by the risk cap) and therefore needs smaller size.
+        "stop_liquidity":       _sl_liq,
         "options_adjustment":        opts_adj,          # signed strength delta applied
         "options_bias":              _opts_bias.get("bias", "neutral"),
         "options_in_window":         bool(_opts_in_win),

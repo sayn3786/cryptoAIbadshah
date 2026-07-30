@@ -514,6 +514,38 @@ went from −3 to 0.
 **Total clamp:** `[−18, +8]`. Asymmetric on purpose — risk should be able to cut
 conviction harder than confirmation can inflate it.
 
+---
+
+### Liquidity-Aware Stop Placement · *risk, not scoring*
+*Changes where the stop goes, not the strength number.*
+
+A stop sitting just short of a liquidity pool is in the worst possible place:
+price runs the pool, takes the stop, then reverses — stopped out by the exact
+move the trade was positioned for. On a live BTC 2H SHORT the stop landed at
+64922.05 with an 8-touch pool at 64941.62, twenty points above it.
+
+After the normal SL anchors and the hard cap, `clear_stop_of_liquidity` looks for
+a pool on the trade's risk side sitting **within `0.25 ATR` beyond** the stop, and
+moves the stop past it with `0.10 ATR` (min 0.15%) of clearance.
+
+| Rule | Behaviour |
+|---|---|
+| Never tightens | Returned distance is always ≥ the one passed in |
+| Respects the hard cap | If clearing exceeds `_max_sl_abs`, the stop is **unchanged** and flagged `blocked` |
+| Blocked → size decision | Emits *"reduce size or wait"* rather than silently leaving the stop in the sweep path |
+| Only the risk side | Below entry for a LONG, above for a SHORT |
+| Only pools just beyond | A distant pool is not what takes the stop out |
+| Needs 3+ touches | Stricter than the 2 required merely to dock conviction — widening real risk demands a better-defended level |
+
+Exposed on the signal as `stop_liquidity`
+(`{sl_dist, moved, pool_price, touches, blocked, note}`), with the note added to
+the reason list **opposing** the trade, because a wider stop is a cost.
+
+**Note on R/R:** widening a stop lowers reward-per-risk, so some candidates will
+now fall below the recommendation engine's `R/R ≥ 1.3` gate. On the reported case
+R/R moved 1.53 → 1.30. That is the honest number for a stop placed out of the
+sweep zone, not a regression.
+
 Exposed on the signal as `structure_adjustment` (signed delta) and
 `structure_factors` (per-factor breakdown), and the individual reasons appear in
 the normal bullish/bearish factor lists.

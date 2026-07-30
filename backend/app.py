@@ -2281,7 +2281,9 @@ def _rec_cache_key() -> str:
     # v37: BOS confluence decays with age, so a stale break no longer scores.
     # v38: stop-run risk reads the full liquidity_pools ladder, not the single
     #      equal-high/low pair.
-    return f"v38_pools_{date}_{slot}"
+    # v39: stops are moved clear of a liquidity pool sitting just beyond them,
+    #      which also changes R/R and therefore which candidates qualify.
+    return f"v39_liqstop_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
