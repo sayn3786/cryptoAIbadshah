@@ -27,6 +27,8 @@ from contextlib import contextmanager
 from typing import Optional
 from urllib.parse import urlsplit
 
+import deploy_context
+
 __all__ = [
     "DatabaseNotConfigured", "DatabaseUnavailable",
     "db_configured", "db_required", "db_enabled",
@@ -450,5 +452,19 @@ def healthcheck() -> dict:
                         "001_initial_signal_schema.sql once (Neon Console -> SQL "
                         "Editor), then verify with database/verify_schema.sql."}
 
+    # Which deployment is answering, and whether its writes are tagged. On a
+    # DATABASE_URL shared between production and preview, this is how you tell
+    # which environment a given deployment thinks it is. The environment NAME is
+    # safe to publish (it is production/preview/local); the git branch and sha
+    # are deliberately NOT here — they are recorded server-side on the CREATED
+    # event instead.
+    extra = {"environment": deploy_context.environment(),
+             "environment_tagging": "002" in applied}
+    if not extra["environment_tagging"]:
+        extra["hint"] = ("Healthy, but signals are not tagged with the writing "
+                         "deployment. Run database/migrations/"
+                         "002_signal_environment.sql once to separate preview "
+                         "rows from production rows.")
+
     return {**info, "ok": True, "reachable": True, "migrated": True,
-            "migrations_applied": applied}
+            "migrations_applied": applied, **extra}

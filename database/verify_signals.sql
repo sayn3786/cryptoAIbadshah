@@ -161,3 +161,46 @@ SELECT strategy_name, strategy_version, count(*) AS signals,
 FROM   signals
 GROUP  BY strategy_name, strategy_version
 ORDER  BY last_seen DESC;
+
+
+-- 12) Which deployment wrote each signal? ------------------------------------
+-- Requires migration 002. DATABASE_URL is shared across Vercel environments,
+-- so this is how you tell production's rows from a preview deploy's.
+SELECT environment, count(*) AS signals,
+       count(*) FILTER (WHERE status IN ('OPEN','PARTIAL_TP')
+                        AND archived_at IS NULL) AS active,
+       min(generated_at) AS first_seen,
+       max(generated_at) AS last_seen
+FROM   signals
+GROUP  BY environment
+ORDER  BY signals DESC;
+
+-- Anything a PREVIEW deploy published. Safe to archive if it is noise —
+-- archiving is a mutation, so do it deliberately, not from this file.
+SELECT id, environment, symbol, direction, status, generated_at
+FROM   signals
+WHERE  environment <> 'production'
+ORDER  BY generated_at DESC
+LIMIT  50;
+
+-- The exact deployment behind a row (branch + short sha), from the audit trail.
+SELECT s.symbol, s.environment,
+       e.metadata -> 'deployment' AS deployment,
+       s.generated_at
+FROM   signals s
+JOIN   signal_events e ON e.signal_id = s.id AND e.event_type = 'CREATED'
+ORDER  BY s.generated_at DESC
+LIMIT  20;
+
+
+-- 13) Same candle, two environments -----------------------------------------
+-- Under the pre-002 key these rows could not coexist: whichever deployment got
+-- there first claimed the candle and the other write was dropped. Rows here are
+-- now EXPECTED and harmless — they are the evidence that preview can no longer
+-- suppress a production signal.
+SELECT symbol, timeframe, strategy_version, candle_close_time,
+       array_agg(environment ORDER BY environment) AS environments
+FROM   signals
+GROUP  BY symbol, timeframe, strategy_version, candle_close_time
+HAVING count(DISTINCT environment) > 1
+ORDER  BY candle_close_time DESC;

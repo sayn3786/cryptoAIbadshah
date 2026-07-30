@@ -274,6 +274,38 @@ def test_health_route_reports_unreachable_distinctly(client, monkeypatch):
     assert body["error_code"] == "DB_UNAVAILABLE"
 
 
+# ── Environment scoping ─────────────────────────────────────────────────────
+
+def test_active_is_scoped_to_this_deployment_by_default(client, fake, monkeypatch):
+    monkeypatch.setenv("SIGNAL_ENVIRONMENT", "production")
+    body = client.get("/api/signals/active").get_json()
+    assert fake.calls["active"]["environment"] is None, \
+        "no filter argument means 'this environment' — the store decides"
+    assert body["environment"] == "production"
+
+
+def test_environment_argument_is_passed_through(client, fake):
+    client.get("/api/signals/active?environment=all")
+    assert fake.calls["active"]["environment"] == "all"
+    client.get("/api/signals/history?environment=preview")
+    assert fake.calls["list"]["environment"] == "preview"
+    client.get("/api/signals/outcomes?environment=preview")
+    assert fake.calls["list"]["environment"] == "preview"
+
+
+@pytest.mark.parametrize("path", ["/api/signals/active",
+                                  "/api/signals/history",
+                                  "/api/signals/outcomes"])
+def test_a_junk_environment_is_a_400_not_a_500(client, fake, monkeypatch, path):
+    def boom(**kw):
+        raise _FakeStore.SignalValidationError("environment filter must be a slug")
+    monkeypatch.setattr(fake, "list_active_signals", boom)
+    monkeypatch.setattr(fake, "list_signals", boom)
+    r = client.get(path + "?environment=%27%3B+DROP+TABLE+signals")
+    assert r.status_code == 400
+    assert r.get_json()["error_code"] == "BAD_REQUEST"
+
+
 def test_health_route_200_only_when_fully_healthy(client, monkeypatch):
     import db as _db
     monkeypatch.setattr(_db, "healthcheck", lambda: {

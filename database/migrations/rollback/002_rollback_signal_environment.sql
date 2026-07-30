@@ -1,0 +1,58 @@
+-- ============================================================================
+-- 002_rollback_signal_environment.sql   — FOR REVIEW ONLY. DO NOT RUN CASUALLY.
+--
+--   *** THIS SCRIPT LOSES INFORMATION AND CAN FAIL OUTRIGHT.              ***
+--
+-- Dropping `environment` discards which deployment wrote each row — that fact
+-- is not recorded anywhere else in the signals table and cannot be recovered.
+--
+-- Worse, restoring the NARROWER idempotency index can FAIL: if production and a
+-- preview both published the same candle for the same strategy_version, those
+-- rows are legal under the per-environment index and duplicates under the old
+-- one. The CREATE UNIQUE INDEX would then error, leaving the table with no
+-- uniqueness guarantee at all if it is run outside a transaction.
+--
+-- Nothing in this repository executes this file. No migration runner, no test,
+-- no API route and no deployment step references it. It exists so the rollback
+-- path is reviewable, not so it is automatic. database/migrate.py explicitly
+-- refuses to run rollbacks.
+--
+-- Before even considering running it:
+--   1. Take a Neon branch or backup of the database.
+--   2. Check what the narrow index would reject:
+--        SELECT symbol, exchange, timeframe, strategy_name, strategy_version,
+--               candle_close_time, count(*), array_agg(environment)
+--        FROM   signals
+--        GROUP  BY 1,2,3,4,5,6
+--        HAVING count(*) > 1;
+--      Every row returned must be resolved (archived, deleted, or accepted as
+--      a reason NOT to roll back) before the index can be recreated.
+--   3. Deploy application code that does not reference the column first. The
+--      running code probes for it, so it degrades rather than breaking — but
+--      after the drop, preview and production writes collide again.
+--   4. Have a second person confirm.
+--
+-- In almost every case the correct rollback is to revert the APPLICATION code
+-- and LEAVE THE COLUMN IN PLACE. A text column on the free tier costs a few
+-- kilobytes; the ability to tell preview rows from real ones is worth more.
+--
+-- To run deliberately, uncomment the block below.
+-- ============================================================================
+
+-- BEGIN;
+--
+-- -- Restore the pre-002 uniqueness rule. THIS FAILS if any candle was
+-- -- published by more than one environment — see step 2 above.
+-- CREATE UNIQUE INDEX IF NOT EXISTS signals_idempotency_uidx
+--     ON signals (symbol, exchange, timeframe,
+--                 strategy_name, strategy_version, candle_close_time);
+--
+-- DROP INDEX IF EXISTS signals_idempotency_env_uidx;
+-- DROP INDEX IF EXISTS signals_environment_generated_idx;
+--
+-- ALTER TABLE signals DROP CONSTRAINT IF EXISTS signals_environment_chk;
+-- ALTER TABLE signals DROP COLUMN IF EXISTS environment;
+--
+-- DELETE FROM schema_migrations WHERE version = '002';
+--
+-- COMMIT;

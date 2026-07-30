@@ -30,9 +30,12 @@ backend/
   signal_store.py     repository layer    ── all signal SQL lives here
   signal_snapshot.py  decision snapshot builder (allow-listed)
   signal_publish.py   recommendation -> stored signal
+  deploy_context.py   which deployment am I (production / preview / local)
 database/
   migrations/001_initial_signal_schema.sql
+  migrations/002_signal_environment.sql
   migrations/rollback/001_rollback_signal_schema.sql   (review only)
+  migrations/rollback/002_rollback_signal_environment.sql  (review only)
   verify_schema.sql
   migrate.py          explicit CLI runner (never automatic)
 ```
@@ -57,6 +60,7 @@ Set these in **Vercel → Project → Settings → Environment Variables**
 | `DATABASE_URL` | yes, to persist | Neon connection string. Injected automatically by the Vercel↔Neon integration. |
 | `DB_REQUIRED` | recommended | `true` in production: refuse to publish a signal that was not recorded. Defaults to `false`. |
 | `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v42_tpfilter`. Bump whenever the signal maths changes. |
+| `SIGNAL_ENVIRONMENT` | optional | Overrides the environment label written on every signal. Defaults to Vercel's own `VERCEL_ENV`, then `local`. See *Shared database, separate environments*. |
 | `CRON_SECRET` | yes, for mutations | Existing project secret. Protects archive / postmortem / usage endpoints. |
 | `TEST_DATABASE_URL` | tests only | Throwaway database for the DB test suite. **Never production.** |
 | `DB_CONNECT_TIMEOUT`, `DB_STATEMENT_TIMEOUT_MS` | optional | Defaults 10s / 15000ms. |
@@ -112,7 +116,12 @@ Creating the database does not create the tables. Continue below.
    it. Check the five result sets described at the top of that file.
 9. Never paste `DATABASE_URL` into a chat, an issue, or a support ticket.
 
-Re-running the migration is safe (every object uses `IF NOT EXISTS` and the
+Then repeat steps 4-6 for `database/migrations/002_signal_environment.sql`,
+which tags each signal with the deployment that wrote it. It is additive except
+for one deliberate index replacement — read the header comment before running it.
+After it applies, `/api/db/health` reports `"environment_tagging": true`.
+
+Re-running either migration is safe (every object uses `IF NOT EXISTS` and the
 version row uses `ON CONFLICT DO NOTHING`), but there is no reason to.
 
 ### Option B — CLI
@@ -128,6 +137,7 @@ or with psql:
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/001_initial_signal_schema.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/002_signal_environment.sql
 psql "$DATABASE_URL" -f database/verify_schema.sql
 ```
 
@@ -158,8 +168,12 @@ datetime is rejected rather than assumed to be UTC.
 There is one unique constraint:
 
 ```
-(symbol, exchange, timeframe, strategy_name, strategy_version, candle_close_time)
+(environment, symbol, exchange, timeframe, strategy_name, strategy_version,
+ candle_close_time)
 ```
+
+(`environment` joins the key in migration 002 — before that it is the same key
+without it.)
 
 * **Re-evaluating the same closed candle** returns the existing signal and
   writes nothing. The publish path can safely run on every slot and every
@@ -176,9 +190,47 @@ There is one unique constraint:
   The current default is `v42_tpfilter`; anything scored before the
   market-structure confluence work is not comparable with anything after it.
 
+* **Environments do not collide.** A preview deploy sharing `DATABASE_URL`
+  publishes its own row for the same candle instead of claiming production's.
+  See below for why that matters.
+
 Lifecycle **events** have their own unique `idempotency_key`, derived from
 `(signal_id, event_type, source timestamp)` — never wall-clock time, or a
 replay one second later would look like a new event.
+
+## Shared database, separate environments
+
+In this project `DATABASE_URL` is scoped to **All Environments** in Vercel, so a
+preview deployment writes into the *same* Neon branch as production. Two problems
+follow, and migration `002_signal_environment.sql` fixes both:
+
+1. **Preview rows looked exactly like real ones.** Every signal now records the
+   deployment that wrote it in `signals.environment` — `production`, `preview`,
+   `local`, or whatever `SIGNAL_ENVIRONMENT` says.
+2. **Preview could silently suppress production.** The old idempotency key had no
+   notion of environment, so whichever deployment evaluated a candle first
+   claimed it and the other one's write came back as a duplicate and was dropped.
+   `environment` is now part of the key.
+
+How it behaves:
+
+| | Behaviour |
+|---|---|
+| Label source | `SIGNAL_ENVIRONMENT`, else `VERCEL_ENV`, else `local`. Never request input — a client cannot influence it. |
+| Reads | Scoped to the *current* environment by default, so production never serves a preview deploy's signals. `?environment=all` shows everything; `?environment=preview` shows one. |
+| Storage cost | One short text column plus two indexes. |
+| Deployment detail | The branch and commit sha are recorded on the `CREATED` event (`metadata.deployment`), not in a column, and are **not** exposed by `/api/db/health`. |
+| Before the migration | The code probes for the column and writes untagged when it is absent, so deploying before migrating cannot break publishing. |
+
+`/api/db/health` reports `environment` (which deployment answered) and
+`environment_tagging` (whether 002 has been applied). `/api/db/usage` adds
+`signals_by_environment`, so you can see how much stored history came from
+preview deploys.
+
+**Keeping preview out entirely** is still the stronger option, if you want it:
+give the Preview scope its own `DATABASE_URL` (a separate Neon branch), or enable
+Neon's per-preview branching in the Vercel integration. The tagging above is what
+makes the shared setup *safe*; a separate branch makes it *unnecessary*.
 
 ## Signal lifecycle
 

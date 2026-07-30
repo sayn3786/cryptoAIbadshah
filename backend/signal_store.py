@@ -25,12 +25,14 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+import deploy_context
 from db import session_scope, DatabaseUnavailable   # noqa: F401  (re-exported)
 
 __all__ = [
     "SignalValidationError", "InvalidTransition",
     "STATUSES", "TERMINAL_STATUSES", "EVENT_TYPES", "ALLOWED_TRANSITIONS",
     "validate_price_structure", "assert_transition", "make_idempotency_key",
+    "has_environment_column", "reset_capabilities",
     "create_signal", "get_signal", "list_active_signals", "list_signals",
     "record_target_hit", "record_stop_loss_hit", "close_signal",
     "expire_signal", "cancel_signal", "upsert_postmortem", "archive_signal",
@@ -211,6 +213,49 @@ def _sql(text_: str):
     return text(text_)
 
 
+# ── Schema capabilities ──────────────────────────────────────────────────────
+# `signals.environment` arrives in migration 002. The code must work on both
+# sides of that migration: if it assumed the column, then deploying before
+# migrating would fail EVERY write — and with DB_REQUIRED=true that means
+# publishing stops entirely. So the column is probed once and the SQL adapts.
+#
+# Cached per process. A serverless instance is short-lived and a new deployment
+# is always a cold start, so a preview deploy can never inherit a stale "no
+# column" answer from before the migration. The only stale case is a warm
+# PRODUCTION instance still writing without the column, whose rows then take the
+# 'production' default — which is what they are anyway.
+
+_ENV_COLUMN: Optional[bool] = None
+
+
+def reset_capabilities() -> None:
+    """Forget probed schema capabilities. Used by tests and after a migration."""
+    global _ENV_COLUMN
+    _ENV_COLUMN = None
+
+
+def has_environment_column(session) -> bool:
+    """True when signals.environment exists (i.e. migration 002 has been run)."""
+    global _ENV_COLUMN
+    if _ENV_COLUMN is None:
+        try:
+            # pg_attribute rather than information_schema: unqualified
+            # to_regclass respects search_path, so this resolves in whatever
+            # schema the tables actually live in (tests use a throwaway one).
+            _ENV_COLUMN = bool(session.execute(_sql("""
+                SELECT count(*) > 0
+                FROM   pg_attribute
+                WHERE  attrelid = to_regclass('signals')
+                  AND  attname  = 'environment'
+                  AND  NOT attisdropped
+            """)).scalar())
+        except Exception:
+            # An unreadable catalog is not a reason to fail a write. Assume the
+            # older schema: writes still succeed, just untagged.
+            _ENV_COLUMN = False
+    return _ENV_COLUMN
+
+
 def _row_to_dict(row) -> Dict[str, Any]:
     d = dict(row._mapping)
     for k, v in list(d.items()):
@@ -266,6 +311,7 @@ def create_signal(*,
                   input_candle_count: int,
                   data_quality_flags: Optional[Dict[str, Any]] = None,
                   confidence_score: Any = None,
+                  environment: Optional[str] = None,
                   session=None) -> Dict[str, Any]:
     """
     Persist a published signal with its targets, decision snapshot and CREATED
@@ -274,10 +320,16 @@ def create_signal(*,
     Returns ``{"signal": {...}, "created": bool, "idempotent_hit": bool}``.
 
     When a signal already exists for the same
-    (symbol, exchange, timeframe, strategy_name, strategy_version,
+    (environment, symbol, exchange, timeframe, strategy_name, strategy_version,
     candle_close_time) the existing row is returned with ``created=False`` and
     nothing is written — re-evaluating the same closed candle is a no-op, which
     is what makes the caller safe to retry.
+
+    ``environment`` defaults to this deployment's own label (see
+    deploy_context). It is part of the idempotency key so that a PREVIEW deploy
+    sharing the database cannot claim a candle and make production's write look
+    like a duplicate. Before migration 002 the column does not exist; writes
+    then proceed untagged and idempotency is shared, as it was.
 
     Raises SignalValidationError BEFORE opening a transaction if the record is
     inconsistent. Any database failure propagates after a full rollback, and
@@ -295,6 +347,12 @@ def create_signal(*,
     if not strategy_name or not strategy_version:
         raise SignalValidationError("strategy_name and strategy_version are required")
 
+    env = (environment or deploy_context.environment() or "").strip().lower()
+    if not deploy_context.SLUG_RE.match(env):
+        # Never fail a real write over a malformed label — the CHECK constraint
+        # would reject it, so normalise instead.
+        env = "unknown"
+
     # Geometry first: never open a transaction for a record we will reject.
     validate_price_structure(direction, entry_price, stop_loss, targets)
 
@@ -310,36 +368,47 @@ def create_signal(*,
     conf_d = _opt_dec(confidence_score, "confidence_score")
 
     def _work(s) -> Dict[str, Any]:
-        inserted = s.execute(_sql("""
+        # The ON CONFLICT target must name the columns of an existing unique
+        # index, so it has to match whichever idempotency index this database
+        # actually has — pre-002 (no environment) or post-002 (with it).
+        tagged = has_environment_column(s)
+        env_col = ", environment" if tagged else ""
+        env_val = ", :env" if tagged else ""
+        env_key = "environment, " if tagged else ""
+        env_and = "AND environment=:env " if tagged else ""
+
+        params = {"symbol": symbol, "exchange": exchange, "timeframe": timeframe,
+                  "direction": direction, "sname": strategy_name,
+                  "sver": strategy_version, "open_t": open_t, "close_t": close_t,
+                  "gen_t": gen_t, "entry": entry_d, "stop": stop_d, "conf": conf_d}
+        if tagged:
+            params["env"] = env
+
+        inserted = s.execute(_sql(f"""
             INSERT INTO signals
                    (symbol, exchange, timeframe, direction,
                     strategy_name, strategy_version,
                     candle_open_time, candle_close_time, generated_at,
-                    entry_price, stop_loss, confidence_score, status)
+                    entry_price, stop_loss, confidence_score, status{env_col})
             VALUES (:symbol, :exchange, :timeframe, :direction,
                     :sname, :sver,
                     :open_t, :close_t, :gen_t,
-                    :entry, :stop, :conf, 'OPEN')
-            ON CONFLICT (symbol, exchange, timeframe,
+                    :entry, :stop, :conf, 'OPEN'{env_val})
+            ON CONFLICT ({env_key}symbol, exchange, timeframe,
                          strategy_name, strategy_version, candle_close_time)
             DO NOTHING
             RETURNING id
-        """), {"symbol": symbol, "exchange": exchange, "timeframe": timeframe,
-               "direction": direction, "sname": strategy_name, "sver": strategy_version,
-               "open_t": open_t, "close_t": close_t, "gen_t": gen_t,
-               "entry": entry_d, "stop": stop_d, "conf": conf_d}).first()
+        """), params).first()
 
         if inserted is None:
             # Idempotent hit: this candle already produced a signal. Return it
             # untouched — do NOT write targets/snapshot/event again.
-            existing = s.execute(_sql("""
+            existing = s.execute(_sql(f"""
                 SELECT * FROM signals
                 WHERE symbol=:symbol AND exchange=:exchange AND timeframe=:timeframe
                   AND strategy_name=:sname AND strategy_version=:sver
-                  AND candle_close_time=:close_t
-            """), {"symbol": symbol, "exchange": exchange, "timeframe": timeframe,
-                   "sname": strategy_name, "sver": strategy_version,
-                   "close_t": close_t}).first()
+                  AND candle_close_time=:close_t {env_and}
+            """), params).first()
             return {"signal": _row_to_dict(existing) if existing else None,
                     "created": False, "idempotent_hit": True}
 
@@ -362,8 +431,13 @@ def create_signal(*,
                "st": _jsonb(source_timestamps), "count": int(input_candle_count or 0),
                "dq": _jsonb(data_quality_flags or {})})
 
+        # Deployment detail (branch, short sha) lives in the event trail rather
+        # than in a column: it is audit context for "which preview wrote this",
+        # not something anything queries or filters on.
+        _deploy = {k: v for k, v in deploy_context.describe().items() if v}
         _insert_event(s, signal_id, "CREATED", gen_t, price=entry_d,
-                      metadata={"targets": [str(t) for t in tps]},
+                      metadata={"targets": [str(t) for t in tps],
+                                "deployment": {**_deploy, "environment": env}},
                       idempotency_key=make_idempotency_key(signal_id, "CREATED", close_t))
 
         row = s.execute(_sql("SELECT * FROM signals WHERE id=:id"),
@@ -425,6 +499,34 @@ def get_signal(signal_id, *, session=None) -> Optional[Dict[str, Any]]:
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 25
 
+# Reserved environment filter values — an environment can never be named these.
+ENV_CURRENT = "current"   # only rows this deployment wrote (the default)
+ENV_ALL = "all"           # every environment, preview rows included
+
+
+def _environment_clause(session, environment: Optional[str]):
+    """
+    SQL fragment restricting a query to one environment.
+
+    Reads default to the CURRENT environment, so a production deployment does
+    not serve signals a preview deploy happened to write into the shared
+    database. Pass ``"all"`` to see everything.
+
+    Returns ``("", {})`` — no filtering — when the column does not exist yet,
+    so the same code runs on both sides of migration 002.
+    """
+    if not has_environment_column(session):
+        return "", {}
+    env = (environment or ENV_CURRENT).strip().lower()
+    if env == ENV_ALL:
+        return "", {}
+    if env == ENV_CURRENT:
+        env = deploy_context.environment()
+    if not deploy_context.SLUG_RE.match(env):
+        raise SignalValidationError(
+            "environment filter must be a short lowercase slug, 'current' or 'all'")
+    return " AND environment = :env", {"env": env}
+
 
 def list_signals(*, statuses: Optional[Iterable[str]] = None,
                  symbol: Optional[str] = None,
@@ -433,11 +535,16 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
                  strategy_version: Optional[str] = None,
                  exchange: Optional[str] = None,
                  include_archived: bool = False,
+                 environment: Optional[str] = None,
                  limit: int = DEFAULT_PAGE_SIZE,
                  offset: int = 0,
                  session=None) -> Dict[str, Any]:
     """
     Paginated history, newest first. Archived rows are hidden unless asked for.
+
+    ``environment`` defaults to this deployment's own — pass ``"all"`` to
+    include rows written by other environments (e.g. preview deploys sharing the
+    database), or a specific slug to look at one.
 
     Returns {"items": [...], "limit", "offset", "total", "has_more"}.
     """
@@ -473,15 +580,18 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
     if not include_archived:
         where.append("archived_at IS NULL")
 
-    clause = " AND ".join(where)
+    base = " AND ".join(where)
 
     def _work(s):
+        env_sql, env_params = _environment_clause(s, environment)
+        clause = base + env_sql
+        p = {**params, **env_params}
         total = s.execute(_sql(f"SELECT count(*) FROM signals WHERE {clause}"),
-                          params).scalar() or 0
+                          p).scalar() or 0
         rows = s.execute(_sql(
             f"SELECT * FROM signals WHERE {clause} "
             f"ORDER BY generated_at DESC, id DESC LIMIT :limit OFFSET :offset"
-        ), params).all()
+        ), p).all()
         items = [_row_to_dict(r) for r in rows]
         return {"items": items, "limit": limit, "offset": offset,
                 "total": int(total), "has_more": offset + len(items) < int(total)}
@@ -492,10 +602,11 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
         return _work(s)
 
 
-def list_active_signals(*, session=None, limit: int = MAX_PAGE_SIZE) -> List[Dict[str, Any]]:
-    """Signals still working: OPEN or PARTIAL_TP, unarchived."""
+def list_active_signals(*, environment: Optional[str] = None, session=None,
+                        limit: int = MAX_PAGE_SIZE) -> List[Dict[str, Any]]:
+    """Signals still working: OPEN or PARTIAL_TP, unarchived, this environment."""
     return list_signals(statuses=["OPEN", "PARTIAL_TP"], limit=limit,
-                        session=session)["items"]
+                        environment=environment, session=session)["items"]
 
 
 # ── Lifecycle updates ────────────────────────────────────────────────────────
@@ -859,7 +970,17 @@ def usage_report(*, session=None) -> Dict[str, Any]:
             FROM signals
         """)).first()
         c = dict(counts._mapping)
+        # Per-environment split: on a shared database this is how you see how
+        # much of the stored history was written by preview deploys rather than
+        # by production.
+        by_env = {}
+        if has_environment_column(s):
+            by_env = {r[0]: int(r[1]) for r in s.execute(_sql(
+                "SELECT environment, count(*) FROM signals "
+                "GROUP BY environment ORDER BY environment")).all()}
         return {
+            "environment": deploy_context.environment(),
+            "signals_by_environment": by_env,
             "database_size_bytes": int(size),
             "database_size_pretty": f"{int(size) / (1024*1024):.1f} MB",
             "estimated_row_counts": est,

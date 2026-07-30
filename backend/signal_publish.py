@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import db
+import deploy_context
 import signal_store as store
 from signal_snapshot import build_snapshot
 
@@ -175,7 +176,10 @@ def persist_recommendation(rec: Dict[str, Any],
     sig = out.get("signal") or {}
     res.update(ok=True, actionable=True, created=bool(out.get("created")),
                idempotent_hit=bool(out.get("idempotent_hit")),
-               signal_id=sig.get("id"))
+               signal_id=sig.get("id"),
+               # Read back from the stored row, not from the env var — this is
+               # what the database actually recorded. None before migration 002.
+               environment=sig.get("environment"))
     return res
 
 
@@ -207,6 +211,11 @@ def persist_recommendations(recs: List[Dict[str, Any]],
     return {
         "results": results,
         "all_actionable": not failed,
+        # Which deployment these rows belong to. On a shared DATABASE_URL this is
+        # how you tell a preview's output from production's.
+        "environment": deploy_context.environment(),
+        "environment_recorded": next((r.get("environment") for r in results
+                                      if r.get("environment")), None),
         "persisted": sum(1 for r in results if r.get("created")),
         "duplicates": sum(1 for r in results if r.get("idempotent_hit")),
         "failed": failed,
