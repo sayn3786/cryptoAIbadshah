@@ -341,8 +341,16 @@ since the signal's own candle and decides what the market did:
 | Idempotent | Every decision is keyed on the candle that caused it, never wall-clock time, so re-running over the same candles changes nothing. |
 | One bad signal never abandons the batch | A monitor that stops at the first error silently leaves the rest open. |
 
-It runs hourly from `.github/workflows/signal-monitor.yml`, and can be triggered
-by hand from the Actions tab. Running it more often is harmless.
+`.github/workflows/signal-monitor.yml` ships **manual-only**. Enabling the hourly
+schedule in the same change that ships the monitor would resolve every signal
+already in the database on the first tick — including old ones that would age
+straight out — before anyone had seen what it decided.
+
+**First run:** Actions tab → *Signal Outcome Monitor* → *Run workflow*, leaving
+`max_age_hours` at **720**. Nothing expires at that setting, so only genuine
+target and stop hits are recorded. Check `/api/signals/tracker` (or the dashboard
+section), then uncomment the `schedule:` block to make it hourly. Running it more
+often than that is harmless.
 
 ## Signal Tracker (dashboard)
 
