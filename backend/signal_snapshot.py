@@ -187,6 +187,20 @@ def build_snapshot(analysis: Dict[str, Any],
         # Patterns / breakout confirmation
         **_pattern_summary(analysis),
 
+        # Market-structure confluence. These are the whole point of a postmortem
+        # on a losing trade: they record whether the strategy KNEW about a
+        # stop-run risk, a chase, or stale structure at decision time — and how
+        # much it discounted the trade for it. Without them the snapshot would
+        # show the strength but not why it was cut.
+        "structure_adjustment": _num(signal.get("structure_adjustment")),
+        "structure_factors": redact(signal.get("structure_factors")),
+        # Whether the stop had to be moved clear of a pool, or could not be.
+        # A trade that lost with stop_liquidity.blocked set was flagged as
+        # sitting in a sweep zone before it was ever taken.
+        "stop_liquidity": redact(signal.get("stop_liquidity")),
+        # What TP2 was trading to — a liquidity pool or a zone/line.
+        "tp_anchor": redact(signal.get("tp_anchor")),
+
         # The decision itself
         "signal_score": _num(signal.get("score")),
         "signal_strength": _num(signal.get("strength")),

@@ -163,3 +163,85 @@ def test_snapshot_stays_small_enough_for_the_free_tier():
     # One snapshot per published signal; a few KB keeps years of history
     # comfortably inside the free allowance.
     assert size < 16_384, f"snapshot is {size} bytes — too large to store per signal"
+
+
+# ── Market-structure confluence must reach the snapshot ─────────────────────
+# The snapshot's allow-list predated the confluence work, so a losing signal
+# would have recorded its strength without recording WHY that strength was cut.
+# For a postmortem that is the most important part.
+
+def _confluence_signal(**over):
+    s = _signal()
+    s.update({
+        "structure_adjustment": -5,
+        "structure_factors": [
+            {"factor": "stop_run_risk", "points": -4, "pool_distance_atr": 0.176,
+             "pool_price": 64368.425, "touches": 4, "bars_ago": 29,
+             "freshness": 0.35, "source": "liquidity_pools"},
+            {"factor": "bos_stale", "points": 0, "direction": "bullish",
+             "count": 1, "bars_ago": 9},
+        ],
+        "stop_liquidity": {"sl_dist": 759.6, "moved": True,
+                           "pool_price": 64941.625, "touches": 8,
+                           "blocked": False, "note": "Stop widened past the 8-touch pool"},
+        "tp_anchor": {"wall": 63055.8, "r_multiple": 1.61,
+                      "kind": "liquidity_pool", "touches": 3},
+    })
+    s.update(over)
+    return s
+
+
+def test_structure_adjustment_and_factors_are_captured():
+    iv = build_snapshot(_analysis(), _confluence_signal())["indicator_values"]
+    assert iv["structure_adjustment"] == -5
+    kinds = {f["factor"] for f in iv["structure_factors"]}
+    assert kinds == {"stop_run_risk", "bos_stale"}
+
+
+def test_the_stop_run_detail_survives_for_postmortem_analysis():
+    iv = build_snapshot(_analysis(), _confluence_signal())["indicator_values"]
+    sr = [f for f in iv["structure_factors"] if f["factor"] == "stop_run_risk"][0]
+    # Distance, conviction and AGE all matter when asking why a trade lost.
+    assert sr["pool_distance_atr"] == 0.176
+    assert sr["touches"] == 4
+    assert sr["bars_ago"] == 29
+    assert sr["freshness"] == 0.35
+
+
+def test_stop_liquidity_verdict_is_captured():
+    iv = build_snapshot(_analysis(), _confluence_signal())["indicator_values"]
+    assert iv["stop_liquidity"]["moved"] is True
+    assert iv["stop_liquidity"]["pool_price"] == 64941.625
+
+
+def test_a_blocked_stop_is_recorded_so_the_loss_can_be_explained():
+    # A trade that lost with `blocked` set was flagged as sitting in a sweep
+    # zone before it was ever taken — the single most useful postmortem fact.
+    sig = _confluence_signal(stop_liquidity={
+        "sl_dist": 643.6, "moved": False, "pool_price": 64941.625,
+        "touches": 8, "blocked": True,
+        "note": "Stop sits inside a liquidity sweep zone … reduce size or wait."})
+    iv = build_snapshot(_analysis(), sig)["indicator_values"]
+    assert iv["stop_liquidity"]["blocked"] is True
+    assert "sweep zone" in iv["stop_liquidity"]["note"]
+
+
+def test_tp_anchor_is_captured():
+    iv = build_snapshot(_analysis(), _confluence_signal())["indicator_values"]
+    assert iv["tp_anchor"]["kind"] == "liquidity_pool"
+    assert iv["tp_anchor"]["r_multiple"] == 1.61
+
+
+def test_missing_confluence_fields_do_not_break_the_snapshot():
+    # Older payloads, or a NEUTRAL read where none of these exist.
+    iv = build_snapshot(_analysis(), _signal())["indicator_values"]
+    assert iv["structure_adjustment"] is None
+    assert iv["stop_liquidity"] is None
+    assert iv["tp_anchor"] is None
+
+
+def test_the_snapshot_is_still_small_enough_for_the_free_tier():
+    import json
+    snap = build_snapshot(_analysis(), _confluence_signal())
+    size = len(json.dumps(snap, default=str))
+    assert size < 16_384, f"snapshot grew to {size} bytes"

@@ -179,3 +179,27 @@ def test_batch_is_all_actionable_when_persistence_is_optional():
 def test_strategy_version_is_reported():
     assert sp.strategy_version() == sp.STRATEGY_VERSION
     assert sp.STRATEGY_VERSION, "a signal must always record which rules produced it"
+
+
+# ── Strategy version must track the scoring ────────────────────────────────
+
+def test_strategy_version_reflects_the_current_rules():
+    # The scoring moved six times (v36..v41: confluence, decay, pool ladder,
+    # liquidity-aware stops, TP anchoring, pool recency). Signals scored before
+    # that are not comparable with signals scored after, which is what this
+    # column exists to separate.
+    assert sp.STRATEGY_VERSION == "v41_poolage"
+    assert "v35" not in sp.STRATEGY_VERSION
+
+
+def test_strategy_version_is_overridable_by_env(monkeypatch):
+    monkeypatch.setenv("STRATEGY_VERSION", "experiment_a")
+    import importlib
+    importlib.reload(sp)
+    try:
+        assert sp.STRATEGY_VERSION == "experiment_a"
+    finally:
+        monkeypatch.undenv = None
+        monkeypatch.delenv("STRATEGY_VERSION", raising=False)
+        importlib.reload(sp)
+    assert sp.STRATEGY_VERSION == "v41_poolage"

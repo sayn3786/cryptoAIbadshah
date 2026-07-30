@@ -32,12 +32,16 @@ __all__ = [
 ]
 
 # Identifies the rule-set that produced a signal. Bump STRATEGY_VERSION when
-# the signal maths changes, so old and new signals stay independently
-# analysable and the idempotency key does not collide across versions.
-# (This task did NOT change any signal maths, so the version is unchanged
-# from the engine's existing "v35_mtf" cache-key lineage.)
+# the signal maths changes, so old and new signals stay independently analysable
+# and the idempotency key does not collide across versions.
 STRATEGY_NAME = "mtf_confluence_top3"
-STRATEGY_VERSION = os.getenv("STRATEGY_VERSION", "v35_mtf").strip() or "v35_mtf"
+# v41: market-structure confluence now moves strength (stop-run risk, range
+# chase, BOS persistence — all age-decayed), stops are placed clear of liquidity
+# pools, and take-profits anchor to them. Signals scored before that are NOT
+# comparable with signals scored after, which is exactly what this column is for.
+_DEFAULT_STRATEGY_VERSION = "v41_poolage"
+STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
+                    or _DEFAULT_STRATEGY_VERSION)
 
 
 def strategy_version() -> str:
