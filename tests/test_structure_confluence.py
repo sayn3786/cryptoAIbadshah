@@ -402,3 +402,124 @@ def test_given_back_beats_freshness_check():
     out = structure_confluence(_with_bos("bullish", count=5, held=False, bars_ago=0), "LONG")
     assert out["delta"] == 0
     assert [f["factor"] for f in out["factors"]] == ["bos_given_back"]
+
+
+# ── Pool source: the clustered ladder, not one level per side ────────────────
+# Regression: the scorer read only equal_levels, which holds ONE eqh and ONE
+# eql. On a live BTC 2H chart that single equal-high was a level price had
+# already traded through, while liquidity_pools held a 7-touch and a 4-touch
+# cluster 0.18-0.19 ATR overhead — real stop-run risk, scored as zero.
+from signals import _nearest_threatening_pool                          # noqa: E402
+
+
+def _live_btc():
+    """The reported BTC 2H state, ATR tuned to the app's own 0.9% figure."""
+    price = 64266.4
+    spread = (price * 0.009) / 2.0
+    candles = [{"timestamp": 1785000000000 + i * 7200000, "open": price,
+                "high": price + spread, "low": price - spread, "close": price}
+               for i in range(40)]
+    return price, {
+        "candles": candles,
+        "equal_levels": {"eqh": {"price": 64197.0, "touches": 10},
+                         "eql": {"price": 63365.4, "touches": 11}},
+        "liquidity_pools": [
+            {"price": 64941.625, "side": "above", "touches": 8},
+            {"price": 63782.675, "side": "below", "touches": 8},
+            {"price": 64377.12857143, "side": "above", "touches": 7},
+            {"price": 65706.36, "side": "above", "touches": 5},
+            {"price": 64368.425, "side": "above", "touches": 4},
+            {"price": 62593.66666667, "side": "below", "touches": 3},
+            {"price": 66353.7, "side": "above", "touches": 2},
+            {"price": 66852.4, "side": "above", "touches": 2}],
+    }
+
+
+def test_the_live_btc_short_now_sees_the_overhead_pool():
+    price, a = _live_btc()
+    out = structure_confluence(a, "SHORT")
+    sr = [f for f in out["factors"] if f["factor"] == "stop_run_risk"]
+    assert sr, "a 4-touch pool 0.18 ATR overhead must register for a SHORT"
+    assert sr[0]["source"] == "liquidity_pools"
+    assert sr[0]["pool_price"] == 64368.425
+    assert sr[0]["pool_distance_atr"] < STOP_RUN_ATR
+    assert out["delta"] < 0
+
+
+def test_the_live_btc_long_is_correctly_unaffected():
+    # Nearest pool BELOW price is 63782.675, ~0.84 ATR away — out of range.
+    price, a = _live_btc()
+    out = structure_confluence(a, "LONG")
+    assert not [f for f in out["factors"] if f["factor"] == "stop_run_risk"]
+
+
+def test_ladder_is_preferred_over_equal_levels():
+    price, a = _live_btc()
+    lvl, touches, src = _nearest_threatening_pool(a, price, is_long=False)
+    assert src == "liquidity_pools"
+    assert lvl == 64368.425, "must take the NEAREST threatening pool"
+
+
+def test_only_the_nearest_pool_scores():
+    # Two clusters within range (64368.425 and 64377.13) are one zone in
+    # practice; stacking a penalty per level would double-count it.
+    price, a = _live_btc()
+    out = structure_confluence(a, "SHORT")
+    assert len([f for f in out["factors"] if f["factor"] == "stop_run_risk"]) == 1
+
+
+def test_pools_on_the_safe_side_are_ignored():
+    price, a = _live_btc()
+    # For a SHORT, everything BELOW price is irrelevant to its stops.
+    lvl, _, _ = _nearest_threatening_pool(a, price, is_long=False)
+    assert lvl > price
+    lvl_long, _, _ = _nearest_threatening_pool(a, price, is_long=True)
+    assert lvl_long <= price
+
+
+def test_thinly_touched_pools_are_skipped_in_favour_of_a_real_one():
+    price, a = _live_btc()
+    a["liquidity_pools"] = [
+        {"price": price + 1.0, "touches": 1},                 # nearer but 1 touch
+        {"price": price + 60.0, "touches": 6},                # the real pool
+    ]
+    lvl, touches, _ = _nearest_threatening_pool(a, price, is_long=False)
+    assert lvl == price + 60.0 and touches == 6
+
+
+def test_falls_back_to_equal_levels_without_a_ladder():
+    price, a = _live_btc()
+    a.pop("liquidity_pools")
+    a["equal_levels"] = {"eqh": {"price": price + 50.0, "touches": 6}}
+    lvl, touches, src = _nearest_threatening_pool(a, price, is_long=False)
+    assert src == "equal_levels" and lvl == price + 50.0 and touches == 6
+
+
+def test_fallback_still_rejects_an_already_breached_level():
+    # The original bug: eqh BELOW price cannot hold a short's stops.
+    price, a = _live_btc()
+    a.pop("liquidity_pools")
+    lvl, _, src = _nearest_threatening_pool(a, price, is_long=False)
+    assert lvl is None and src is None
+
+
+def test_empty_and_malformed_pools_are_survivable():
+    price, a = _live_btc()
+    for bad in ([], None,
+                [{"price": None, "touches": 5}],
+                [{"price": "abc", "touches": 5}],
+                [{"price": price + 10}],                 # no touches
+                [{"price": 0, "touches": 9}],
+                [{}]):
+        a["liquidity_pools"] = bad
+        # Must not raise; falls through to equal_levels (which is breached here).
+        assert structure_confluence(a, "SHORT")["delta"] <= 0
+
+
+def test_pool_exactly_at_price_is_the_worst_case_not_an_exemption():
+    price, a = _live_btc()
+    a["liquidity_pools"] = [{"price": price, "touches": 6}]
+    for d in ("LONG", "SHORT"):
+        out = structure_confluence(a, d)
+        sr = [f for f in out["factors"] if f["factor"] == "stop_run_risk"]
+        assert sr and sr[0]["pool_distance_atr"] == 0.0, f"{d} should register"
