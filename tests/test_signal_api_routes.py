@@ -278,6 +278,30 @@ def test_tracker_window_is_bounded(client, fake, monkeypatch):
     assert client.get("/api/signals/tracker?days=junk").get_json()["window_days"] == 3
 
 
+def test_the_table_does_not_wait_forever_for_live_prices(client, fake, monkeypatch):
+    """
+    The tracker's job is the state of your trades; live progress is a bonus.
+
+    A stalled market-data provider must not hold the table hostage — past the
+    budget the rows render without live progress, which build_row handles.
+    """
+    import time as _time
+    monkeypatch.setenv("TRACKER_PRICE_BUDGET_S", "0.2")
+
+    def slow(sym, tf, *a, **k):
+        _time.sleep(5)
+        return {"live_price": 101.0}
+
+    monkeypatch.setattr(appmod, "get_analysis", slow)
+    started = _time.time()
+    body = client.get("/api/signals/tracker").get_json()
+    elapsed = _time.time() - started
+
+    assert elapsed < 3, f"the request waited {elapsed:.1f}s on a stalled provider"
+    assert body["live"][0]["live_price"] is None
+    assert body["live"][0]["symbol"] == "BTC", "the row is still served"
+
+
 def test_tracker_survives_a_price_lookup_failure(client, fake, monkeypatch):
     # Market data being down must not take the tracker down with it — the rows
     # still render, just without live progress.

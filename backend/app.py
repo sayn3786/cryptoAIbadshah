@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from btc_onchain import get_btc_mining_signals, get_gomining_strategy, get_lth_accumulation_proxy
 from options import get_options_expiry_data
 from typing import Dict, List, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (ThreadPoolExecutor, as_completed,
+                                TimeoutError as FuturesTimeout)
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -3073,17 +3074,30 @@ def _tracker_prices(symbols) -> dict:
                      or (data.get("signal") or {}).get("current_price"))
 
     out = {}
-    # In parallel: the tracker's wall-clock is then the slowest SINGLE symbol
-    # rather than the sum of them all. Serially, one slow upstream fetch would
-    # hold the whole table hostage.
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        for fut in as_completed([ex.submit(_one, s) for s in wanted]):
-            try:
-                sym, price = fut.result()
-            except Exception:
-                continue
-            if price:
-                out[sym] = price
+    # In parallel AND on a deadline. The tracker's job is to show the state of
+    # your trades; live progress is a bonus on top. Serially, one slow upstream
+    # fetch held the whole table hostage — and even in parallel, a stalled
+    # provider would. Past the budget we return what arrived and the remaining
+    # rows simply render without live progress, which build_row already handles.
+    budget = float(os.getenv("TRACKER_PRICE_BUDGET_S", "6") or 6)
+    ex = ThreadPoolExecutor(max_workers=6)
+    try:
+        futures = [ex.submit(_one, s) for s in wanted]
+        try:
+            for fut in as_completed(futures, timeout=budget):
+                try:
+                    sym, price = fut.result()
+                except Exception:
+                    continue
+                if price:
+                    out[sym] = price
+        except (FuturesTimeout, TimeoutError):
+            # Aliases of each other on 3.11+, distinct classes before it.
+            print(f"[tracker] price budget {budget}s exceeded — "
+                  f"{len(out)}/{len(wanted)} symbols priced")
+    finally:
+        # Do not block the response waiting for the stragglers to finish.
+        ex.shutdown(wait=False, cancel_futures=True)
     return out
 
 

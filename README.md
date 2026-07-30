@@ -60,6 +60,7 @@ Set these in **Vercel → Project → Settings → Environment Variables**
 | `DATABASE_URL` | yes, to persist | Neon connection string. Injected automatically by the Vercel↔Neon integration. |
 | `DB_REQUIRED` | recommended | `true` in production: refuse to publish a signal that was not recorded. Defaults to `false`. |
 | `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v42_tpfilter`. Bump whenever the signal maths changes. |
+| `TRACKER_PRICE_BUDGET_S` | optional | How long `/api/signals/tracker` may spend fetching live prices before serving the table without them. Default 6s. |
 | `SIGNAL_ENVIRONMENT` | optional | Overrides the environment label written on every signal. Defaults to Vercel's own `VERCEL_ENV`, then `local`. See *Shared database, separate environments*. |
 | `CRON_SECRET` | yes, for mutations | Existing project secret. Protects archive / postmortem / usage endpoints. |
 | `TEST_DATABASE_URL` | tests only | Throwaway database for the DB test suite. **Never production.** |
