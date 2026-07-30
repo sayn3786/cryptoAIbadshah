@@ -453,10 +453,18 @@ These three reads are also what the Market Structure panel displays; the panel
 and the score share `average_true_range()` and `structure_range()` so the
 numbers on screen are the numbers being scored.
 
-**1. Stop-run risk** — a liquidity pool (equal highs/lows) sitting *against* the
-trade within `0.35 ATR`. That is where the stops of everyone already positioned
-rest, and price tends to take them first. Needs ≥ 2 touches; a single touch is
-not a pool.
+**1. Stop-run risk** — a liquidity pool sitting *against* the trade within
+`0.35 ATR`. That is where the stops of everyone already positioned rest, and
+price tends to take them first. Needs ≥ 2 touches; a single touch is not a pool.
+
+Read from **`liquidity_pools`** — the full clustered ladder — falling back to the
+single `equal_levels` pair only when the ladder is absent. `equal_levels` holds
+one level per side, and on a live BTC 2H chart that single equal-high was a level
+price had already traded through, while the ladder held a 7-touch and a 4-touch
+cluster 0.18–0.19 ATR overhead that scored nothing.
+
+**Only the nearest qualifying pool scores.** Two clusters a few points apart are
+one zone in practice; a penalty per level would double-count it.
 
 ```
 closeness  = 1 − (distance_atr / 0.35)          # 1.0 when at price

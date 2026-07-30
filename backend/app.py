@@ -2279,7 +2279,9 @@ def _rec_cache_key() -> str:
     # v36: market-structure confluence (stop-run risk / chase / BOS persistence)
     #      now adjusts strength.
     # v37: BOS confluence decays with age, so a stale break no longer scores.
-    return f"v37_struct2_{date}_{slot}"
+    # v38: stop-run risk reads the full liquidity_pools ladder, not the single
+    #      equal-high/low pair.
+    return f"v38_pools_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

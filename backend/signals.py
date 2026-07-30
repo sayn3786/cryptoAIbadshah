@@ -36,6 +36,61 @@ STRUCT_ADJ_FLOOR     = -18
 STRUCT_ADJ_CEILING   = 8
 
 
+def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
+    """
+    The nearest liquidity pool on the side that threatens the trade.
+
+    Returns ``(pool_price, touches, source)`` — all None/0/None when there is
+    nothing usable.
+
+    Prefers ``liquidity_pools``, the full clustered ladder, over
+    ``equal_levels``, which carries only ONE level per side. On a live BTC 2H
+    chart the single equal-high was a level price had already traded through,
+    while the ladder held a 7-touch and a 4-touch cluster 0.18-0.19 ATR
+    overhead — genuine stop-run risk the scorer could not see.
+
+    Only the NEAREST qualifying pool is returned. Two clusters a few points
+    apart are one zone in practice, and stacking a penalty per level would
+    double-count it.
+
+    A pool sitting exactly AT price counts as threatening: price has just
+    arrived at the level where the stops rest, which is the worst case, not an
+    exempt one.
+    """
+    def _threatens(level: float) -> bool:
+        return level <= price if is_long else level >= price
+
+    best_price, best_touches = None, 0
+
+    # Preferred source: the clustered ladder. `side` is computed against the
+    # latest close in detect_liquidity_pools, but re-check against `price` here
+    # so this stays correct even if the two ever diverge.
+    for pool in (analysis.get("liquidity_pools") or []):
+        try:
+            lvl = float(pool.get("price"))
+            tch = int(pool.get("touches") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lvl <= 0 or not _threatens(lvl) or tch < STOP_RUN_MIN_TOUCHES:
+            continue
+        if best_price is None or abs(price - lvl) < abs(price - best_price):
+            best_price, best_touches = lvl, tch
+    if best_price is not None:
+        return best_price, best_touches, "liquidity_pools"
+
+    # Fallback: the single equal-high/equal-low pair.
+    eq = analysis.get("equal_levels") or {}
+    lv = (eq.get("eql") if is_long else eq.get("eqh")) or {}
+    try:
+        lvl = float(lv.get("price"))
+        tch = int(lv.get("touches") or 0)
+    except (TypeError, ValueError):
+        return None, 0, None
+    if lvl > 0 and _threatens(lvl):
+        return lvl, tch, "equal_levels"
+    return None, 0, None
+
+
 def structure_confluence(analysis: Dict, direction: str) -> Dict:
     """
     Conviction adjustment from market structure, for a directional signal.
@@ -71,21 +126,14 @@ def structure_confluence(analysis: Dict, direction: str) -> Dict:
     delta = 0
 
     # ── 1. Stop-run risk ─────────────────────────────────────────────────────
-    # Stops for a LONG rest BELOW price, so the pool that threatens it is the
-    # equal-low cluster; mirrored for a SHORT.
+    # Stops for a LONG rest BELOW price, so the pool that threatens it sits
+    # below; mirrored for a SHORT.
     atr = average_true_range(candles)
-    eq = analysis.get("equal_levels") or {}
-    pool = (eq.get("eql") if is_long else eq.get("eqh")) or {}
-    pool_price = pool.get("price")
-    touches = int(pool.get("touches") or 0)
+    pool_price, touches, pool_source = _nearest_threatening_pool(analysis, price, is_long)
 
     if atr > 0 and pool_price and touches >= STOP_RUN_MIN_TOUCHES:
-        # Only count a pool on the threatening side of price. Inclusive: a pool
-        # sitting exactly AT price is the highest stop-run risk there is —
-        # price has just arrived at the level where the stops rest.
-        beyond = (pool_price <= price) if is_long else (pool_price >= price)
         dist_atr = abs(price - pool_price) / atr
-        if beyond and dist_atr <= STOP_RUN_ATR:
+        if dist_atr <= STOP_RUN_ATR:
             closeness = 1.0 - (dist_atr / STOP_RUN_ATR)          # 1.0 at price
             conviction = min(1.0, touches / 5.0)                  # 5+ touches = full
             pts = -int(round(STOP_RUN_MAX_PENALTY * max(closeness, 0.35) * conviction))
@@ -97,7 +145,9 @@ def structure_confluence(analysis: Dict, direction: str) -> Dict:
                        f"({pts} pts)")
                 out["factors"].append({"factor": "stop_run_risk", "points": pts,
                                        "pool_distance_atr": round(dist_atr, 3),
-                                       "touches": touches})
+                                       "pool_price": pool_price,
+                                       "touches": touches,
+                                       "source": pool_source})
                 # A sweep below price is a bearish-side risk for a LONG.
                 (out["bear_reasons"] if is_long else out["bull_reasons"]).append(msg)
 
