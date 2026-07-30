@@ -1927,6 +1927,54 @@ def _rec_quality(cand: dict, htf_dir: str) -> tuple:
     return round(max(0.0, score), 1), factors
 
 
+def _targets_behind_live(direction: str, tp_targets, live_price) -> dict:
+    """
+    Which targets has price ALREADY traded through?
+
+    The ladder is priced off the last CLOSED candle, but a recommendation is
+    served for the whole slot — so by the time anyone reads it, price may have
+    moved past a target. A LONG whose TP1 sits below the live price offers no
+    reward for the risk it still carries: entering there means taking the full
+    stop distance to chase a level the market has already given away.
+
+    Returns {"behind": [target numbers, 1-indexed], "tp1_behind": bool,
+             "all_behind": bool, "evaluated": bool}. `evaluated` is False when
+    there is nothing to compare (no live price, no ladder), in which case the
+    caller must NOT treat the setup as expired — absence of a live price is not
+    evidence that the targets are still ahead.
+    """
+    levels = [t for t in (tp_targets or [])]
+    try:
+        live = float(live_price) if live_price is not None else None
+    except (TypeError, ValueError):
+        live = None
+    if not levels or not live or live <= 0 or direction not in ("LONG", "SHORT"):
+        return {"behind": [], "tp1_behind": False, "all_behind": False,
+                "evaluated": False}
+
+    behind = []
+    priced = 0
+    for i, lvl in enumerate(levels, start=1):
+        try:
+            lvl = float(lvl)
+        except (TypeError, ValueError):
+            continue
+        if lvl <= 0:
+            continue
+        priced += 1
+        # A target is spent once price has reached it: at or beyond, in the
+        # direction of the trade.
+        if (direction == "LONG" and lvl <= live) or (direction == "SHORT" and lvl >= live):
+            behind.append(i)
+
+    return {
+        "behind":     behind,
+        "tp1_behind": 1 in behind,
+        "all_behind": bool(priced) and len(behind) == priced,
+        "evaluated":  bool(priced),
+    }
+
+
 def _compute_recommendations() -> dict:
     """
     Best-signal engine (Phase 3 — composite quality ranking):
@@ -1937,6 +1985,8 @@ def _compute_recommendations() -> dict:
       agreement − reversal-against − exhaustion − degraded-data), not raw
       strength alone — see _rec_quality
     - Drop trades with R/R < 1.3 (downside too large for the upside)
+    - Drop trades whose first target price has ALREADY traded through — the
+      setup expired inside the slot (see _targets_behind_live)
     - Diversify the top-3 by BTC correlation so we don't publish three
       high-correlation same-direction bets that all lose together
     - Entry/SL/TP come from the 2H signal (primary trading timeframe)
@@ -2010,6 +2060,7 @@ def _compute_recommendations() -> dict:
     _opts_summary = _opts.get("summary", "")
 
     candidates = []
+    expired: list = []      # setups dropped because price already took TP1
     for sym, tfs in raw.items():
         if sym == "BTC":
             continue
@@ -2106,6 +2157,28 @@ def _compute_recommendations() -> dict:
         except (TypeError, ValueError):
             pass
 
+        # ── Expired setup — TP1 already taken ────────────────────────────
+        # The R/R gate above is computed against the ladder's own entry, off the
+        # closed candle. If price has since traded through TP1, that published
+        # R/R is fiction for anyone entering now: the reward has been collected
+        # and only the risk is left. Drop the candidate rather than repricing —
+        # a setup the market already ran is not a setup.
+        _behind = _targets_behind_live(direction, sig.get("tp_targets"), _live_p)
+        if _behind["tp1_behind"]:
+            expired.append({
+                "symbol":          sym,
+                "direction":       direction,
+                "reason":          "TP1_BEHIND_LIVE",
+                "entry":           sig.get("entry"),
+                "live_price":      _live_p,
+                "tp_targets":      list(sig.get("tp_targets") or []),
+                "targets_behind":  _behind["behind"],
+                "all_targets_behind": _behind["all_behind"],
+                "rr_ratio":        sig.get("rr_ratio"),
+                "strength":        strength,
+            })
+            continue
+
         cand = {
             "symbol":           sym,
             "timeframe":        "2H",
@@ -2146,6 +2219,10 @@ def _compute_recommendations() -> dict:
             "sl_pct":           sig.get("sl_pct"),
             "tp_targets":       sig.get("tp_targets", []),
             "tp_pcts":          sig.get("tp_pcts", []),
+            # TP1 is guaranteed ahead of live here (the gate above dropped it
+            # otherwise), but a later rung may already be spent — say so rather
+            # than showing a ladder that reads as fully available.
+            "targets_behind_live": _behind["behind"],
             "rr_ratio":         sig.get("rr_ratio"),
             "leverage":         sig.get("leverage"),
             "vol_tier_label":   sig.get("vol_tier_label"),
@@ -2263,6 +2340,10 @@ def _compute_recommendations() -> dict:
         "btc_1d_str":       0,
         "options_expiry":   _opts,
         "recommendations":  intraday_recs,
+        # Candidates that passed every other gate but whose first target price
+        # had already traded through by the time the set was built. Surfaced so
+        # a missing symbol is explainable instead of silently absent.
+        "expired_setups":   expired,
         # Publication gate. When false these recommendations were NOT recorded
         # and must be treated as analysis only, never as tradeable output.
         "actionable":       bool(_persist.get("all_actionable", True)),
@@ -2331,7 +2412,9 @@ def _rec_cache_key() -> str:
     # v40: liquidity pools are candidate TP walls, so the ladder can trade to
     #      where resting orders actually sit.
     # v41: pool weight decays with how long ago the level was last touched.
-    return f"v41_poolage_{date}_{slot}"
+    # v42: a candidate whose TP1 has already traded through is dropped, so the
+    #      published set changes as price moves inside the slot.
+    return f"v42_tpfilter_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
