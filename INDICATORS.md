@@ -604,6 +604,50 @@ the normal bullish/bearish factor lists.
 
 ---
 
+### Expired Setups · *publication gate, not scoring*
+*Removes a recommendation entirely; never changes a strength number.*
+
+The entry/SL/TP ladder is priced off the last **closed** 2H candle, but a
+recommendation is served for the whole slot. If price trades through TP1 inside
+that window, the published R/R describes a trade that no longer exists: the
+reward has already been collected and only the risk is still in front of anyone
+entering now.
+
+Three live cases that shipped before this gate existed:
+
+| Symbol | Entry | Live | TP1 | R/R published → at live |
+|---|---|---|---|---|
+| TRX | 0.32711979 | 0.32864 | 0.32852649 — **taken** | 1.36 → **0.50** |
+| XMR | 353.72105263 | 358.04000 | **taken** | 2.04 → 1.36 |
+| BNB | — | 580.741 | 575.224 / 576.766 / 579.944 — **all taken** | no target left |
+
+TRX is the sharpest: it cleared the `R/R ≥ 1.3` gate at 1.36 and was served at an
+effective 0.50 — worse than the gate exists to prevent. BNB had nowhere left to
+go at all.
+
+`_targets_behind_live(direction, tp_targets, live_price)` marks a rung **spent**
+once price has reached it — `≤ live` for a LONG, `≥ live` for a SHORT, *at* the
+level included. A candidate whose **TP1** is spent is dropped after the R/R gate.
+
+| Rule | Behaviour |
+|---|---|
+| Drop, don't reprice | The ladder is not rebuilt from the live price. A setup the market already ran is not a setup, and repricing would invent levels no analysis chose. |
+| TP1 only decides | A spent TP2/TP3 does not drop the trade — TP1 is what makes it worth taking. |
+| Reaching counts as taken | `lvl == live` is spent. Conservative on purpose. |
+| Missing data never expires a trade | No live price, or no priced ladder, means *not evaluated* — absence of a live price is not evidence the targets are gone. |
+| Visible, not silent | Dropped candidates appear in the payload as `expired_setups` (`{symbol, direction, reason: "TP1_BEHIND_LIVE", entry, live_price, tp_targets, targets_behind, all_targets_behind, rr_ratio, strength}`). |
+| Spent later rungs still reported | A published card carries `targets_behind_live` so a ladder with a dead TP2 doesn't read as fully available. |
+
+This is distinct from the existing `chase_warning`, which compares the **entry**
+against the level being broken. That says "you're entering late"; this says "the
+target is already gone".
+
+Because the published set now changes as price moves within a slot, the slot cache
+key and `STRATEGY_VERSION` both moved to **v42_tpfilter** — signals scored with
+this gate are not comparable with those scored without it.
+
+---
+
 ### BTC-Only Indicators
 
 These only score when the symbol is `BTCUSDT`.

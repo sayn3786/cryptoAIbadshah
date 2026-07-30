@@ -56,7 +56,7 @@ Set these in **Vercel → Project → Settings → Environment Variables**
 |---|---|---|
 | `DATABASE_URL` | yes, to persist | Neon connection string. Injected automatically by the Vercel↔Neon integration. |
 | `DB_REQUIRED` | recommended | `true` in production: refuse to publish a signal that was not recorded. Defaults to `false`. |
-| `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v41_poolage`. Bump whenever the signal maths changes. |
+| `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v42_tpfilter`. Bump whenever the signal maths changes. |
 | `CRON_SECRET` | yes, for mutations | Existing project secret. Protects archive / postmortem / usage endpoints. |
 | `TEST_DATABASE_URL` | tests only | Throwaway database for the DB test suite. **Never production.** |
 | `DB_CONNECT_TIMEOUT`, `DB_STATEMENT_TIMEOUT_MS` | optional | Defaults 10s / 15000ms. |
@@ -173,7 +173,7 @@ There is one unique constraint:
   candle — several times a day, all on the same calendar date.
 * **Strategy versions are independent.** Bump `STRATEGY_VERSION` and the new
   rules can be evaluated on the same candles without colliding with the old.
-  The current default is `v41_poolage`; anything scored before the
+  The current default is `v42_tpfilter`; anything scored before the
   market-structure confluence work is not comparable with anything after it.
 
 Lifecycle **events** have their own unique `idempotency_key`, derived from
