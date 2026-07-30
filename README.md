@@ -306,7 +306,9 @@ the mutation endpoints stay **closed**, not open.
 | GET | `/api/signals/history` | public |
 | GET | `/api/signals/outcomes` | public |
 | GET | `/api/signals/postmortems` | public |
+| GET | `/api/signals/tracker` | public |
 | GET | `/api/signals/<id>` | public |
+| POST | `/api/signals/monitor` | internal |
 | POST | `/api/signals/<id>/archive` | internal |
 | POST | `/api/signals/<id>/postmortem` | internal |
 | GET | `/api/db/health` | public (code only) |
@@ -314,7 +316,59 @@ the mutation endpoints stay **closed**, not open.
 
 Filters on `/api/signals/history`: `symbol`, `timeframe`, `direction`,
 `status` (repeatable), `strategy_version`, `exchange`, `include_archived=1`,
-`limit` (default 25, max 100), `offset`. Archived rows are hidden by default.
+`environment`, `limit` (default 25, max 100), `offset`. Archived rows are hidden
+by default and results are scoped to this deployment's environment.
+
+`/api/signals/tracker` takes `days` (closed window, default 3, max 30) and
+`environment`.
+
+## Outcome tracking
+
+Signals used to be recorded and then left at `OPEN` forever: the lifecycle
+functions existed and were tested, but nothing called them. Entries with no exits
+are not a track record. `POST /api/signals/monitor` is the driver.
+
+**What it does.** For every working signal it walks the CLOSED candles published
+since the signal's own candle and decides what the market did:
+
+| Rule | Behaviour |
+|---|---|
+| Closed candles only | A forming candle can un-touch a level before it closes. Recording a hit from one would write an outcome the market never confirmed. |
+| The signal's own candle is excluded | Otherwise a trade could be stopped out by the very bar that triggered it. |
+| One candle touching BOTH a target and the stop records the **STOP** | A candle says where price went, not in what order. Recording the target would claim a win the data cannot prove — `backtest.py` has always made the same assumption. |
+| A gap straight through a level still counts | Price traded through it; pretending otherwise would invent a fill that never happened. |
+| Stale signals `EXPIRE` after 72h | Terminal, but **not** a loss. Nothing was lost — the setup stopped being current. Conflating the two would corrupt the win rate in both directions. |
+| Idempotent | Every decision is keyed on the candle that caused it, never wall-clock time, so re-running over the same candles changes nothing. |
+| One bad signal never abandons the batch | A monitor that stops at the first error silently leaves the rest open. |
+
+`.github/workflows/signal-monitor.yml` ships **manual-only**. Enabling the hourly
+schedule in the same change that ships the monitor would resolve every signal
+already in the database on the first tick — including old ones that would age
+straight out — before anyone had seen what it decided.
+
+**First run:** Actions tab → *Signal Outcome Monitor* → *Run workflow*, leaving
+`max_age_hours` at **720**. Nothing expires at that setting, so only genuine
+target and stop hits are recorded. Check `/api/signals/tracker` (or the dashboard
+section), then uncomment the `schedule:` block to make it hourly. Running it more
+often than that is harmless.
+
+## Signal Tracker (dashboard)
+
+The dashboard's **📋 Signal Tracker** section reads `/api/signals/tracker`: every
+live signal with its ladder state, distance to the next target, cushion above the
+stop, plain-language remarks and the next course of action — then trades that
+closed in the last 3 days, marked win or loss.
+
+The scoreboard counts only **decided** trades. Expired and cancelled signals are
+reported separately and excluded from the win-rate denominator, because a setup
+that never resolved is not evidence either way. With nothing decided the rate is
+absent rather than `0%`.
+
+The view is read-only. It reports what the monitor recorded and never advances a
+signal itself — and because the monitor only acts on closed candles, a row can
+legitimately show price already through a target or stop while the status has not
+caught up. Those rows say so explicitly (*"awaiting candle close"*) rather than
+rendering as a healthy open trade.
 
 ## Database outage behaviour
 

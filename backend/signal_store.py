@@ -34,6 +34,7 @@ __all__ = [
     "validate_price_structure", "assert_transition", "make_idempotency_key",
     "has_environment_column", "reset_capabilities",
     "create_signal", "get_signal", "list_active_signals", "list_signals",
+    "attach_targets",
     "record_target_hit", "record_stop_loss_hit", "close_signal",
     "expire_signal", "cancel_signal", "upsert_postmortem", "archive_signal",
     "list_postmortems", "usage_report",
@@ -595,6 +596,39 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
         items = [_row_to_dict(r) for r in rows]
         return {"items": items, "limit": limit, "offset": offset,
                 "total": int(total), "has_more": offset + len(items) < int(total)}
+
+    if session is not None:
+        return _work(session)
+    with session_scope() as s:
+        return _work(s)
+
+
+def attach_targets(rows: List[Dict[str, Any]], *, session=None) -> List[Dict[str, Any]]:
+    """
+    Add a ``targets`` list to each signal dict, in ONE query.
+
+    The tracker needs the ladder for every row it shows. Calling get_signal per
+    row would be a query per signal on a serverless connection — this is the
+    same information for one round trip.
+    """
+    ids = [str(r["id"]) for r in rows or [] if r.get("id")]
+    if not ids:
+        for r in rows or []:
+            r.setdefault("targets", [])
+        return rows
+
+    def _work(s):
+        by_signal: Dict[str, List[Dict[str, Any]]] = {}
+        for t in s.execute(_sql("""
+            SELECT * FROM signal_targets
+            WHERE  signal_id = ANY(CAST(:ids AS uuid[]))
+            ORDER  BY signal_id, target_number
+        """), {"ids": ids}).all():
+            d = _row_to_dict(t)
+            by_signal.setdefault(str(d["signal_id"]), []).append(d)
+        for r in rows:
+            r["targets"] = by_signal.get(str(r.get("id")), [])
+        return rows
 
     if session is not None:
         return _work(session)

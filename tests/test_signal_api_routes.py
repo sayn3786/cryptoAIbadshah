@@ -63,6 +63,12 @@ class _FakeStore:
     def usage_report(self, **kw):
         return {"database_size_bytes": 1, "signals_total": 0}
 
+    def attach_targets(self, rows, **kw):
+        self.calls["attach"] = len(rows)
+        for r in rows:
+            r.setdefault("targets", [])
+        return rows
+
 
 @pytest.fixture()
 def fake(monkeypatch):
@@ -239,6 +245,80 @@ def test_usage_report_is_internal_only(client, fake, monkeypatch):
     monkeypatch.setenv("CRON_SECRET", "right")
     assert client.get("/api/db/usage",
                       headers={"x-cron-secret": "right"}).status_code == 200
+
+
+# ── Tracker ─────────────────────────────────────────────────────────────────
+
+def test_tracker_needs_a_database(client):
+    r = client.get("/api/signals/tracker")
+    assert r.status_code == 503
+    assert r.get_json()["error_code"] == "DB_NOT_CONFIGURED"
+
+
+def test_tracker_returns_live_and_closed_sections(client, fake, monkeypatch):
+    monkeypatch.setattr(appmod, "get_analysis",
+                        lambda sym, tf, *a, **k: {"live_price": 101.0})
+    body = client.get("/api/signals/tracker").get_json()
+    assert set(body) >= {"live", "closed", "summary", "window_days", "environment"}
+    assert body["window_days"] == 3
+    assert [r["symbol"] for r in body["live"]] == ["BTC"]
+
+
+def test_tracker_asks_only_for_terminal_statuses_in_the_closed_list(client, fake,
+                                                                    monkeypatch):
+    monkeypatch.setattr(appmod, "get_analysis", lambda *a, **k: {})
+    client.get("/api/signals/tracker")
+    assert set(fake.calls["list"]["statuses"]) == {
+        "TP_HIT", "SL_HIT", "CLOSED", "EXPIRED", "CANCELLED"}
+
+
+def test_tracker_window_is_bounded(client, fake, monkeypatch):
+    monkeypatch.setattr(appmod, "get_analysis", lambda *a, **k: {})
+    assert client.get("/api/signals/tracker?days=999").get_json()["window_days"] == 30
+    assert client.get("/api/signals/tracker?days=junk").get_json()["window_days"] == 3
+
+
+def test_tracker_survives_a_price_lookup_failure(client, fake, monkeypatch):
+    # Market data being down must not take the tracker down with it — the rows
+    # still render, just without live progress.
+    def boom(*a, **k):
+        raise RuntimeError("binance unreachable")
+    monkeypatch.setattr(appmod, "get_analysis", boom)
+    body = client.get("/api/signals/tracker").get_json()
+    assert body["live"][0]["live_price"] is None
+    assert body["live"][0]["move_pct"] is None
+
+
+def test_tracker_is_read_only(client, fake, monkeypatch):
+    # It reports what the monitor recorded; it must never advance a signal.
+    monkeypatch.setattr(appmod, "get_analysis", lambda *a, **k: {})
+    for name in ("record_target_hit", "record_stop_loss_hit", "expire_signal"):
+        monkeypatch.setattr(fake, name, lambda *a, **k: pytest.fail(
+            f"tracker called {name}"), raising=False)
+    assert client.get("/api/signals/tracker").status_code == 200
+
+
+# ── Monitor ─────────────────────────────────────────────────────────────────
+
+def test_monitor_is_internal_only(client, fake, monkeypatch):
+    assert client.post("/api/signals/monitor").status_code == 401
+    monkeypatch.setenv("CRON_SECRET", "right")
+    monkeypatch.setattr(appmod, "_fetch_closed_spot", lambda sym, tf: [])
+    r = client.post("/api/signals/monitor", headers={"x-cron-secret": "right"})
+    assert r.status_code == 200
+    assert set(r.get_json()) >= {"checked", "targets_hit", "stopped", "expired"}
+
+
+def test_monitor_reports_rather_than_crashing_on_a_data_failure(client, fake,
+                                                                monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "right")
+
+    def boom(sym, tf):
+        raise RuntimeError("no candles")
+    monkeypatch.setattr(appmod, "_fetch_closed_spot", boom)
+    r = client.post("/api/signals/monitor", headers={"x-cron-secret": "right"})
+    assert r.status_code == 200, "one bad symbol must not fail the whole run"
+    assert r.get_json()["errors"]
 
 
 # ── Health route must surface the migration state distinctly ────────────────

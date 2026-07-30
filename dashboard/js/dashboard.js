@@ -5421,6 +5421,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadTicker().then(loadLivePrices);   // full baseline, then an immediate live tick
   loadAnalysis();
   loadRecommendations();
+  loadTracker();
   loadEngulfAlerts();
   checkStrengthChanges();
   loadWhaleAlerts();
@@ -5436,6 +5437,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   setInterval(loadTicker, 5 * 60 * 1000);
   setInterval(loadLivePrices, 45 * 1000);
   setInterval(checkStrengthChanges, 60 * 60 * 1000);
+  // The monitor only advances signals on CLOSED candles, so polling faster than
+  // this would just re-render identical rows.
+  setInterval(loadTracker, 5 * 60 * 1000);
 });
 
 /* ─── Macro economic events ───────────────────────────────────────────────── */
@@ -6070,4 +6074,123 @@ function renderMacro(data) {
       <div class="macro-reason">${e.reason || ''}</div>
     </div>
   `).join('');
+}
+
+/* ─── Signal Tracker ──────────────────────────────────────────────────────────
+   Every published signal and what it is doing now. Live trades first, then
+   anything that closed inside the window (3 days by default) so the record of
+   wins and losses sits next to the open risk.
+
+   Read-only: this renders what the monitor recorded. Nothing here advances a
+   signal, and the numbers come from the API rather than being recomputed in the
+   browser — two places computing "is this a win" is one place too many. */
+
+const _TK_STATUS_LABEL = {
+  OPEN: 'Open', PARTIAL_TP: 'Partial TP', TP_HIT: 'All TP hit',
+  SL_HIT: 'Stopped', EXPIRED: 'Expired', CANCELLED: 'Cancelled', CLOSED: 'Closed',
+};
+
+const _tkPct = v => (v == null ? '<span class="tk-muted">—</span>'
+  : `<span class="${v > 0 ? 'tk-pos' : v < 0 ? 'tk-neg' : 'tk-muted'}">${v > 0 ? '+' : ''}${v.toFixed(2)}%</span>`);
+
+function _tkAge(h) {
+  if (h == null) return '—';
+  if (h < 24) return `${h.toFixed(0)}h`;
+  return `${(h / 24).toFixed(1)}d`;
+}
+
+function _tkLadder(row) {
+  if (!row.targets?.length) return '<span class="tk-muted">—</span>';
+  const chips = row.targets.map(t => {
+    const cls = t.hit ? 'hit' : (t.number === row.next_target ? 'next' : '');
+    const tip = t.hit
+      ? `TP${t.number} hit at ${fmtPrice(t.hit_price ?? t.price)}`
+      : (t.distance_pct == null ? `TP${t.number} ${fmtPrice(t.price)}`
+         : `TP${t.number} ${fmtPrice(t.price)} — ${Math.abs(t.distance_pct).toFixed(2)}% ${t.distance_pct >= 0 ? 'away' : 'through'}`);
+    return `<span class="tk-tp ${cls}" title="${tip}">TP${t.number}${t.hit ? ' ✓' : ''}</span>`;
+  }).join('');
+  return `<div class="tk-ladder">${chips}</div>`;
+}
+
+function _tkRow(row) {
+  const dir = (row.direction || '').toLowerCase();
+  const status = (row.status || '').toLowerCase();
+  // A closed trade is judged on its realised move; a live one on where it is now.
+  const move = row.state === 'closed' ? (row.realized_return_pct ?? row.move_pct) : row.move_pct;
+  const priceCell = row.state === 'closed'
+    ? `${fmtPrice(row.close_price)}<div class="tk-muted" style="font-size:.68rem">close</div>`
+    : `${fmtPrice(row.live_price)}<div class="tk-muted" style="font-size:.68rem">live</div>`;
+  const cushion = row.stop_distance_pct == null
+    ? ''
+    : `<div class="tk-muted" style="font-size:.68rem">${row.stop_distance_pct >= 0
+        ? `${row.stop_distance_pct.toFixed(2)}% clear` : 'breached'}</div>`;
+
+  return `<tr>
+    <td class="tk-sym">${row.symbol}<span class="tk-tf">${row.timeframe || ''}</span></td>
+    <td><span class="tk-dir ${dir}">${row.direction}</span></td>
+    <td><span class="tk-status ${status}">${_TK_STATUS_LABEL[row.status] || row.status}</span></td>
+    <td class="tk-num">${fmtPrice(row.entry)}</td>
+    <td class="tk-num">${priceCell}</td>
+    <td class="tk-num">${fmtPrice(row.stop_loss)}${cushion}</td>
+    <td>${_tkLadder(row)}</td>
+    <td class="tk-num">${_tkPct(move)}${row.r_multiple != null
+        ? `<div class="tk-muted" style="font-size:.68rem">${row.r_multiple >= 0 ? '+' : ''}${row.r_multiple.toFixed(2)}R</div>` : ''}</td>
+    <td class="tk-num tk-muted">${_tkAge(row.age_hours)}</td>
+    <td class="tk-remark">${row.remark || ''}</td>
+    <td class="tk-action">${row.action || ''}</td>
+  </tr>`;
+}
+
+function _tkTable(rows) {
+  return `<table class="tracker-table">
+    <thead><tr>
+      <th>Symbol</th><th>Side</th><th>Status</th><th>Entry</th><th>Price</th>
+      <th>Stop</th><th>Targets</th><th>P/L</th><th>Age</th>
+      <th>Remarks</th><th>Next course of action</th>
+    </tr></thead>
+    <tbody>${rows.map(_tkRow).join('')}</tbody>
+  </table>`;
+}
+
+async function loadTracker(force) {
+  const section = document.getElementById('trackerSection');
+  const body    = document.getElementById('trackerBody');
+  const scoreEl = document.getElementById('trackerScore');
+  const metaEl  = document.getElementById('trackerMeta');
+  if (!section || !body) return;
+
+  try {
+    const res = await fetch(`${API}/signals/tracker`, force ? {cache: 'no-store'} : undefined);
+    if (res.status === 503) {
+      // No database configured: the tracker has nothing to track. Stay hidden
+      // rather than showing an empty table that looks like "no trades".
+      section.classList.add('hidden');
+      return;
+    }
+    const data = await res.json();
+    const live = data.live || [], closed = data.closed || [];
+    section.classList.remove('hidden');
+
+    const s = data.summary || {};
+    scoreEl.innerHTML = s.decided
+      ? `<span class="tk-win">${s.wins}W</span> · <span class="tk-loss">${s.losses}L</span>`
+        + ` · ${s.win_rate_pct}% over ${data.window_days}d`
+        + (s.expired ? ` · ${s.expired} expired` : '')
+      : `${live.length} live · no closed trades in ${data.window_days}d`;
+    metaEl.textContent = data.environment && data.environment !== 'production'
+      ? `${data.environment} data` : '';
+
+    body.innerHTML =
+      (live.length
+        ? `<div class="tracker-group-title">Live — ${live.length}</div>${_tkTable(live)}`
+        : `<div class="tk-empty">No live signals. The next set publishes at the next slot.</div>`)
+      + (closed.length
+        ? `<div class="tracker-group-title">Closed — last ${data.window_days} days</div>${_tkTable(closed)}`
+        : '');
+  } catch (e) {
+    console.warn('[tracker] load failed', e);
+    // Leave whatever was last rendered in place — a failed poll must not blank
+    // a table someone is reading.
+    if (!body.innerHTML) section.classList.add('hidden');
+  }
 }
