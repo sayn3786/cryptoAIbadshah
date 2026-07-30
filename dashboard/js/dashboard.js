@@ -5413,6 +5413,14 @@ async function renderAssetTabs() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Fire the two panels that depend on NOTHING here first, and do not await
+  // them. They used to sit behind `await renderAssetTabs()`, so a slow
+  // /api/market-caps response held up the recommendations and the tracker even
+  // though neither needs the asset tabs — the page looked empty for as long as
+  // that one fetch took.
+  loadRecommendations();
+  loadTracker();
+
   await renderAssetTabs();   // build tabs sorted by live market cap first
   wireSelectors();
   initCharts();
@@ -5420,8 +5428,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderMyTrades();
   loadTicker().then(loadLivePrices);   // full baseline, then an immediate live tick
   loadAnalysis();
-  loadRecommendations();
-  loadTracker();
   loadEngulfAlerts();
   checkStrengthChanges();
   loadWhaleAlerts();

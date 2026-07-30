@@ -70,6 +70,32 @@ def test_it_calls_the_tracker_endpoint():
     assert "/signals/tracker" in JS
 
 
+def test_the_panels_are_not_stuck_behind_the_asset_tab_fetch():
+    """
+    Reported as "nothing coming up… it's slow".
+
+    Both panels used to sit AFTER `await renderAssetTabs()` in the startup
+    handler, so a slow /api/market-caps held up the recommendations and the
+    tracker even though neither needs the asset tabs. The page just looked
+    empty for as long as that one fetch took.
+    """
+    init = JS[JS.rindex("document.addEventListener('DOMContentLoaded'"):]
+    # Match the STATEMENT, not the mention of it in the comment above.
+    gate = re.search(r"^\s*await renderAssetTabs\(\);", init, re.M)
+    assert gate, "the startup handler no longer awaits the asset tabs"
+    body = init[:gate.start()]
+    assert "loadRecommendations();" in body, "recommendations still wait on the tabs"
+    assert "loadTracker();" in body, "the tracker still waits on the tabs"
+
+
+def test_the_startup_panels_are_each_started_once():
+    # Moving the calls without removing the originals would double every
+    # request on page load.
+    init = JS[JS.rindex("document.addEventListener('DOMContentLoaded'"):]
+    for call in ("loadRecommendations();", "loadTracker();"):
+        assert init.count(call) == 1, f"{call} runs more than once at startup"
+
+
 def test_it_hides_itself_when_there_is_no_database():
     # 503 means persistence is not configured. An empty table would read as
     # "no trades", which is a different and misleading statement.
