@@ -2274,7 +2274,11 @@ def _rec_cache_key() -> str:
         # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
         slot = "20"
         date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    return f"v35_mtf_{date}_{slot}"
+    # Bump the version prefix whenever the scoring changes, or the cache would
+    # keep serving strengths computed by the OLD rules for the rest of the slot.
+    # v36: market-structure confluence (stop-run risk / chase / BOS persistence)
+    # now adjusts strength.
+    return f"v36_struct_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

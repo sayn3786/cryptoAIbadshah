@@ -1,5 +1,155 @@
 from typing import Dict, List, Optional
 
+# Shared structure measurements. Imported (not re-implemented) so the numbers the
+# Market Structure panel displays and the numbers this module scores are the
+# same numbers — otherwise the panel and the strength would disagree on screen.
+from patterns import average_true_range, structure_range
+
+
+# ── Market-structure confluence ───────────────────────────────────────────────
+# The status panel surfaced pool distance, range position and BOS persistence
+# but none of them touched the score, so the most tradeable reads on the whole
+# panel were decoration. These constants turn them into a conviction adjustment.
+#
+# It adjusts STRENGTH, not score, and therefore never flips direction: resting
+# stops below a LONG are a reason to size down or wait, not a reason to go short.
+
+# A pool this close (in ATR) is realistically reachable before the trade works.
+STOP_RUN_ATR         = 0.35
+STOP_RUN_MAX_PENALTY = 10      # pool sits against the trade, one candle away
+STOP_RUN_MIN_TOUCHES = 2       # a level needs to have been defended to hold stops
+
+# Buying the top / selling the bottom of the recent range.
+CHASE_UPPER_PCT      = 80.0
+CHASE_LOWER_PCT      = 20.0
+CHASE_MAX_PENALTY    = 8
+
+# Structure being taken out repeatedly, and still holding.
+BOS_MAX_BONUS        = 8
+BOS_OPPOSED_PENALTY  = 6
+
+# Asymmetric on purpose: risk should be able to cut conviction harder than
+# confirmation can inflate it.
+STRUCT_ADJ_FLOOR     = -18
+STRUCT_ADJ_CEILING   = 8
+
+
+def structure_confluence(analysis: Dict, direction: str) -> Dict:
+    """
+    Conviction adjustment from market structure, for a directional signal.
+
+    Returns ``{"delta", "factors", "bull_reasons", "bear_reasons"}`` where delta
+    is a signed STRENGTH adjustment (not a score contribution). NEUTRAL signals
+    get a zero delta — there is no trade to qualify.
+
+    Three reads, all previously display-only:
+
+    * **Stop-run risk.** A liquidity pool within STOP_RUN_ATR *against* the
+      trade is where the stops of everyone already positioned are sitting.
+      Price tends to take them first. Penalty grows as the pool gets closer and
+      as it has been defended more times.
+    * **Chase.** A LONG in the upper fifth of the recent range (or a SHORT in
+      the lower fifth) is entering where the move has already happened.
+    * **BOS persistence.** Structure repeatedly broken in the trade's direction
+      and still holding is real confirmation. A *given-back* break earns nothing
+      — it is stale context, not a live read.
+    """
+    out = {"delta": 0, "factors": [], "bull_reasons": [], "bear_reasons": []}
+    if direction not in ("LONG", "SHORT"):
+        return out
+
+    candles = analysis.get("candles") or []
+    if len(candles) < 10:
+        return out
+    price = candles[-1].get("close") or 0.0
+    if price <= 0:
+        return out
+
+    is_long = direction == "LONG"
+    delta = 0
+
+    # ── 1. Stop-run risk ─────────────────────────────────────────────────────
+    # Stops for a LONG rest BELOW price, so the pool that threatens it is the
+    # equal-low cluster; mirrored for a SHORT.
+    atr = average_true_range(candles)
+    eq = analysis.get("equal_levels") or {}
+    pool = (eq.get("eql") if is_long else eq.get("eqh")) or {}
+    pool_price = pool.get("price")
+    touches = int(pool.get("touches") or 0)
+
+    if atr > 0 and pool_price and touches >= STOP_RUN_MIN_TOUCHES:
+        # Only count a pool on the threatening side of price. Inclusive: a pool
+        # sitting exactly AT price is the highest stop-run risk there is —
+        # price has just arrived at the level where the stops rest.
+        beyond = (pool_price <= price) if is_long else (pool_price >= price)
+        dist_atr = abs(price - pool_price) / atr
+        if beyond and dist_atr <= STOP_RUN_ATR:
+            closeness = 1.0 - (dist_atr / STOP_RUN_ATR)          # 1.0 at price
+            conviction = min(1.0, touches / 5.0)                  # 5+ touches = full
+            pts = -int(round(STOP_RUN_MAX_PENALTY * max(closeness, 0.35) * conviction))
+            if pts:
+                delta += pts
+                side = "below" if is_long else "above"
+                msg = (f"Liquidity pool {dist_atr:.2f} ATR {side} price "
+                       f"({touches} touches) — stop-run risk before the {direction} works "
+                       f"({pts} pts)")
+                out["factors"].append({"factor": "stop_run_risk", "points": pts,
+                                       "pool_distance_atr": round(dist_atr, 3),
+                                       "touches": touches})
+                # A sweep below price is a bearish-side risk for a LONG.
+                (out["bear_reasons"] if is_long else out["bull_reasons"]).append(msg)
+
+    # ── 2. Chase ─────────────────────────────────────────────────────────────
+    rng = structure_range(candles)
+    pos = rng.get("position_pct")
+    if pos is not None:
+        overextended = (is_long and pos >= CHASE_UPPER_PCT) or \
+                       (not is_long and pos <= CHASE_LOWER_PCT)
+        if overextended:
+            # Scale from the threshold to the extreme: 80% -> 0, 100% -> full.
+            span = (pos - CHASE_UPPER_PCT) / (100.0 - CHASE_UPPER_PCT) if is_long \
+                else (CHASE_LOWER_PCT - pos) / CHASE_LOWER_PCT
+            pts = -int(round(CHASE_MAX_PENALTY * min(max(span, 0.0), 1.0)))
+            pts = pts if pts else -1        # at the threshold it is still a mild warning
+            delta += pts
+            where = "upper" if is_long else "lower"
+            msg = (f"{direction} entering the {where} {abs(100 - pos) if is_long else pos:.0f}% "
+                   f"of the last {rng['bars']}-bar range — chasing an extended move ({pts} pts)")
+            out["factors"].append({"factor": "range_chase", "points": pts,
+                                   "range_position_pct": round(pos, 1),
+                                   "window_bars": rng["bars"]})
+            (out["bear_reasons"] if is_long else out["bull_reasons"]).append(msg)
+
+    # ── 3. BOS persistence ───────────────────────────────────────────────────
+    bos = analysis.get("bos_streak") or {}
+    bos_dir, bos_count = bos.get("direction"), int(bos.get("count") or 0)
+    if bos_dir and bos_count:
+        aligned = (bos_dir == "bullish") == is_long
+        if not bos.get("held", True):
+            # Given back: explicitly worth nothing. Recorded so the reason why
+            # it did not count is visible.
+            out["factors"].append({"factor": "bos_given_back", "points": 0,
+                                   "direction": bos_dir, "count": bos_count})
+        elif aligned:
+            pts = min(BOS_MAX_BONUS, bos_count * 3)
+            delta += pts
+            msg = (f"{bos_count}x {bos_dir} break of structure, still holding — "
+                   f"structure agrees with the {direction} (+{pts} pts)")
+            out["factors"].append({"factor": "bos_aligned", "points": pts,
+                                   "direction": bos_dir, "count": bos_count})
+            (out["bull_reasons"] if is_long else out["bear_reasons"]).append(msg)
+        else:
+            pts = -min(BOS_OPPOSED_PENALTY, bos_count * 3)
+            delta += pts
+            msg = (f"{bos_count}x {bos_dir} break of structure, still holding — "
+                   f"structure opposes the {direction} ({pts} pts)")
+            out["factors"].append({"factor": "bos_opposed", "points": pts,
+                                   "direction": bos_dir, "count": bos_count})
+            (out["bear_reasons"] if is_long else out["bull_reasons"]).append(msg)
+
+    out["delta"] = max(STRUCT_ADJ_FLOOR, min(STRUCT_ADJ_CEILING, delta))
+    return out
+
 
 def _funding_8h(funding: Optional[Dict]):
     """Funding rate normalized to a per-8h basis for threshold comparison.
@@ -2269,6 +2419,19 @@ def generate_signal(analysis: Dict) -> Dict:
         g['sentiment'] += _opts_pts
         _options_applied = True
 
+    # ── Market-structure confluence ───────────────────────────────────────────
+    # Applied HERE, after direction is settled, for the same reason options are:
+    # these reads are direction-relative. Resting stops below a LONG lower its
+    # conviction; they are not an argument for a SHORT. So this moves STRENGTH
+    # and never the direction.
+    _struct = structure_confluence(analysis, direction)
+    struct_adj = _struct["delta"]
+    if struct_adj:
+        strength = max(0, min(100, strength + struct_adj))
+        bull_reasons.extend(_struct["bull_reasons"])
+        bear_reasons.extend(_struct["bear_reasons"])
+        g['pattern'] += struct_adj
+
     # Strength tiers (strength = score / 220 * 100):
     # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size
     # Moderate (33–50): score  73–110 — several aligned, 50% size
@@ -2823,6 +2986,10 @@ def generate_signal(analysis: Dict) -> Dict:
         "squeeze_priming":    _sqp,
         # Options-expiry adjustment metadata — applied EXACTLY ONCE here. The rec
         # engine reads these instead of re-applying the pressure.
+        # Market-structure confluence — signed strength delta plus the individual
+        # factors, so the card can show WHY conviction was cut or raised.
+        "structure_adjustment": struct_adj,
+        "structure_factors":    _struct["factors"],
         "options_adjustment":        opts_adj,          # signed strength delta applied
         "options_bias":              _opts_bias.get("bias", "neutral"),
         "options_in_window":         bool(_opts_in_win),
