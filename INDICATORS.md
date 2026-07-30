@@ -546,6 +546,41 @@ now fall below the recommendation engine's `R/R ≥ 1.3` gate. On the reported c
 R/R moved 1.53 → 1.30. That is the honest number for a stop placed out of the
 sweep zone, not a regression.
 
+---
+
+### Liquidity Pools as TP Anchors · *targets, not scoring*
+*Changes where profit is taken, not the strength number.*
+
+A pool ahead of the trade is where resting orders sit, so price is drawn to it.
+TP snapping already anchored to supply/demand zones, trend-lines, swings and the
+macro line — but ignored pools, so the ladder could target an ATR projection
+while a real wall of liquidity sat closer.
+
+Pools ahead of the trade now join the candidate walls in `_snap_tp_to_structure`,
+which keeps all its existing rules: the nearest wall clearing the R gate becomes
+TP2, and every wall is **front-run by ~3%** so the order fills just *before* the
+level rather than inside the fight over it.
+
+| Rule | Behaviour |
+|---|---|
+| Direction | Only pools ahead of entry — above for a LONG, below for a SHORT |
+| Minimum touches | **2** — looser than the 3 required to move a stop |
+| Front-running | Inherited: TP fills before the pool, never inside it |
+| Labelling | When the chosen wall *is* a pool, the reason says `"N-touch liquidity pool"` instead of `"zone / line"` |
+
+**Why 2 touches here but 3 for stops.** Anchoring to a weak pool that price blows
+through only takes profit slightly early. *Ignoring* a real pool leaves the TP
+beyond it, where it may never fill. Under-shooting is the cheaper error, so the
+gate is looser.
+
+Exposed as `tp_anchor` (`{wall, r_multiple, kind, touches}`) where `kind` is
+`liquidity_pool` or `zone_or_line`.
+
+On the reported BTC 2H SHORT this moved **TP3** from an ATR extension (62505.61)
+onto the real 3-touch pool at 62593.67. TP1/TP2 were unchanged there because an
+existing level already sat nearer — the effect shows up wherever pools are the
+closest structure.
+
 Exposed on the signal as `structure_adjustment` (signed delta) and
 `structure_factors` (per-factor breakdown), and the individual reasons appear in
 the normal bullish/bearish factor lists.

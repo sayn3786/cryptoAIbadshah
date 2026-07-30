@@ -36,6 +36,66 @@ STRUCT_ADJ_FLOOR     = -18
 STRUCT_ADJ_CEILING   = 8
 
 
+# ── Liquidity pools as take-profit anchors ───────────────────────────────────
+# A pool ahead of the trade is where resting orders sit, so price is drawn to
+# it. TP snapping already anchored to zones, trend-lines and swings but ignored
+# pools entirely, so the ladder could target an ATR number while a real wall of
+# liquidity sat closer.
+#
+# Two touches is enough to qualify here, unlike stop placement which demands
+# three. The asymmetry is deliberate: anchoring to a weak pool that price blows
+# through only takes profit slightly early, while IGNORING a real pool leaves
+# the TP beyond it where it may never fill. Under-shooting is the cheaper error.
+TP_POOL_MIN_TOUCHES = 2
+
+# How close a wall must be to a pool to be called one, as a fraction of price.
+_TP_POOL_MATCH_TOL = 0.0005
+
+
+def _tp_pool_levels(analysis: Dict, entry: float, is_long: bool) -> List[float]:
+    """Pool prices lying ahead of the trade, usable as TP walls."""
+    if entry <= 0:
+        return []
+    out = []
+    for pool in (analysis.get("liquidity_pools") or []):
+        try:
+            lvl = float(pool.get("price"))
+            tch = int(pool.get("touches") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lvl <= 0 or tch < TP_POOL_MIN_TOUCHES:
+            continue
+        if (lvl > entry) if is_long else (lvl < entry):
+            out.append(lvl)
+    return out
+
+
+def _matching_pool(analysis: Dict, wall: float) -> Optional[Dict]:
+    """
+    The pool a chosen TP wall corresponds to, if any.
+
+    Used only for labelling: the wall comes back as a bare price, so this is how
+    we know whether to call it a liquidity pool or a zone. Tolerance is relative
+    to price, not absolute, so it behaves the same on BTC and on a sub-cent alt.
+    """
+    if not wall or wall <= 0:
+        return None
+    tol = abs(wall) * _TP_POOL_MATCH_TOL
+    best = None
+    for pool in (analysis.get("liquidity_pools") or []):
+        try:
+            lvl = float(pool.get("price"))
+            tch = int(pool.get("touches") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lvl <= 0 or tch < TP_POOL_MIN_TOUCHES:
+            continue
+        gap = abs(lvl - wall)
+        if gap <= tol and (best is None or gap < best[0]):
+            best = (gap, {"price": lvl, "touches": tch})
+    return best[1] if best else None
+
+
 # ── Liquidity-aware stop placement ───────────────────────────────────────────
 # A stop sitting just short of a liquidity pool is in the worst possible place:
 # price runs the pool, takes the stop, then reverses — stopped out by the exact
@@ -2677,9 +2737,11 @@ def generate_signal(analysis: Dict) -> Dict:
     sl_pct = tp1_pct = tp2_pct = tp3_pct = None
     suggested_lev = None
     chase_warning = None
-    # Liquidity check on the stop. Initialised here because the whole entry/SL
-    # block sits behind a candles/price guard that may not run at all.
+    # Liquidity check on the stop, and what TP2 ended up anchored to.
+    # Initialised here because the whole entry/SL block sits behind a
+    # candles/price guard that may not run at all.
     _sl_liq = None
+    _tp_anchor = None
 
     # SL distance multiplier — same across market caps; wider ATR cap does the work
     TF_SL_MULT = {
@@ -2967,23 +3029,41 @@ def generate_signal(analysis: Dict) -> Dict:
             # prior swings the 60-candle window can't see.
             _deep_h = analysis.get("deep_swing_highs") or []
             _deep_l = analysis.get("deep_swing_lows") or []
+            # Liquidity pools AHEAD of the trade. A cluster of equal highs/lows
+            # is where resting orders sit, so price is drawn to it — which makes
+            # it a natural target, and one the ladder previously ignored
+            # entirely. _snap_tp_to_structure front-runs every wall by ~3%, so
+            # the TP lands just BEFORE the pool rather than inside the fight
+            # over it.
+            _pool_levels = _tp_pool_levels(analysis, entry, direction == "LONG")
             if direction == "LONG":
                 _tp_levels = ([_sup_bot, _sup_top, _tl_res, swing_high, _macro_v]
                               + [h for h in _piv_h if h > entry]
-                              + [h for h in _deep_h if h > entry])
+                              + [h for h in _deep_h if h > entry]
+                              + _pool_levels)
             else:
                 _tp_levels = ([_dem_top, _dem_bot, _tl_sup, swing_low, _macro_v]
                               + [l for l in _piv_l if 0 < l < entry]
-                              + [l for l in _deep_l if 0 < l < entry])
+                              + [l for l in _deep_l if 0 < l < entry]
+                              + _pool_levels)
             _snap = _snap_tp_to_structure(direction, entry, sl, timeframe,
                                           _tp_levels, _max_tp3_abs)
             if _snap:
                 tp_targets, _wall, _rmult = _snap
-                _lbl = ("supply zone / resistance line" if direction == "LONG"
-                        else "demand zone / support line")
+                # Name the anchor for what it actually is. A liquidity pool is a
+                # different (and more specific) claim than "a zone or a line".
+                _pool_hit = _matching_pool(analysis, _wall)
+                if _pool_hit:
+                    _lbl = f"{_pool_hit['touches']}-touch liquidity pool"
+                else:
+                    _lbl = ("supply zone / resistance line" if direction == "LONG"
+                            else "demand zone / support line")
                 (bull_reasons if direction == "LONG" else bear_reasons).append(
                     f"🎯 TP2 anchored to the opposing {_lbl} (~${_wall:,.4f}, {_rmult:.1f}R) "
                     f"— trading to real structure, not just ATR")
+                _tp_anchor = {"wall": _wall, "r_multiple": round(_rmult, 2),
+                              "kind": "liquidity_pool" if _pool_hit else "zone_or_line",
+                              "touches": (_pool_hit or {}).get("touches")}
             elif tp_targets and tp_targets[0] and abs(sl - entry) > 0:
                 # No wall cleared the TP2 gate — common for a coin in free-fall at
                 # new lows (nothing overhead for the SL, nothing below to target).
@@ -3187,6 +3267,8 @@ def generate_signal(analysis: Dict) -> Dict:
         # Whether the stop had to be moved clear of a liquidity pool, or could
         # not be (blocked by the risk cap) and therefore needs smaller size.
         "stop_liquidity":       _sl_liq,
+        # What TP2 is anchored to — a liquidity pool, or a zone/line.
+        "tp_anchor":            _tp_anchor,
         "options_adjustment":        opts_adj,          # signed strength delta applied
         "options_bias":              _opts_bias.get("bias", "neutral"),
         "options_in_window":         bool(_opts_in_win),

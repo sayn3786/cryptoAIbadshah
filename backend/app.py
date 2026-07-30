@@ -2283,7 +2283,9 @@ def _rec_cache_key() -> str:
     #      equal-high/low pair.
     # v39: stops are moved clear of a liquidity pool sitting just beyond them,
     #      which also changes R/R and therefore which candidates qualify.
-    return f"v39_liqstop_{date}_{slot}"
+    # v40: liquidity pools are candidate TP walls, so the ladder can trade to
+    #      where resting orders actually sit.
+    return f"v40_tppools_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
