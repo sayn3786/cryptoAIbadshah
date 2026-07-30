@@ -203,3 +203,81 @@ def test_strategy_version_is_overridable_by_env(monkeypatch):
         monkeypatch.delenv("STRATEGY_VERSION", raising=False)
         importlib.reload(sp)
     assert sp.STRATEGY_VERSION == "v41_poolage"
+
+
+# ── Pooler compatibility ────────────────────────────────────────────────────
+# Neon's pooled endpoint is PgBouncer-based and REJECTS the libpq `options`
+# startup parameter ("unsupported startup parameter: options"). Passing
+# `-c statement_timeout=...` at connect time therefore made every connection
+# through the -pooler host fail outright, and the health probe could only report
+# it as an unreachable database.
+
+def test_no_options_startup_parameter_is_passed():
+    """The regression itself: `options` must never reach connect_args."""
+    import inspect
+    src = inspect.getsource(db.get_engine)
+    assert '"options"' not in src and "'options'" not in src, \
+        "libpq `options` at connect time breaks Neon's pooled endpoint"
+
+
+def test_statement_timeout_is_applied_per_transaction_instead():
+    import inspect
+    src = inspect.getsource(db.session_scope)
+    assert "SET LOCAL statement_timeout" in src, \
+        "the timeout must be set inside the transaction, which is pooler-safe"
+
+
+def test_a_failing_timeout_set_does_not_break_the_transaction():
+    # A SET that errors must never take down the actual work.
+    import inspect
+    src = inspect.getsource(db.session_scope)
+    i = src.index("SET LOCAL statement_timeout")
+    assert "except Exception" in src[i:i + 400], \
+        "the SET must be guarded so it cannot fail the caller's work"
+
+
+# ── Failure classification ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize("message,expected", [
+    ("unsupported startup parameter: options", "startup_parameter_rejected"),
+    ('password authentication failed for user "app"', "authentication"),
+    ('database "nope" does not exist', "database_missing"),
+    ('could not translate host name "h" to address', "dns"),
+    ("connection timeout expired", "timeout"),
+    ("connection refused", "refused"),
+    ("sorry, too many clients already", "too_many_connections"),
+    ("No module named psycopg", "driver_missing"),
+    ("something entirely unexpected", "other"),
+])
+def test_failure_classification(message, expected):
+    assert db.classify_db_failure(RuntimeError(message)) == expected
+
+
+def test_every_failure_class_has_an_actionable_remedy():
+    classes = {c for c, _ in db._FAILURE_SIGNATURES} | {"other"}
+    assert classes <= set(db._UNREACHABLE_HINTS), \
+        "a new failure signature needs a hint saying what to do about it"
+    for cause, hint in db._UNREACHABLE_HINTS.items():
+        assert len(hint) > 20, f"{cause} hint is too vague to act on"
+
+
+def test_classification_never_echoes_the_driver_text():
+    # The vocabulary is fixed, so a message carrying a host or password cannot
+    # reach the client through this field.
+    secretish = 'password authentication failed for user "admin" at db.internal'
+    assert db.classify_db_failure(RuntimeError(secretish)) == "authentication"
+
+
+def test_health_reports_the_failure_class_when_unreachable(monkeypatch):
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:hunter2@127.0.0.1:1/x?sslmode=disable&connect_timeout=1")
+    db.reset_engine()
+    try:
+        h = db.healthcheck()
+        assert h["reachable"] is False
+        assert h["failure"] in {c for c, _ in db._FAILURE_SIGNATURES} | {"other"}
+        assert h["hint"]
+        assert "hunter2" not in repr(h)
+    finally:
+        db.reset_engine()

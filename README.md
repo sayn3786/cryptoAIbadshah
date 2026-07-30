@@ -287,6 +287,29 @@ fixes:
 | `DB_NOT_MIGRATED` | **connects fine**, tables absent | run the migration |
 | `DB_SCHEMA_UNREADABLE` | connects, cannot inspect schema | check the role's privileges on `public` |
 
+When `error_code` is `DB_UNAVAILABLE` the response also carries a `failure`
+class and a matching `hint`:
+
+| `failure` | Means |
+|---|---|
+| `startup_parameter_rejected` | the pooled endpoint refused a libpq startup parameter |
+| `authentication` | credentials rejected — re-copy `DATABASE_URL` |
+| `database_missing` | wrong Neon branch, or the role/database is gone |
+| `dns` | host cannot be resolved |
+| `tls` | TLS negotiation failed |
+| `timeout` | a scale-to-zero compute may be slow to wake; retry |
+| `refused` | wrong host or port |
+| `too_many_connections` | use the `-pooler` host |
+| `driver_missing` | `requirements.txt` deps missing — redeploy |
+
+The class is a fixed vocabulary, never the driver's message, so it cannot leak a
+host, database name or credential on this unauthenticated endpoint.
+
+> **Never pass libpq `options` when using Neon's pooled (`-pooler`) host.**
+> PgBouncer rejects it with *"unsupported startup parameter: options"*, which
+> fails every connection. `statement_timeout` is applied with `SET LOCAL` inside
+> each transaction instead — pooler-safe, and correctly scoped.
+
 `"reachable": true` with `"migrated": false` is the expected state immediately
 after wiring `DATABASE_URL` but **before** running the migration. It is not a
 connection fault.

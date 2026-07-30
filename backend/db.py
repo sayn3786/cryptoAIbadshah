@@ -29,7 +29,7 @@ __all__ = [
     "DatabaseNotConfigured", "DatabaseUnavailable",
     "db_configured", "db_required", "db_enabled",
     "get_engine", "session_scope", "healthcheck", "reset_engine", "EXPECTED_TABLES",
-    "sanitize_db_error", "safe_dsn_summary",
+    "sanitize_db_error", "safe_dsn_summary", "classify_db_failure",
 ]
 
 
@@ -130,6 +130,46 @@ def sanitize_db_error(exc: BaseException, limit: int = 200) -> str:
     return text
 
 
+# Coarse, non-identifying classification of a connection failure. Lets a health
+# endpoint say WHY without echoing driver text that can carry hostnames,
+# database names or credentials.
+_FAILURE_SIGNATURES = (
+    ("startup_parameter_rejected", ("unsupported startup parameter",
+                                    "unsupported startup parameters")),
+    ("authentication",             ("password authentication failed",
+                                    "authentication failed", "role \"",
+                                    "no password supplied")),
+    ("database_missing",          ("database \"", "does not exist")),
+    ("dns",                       ("could not translate host name",
+                                    "failed to resolve host",
+                                    "name or service not known",
+                                    "nodename nor servname")),
+    ("tls",                       ("ssl ", "certificate", "sslmode")),
+    ("timeout",                   ("timeout expired", "connection timed out",
+                                    "timeout", "statement timeout")),
+    ("refused",                   ("connection refused", "could not connect",
+                                    "is the server running")),
+    ("too_many_connections",      ("too many clients", "too many connections")),
+    ("driver_missing",            ("sqlalchemy is not installed",
+                                    "no module named")),
+)
+
+
+def classify_db_failure(exc: BaseException) -> str:
+    """
+    One-word cause for a connection failure. Safe to return to a client.
+
+    Deliberately a fixed vocabulary rather than the driver's message: the
+    message can contain the host, the database name or a role name, and this is
+    surfaced on an unauthenticated endpoint.
+    """
+    blob = f"{type(exc).__name__}: {exc}".lower()
+    for label, needles in _FAILURE_SIGNATURES:
+        if any(n in blob for n in needles):
+            return label
+    return "other"
+
+
 def safe_dsn_summary() -> dict:
     """
     Non-identifying description of the configured target, for health output.
@@ -197,11 +237,14 @@ def get_engine():
             _normalize_url(raw),
             poolclass=NullPool,          # see module docstring
             future=True,
+            # NOTE: no `options` startup parameter here. Neon's pooled endpoint
+            # is PgBouncer-based and rejects `options` ("unsupported startup
+            # parameter"), so passing `-c statement_timeout=...` at connect time
+            # made every connection through the -pooler host fail outright.
+            # statement_timeout is applied per transaction in session_scope()
+            # with SET LOCAL, which is pooler-safe and correctly scoped.
             connect_args={
                 "connect_timeout": int(_env("DB_CONNECT_TIMEOUT", "10") or 10),
-                # Keep a stuck query from pinning a serverless invocation open
-                # for its whole 60s budget.
-                "options": f"-c statement_timeout={int(_env('DB_STATEMENT_TIMEOUT_MS', '15000') or 15000)}",
             },
         )
         _engine_url_fingerprint = fingerprint
@@ -233,11 +276,24 @@ def session_scope():
     The rollback path is what makes "a failed write never publishes a signal"
     true: partial state cannot survive an error.
     """
+    from sqlalchemy import text
     from sqlalchemy.orm import Session
 
     engine = get_engine()
     session = Session(engine, future=True)
     try:
+        # Per-transaction statement timeout. SET LOCAL (not a connect-time
+        # `options` parameter) because Neon's pooled endpoint is PgBouncer-based
+        # and rejects `options` at startup. SET LOCAL is also correctly scoped:
+        # it reverts at COMMIT/ROLLBACK, so it cannot leak into whatever
+        # transaction reuses this pooled connection next.
+        _ms = int(_env("DB_STATEMENT_TIMEOUT_MS", "15000") or 15000)
+        if _ms > 0:
+            try:
+                session.execute(text(f"SET LOCAL statement_timeout = {_ms}"))
+            except Exception as exc:
+                # Never let a timeout hint break the actual work.
+                print(f"[db] could not set statement_timeout: {sanitize_db_error(exc)}")
         yield session
         session.commit()
     except Exception:
@@ -248,6 +304,39 @@ def session_scope():
         raise
     finally:
         session.close()
+
+
+# What to actually DO about each failure class. Kept next to the classifier so
+# a new signature cannot be added without an accompanying remedy.
+_UNREACHABLE_HINTS = {
+    "startup_parameter_rejected":
+        "The pooled endpoint rejected a startup parameter. Do not pass libpq "
+        "`options` when using Neon's -pooler host.",
+    "authentication":
+        "Credentials rejected. Re-copy DATABASE_URL from the Neon dashboard; "
+        "a rotated password invalidates the old one.",
+    "database_missing":
+        "The database or role named in DATABASE_URL does not exist. Check you "
+        "are pointing at the right Neon branch.",
+    "dns":
+        "Host could not be resolved. Check DATABASE_URL for a typo and that "
+        "the Neon project still exists.",
+    "tls":
+        "TLS negotiation failed. Neon requires sslmode=require.",
+    "timeout":
+        "Connection timed out. A scale-to-zero Neon compute can be slow to "
+        "wake; retry, and raise DB_CONNECT_TIMEOUT if it persists.",
+    "refused":
+        "Connection refused. Check the host and port in DATABASE_URL.",
+    "too_many_connections":
+        "Connection limit reached. Use Neon's -pooler host.",
+    "driver_missing":
+        "The Postgres driver is not installed. Check requirements.txt has "
+        "SQLAlchemy and psycopg[binary], and redeploy.",
+    "other":
+        "Check DATABASE_URL, the Neon project state and that the variable is "
+        "enabled for this environment.",
+}
 
 
 def healthcheck() -> dict:
@@ -280,11 +369,12 @@ def healthcheck() -> dict:
         with session_scope() as s:
             s.execute(text("SELECT 1"))
     except Exception as exc:
-        print(f"[db] not reachable: {sanitize_db_error(exc)}")
+        cause = classify_db_failure(exc)
+        print(f"[db] not reachable ({cause}): {sanitize_db_error(exc)}")
         return {**info, "ok": False, "reachable": False, "migrated": False,
                 "error_code": "DB_UNAVAILABLE",
-                "hint": "Check DATABASE_URL, the Neon project state and that the "
-                        "variable is enabled for this environment."}
+                "failure": cause,
+                "hint": _UNREACHABLE_HINTS.get(cause, _UNREACHABLE_HINTS["other"])}
 
     # ── 2. Reachable. Has the migration been run? ───────────────────────────
     try:
