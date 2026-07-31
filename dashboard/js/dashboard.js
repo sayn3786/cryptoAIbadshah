@@ -1,18 +1,29 @@
-/* ─── Build stamp ─────────────────────────────────────────────────────────────
-   Read straight off this script's own ?v= query string, so it can never drift
-   from what the browser actually loaded. Answers "am I looking at the new
-   build, or a cached one?" without guesswork.                                */
-const APP_BUILD = (() => {
+/* ─── Build stamps ────────────────────────────────────────────────────────────
+   TWO of them, because there are two things that go stale independently and
+   conflating them is how this page ended up reporting "build 179" while running
+   v185 code.
+
+   CODE_BUILD — baked into this file. What is actually executing.
+   SHELL_BUILD — the ?v= on this script's tag, which comes from index.html. The
+     server IGNORES that query string and serves whatever dashboard.js currently
+     is, so a stale shell still pulls fresh code. It measures the HTML, not the
+     JS.
+
+   The old single stamp read the query string and called itself "the build",
+   which is the shell's answer to a question about the code.                  */
+const CODE_BUILD = '186';                 // bump with index.html's ?v= — tested
+const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
     return (/[?&]v=([^&]+)/.exec(src) || [, '?'])[1];
   } catch (_) { return '?'; }
 })();
-window.CM_BUILD = APP_BUILD;
-console.log(`CryptoMonk build ${APP_BUILD}`);
+const APP_BUILD = CODE_BUILD;             // kept: callers mean "what am I running"
+window.CM_BUILD = { code: CODE_BUILD, shell: SHELL_BUILD };
+console.log(`CryptoMonk code ${CODE_BUILD} / shell ${SHELL_BUILD}`);
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('buildTag');
-  if (el) el.textContent = `build ${APP_BUILD}`;
+  if (el) el.textContent = `build ${CODE_BUILD}`;
 });
 
 /* ─── State ───────────────────────────────────────────────────────────────── */
@@ -6382,25 +6393,68 @@ function _tkBatches(batches, flatRows, section) {
   }).join('');
 }
 
-/* Is the page running the bundle this deploy ships?
+/* Staleness has TWO independent halves, and the first version of this conflated
+   them and cried wolf.
 
-   An installed PWA can keep an old dashboard.js alive across a deploy. The
-   tracker then renders through an older code path and simply looks like the
-   grouping and collapse controls were removed — which is how it was reported,
-   and it cost a long investigation to find that the frontend was stale rather
-   than the feature broken. The page now notices and says so.
+   THE CODE — this file. Its version is the constant below, baked into the
+   source, so it says what is actually executing.
 
-   Fails SILENT, never loud-wrong: if either side cannot be read we assume the
-   build is fine. A false "you are out of date" banner would be worse than none. */
-function _ownBuild() {
-  const src = document.querySelector('script[src*="dashboard.js"]')?.src || '';
-  return src.match(/[?&]v=(\w+)/)?.[1] || null;
+   THE SHELL — index.html. It carries the `?v=` on the script tag. The server
+   IGNORES that query string and serves whatever dashboard.js currently is, so a
+   stale shell still pulls fresh code. Reading the query string therefore
+   measures the shell, not the code.
+
+   The first version read the query string and announced "this page is running
+   an old build". On an installed PWA holding a v179 index.html against v185
+   code, that warned about code which was in fact current — a false alarm on
+   every single poll.
+
+   They need different treatment:
+   - Stale SHELL is recoverable. The HTML is missing elements this code expects
+     (the tracker's collapse caret lives in index.html, which is exactly why it
+     went missing). Clear the caches and reload ONCE — silently, because a
+     banner the user has to act on is a worse fix than one they never see.
+   - Stale CODE cannot self-fix: old code has none of this in it, so it can
+     never warn about itself. If we somehow do detect it, say so plainly.
+
+   Fails SILENT, never loud-wrong. A false "you are out of date" is worse than
+   none — that is the whole lesson of the first attempt. */
+/* Drop every cache and reload, at most once per session. The sessionStorage
+   guard is not optional: without it a shell that will not refresh — an iOS home
+   screen app pinning its start_url is the usual culprit — reloads forever. */
+async function _recoverStaleShell() {
+  try {
+    if (sessionStorage.getItem('cm.shellRecovered')) return false;
+    sessionStorage.setItem('cm.shellRecovered', '1');
+  } catch (_) { return false; }          // no storage, no guard, no reload
+  try {
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+    const regs = await navigator.serviceWorker?.getRegistrations?.() || [];
+    await Promise.all(regs.map(r => r.update()));
+  } catch (_) {}
+  // A plain reload can be answered from the very cache that is stale, so ask
+  // for the shell by a URL nothing has cached yet.
+  const u = new URL(location.href);
+  u.searchParams.set('_fresh', CODE_BUILD);
+  location.replace(u.toString());
+  return true;
 }
 
 function _checkBuild(serverBuild) {
   if (!serverBuild) return;
-  const own = _ownBuild();
-  if (!own || own === serverBuild) {
+
+  // 1. Is the SHELL behind the code that is running? Recoverable, so recover.
+  if (SHELL_BUILD && SHELL_BUILD !== '?' && SHELL_BUILD !== CODE_BUILD) {
+    _recoverStaleShell();
+    return;
+  }
+
+  // 2. Is the CODE behind what the server ships? Rare — this code has to be
+  //    new enough to contain the check at all — and not fixable from here.
+  if (CODE_BUILD === serverBuild) {
     document.getElementById('buildNotice')?.remove();
     return;
   }
@@ -6408,11 +6462,20 @@ function _checkBuild(serverBuild) {
   const el = document.createElement('div');
   el.id = 'buildNotice';
   el.className = 'build-notice';
-  el.innerHTML = `⚠ This page is running an old build (v${own}); the server ships v${serverBuild}.
+  el.innerHTML = `⚠ This page is running an old build (v${CODE_BUILD}); the server ships v${serverBuild}.
     Parts of the dashboard may be missing or behave oddly.
-    <button type="button" onclick="location.reload(true)">Reload</button>
-    <span class="build-notice-hint">If it persists, fully quit the app (Cmd+Q) and reopen.</span>`;
+    <button type="button" onclick="_forceRefresh()">Reload</button>
+    <span class="build-notice-hint">If it persists: on iPhone, close the app from the
+      app switcher and reopen. On a Mac, quit it fully (Cmd+Q).</span>`;
   document.body.prepend(el);
+}
+
+/* The Reload button. location.reload() can be served from the stale cache, so
+   clear first — and bypass the once-per-session guard, since this is a person
+   deliberately asking. */
+async function _forceRefresh() {
+  try { sessionStorage.removeItem('cm.shellRecovered'); } catch (_) {}
+  await _recoverStaleShell();
 }
 
 async function loadTracker(force) {

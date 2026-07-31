@@ -512,12 +512,29 @@ live progress rather than reporting a move of zero.
 alive across a deploy. The tracker then renders through an older code path —
 no batch grouping, no collapse controls — which on screen is indistinguishable
 from the feature having been removed, and cost a long investigation to identify
-as a stale frontend rather than a broken feature. `/api/signals/tracker` now
-reports `frontend_build` (the `?v=` stamp parsed out of `index.html`, so it
-cannot drift from the real asset), the page compares it against the bundle it is
-running, and a mismatch raises a banner with a reload button and the Cmd+Q hint
-for an installed app. It fails **silent**: if either side cannot be read, no
-banner — a false "you are out of date" would be worse than none.
+as a stale frontend rather than a broken feature. Staleness has **two independent halves**, and conflating them made the first
+version of this check cry wolf on every poll:
+
+| | What it is | Recoverable? |
+|---|---|---|
+| `CODE_BUILD` | Baked into `dashboard.js`. What is actually executing. | No — old code contains none of this, so it can never warn about itself. |
+| `SHELL_BUILD` | The `?v=` on the script tag, i.e. what `index.html` says. | Yes. |
+
+The server **ignores** that query string and serves whatever `dashboard.js`
+currently is, so a stale shell still pulls fresh code. Reading it therefore
+measures the HTML, not the JS — and the first version read it and announced
+*"this page is running an old build"*, warning about code that was current.
+
+So they get different treatment. A stale **shell** is fixed silently: caches
+dropped and the page reloaded once against an uncached URL — a banner the user
+must act on is a worse fix than one they never see, and the guard in
+`sessionStorage` is what stops a shell that will not refresh from reloading
+forever. A stale **code** build raises the banner, with platform-correct advice
+(app switcher on iPhone, Cmd+Q on Mac).
+
+`/api/signals/tracker` reports `frontend_build`, parsed out of `index.html` so it
+cannot drift from the real asset. The check fails **silent**: if either side
+cannot be read, no banner — a false "you are out of date" is worse than none.
 
 Relatedly, when the API returns no batches the tracker still falls back to one
 flat table, but now labels it as a degraded render instead of quietly looking
