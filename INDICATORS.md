@@ -662,6 +662,42 @@ this gate are not comparable with those scored without it.
 
 ---
 
+### Triangles & Wedges · *detection integrity*
+*Changes which patterns are confirmed, and confirmed patterns feed the score.*
+
+Rails are fitted through the recent swing pivots, and a breakout is the first
+decisive **close** beyond a rail after the last pivot. That last part had a hole:
+after a breakout the breaking candle usually becomes a swing pivot itself, so the
+rail was refitted **through** it and the scan window slid past the very bar that
+broke. The pattern quietly un-broke itself.
+
+Observed on a live TAO 1D falling wedge: breakout, retest the next day, and days
+later the card read *"Forming — awaiting a break above the rail"* again. Same
+series in a test harness, before the fix:
+
+```
++1 candle   failed      ← correct
++2 candles  failed
++3 candles  forming     ← the breakout has been erased
++4 candles  forming
+```
+
+**A candle cannot be part of the boundary it broke.** Pivots whose candle closed
+beyond the structure that preceded them are now dropped before the rails are
+fitted (`_peel_breakout_pivots`).
+
+| Rule | Behaviour |
+|---|---|
+| Which pivots are dropped | Any whose close was beyond rails fitted from the pivots *before* it — newest first, since a breakout pivot stops being the trailing one after a few bars and would otherwise poison the fit from the middle of the set. |
+| Bounded | At most 3, and never below `TW_MIN_PIVOTS` per rail. A noisy stretch must not dissolve a valid structure. |
+| Clean structures untouched | With nothing to peel the rails are bit-identical to before. |
+| Still forming stays forming | The fix must not make every pattern look broken. |
+
+A failed breakout still disappears once it ages past `FAILURE_SHOW_BARS` — that
+is unchanged. What is fixed is the state it passes through on the way there.
+
+---
+
 ### BTC-Only Indicators
 
 These only score when the symbol is `BTCUSDT`.

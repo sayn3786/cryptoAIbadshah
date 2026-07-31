@@ -108,7 +108,7 @@ BASE = datetime(2026, 3, 2, 10, 0, tzinfo=timezone.utc)
 def _payload(**over):
     p = dict(
         symbol="btc", exchange="binance", timeframe="2H", direction="LONG",
-        strategy_name="mtf", strategy_version="v42_tpfilter",
+        strategy_name="mtf", strategy_version="v43_wedgefix",
         candle_open_time=BASE, candle_close_time=BASE + timedelta(hours=2),
         generated_at=BASE + timedelta(hours=2),
         entry_price="100.5", stop_loss="95.25", targets=["110.5", "120.75"],

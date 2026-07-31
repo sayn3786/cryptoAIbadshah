@@ -1760,6 +1760,80 @@ def _trendline_through_pivots(pivots, want_upper: bool):
     return None
 
 
+def _fit_rails(hs, ls, candles):
+    """
+    Upper/lower rail for a pivot set, as (h_slope, h_int, l_slope, l_int).
+
+    Rails that TOUCH the swing pivots (a line through two swings keeping the rest
+    on the correct side). Falls back to the regression SLOPE offset to the
+    extreme (envelope) when no clean 2-touch boundary exists, so the rail still
+    bounds the price rather than running through its middle.
+    """
+    start_i = min(hs[0]["index"], ls[0]["index"])
+    last_i  = max(hs[-1]["index"], ls[-1]["index"])
+    _up = _trendline_through_pivots(hs, want_upper=True)
+    _lo = _trendline_through_pivots(ls, want_upper=False)
+    if _up and _lo:
+        (h_slope, h_int), (l_slope, l_int) = _up, _lo
+    else:
+        h_slope, _ = _fit_line([(p["index"], p["price"]) for p in hs])
+        l_slope, _ = _fit_line([(p["index"], p["price"]) for p in ls])
+        _rng = candles[start_i:last_i + 1] or [candles[last_i]]
+        h_int = max(c["high"] - h_slope * (start_i + k) for k, c in enumerate(_rng))
+        l_int = min(c["low"]  - l_slope * (start_i + k) for k, c in enumerate(_rng))
+    return h_slope, h_int, l_slope, l_int
+
+
+def _peel_breakout_pivots(hs, ls, candles, max_peel: int = 3):
+    """
+    Drop trailing pivots that are themselves BREAKOUT candles.
+
+    A candle cannot be part of the boundary it broke. Without this, a pattern
+    quietly un-breaks itself: price closes beyond a rail, and a few bars later
+    that same candle becomes the newest swing pivot — so the rail is refitted
+    THROUGH it and the breakout scan, which starts after the last pivot, no
+    longer covers the bar that broke. The card then reverts to "forming —
+    awaiting a break", erasing a breakout that already happened and failed.
+
+    Peeling is bounded and never takes a set below TW_MIN_PIVOTS, so a structure
+    can lose a laundered breakout without losing the rails that define it.
+    """
+    keep_h, keep_l = list(hs), list(ls)
+    dropped = 0
+
+    def _broke(idx: int) -> bool:
+        """Did the candle at `idx` close beyond the structure that PRECEDED it?"""
+        pre_h = [p for p in keep_h if p["index"] < idx]
+        pre_l = [p for p in keep_l if p["index"] < idx]
+        if len(pre_h) < 2 or len(pre_l) < 2:
+            return False                    # too little structure to have broken
+        try:
+            h_s, h_i, l_s, l_i = _fit_rails(pre_h, pre_l, candles)
+        except (IndexError, ValueError, ZeroDivisionError):
+            return False
+        close = candles[idx]["close"]
+        return close > h_s * idx + h_i or close < l_s * idx + l_i
+
+    # Newest first: a pivot that broke out has to go whether it is still the
+    # trailing one or has since been overtaken by newer swings. Peeling only the
+    # trailing pivot fixed the first bar or two after a breakout and then let the
+    # same candle poison the fit again from the middle of the set.
+    for p in sorted(hs, key=lambda x: x["index"], reverse=True):
+        if dropped >= max_peel or len(keep_h) <= TW_MIN_PIVOTS:
+            break
+        if _broke(p["index"]):
+            keep_h = [q for q in keep_h if q["index"] != p["index"]]
+            dropped += 1
+    for p in sorted(ls, key=lambda x: x["index"], reverse=True):
+        if dropped >= max_peel or len(keep_l) <= TW_MIN_PIVOTS:
+            break
+        if _broke(p["index"]):
+            keep_l = [q for q in keep_l if q["index"] != p["index"]]
+            dropped += 1
+
+    return keep_h, keep_l
+
+
 def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                             window: int = TW_PIVOT_WINDOW) -> List[Dict]:
     """Detect ascending/descending/symmetrical triangles and rising/falling wedges
@@ -1775,25 +1849,17 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
     hs = ph[-4:] if len(ph) >= 4 else ph[-TW_MIN_PIVOTS:]
     ls = pl[-4:] if len(pl) >= 4 else pl[-TW_MIN_PIVOTS:]
 
+    # A breakout candle must not become part of the boundary it broke — see
+    # _peel_breakout_pivots. Without this the pattern silently un-breaks itself
+    # a few bars after a failed breakout.
+    hs, ls = _peel_breakout_pivots(hs, ls, candles)
+
     start_i = min(hs[0]["index"], ls[0]["index"])
     last_i  = max(hs[-1]["index"], ls[-1]["index"])   # END OF STRUCTURE (last pivot),
                                                        # not the current bar — after a
                                                        # break the rails have already met.
 
-    # Rails that TOUCH the swing pivots (a line through two swings keeping the rest
-    # on the correct side). Falls back to the regression SLOPE offset to the
-    # extreme (envelope) when no clean 2-touch boundary exists, so the rail still
-    # bounds the price rather than running through its middle.
-    _up = _trendline_through_pivots(hs, want_upper=True)
-    _lo = _trendline_through_pivots(ls, want_upper=False)
-    if _up and _lo:
-        (h_slope, h_int), (l_slope, l_int) = _up, _lo
-    else:
-        h_slope, _ = _fit_line([(p["index"], p["price"]) for p in hs])
-        l_slope, _ = _fit_line([(p["index"], p["price"]) for p in ls])
-        _rng = candles[start_i:last_i + 1] or [candles[last_i]]
-        h_int = max(c["high"] - h_slope * (start_i + k) for k, c in enumerate(_rng))
-        l_int = min(c["low"]  - l_slope * (start_i + k) for k, c in enumerate(_rng))
+    h_slope, h_int, l_slope, l_int = _fit_rails(hs, ls, candles)
 
     upper = lambda i: h_slope * i + h_int
     lower = lambda i: l_slope * i + l_int
