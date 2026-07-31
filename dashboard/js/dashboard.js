@@ -6183,8 +6183,11 @@ function _tkTable(rows) {
 
 /* Which batches are expanded. Persisted, because the tracker re-renders on a
    5-minute poll — without this, anything you opened would snap shut under you.
-   Live batches default to open (that is the working list); closed ones default
-   to collapsed so the history does not bury it. */
+
+   Every batch starts COLLAPSED. With 50 live signals across three slots, opening
+   them all makes the section hundreds of rows long; the batch headers alone —
+   date, slot, count, scoreboard — are the summary most of the time, and you
+   open the one you want. */
 const TK_OPEN_KEY = 'cryptomonk.tracker.open';
 
 function _tkOpenMap() {
@@ -6194,7 +6197,7 @@ function _tkOpenMap() {
 
 function _tkIsOpen(key, section) {
   const map = _tkOpenMap();
-  return key in map ? !!map[key] : section === 'live';
+  return key in map ? !!map[key] : false;
 }
 
 function _tkToggleBatch(key, section) {
@@ -6228,14 +6231,18 @@ document.addEventListener('keydown', e => {
   }
 });
 
-/* The whole section starts COLLAPSED: the tracker is a reference you open when
-   you want it, not something that pushes the charts down the page on every
-   load. The choice is remembered, so someone who works from it keeps it open. */
+/* The section itself starts OPEN, showing the batch headers with their counts
+   and scoreboards. That is the useful default: a compact index of every batch,
+   with the rows one click away. (It shipped collapsed-by-default first; seeing
+   it in use, the headers ARE the summary — hiding them hid the whole point.)
+   The choice is remembered either way. */
 const TK_SECTION_KEY = 'cryptomonk.tracker.section';
 
 function _tkSectionOpen() {
-  try { return localStorage.getItem(TK_SECTION_KEY) === 'open'; }
-  catch (_) { return false; }
+  try {
+    const v = localStorage.getItem(TK_SECTION_KEY);
+    return v === null ? true : v === 'open';
+  } catch (_) { return true; }
 }
 
 function _tkApplySection() {

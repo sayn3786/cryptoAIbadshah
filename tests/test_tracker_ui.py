@@ -41,13 +41,21 @@ def test_the_section_exists_and_starts_hidden():
     assert "hidden" in section, "must not flash an empty table before data loads"
 
 
-def test_the_whole_section_starts_collapsed():
-    # The tracker is a reference you open when you want it, not something that
-    # pushes the charts down the page on every load.
+def test_the_section_starts_open_showing_the_batch_index():
+    # The batch headers ARE the summary — date, slot, count, scoreboard — so the
+    # useful default is the section open with every batch closed underneath it.
+    # (It shipped collapsed-by-default first; that hid the whole point.)
     section = HTML.split('id="trackerSection"')[1][:160]
-    assert "collapsed" in section
-    assert ".tracker-section.collapsed .tracker-body" in CSS, "collapsing does nothing"
-    assert 'aria-expanded="false"' in HTML
+    assert "collapsed" not in section
+    assert 'aria-expanded="true"' in HTML
+    # …but it must still be collapsible.
+    assert ".tracker-section.collapsed .tracker-body" in CSS
+
+
+def test_the_section_default_survives_an_empty_store():
+    # localStorage has nothing on a first visit. Default OPEN, not "falsy".
+    fn = JS[JS.index("function _tkSectionOpen"):JS.index("function _tkApplySection")]
+    assert "=== null ? true" in fn, "a first visit must default to open"
 
 
 def test_the_section_toggle_is_remembered_separately_from_the_batches():
@@ -205,10 +213,11 @@ def test_the_toggle_is_delegated_not_bound_per_header():
     assert "closest?.('.tk-batch-hdr')" in JS
 
 
-def test_live_batches_open_and_closed_ones_collapse_by_default():
-    # The working list should be in front of you; the history should not bury it.
+def test_every_batch_starts_collapsed():
+    # With 50 live signals across three slots, opening them all makes the section
+    # hundreds of rows long. You open the batch you want.
     fn = JS[JS.index("function _tkIsOpen"):JS.index("function _tkToggleBatch")]
-    assert "section === 'live'" in fn, "the default does not distinguish the sections"
+    assert "key in map ? !!map[key] : false" in fn
     assert "key in map" in fn, "a stored choice must win over the default"
 
 
