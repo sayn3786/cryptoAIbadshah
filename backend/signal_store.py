@@ -34,7 +34,8 @@ __all__ = [
     "validate_price_structure", "assert_transition", "make_idempotency_key",
     "has_environment_column", "reset_capabilities",
     "create_signal", "get_signal", "list_active_signals", "list_signals",
-    "attach_targets",
+    "attach_targets", "record_entry_fill", "record_excursion",
+    "WORKING_STATUSES",
     "record_target_hit", "record_stop_loss_hit", "close_signal",
     "expire_signal", "cancel_signal", "upsert_postmortem", "archive_signal",
     "list_postmortems", "usage_report",
@@ -51,17 +52,27 @@ class InvalidTransition(ValueError):
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
 
-STATUSES = ("OPEN", "PARTIAL_TP", "TP_HIT", "SL_HIT", "CLOSED", "EXPIRED", "CANCELLED")
+STATUSES = ("PENDING", "OPEN", "PARTIAL_TP", "TP_HIT", "SL_HIT",
+            "CLOSED", "EXPIRED", "CANCELLED")
+
+# A published signal is a WORKING ORDER, not a position. It becomes OPEN only
+# when price reaches the entry. Anything still PENDING has no P/L and belongs in
+# no performance statistic — an order that never filled is not a trade you took.
+WORKING_STATUSES = frozenset({"PENDING", "OPEN", "PARTIAL_TP"})
 
 TERMINAL_STATUSES = frozenset({"TP_HIT", "SL_HIT", "CLOSED", "EXPIRED", "CANCELLED"})
 
-EVENT_TYPES = ("CREATED", "TARGET_HIT", "STOP_LOSS_HIT", "CLOSED",
-               "EXPIRED", "CANCELLED", "ANALYSIS_ADDED", "ARCHIVED")
+EVENT_TYPES = ("CREATED", "ENTRY_FILLED", "TARGET_HIT", "STOP_LOSS_HIT",
+               "CLOSED", "EXPIRED", "CANCELLED", "ANALYSIS_ADDED", "ARCHIVED")
 
 # A terminal status maps to an EMPTY set: nothing may follow it. That single
 # fact is what stops a closed trade being reopened and what stops a signal
 # recording both TP_HIT and SL_HIT as its outcome.
 ALLOWED_TRANSITIONS: Dict[str, frozenset] = {
+    # PENDING is a working order. It can fill (OPEN) or be withdrawn — it can
+    # NEVER jump straight to a target or a stop, because there was no position
+    # to hit one with.
+    "PENDING":    frozenset({"OPEN", "CANCELLED", "EXPIRED"}),
     "OPEN":       frozenset({"PARTIAL_TP", "TP_HIT", "SL_HIT", "CLOSED", "EXPIRED", "CANCELLED"}),
     "PARTIAL_TP": frozenset({"PARTIAL_TP", "TP_HIT", "SL_HIT", "CLOSED", "EXPIRED", "CANCELLED"}),
     "TP_HIT":     frozenset(),
@@ -227,12 +238,14 @@ def _sql(text_: str):
 # 'production' default — which is what they are anyway.
 
 _ENV_COLUMN: Optional[bool] = None
+_FILL_COLUMNS: Optional[bool] = None
 
 
 def reset_capabilities() -> None:
     """Forget probed schema capabilities. Used by tests and after a migration."""
-    global _ENV_COLUMN
+    global _ENV_COLUMN, _FILL_COLUMNS
     _ENV_COLUMN = None
+    _FILL_COLUMNS = None
 
 
 def has_environment_column(session) -> bool:
@@ -255,6 +268,31 @@ def has_environment_column(session) -> bool:
             # older schema: writes still succeed, just untagged.
             _ENV_COLUMN = False
     return _ENV_COLUMN
+
+
+def has_entry_fill_columns(session) -> bool:
+    """
+    True when signals.entry_filled_at exists (i.e. migration 003 has been run).
+
+    Same reasoning as has_environment_column: the code has to work on both sides
+    of the migration, because deploying before migrating must never break
+    publishing. Without the columns, a signal is written straight to OPEN — the
+    old assume-filled behaviour — rather than to PENDING, which the pre-003
+    CHECK constraint would reject outright.
+    """
+    global _FILL_COLUMNS
+    if _FILL_COLUMNS is None:
+        try:
+            _FILL_COLUMNS = bool(session.execute(_sql("""
+                SELECT count(*) > 0
+                FROM   pg_attribute
+                WHERE  attrelid = to_regclass('signals')
+                  AND  attname  = 'entry_filled_at'
+                  AND  NOT attisdropped
+            """)).scalar())
+        except Exception:
+            _FILL_COLUMNS = False
+    return _FILL_COLUMNS
 
 
 def _row_to_dict(row) -> Dict[str, Any]:
@@ -373,6 +411,10 @@ def create_signal(*,
         # index, so it has to match whichever idempotency index this database
         # actually has — pre-002 (no environment) or post-002 (with it).
         tagged = has_environment_column(s)
+        # A published signal is a WORKING ORDER. It becomes OPEN only when the
+        # monitor sees price reach the entry. Pre-003 databases reject 'PENDING'
+        # outright, so there we keep the old assume-filled behaviour.
+        start_status = "PENDING" if has_entry_fill_columns(s) else "OPEN"
         env_col = ", environment" if tagged else ""
         env_val = ", :env" if tagged else ""
         env_key = "environment, " if tagged else ""
@@ -381,7 +423,8 @@ def create_signal(*,
         params = {"symbol": symbol, "exchange": exchange, "timeframe": timeframe,
                   "direction": direction, "sname": strategy_name,
                   "sver": strategy_version, "open_t": open_t, "close_t": close_t,
-                  "gen_t": gen_t, "entry": entry_d, "stop": stop_d, "conf": conf_d}
+                  "gen_t": gen_t, "entry": entry_d, "stop": stop_d, "conf": conf_d,
+                  "status": start_status}
         if tagged:
             params["env"] = env
 
@@ -394,7 +437,7 @@ def create_signal(*,
             VALUES (:symbol, :exchange, :timeframe, :direction,
                     :sname, :sver,
                     :open_t, :close_t, :gen_t,
-                    :entry, :stop, :conf, 'OPEN'{env_val})
+                    :entry, :stop, :conf, :status{env_val})
             ON CONFLICT ({env_key}symbol, exchange, timeframe,
                          strategy_name, strategy_version, candle_close_time)
             DO NOTHING
@@ -638,12 +681,102 @@ def attach_targets(rows: List[Dict[str, Any]], *, session=None) -> List[Dict[str
 
 def list_active_signals(*, environment: Optional[str] = None, session=None,
                         limit: int = MAX_PAGE_SIZE) -> List[Dict[str, Any]]:
-    """Signals still working: OPEN or PARTIAL_TP, unarchived, this environment."""
-    return list_signals(statuses=["OPEN", "PARTIAL_TP"], limit=limit,
+    """
+    Signals still working, unarchived, in this environment.
+
+    Includes PENDING: a working order is unresolved and the monitor must keep
+    watching it, both to fill it and to withdraw it if it never fills.
+    """
+    return list_signals(statuses=sorted(WORKING_STATUSES), limit=limit,
                         environment=environment, session=session)["items"]
 
 
 # ── Lifecycle updates ────────────────────────────────────────────────────────
+
+def record_entry_fill(signal_id, fill_price, filled_at, *,
+                      source_ts=None, session=None) -> Dict[str, Any]:
+    """
+    Price reached the entry: the working order became a position.
+
+    Idempotent on the source timestamp, like every other lifecycle call. Only a
+    PENDING signal can fill — a signal already OPEN was filled before, and the
+    state machine refuses anything else.
+    """
+    at_t = _utc(filled_at, "filled_at")
+    price_d = _dec(fill_price, "fill_price")
+    if price_d <= 0:
+        raise SignalValidationError("fill_price must be > 0")
+    src = source_ts if source_ts is not None else at_t
+
+    def _work(s):
+        row = _lock_signal(s, signal_id)
+        current = row._mapping["status"]
+
+        key = make_idempotency_key(signal_id, "ENTRY_FILLED", src)
+        if s.execute(_sql("SELECT 1 FROM signal_events WHERE idempotency_key=:k"),
+                     {"k": key}).first():
+            return {"signal": _row_to_dict(row), "applied": False, "duplicate": True}
+
+        assert_transition(current, "OPEN")
+
+        s.execute(_sql("""
+            UPDATE signals
+            SET status='OPEN', entry_filled_at=:at,
+                entry_fill_price=CAST(:price AS NUMERIC), updated_at=now()
+            WHERE id=:sid AND status=:cur
+        """), {"at": at_t, "price": price_d, "sid": str(signal_id), "cur": current})
+
+        _insert_event(s, signal_id, "ENTRY_FILLED", at_t, price=price_d,
+                      metadata={"previous_status": current},
+                      idempotency_key=key)
+        return {"signal": _row_to_dict(_lock_signal(s, signal_id)),
+                "applied": True, "duplicate": False, "status": "OPEN"}
+
+    if session is not None:
+        return _work(session)
+    with session_scope() as s:
+        return _work(s)
+
+
+def record_excursion(signal_id, *, mfe_pct=None, mae_pct=None,
+                     session=None) -> Dict[str, Any]:
+    """
+    Record how far the trade ran in favour (MFE) and against (MAE), in percent.
+
+    Both only ever WIDEN. The monitor recomputes from whatever candles it can
+    still see, and a provider that returns a shorter window must not shrink a
+    high-water mark that was already observed — the extreme happened whether or
+    not today's fetch reaches back to it.
+
+    No event is written: this is a measurement of a position, not a change to
+    it, and the event trail is for things that happened TO the signal.
+    """
+    mfe = _opt_dec(mfe_pct, "mfe_pct")
+    mae = _opt_dec(mae_pct, "mae_pct")
+    if mfe is None and mae is None:
+        return {"applied": False}
+
+    def _work(s):
+        res = s.execute(_sql("""
+            UPDATE signals
+            SET mfe_pct = GREATEST(COALESCE(mfe_pct, CAST(:mfe AS NUMERIC)),
+                                   COALESCE(CAST(:mfe AS NUMERIC), mfe_pct)),
+                mae_pct = LEAST(COALESCE(mae_pct, CAST(:mae AS NUMERIC)),
+                                COALESCE(CAST(:mae AS NUMERIC), mae_pct)),
+                updated_at = now()
+            WHERE id = :sid
+            RETURNING mfe_pct, mae_pct
+        """), {"mfe": mfe, "mae": mae, "sid": str(signal_id)}).first()
+        if res is None:
+            return {"applied": False}
+        return {"applied": True, "mfe_pct": _row_to_dict(res).get("mfe_pct"),
+                "mae_pct": _row_to_dict(res).get("mae_pct")}
+
+    if session is not None:
+        return _work(session)
+    with session_scope() as s:
+        return _work(s)
+
 
 def record_target_hit(signal_id, target_number: int, hit_price, hit_at, *,
                       source_ts=None, session=None) -> Dict[str, Any]:

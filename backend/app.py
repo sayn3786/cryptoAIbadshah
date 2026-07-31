@@ -3145,8 +3145,11 @@ def api_signals_monitor():
     Advance every working signal against the market. Internal only.
 
     This is what makes an outcome history exist: without it every signal stays
-    OPEN forever. Idempotent — each decision is keyed on the CANDLE that caused
-    it, so running it twice over the same candles changes nothing.
+    PENDING forever. It fills working orders whose entry price traded, records
+    target and stop hits, withdraws orders that never filled, expires stale
+    positions, and measures MFE/MAE. Idempotent — each decision is keyed on the
+    CANDLE that caused it, so running it twice over the same candles changes
+    nothing.
     """
     unauth = _require_internal()
     if unauth:
@@ -3168,11 +3171,15 @@ def api_signals_monitor():
             store, _candles,
             max_age_hours=_int_arg("max_age_hours",
                                    monitor.DEFAULT_MAX_AGE_HOURS, 1, 24 * 30),
+            fill_window_hours=_int_arg("fill_window_hours",
+                                       monitor.DEFAULT_FILL_WINDOW_HOURS,
+                                       1, 24 * 30),
             limit=_int_arg("limit", 100, 1, 200))
     except Exception as exc:
         return _db_error_response(exc)
-    print(f"[monitor] checked={summary['checked']} tp={summary['targets_hit']} "
-          f"sl={summary['stopped']} expired={summary['expired']} "
+    print(f"[monitor] checked={summary['checked']} filled={summary['filled']} "
+          f"tp={summary['targets_hit']} sl={summary['stopped']} "
+          f"expired={summary['expired']} cancelled={summary['cancelled']} "
           f"errors={len(summary['errors'])}")
     return jsonify(summary)
 

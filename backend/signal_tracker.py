@@ -173,12 +173,15 @@ def build_row(signal: Dict[str, Any],
                    else next((t for t in ladder if not t["hit"]), None))
 
     # Reference price: the close for a finished trade, the live tick otherwise.
+    # A working order has no position, so it has no move at all — reporting one
+    # would be P/L on a trade that was never entered.
     reference = close_price if (is_terminal and close_price) else live
-    move_pct = _signed(direction, entry, reference)
+    move_pct = None if status == "PENDING" else _signed(direction, entry, reference)
 
     # Risk/reward realised so far, in R — the move divided by the original risk.
     r_multiple = None
-    if entry is not None and stop is not None and reference is not None and entry != stop:
+    if (status != "PENDING" and entry is not None and stop is not None
+            and reference is not None and entry != stop):
         risk = abs(entry - stop)
         gain = (reference - entry) if direction == "LONG" else (entry - reference)
         if risk > 0:
@@ -194,13 +197,17 @@ def build_row(signal: Dict[str, Any],
         outcome = ("WIN" if (move_pct or 0) > 0 else
                    "LOSS" if (move_pct or 0) < 0 else "BREAKEVEN")
 
+    entry_ref = _dec(signal.get("entry_fill_price")) or entry
     row = {
         "signal_id":     signal.get("id"),
         "symbol":        signal.get("symbol"),
         "direction":     direction,
         "timeframe":     signal.get("timeframe"),
         "status":        status,
-        "state":         "closed" if is_terminal else "live",
+        # A PENDING signal is a WORKING ORDER, not a position: no P/L, no R, and
+        # it must not be read as a trade you are in.
+        "state":         ("closed" if is_terminal
+                          else "pending" if status == "PENDING" else "live"),
         "entry":         _f(entry),
         "stop_loss":     _f(stop),
         "live_price":    _f(live),
@@ -214,6 +221,18 @@ def build_row(signal: Dict[str, Any],
         # (below it for a SHORT). Positive is safe, negative means price has
         # already traded through the stop and the record has not caught up.
         "stop_distance_pct": (_signed(direction, stop, live) if (live and stop) else None),
+        # How far price still has to travel to reach the entry, in the direction
+        # the order is waiting from. Negative means it has traded through and a
+        # fill is due on the next closed candle.
+        "entry_distance_pct": (_signed(direction, live, entry)
+                               if (status == "PENDING" and live and entry) else None),
+        "entry_fill_price": _f(signal.get("entry_fill_price")),
+        "filled_at":     (_utc(signal.get("entry_filled_at")).isoformat()
+                          if _utc(signal.get("entry_filled_at")) else None),
+        # How far it ran for and against, measured from the fill. The standard
+        # read on whether a stop was too tight or a target too far.
+        "mfe_pct":       _f(signal.get("mfe_pct")),
+        "mae_pct":       _f(signal.get("mae_pct")),
         "confidence":    _f(signal.get("confidence_score")),
         "slot":          slot_for(opened),
         "opened_at":     opened.isoformat() if opened else None,
@@ -245,6 +264,17 @@ def _remark(row: Dict[str, Any]) -> tuple:
         t = next((x for x in row["targets"] if x["number"] == n), None)
         return t["distance_pct"] if t else None
 
+    # ── Not a position yet ──────────────────────────────────────────────────
+    if status == "PENDING":
+        gap = row["entry_distance_pct"]
+        if gap is None:
+            return ("Waiting for entry", "Order working. Nothing filled yet.")
+        if gap <= 0:
+            return (f"Entry reached ({abs(gap):.2f}% through) — awaiting candle close",
+                    "Fills on the next closed candle.")
+        return (f"Waiting for entry — {gap:.2f}% away",
+                "Order working. Cancel it if the setup stops making sense.")
+
     # ── Finished ────────────────────────────────────────────────────────────
     if status == "TP_HIT":
         return (f"All targets hit ({_join(hits)}) — closed {_pm(move)}",
@@ -264,6 +294,11 @@ def _remark(row: Dict[str, Any]) -> tuple:
         return (f"Went sideways for {row['age_hours']}h — closed {_pm(move)}",
                 "Closed on the record. Exit if you are still in the position.")
     if status == "CANCELLED":
+        if (row.get("close_reason") or "") == "NEVER_FILLED":
+            # Not a trade. It must not read like one, and it is excluded from
+            # every performance figure.
+            return (f"Never filled — entry not reached in {row['age_hours']}h",
+                    "Order withdrawn. Nothing was ever at risk.")
         return ("Cancelled before it resolved", "No action.")
     if status == "CLOSED":
         return (f"Closed manually {_pm(move)}", "No action.")
@@ -415,6 +450,12 @@ def summarise(closed_rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     signals are reported separately and excluded from the denominator, because a
     setup that never resolved is not evidence either way.
     """
+    # An order that never filled was never a trade — it is reported separately
+    # and kept out of every figure below, including the averages.
+    never_filled = [r for r in closed_rows
+                    if (r.get("close_reason") or "") == "NEVER_FILLED"]
+    closed_rows = [r for r in closed_rows if r not in never_filled]
+
     wins = [r for r in closed_rows if r["outcome"] == "WIN"]
     losses = [r for r in closed_rows if r["outcome"] == "LOSS"]
     decided = len(wins) + len(losses)
@@ -422,6 +463,7 @@ def summarise(closed_rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
     return {
         "closed": len(closed_rows),
+        "never_filled": len(never_filled),
         "wins": len(wins),
         "losses": len(losses),
         "expired": sum(1 for r in closed_rows if r["outcome"] == "EXPIRED"),
