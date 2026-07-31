@@ -1,5 +1,6 @@
 """CryptoMonk — Flask backend, pure Python, works on Python 3.15+"""
 import os
+import re
 import sys
 import json
 import time
@@ -3291,6 +3292,36 @@ def api_signals_postmortems():
         return _db_error_response(exc)
 
 
+_DASHBOARD_BUILD: dict = {}
+
+def dashboard_build() -> Optional[str]:
+    """
+    The ``?v=`` stamp on dashboard.js, read out of index.html.
+
+    Served to the page so it can tell whether the JS it is running is the JS
+    this deploy ships. An installed PWA can keep an old bundle alive across a
+    deploy — the tracker then renders through a fallback path and simply looks
+    like the grouping and collapse controls were removed, with nothing on screen
+    saying otherwise.
+
+    Parsed rather than hard-coded: a constant here would be one more thing to
+    remember to bump, and a build stamp that lies is worse than none.
+    """
+    if "value" in _DASHBOARD_BUILD:
+        return _DASHBOARD_BUILD["value"]
+    value = None
+    try:
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            "dashboard", "index.html")
+        with open(path, "r", encoding="utf-8") as fh:
+            m = re.search(r"dashboard\.js\?v=(\w+)", fh.read())
+        value = m.group(1) if m else None
+    except Exception:
+        value = None                     # never break a response over this
+    _DASHBOARD_BUILD["value"] = value
+    return value
+
+
 def _tracker_prices(symbols) -> dict:
     """
     Live price per symbol for the tracker, best-effort.
@@ -3400,6 +3431,11 @@ def api_signals_tracker():
     prices = _tracker_prices([r.get("symbol") for r in active])
     view = tracker.build_tracker(active, closed, prices, window_days=days)
     view["environment"] = _deploy_env()
+    # Which dashboard bundle this deploy ships. The page compares it with the
+    # bundle it is actually running and says so when they differ — see
+    # dashboard_build(). Carried on a response the dashboard already polls, so
+    # it costs no extra request.
+    view["frontend_build"] = dashboard_build()
     return jsonify(view)
 
 

@@ -6354,7 +6354,17 @@ function _tkBatches(batches, flatRows, section) {
   // Grouped by the slot each signal was PUBLISHED in — "the 8pm batch" is the
   // unit these are decided and reviewed in. Falls back to one flat table if an
   // older API build returns no batches, so the section never renders empty.
-  if (!batches?.length) return _tkTable(flatRows);
+  //
+  // The fallback now SAYS it is a fallback. Rendering it silently looked
+  // identical to the grouping and collapse controls having been removed, which
+  // is exactly how it was reported.
+  if (!batches?.length) {
+    const note = flatRows?.length
+      ? `<div class="tk-degraded">Showing an ungrouped list — this deployment's API
+         returned no publication batches, so there is nothing to collapse.</div>`
+      : '';
+    return note + _tkTable(flatRows);
+  }
   return batches.map(b => {
     const open = _tkIsOpen(b.key, section);
     return `<div class="tk-batch${open ? '' : ' collapsed'}" data-key="${b.key}"
@@ -6370,6 +6380,39 @@ function _tkBatches(batches, flatRows, section) {
       <div class="tk-batch-body">${_tkTable(b.rows)}</div>
     </div>`;
   }).join('');
+}
+
+/* Is the page running the bundle this deploy ships?
+
+   An installed PWA can keep an old dashboard.js alive across a deploy. The
+   tracker then renders through an older code path and simply looks like the
+   grouping and collapse controls were removed — which is how it was reported,
+   and it cost a long investigation to find that the frontend was stale rather
+   than the feature broken. The page now notices and says so.
+
+   Fails SILENT, never loud-wrong: if either side cannot be read we assume the
+   build is fine. A false "you are out of date" banner would be worse than none. */
+function _ownBuild() {
+  const src = document.querySelector('script[src*="dashboard.js"]')?.src || '';
+  return src.match(/[?&]v=(\w+)/)?.[1] || null;
+}
+
+function _checkBuild(serverBuild) {
+  if (!serverBuild) return;
+  const own = _ownBuild();
+  if (!own || own === serverBuild) {
+    document.getElementById('buildNotice')?.remove();
+    return;
+  }
+  if (document.getElementById('buildNotice')) return;
+  const el = document.createElement('div');
+  el.id = 'buildNotice';
+  el.className = 'build-notice';
+  el.innerHTML = `⚠ This page is running an old build (v${own}); the server ships v${serverBuild}.
+    Parts of the dashboard may be missing or behave oddly.
+    <button type="button" onclick="location.reload(true)">Reload</button>
+    <span class="build-notice-hint">If it persists, fully quit the app (Cmd+Q) and reopen.</span>`;
+  document.body.prepend(el);
 }
 
 async function loadTracker(force) {
@@ -6388,6 +6431,7 @@ async function loadTracker(force) {
       return;
     }
     const data = await res.json();
+    _checkBuild(data.frontend_build);
     const live = data.live || [], closed = data.closed || [];
     section.classList.remove('hidden');
     _tkApplySection();     // collapsed unless this browser chose otherwise

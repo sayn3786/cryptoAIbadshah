@@ -333,8 +333,9 @@ Row fields that are **derived, not stored**:
 | `entry_distance_pct` | `PENDING` only — how far price still has to travel to fill. |
 | `risk_free` | Stop is at entry or better. |
 | `targets[].distance_pct` | Per rung: how far to go. Negative = price already through it. |
-| `republished` / `signal_ids` | One setup published on several candles is shown once; this is how many rows are behind it. |
+| `republished` / `signal_ids` | One setup published on several candles is shown once; this is how many rows are behind it. Merged when symbol, timeframe, direction and status match and both entry and stop agree to within `MERGE_TOLERANCE_PCT` (0.25%) — levels are re-derived each candle, so an unchanged setup returns a few basis points off. |
 | `slot` | The publication batch (`Jul 30 · 8:00 PM SGT`) — one of the six 4H slots: 12AM, 4AM, 8AM, 12PM, 4PM, 8PM SGT. |
+| `frontend_build` | Top-level, not per row: the `?v=` stamp of the dashboard bundle this deploy ships. The page compares it with its own and warns when they differ. |
 | `remark` / `action` | Plain-language state, and the next course of action. |
 | `outcome` | `WIN` / `LOSS` / `BREAKEVEN` / `EXPIRED` / `CANCELLED`. |
 

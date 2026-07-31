@@ -436,6 +436,35 @@ def build_tracker(active: Sequence[Dict[str, Any]],
     }
 
 
+# How far two published levels may differ and still be the same setup. The
+# re-derived levels observed in production all move by well under 0.2%; 0.25%
+# catches them with a little room, and is far tighter than the distance between
+# two setups anyone would size differently.
+MERGE_TOLERANCE_PCT = 0.25
+
+
+def _close_enough(a, b, tolerance_pct: float = MERGE_TOLERANCE_PCT) -> bool:
+    """
+    Are two prices the same level, allowing for re-derivation drift?
+
+    Relative, not absolute: 0.25% has to mean the same thing for a $4,000 gold
+    token and a $0.027 altcoin. Exact equality still counts, so a zero — which
+    has no meaningful percentage — only matches another zero.
+    """
+    if a is None or b is None:
+        return False
+    try:
+        x, y = float(a), float(b)
+    except (TypeError, ValueError):
+        return False
+    if x == y:
+        return True
+    scale = max(abs(x), abs(y))
+    if scale == 0:
+        return False
+    return abs(x - y) / scale * 100.0 <= tolerance_pct
+
+
 def collapse_republished(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     One line per setup, not per candle.
@@ -446,11 +475,23 @@ def collapse_republished(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]
     its own decision. But it is not a new position. Showing TAO twice with the
     same entry, the same stop and the same targets reads as two trades.
 
-    Rows are merged only when they are indistinguishable as positions: same
-    symbol, timeframe, direction, entry, stop AND status. A different entry or
-    stop is a different setup. A different status means one filled and the other
+    Rows are merged when they are indistinguishable as positions: same symbol,
+    timeframe, direction and status, with an entry and stop that agree to within
+    ``MERGE_TOLERANCE_PCT``. A different status means one filled and the other
     did not, and collapsing those would hide a live position behind a working
-    order.
+    order — so status must match exactly.
+
+    **Why a tolerance rather than exact equality.** Levels are re-derived from
+    each candle, so a setup that has not really changed still comes back a few
+    basis points off: SOL at 74.0885 and 74.1503, ETH at 1911.11 and 1911.27,
+    XMR at 350.9238 and 351.5500 — all observed on one screen, all the same
+    trade shown two and three times. Exact matching merged none of them, and a
+    tracker that lists one position twice misreports your exposure.
+
+    Each candidate is compared against the CLUSTER'S representative, never
+    against the row before it. Chained comparison would let A~B and B~C merge A
+    with C however far apart they are, and a long enough chain of small drifts
+    would collapse genuinely different setups into one.
 
     The EARLIEST is kept — the setup has been working since it was first
     published, and that is the age that matters — with ``republished`` counting
@@ -459,26 +500,37 @@ def collapse_republished(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]
 
     Closed trades are never merged: history stays whole.
     """
-    merged: Dict[tuple, Dict[str, Any]] = {}
+    # Two rows agree when both levels are within this percentage. Wide enough to
+    # catch a re-derived level (the observed cases are all under 0.2%), narrow
+    # enough that two setups a trader would size differently stay apart.
+    groups: Dict[tuple, List[Dict[str, Any]]] = {}
     out: List[Dict[str, Any]] = []
     for row in rows or []:
-        key = (row.get("symbol"), row.get("timeframe"), row.get("direction"),
-               row.get("entry"), row.get("stop_loss"), row.get("status"))
-        if None in (key[0], key[3], key[4]):
+        symbol, entry, stop = (row.get("symbol"), row.get("entry"),
+                               row.get("stop_loss"))
+        if symbol is None or entry is None or stop is None:
             out.append(row)              # not enough identity to merge safely
             continue
-        first = merged.get(key)
+        key = (symbol, row.get("timeframe"), row.get("direction"),
+               row.get("status"))
+        bucket = groups.setdefault(key, [])
+        first = next((rep for rep in bucket
+                      if _close_enough(rep.get("entry"), entry)
+                      and _close_enough(rep.get("stop_loss"), stop)), None)
         if first is None:
             row = {**row, "republished": 1,
                    "signal_ids": list(row.get("signal_ids") or [row.get("signal_id")])}
-            merged[key] = row
+            bucket.append(row)
             out.append(row)
             continue
         first["republished"] += 1
         first["signal_ids"].append(row.get("signal_id"))
-        # Keep the earliest as the row shown — including its age and its id.
+        # Keep the earliest as the row shown — including its age, its id and the
+        # levels it was actually published at. Showing a later candle's entry
+        # under the earlier candle's age would describe a trade nobody took.
         if (row.get("opened_at") or "") < (first.get("opened_at") or ""):
-            for field in ("opened_at", "age_hours", "signal_id", "slot"):
+            for field in ("opened_at", "age_hours", "signal_id", "slot",
+                          "entry", "stop_loss", "targets"):
                 first[field] = row.get(field)
     return out
 

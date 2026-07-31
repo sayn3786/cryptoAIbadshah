@@ -2186,3 +2186,29 @@ html { overflow-x: hidden; }
 .tk-batch-title { font-size: .78rem; font-weight: 700; color: var(--text); }
 .tk-batch-count { font-size: .7rem; color: var(--muted2); }
 .tk-batch-score { font-size: .7rem; color: var(--muted2); margin-left: auto; }
+
+/* ── Stale-build banner ─────────────────────────────────────────────────────
+   Shown only when the bundle the page is running differs from the one the
+   server ships. An installed PWA can hold an old dashboard.js across a deploy,
+   and the symptom — a tracker rendering through an older code path — looks
+   exactly like features having been removed. */
+.build-notice {
+  position: sticky; top: 0; z-index: 999;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 10px 16px; font-size: .78rem; line-height: 1.4;
+  background: #7c2d12; color: #fed7aa; border-bottom: 1px solid #9a3412;
+}
+.build-notice button {
+  background: #fed7aa; color: #7c2d12; border: 0; border-radius: 6px;
+  padding: 4px 12px; font-size: .74rem; font-weight: 700; cursor: pointer;
+}
+.build-notice button:hover { background: #fff; }
+.build-notice-hint { opacity: .75; font-size: .72rem; }
+
+/* The tracker rendering ungrouped is a degraded state, not a design. Say so
+   rather than letting it look like the collapse controls were removed. */
+.tk-degraded {
+  padding: 8px 12px; margin-bottom: 10px; border-radius: 8px;
+  font-size: .74rem; color: var(--muted);
+  background: rgba(148,163,184,.08); border: 1px solid rgba(148,163,184,.18);
+}
