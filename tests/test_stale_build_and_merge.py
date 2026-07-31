@@ -194,12 +194,14 @@ def test_the_page_compares_its_bundle_against_the_server():
 
 
 def test_the_build_check_fails_silent_rather_than_loud_wrong():
-    # A false "you are out of date" banner would be worse than none, so an
-    # unreadable build on either side must be treated as fine.
+    # A false "you are out of date" banner would be worse than none — and the
+    # first version proved it, warning on every poll about code that was current.
+    # An unreadable build on either side must be treated as fine.
     src = _js()
-    check = src.split("function _checkBuild", 1)[1].split("\nasync function", 1)[0]
-    assert "if (!serverBuild) return;" in check
-    assert "!own || own === serverBuild" in check
+    check = src.split("function _checkBuild", 1)[1].split("\n/* The Reload button", 1)[0]
+    assert "if (!serverBuild) return;" in check, "no server answer, no banner"
+    assert "CODE_BUILD === serverBuild" in check, "compare the running code"
+    assert "buildNotice')?.remove()" in check, "and clear it once they agree"
 
 
 def test_the_banner_offers_the_action_that_actually_fixes_it():
@@ -215,3 +217,72 @@ def test_the_ungrouped_fallback_announces_itself():
     assert "tk-degraded" in src
     css = open(_repo("dashboard", "css", "dashboard.css"), encoding="utf-8").read()
     assert ".tk-degraded" in css and ".build-notice" in css
+
+
+# ── Code build vs shell build ──────────────────────────────────────────────
+# The first version of this check read the script tag's `?v=` and called it "the
+# build". That query string comes from index.html; the server ignores it and
+# serves whatever dashboard.js currently is. So it measured how stale the HTML
+# SHELL was while announcing that the CODE was old — and on an installed PWA
+# holding a v179 index.html against v185 code, it cried wolf on every poll.
+
+def test_the_code_build_matches_the_shipped_asset_version():
+    # If these drift, the page warns about itself forever.
+    src = _js()
+    code = re.search(r"const CODE_BUILD = '(\w+)'", src).group(1)
+    with open(_repo("dashboard", "index.html"), encoding="utf-8") as fh:
+        shipped = re.search(r"dashboard\.js\?v=(\w+)", fh.read()).group(1)
+    assert code == shipped, (
+        f"CODE_BUILD is {code} but index.html ships {shipped} — "
+        "every page load would report itself stale")
+    assert appmod.dashboard_build() == code
+
+
+def test_code_and_shell_builds_are_kept_distinct():
+    src = _js()
+    assert "const CODE_BUILD" in src and "const SHELL_BUILD" in src
+    # The warning must be about the CODE, never the query string.
+    banner = src.split("el.innerHTML = `⚠", 1)[1].split("`", 1)[0]
+    assert "CODE_BUILD" in banner and "SHELL_BUILD" not in banner
+
+
+def test_a_stale_shell_is_recovered_not_merely_announced():
+    # A stale shell is missing elements this code expects — the tracker's
+    # collapse caret lives in index.html, which is why it vanished. That is
+    # fixable from here, so fix it instead of nagging.
+    src = _js()
+    check = src.split("function _checkBuild", 1)[1].split("\n/* The Reload button", 1)[0]
+    assert "SHELL_BUILD !== CODE_BUILD" in check
+    assert "_recoverStaleShell()" in check
+
+
+def test_the_recovery_cannot_loop():
+    # Without the guard, a shell that will not refresh — an iOS home-screen app
+    # pinning its start_url is the usual culprit — reloads forever.
+    src = _js()
+    rec = src.split("async function _recoverStaleShell", 1)[1].split("\nfunction _checkBuild", 1)[0]
+    assert "sessionStorage.getItem('cm.shellRecovered')" in rec
+    assert "sessionStorage.setItem('cm.shellRecovered', '1')" in rec
+    assert "return false" in rec, "no storage means no guard, so no reload"
+
+
+def test_the_recovery_busts_the_cache_it_is_escaping():
+    # A plain reload can be answered from the very cache that is stale.
+    src = _js()
+    rec = src.split("async function _recoverStaleShell", 1)[1].split("\nfunction _checkBuild", 1)[0]
+    assert "caches.delete" in rec
+    assert "_fresh" in rec, "must request the shell by an uncached URL"
+
+
+def test_the_hint_covers_the_platform_people_actually_use():
+    # The first version said "Cmd+Q" to someone on an iPhone.
+    src = _js()
+    assert "iPhone" in src and "app switcher" in src
+    assert "Cmd+Q" in src, "still right for the desktop app"
+
+
+def test_an_unreadable_shell_build_never_triggers_recovery():
+    # SHELL_BUILD falls back to '?' when the script src cannot be read. Treating
+    # that as stale would reload the page for no reason.
+    src = _js()
+    assert "SHELL_BUILD !== '?'" in src
