@@ -254,9 +254,15 @@ def _remark(row: Dict[str, Any]) -> tuple:
         return (f"Stopped out{partial} — closed {_pm(move)}",
                 "Done. Review whether the stop sat in a liquidity pool.")
     if status == "EXPIRED":
-        return (f"Expired after {row['age_hours']}h without resolving"
-                f"{f' — was {_pm(move)}' if move is not None else ''}",
-                "Setup went stale. Close it if you are still in it.")
+        # Expiry closes the trade at the last price seen, so this reads like the
+        # exit it is rather than a signal left dangling. Still not a win or a
+        # loss: it never reached a target and was never stopped, so it stays out
+        # of the win rate while its P/L counts towards the averages.
+        if move is None:
+            return (f"Expired after {row['age_hours']}h without resolving",
+                    "Setup went stale. Close it if you are still in it.")
+        return (f"Went sideways for {row['age_hours']}h — closed {_pm(move)}",
+                "Closed on the record. Exit if you are still in the position.")
     if status == "CANCELLED":
         return ("Cancelled before it resolved", "No action.")
     if status == "CLOSED":

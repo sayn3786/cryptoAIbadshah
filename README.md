@@ -338,7 +338,7 @@ since the signal's own candle and decides what the market did:
 | The signal's own candle is excluded | Otherwise a trade could be stopped out by the very bar that triggered it. |
 | One candle touching BOTH a target and the stop records the **STOP** | A candle says where price went, not in what order. Recording the target would claim a win the data cannot prove — `backtest.py` has always made the same assumption. |
 | A gap straight through a level still counts | Price traded through it; pretending otherwise would invent a fill that never happened. |
-| Stale signals `EXPIRE` after 72h | Terminal, but **not** a loss. Nothing was lost — the setup stopped being current. Conflating the two would corrupt the win rate in both directions. |
+| Stale signals `EXPIRE` after 72h | The trade is **closed at the last price seen**, so the row carries a real exit and a real P/L — a sideways trade is still a result, and "expired" with a NULL return teaches nobody anything. Still **not** a loss: it never reached a target and was never stopped, so it stays out of the win rate while its P/L counts towards the averages. |
 | Idempotent | Every decision is keyed on the candle that caused it, never wall-clock time, so re-running over the same candles changes nothing. |
 | One bad signal never abandons the batch | A monitor that stops at the first error silently leaves the rest open. |
 
@@ -347,7 +347,8 @@ by hand from the Actions tab. Running it more often is harmless — every decisi
 is keyed on the candle that caused it, so an extra run records nothing new.
 
 **The first tick resolves the whole backlog.** Genuine target and stop hits are
-recorded, and anything older than `max_age_hours` (72 by default) is EXPIRED.
+recorded, and anything older than `max_age_hours` (72 by default) is EXPIRED —
+closed at the last price seen, with its P/L.
 Expired is terminal but is **not** a loss — it is excluded from the win rate — so
 a backlog of stale signals resolves honestly rather than being scored against the
 strategy. To record hits without ageing anything out, trigger it by hand first
