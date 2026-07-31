@@ -307,7 +307,8 @@ def evaluate(signal: Dict[str, Any],
 
 # ── Applying the decision ────────────────────────────────────────────────────
 
-def apply_actions(store, signal_id, actions: Sequence[Action]) -> List[Dict[str, Any]]:
+def apply_actions(store, signal_id, actions: Sequence[Action],
+                  *, session=None) -> List[Dict[str, Any]]:
     """
     Push decided actions through the store, in order, stopping at the first
     that does not apply.
@@ -323,30 +324,30 @@ def apply_actions(store, signal_id, actions: Sequence[Action]) -> List[Dict[str,
             if kind == "ENTRY_FILLED":
                 res = store.record_entry_fill(
                     signal_id, action["price"], action["at"],
-                    source_ts=action["source_ts"])
+                    source_ts=action["source_ts"], session=session)
             elif kind == "STOP_MOVED":
                 res = store.record_stop_move(
                     signal_id, action["price"], action["at"],
                     reason=action.get("reason", "BREAKEVEN"),
-                    source_ts=action["source_ts"])
+                    source_ts=action["source_ts"], session=session)
             elif kind == "CANCELLED":
                 res = store.cancel_signal(
                     signal_id, action["at"], reason=action.get("reason", "CANCELLED"),
-                    source_ts=action["source_ts"])
+                    source_ts=action["source_ts"], session=session)
             elif kind == "TARGET_HIT":
                 res = store.record_target_hit(
                     signal_id, action["target_number"], action["price"],
-                    action["at"], source_ts=action["source_ts"])
+                    action["at"], source_ts=action["source_ts"], session=session)
             elif kind == "STOP_LOSS_HIT":
                 res = store.record_stop_loss_hit(
                     signal_id, action["price"], action["at"],
-                    source_ts=action["source_ts"])
+                    source_ts=action["source_ts"], session=session)
             elif kind == "EXPIRED":
                 # price closes the trade on the record and lets the store
                 # compute realized_return_pct; None leaves both NULL.
                 res = store.expire_signal(
                     signal_id, action["at"], price=action.get("price"),
-                    source_ts=action["source_ts"])
+                    source_ts=action["source_ts"], session=session)
             else:
                 continue
         except store.InvalidTransition as exc:
@@ -373,7 +374,7 @@ def apply_actions(store, signal_id, actions: Sequence[Action]) -> List[Dict[str,
 
 def _record_excursion(store, signal: Dict[str, Any],
                       candles: Sequence[Dict[str, Any]],
-                      actions: Sequence[Action]) -> bool:
+                      actions: Sequence[Action], *, session=None) -> bool:
     """
     Measure MFE/MAE from the fill onwards and store it. True when recorded.
 
@@ -421,7 +422,7 @@ def _record_excursion(store, signal: Dict[str, Any],
 
     try:
         store.record_excursion(signal["id"], mfe_pct=ex["mfe_pct"],
-                               mae_pct=ex["mae_pct"])
+                               mae_pct=ex["mae_pct"], session=session)
     except Exception:
         return False                     # a measurement must never break a run
     return True
@@ -447,11 +448,15 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     than no monitor, because the remaining trades silently stay open.
     """
     started = time.monotonic()
+    # Where the time actually goes. Two rounds of tuning were guided by guesses
+    # about which half was slow; this reports it instead.
+    timing = {"load_s": 0.0, "fetch_s": 0.0, "decide_s": 0.0, "write_s": 0.0}
     summary = {"checked": 0, "filled": 0, "targets_hit": 0, "stops_moved": 0,
                "stopped": 0, "expired": 0, "cancelled": 0, "measured": 0,
                "unchanged": 0, "skipped": 0, "truncated": False,
-               "elapsed_s": 0.0, "errors": [], "results": []}
+               "elapsed_s": 0.0, "timing": timing, "errors": [], "results": []}
 
+    _t = time.monotonic()
     try:
         active = store.list_active_signals(limit=limit)
         # Targets for EVERY signal in one query. The loop used to call
@@ -465,6 +470,7 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     except Exception as exc:
         summary["errors"].append({"symbol": None, "error": str(exc)[:200]})
         return summary
+    timing["load_s"] = round(time.monotonic() - _t, 2)
 
     # Fetch every symbol's candles ONCE, in parallel, before touching anything.
     # Serially this was the sum of every symbol's round trip, which is what blew
@@ -472,6 +478,7 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     pairs = {(r.get("symbol"), r.get("timeframe")) for r in active
              if r.get("symbol")}
     candle_cache: Dict[tuple, Sequence[Dict[str, Any]]] = {}
+    _t = time.monotonic()
     if pairs:
         ex = ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, len(pairs)))
         try:
@@ -493,6 +500,18 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
                 summary["truncated"] = True
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
+    # Measured directly, not derived by subtraction: a figure that can come back
+    # negative is worse than no figure at all.
+    timing["fetch_s"] = round(time.monotonic() - _t, 2)
+
+    # ONE connection for every write in the run. Each store call opened its own
+    # session, and the engine is NullPool for serverless — so every lifecycle
+    # write paid a fresh TLS handshake to Neon. Committing after each signal
+    # keeps the property that matters: a partial run's work is durable, and a
+    # failure never leaves half a signal's actions applied.
+    scope = getattr(store, "session_scope", None)
+    session_cm = scope() if callable(scope) else None
+    session = session_cm.__enter__() if session_cm is not None else None
 
     for row in active:
         sid, symbol = row.get("id"), row.get("symbol")
@@ -511,6 +530,7 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
                 summary["skipped"] += 1
                 continue                 # no market data this run
             detail = row
+            _t = time.monotonic()
             actions = evaluate(detail, detail.get("targets") or [],
                                candle_cache[key], now=now,
                                max_age_hours=max_age_hours,
@@ -522,13 +542,24 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
             # onwards, because an order that had not filled yet was not exposed
             # to anything. Runs even when nothing else happened: the high-water
             # marks move while the trade just sits there.
-            if _record_excursion(store, detail, candle_cache[key], actions):
+            timing["decide_s"] += time.monotonic() - _t
+
+            _t = time.monotonic()
+            if _record_excursion(store, detail, candle_cache[key], actions,
+                                 session=session):
                 summary["measured"] += 1
+            timing["write_s"] += time.monotonic() - _t
 
             if not actions:
                 summary["unchanged"] += 1
                 continue
-            applied = apply_actions(store, sid, actions)
+            _t = time.monotonic()
+            applied = apply_actions(store, sid, actions, session=session)
+            if session is not None:
+                # Commit per signal, not per run: a truncated run must leave
+                # every signal it finished durably recorded.
+                session.commit()
+            timing["write_s"] += time.monotonic() - _t
             for a in applied:
                 if not a.get("applied"):
                     continue
@@ -549,5 +580,12 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
         except Exception as exc:
             summary["errors"].append({"symbol": symbol, "signal_id": sid,
                                       "error": str(exc)[:200]})
+    if session_cm is not None:
+        try:
+            session_cm.__exit__(None, None, None)
+        except Exception as exc:
+            summary["errors"].append({"symbol": None, "error": str(exc)[:200]})
+    timing["decide_s"] = round(timing["decide_s"], 2)
+    timing["write_s"] = round(timing["write_s"], 2)
     summary["elapsed_s"] = round(time.monotonic() - started, 2)
     return summary
