@@ -3296,28 +3296,58 @@ def _tracker_prices(symbols) -> dict:
     Live price per symbol for the tracker, best-effort.
 
     A missing price is NOT an error — the row renders without live progress
-    rather than reporting a move of zero. Uses the cached analysis so the
-    tracker costs no extra market data when the dashboard is already warm.
+    rather than reporting a move of zero.
+
+    Two tiers, cheapest first:
+
+    1. **Peek** at the analysis cache. Free when the dashboard is already warm,
+       and it never BUILDS one. Calling ``get_analysis`` here was the bug: on a
+       cold serverless instance nothing is cached, so every symbol triggered a
+       full ``build_analysis`` — candles, funding, open interest, CVD, on-chain
+       — just to read one number. With forty-odd working signals and a 6s
+       budget, nothing finished and the whole table rendered priceless.
+    2. **One ticker call** for whatever is left, the same cheap path
+       ``/api/prices`` uses. Milliseconds each, so the budget is now generous
+       rather than hopeless.
     """
     wanted = {s for s in symbols if s}
     if not wanted:
         return {}
 
-    def _one(sym):
-        data = get_analysis(sym, "2H")
-        return sym, (data.get("live_price")
-                     or (data.get("signal") or {}).get("current_price"))
+    out: dict = {}
+    remaining = set()
+    for sym in wanted:
+        key = _analysis_cache_key(sym, "2H")
+        with _analysis_cache_lock:
+            entry = _analysis_cache.get((sym, "2H"))
+        data = entry["data"] if entry and entry.get("key") == key else None
+        price = data and (data.get("live_price")
+                          or (data.get("signal") or {}).get("current_price"))
+        if price:
+            out[sym] = price
+        else:
+            remaining.add(sym)
 
-    out = {}
+    if not remaining:
+        return out
+
+    def _one(sym):
+        base = SYMBOLS.get(sym)
+        if not base:
+            return sym, None
+        return sym, client.get_current_price(base)
+
     # In parallel AND on a deadline. The tracker's job is to show the state of
     # your trades; live progress is a bonus on top. Serially, one slow upstream
     # fetch held the whole table hostage — and even in parallel, a stalled
     # provider would. Past the budget we return what arrived and the remaining
     # rows simply render without live progress, which build_row already handles.
     budget = float(os.getenv("TRACKER_PRICE_BUDGET_S", "6") or 6)
-    ex = ThreadPoolExecutor(max_workers=6)
+    # One ticker call each, so the pool can be wide: the limit is the provider's
+    # patience, not ours. Forty working signals at six workers meant seven waves.
+    ex = ThreadPoolExecutor(max_workers=min(len(remaining), 16))
     try:
-        futures = [ex.submit(_one, s) for s in wanted]
+        futures = [ex.submit(_one, s) for s in remaining]
         try:
             for fut in as_completed(futures, timeout=budget):
                 try:
@@ -3329,7 +3359,8 @@ def _tracker_prices(symbols) -> dict:
         except (FuturesTimeout, TimeoutError):
             # Aliases of each other on 3.11+, distinct classes before it.
             print(f"[tracker] price budget {budget}s exceeded — "
-                  f"{len(out)}/{len(wanted)} symbols priced")
+                  f"{len(out)}/{len(wanted)} symbols priced "
+                  f"({len(wanted) - len(remaining)} from cache)")
     finally:
         # Do not block the response waiting for the stragglers to finish.
         ex.shutdown(wait=False, cancel_futures=True)

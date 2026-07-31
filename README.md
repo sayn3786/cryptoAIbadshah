@@ -66,7 +66,7 @@ Set these in **Vercel → Project → Settings → Environment Variables**
 | `DATABASE_URL` | yes, to persist | Neon connection string. Injected automatically by the Vercel↔Neon integration. |
 | `DB_REQUIRED` | recommended | `true` in production: refuse to publish a signal that was not recorded. Defaults to `false`. |
 | `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v44_4h_avg`. Bump whenever the signal maths changes. |
-| `TRACKER_PRICE_BUDGET_S` | optional | How long `/api/signals/tracker` may spend fetching live prices before serving the table without them. Default 6s. |
+| `TRACKER_PRICE_BUDGET_S` | optional | How long `/api/signals/tracker` may spend fetching live prices before serving the table without them. Default 6s — generous, because pricing a row is one ticker call, not a full analysis. |
 | `SIGNAL_ENVIRONMENT` | optional | Overrides the environment label written on every signal. Defaults to Vercel's own `VERCEL_ENV`, then `local`. See *Shared database, separate environments*. |
 | `CRON_SECRET` | yes, for mutations | Existing project secret. Protects archive / postmortem / usage endpoints. |
 | `TEST_DATABASE_URL` | tests only | Throwaway database for the DB test suite. **Never production.** |
@@ -485,6 +485,16 @@ The scoreboard counts only **decided** trades. Expired and cancelled signals are
 reported separately and excluded from the win-rate denominator, because a setup
 that never resolved is not evidence either way. With nothing decided the rate is
 absent rather than `0%`.
+
+**Live price is a cheap lookup, not an analysis.** Pricing a row peeks at the
+analysis cache — free when the dashboard is warm, and it never *builds* one —
+then falls back to a single ticker call per symbol, the same path `/api/prices`
+uses. Calling `get_analysis` here used to mean a cold instance ran a full
+`build_analysis` per symbol (candles, funding, open interest, CVD, on-chain) just
+to read one number; with forty-odd working signals nothing finished inside the
+budget and every row rendered with no PRICE, no distance to entry and no cushion
+above the stop. A missing price is still not an error — the row renders without
+live progress rather than reporting a move of zero.
 
 The view is read-only. It reports what the monitor recorded and never advances a
 signal itself — and because the monitor only acts on closed candles, a row can
