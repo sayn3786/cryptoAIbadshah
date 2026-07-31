@@ -14,6 +14,12 @@ This repository includes a Vercel configuration in `vercel.json`.
 > The reviewed migration must be executed explicitly, once, by a human.
 > See [Running the migration](#running-the-migration).
 
+## Documentation
+
+* **[DATA_MODEL.md](DATA_MODEL.md)** — the guide and data dictionary: lifecycle,
+  every column, the identity rule, the API surface and the queries worth knowing.
+* [INDICATORS.md](INDICATORS.md) — indicator scoring and the signal maths.
+
 ## Architecture
 
 Single Python service. There is no separate frontend deployment.
