@@ -280,33 +280,47 @@ def _at(y, m, d, hh, mm=0):
 
 
 @pytest.mark.parametrize("hour,expected", [
-    (8, "8:00 AM"), (12, "8:00 AM"), (15, "8:00 AM"),
+    (0, "12:00 AM"), (3, "12:00 AM"),
+    (4, "4:00 AM"),  (7, "4:00 AM"),
+    (8, "8:00 AM"),  (11, "8:00 AM"),
+    (12, "12:00 PM"), (15, "12:00 PM"),
     (16, "4:00 PM"), (19, "4:00 PM"),
     (20, "8:00 PM"), (23, "8:00 PM"),
 ])
-def test_a_signal_lands_in_the_slot_it_was_published_in(hour, expected):
+def test_a_signal_lands_in_the_batch_it_was_published_in(hour, expected):
+    # Six batches a day, on the 4H closes.
     slot = tracker.slot_for(_at(2026, 3, 5, hour))
     assert slot["label"] == expected
     assert slot["date_label"] == "Mar 05, 2026"
 
 
-@pytest.mark.parametrize("hour", [0, 3, 7])
-def test_the_small_hours_belong_to_the_previous_evening_batch(hour):
-    # 00:00-07:59 SGT is served the previous 8pm recommendation set, so a signal
-    # written then is part of THAT batch, not a new day's.
+@pytest.mark.parametrize("hour,key", [(0, "20260305-00"), (3, "20260305-00"),
+                                      (4, "20260305-04"), (7, "20260305-04")])
+def test_the_small_hours_are_their_own_batches_now(hour, key):
+    # They used to fold into the previous day's 8pm set, because that was the
+    # last publication of the day. With a 4H cadence they are publications in
+    # their own right and belong to the day they happened on.
     slot = tracker.slot_for(_at(2026, 3, 5, hour))
-    assert slot["label"] == "8:00 PM"
-    assert slot["date_label"] == "Mar 04, 2026", "the previous day's evening slot"
-    assert slot["key"] == "20260304-20"
+    assert slot["key"] == key
+    assert slot["date_label"] == "Mar 05, 2026"
 
 
-def test_slot_boundaries_are_exact():
-    assert tracker.slot_for(_at(2026, 3, 5, 7, 59))["key"] == "20260304-20"
+def test_batch_boundaries_are_exact():
+    assert tracker.slot_for(_at(2026, 3, 5, 3, 59))["key"] == "20260305-00"
+    assert tracker.slot_for(_at(2026, 3, 5, 4, 0))["key"] == "20260305-04"
+    assert tracker.slot_for(_at(2026, 3, 5, 7, 59))["key"] == "20260305-04"
     assert tracker.slot_for(_at(2026, 3, 5, 8, 0))["key"] == "20260305-08"
-    assert tracker.slot_for(_at(2026, 3, 5, 15, 59))["key"] == "20260305-08"
+    assert tracker.slot_for(_at(2026, 3, 5, 11, 59))["key"] == "20260305-08"
+    assert tracker.slot_for(_at(2026, 3, 5, 12, 0))["key"] == "20260305-12"
+    assert tracker.slot_for(_at(2026, 3, 5, 15, 59))["key"] == "20260305-12"
     assert tracker.slot_for(_at(2026, 3, 5, 16, 0))["key"] == "20260305-16"
     assert tracker.slot_for(_at(2026, 3, 5, 19, 59))["key"] == "20260305-16"
     assert tracker.slot_for(_at(2026, 3, 5, 20, 0))["key"] == "20260305-20"
+
+
+def test_a_day_holds_exactly_six_batches():
+    keys = {tracker.slot_for(_at(2026, 3, 5, h))["key"] for h in range(24)}
+    assert len(keys) == 6, "six publications a day, on the 4H closes"
 
 
 def test_the_stored_utc_instant_is_read_in_sgt():

@@ -1466,6 +1466,17 @@ a:hover { color: var(--gold2); }
 .rec-strength.str-strong    { color: #6ee7b7; font-weight: 600; }
 .rec-strength.str-moderate  { color: #fbbf24; font-weight: 500; }
 .rec-strength.str-weak      { color: #f87171; font-weight: 500; }
+/* How the score reads NOW, next to what it was recorded at. Additive and
+   deliberately quieter than the published figure — the published one is the
+   record of the decision; this is only how it has drifted since. */
+.rec-strength-now:empty     { display: none; }
+.rec-strength-now {
+  font-size: .62rem; font-weight: 600; letter-spacing: .01em;
+  padding: 1px 5px; border-radius: 999px; margin-left: 4px;
+  border: 1px solid currentColor; opacity: .85;
+}
+.rec-strength-now.weaker    { color: #f87171; }
+.rec-strength-now.stronger  { color: #34d399; }
 
 /* No-signal placeholder */
 .rec-no-signal { text-align: center; padding: 28px 16px; color: var(--muted); }

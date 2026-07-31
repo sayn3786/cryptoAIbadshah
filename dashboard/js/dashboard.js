@@ -4929,16 +4929,25 @@ async function sendToTelegram() {
   }
 }
 
-// Session starts at 8AM SGT = 00:00 UTC exactly.
-// 30-min cache key — invalidates at :00 and :30 of each UTC hour.
+/* Cache key = the 4H PUBLICATION SLOT, not a wall-clock interval.
+
+   It used to bucket every 30 minutes, which does not divide into the slots: a
+   browser holding the 16:00 key kept showing the previous set until 16:30, half
+   an hour after a new one had published. Keyed to the slot, the cache expires
+   exactly when the thing it is caching is replaced.
+
+   4H boundaries are the same instants in UTC and SGT, so UTC arithmetic here
+   lands on the same six slots the server publishes on. */
+const REC_SLOT_HOURS = 4;
+
 function _recCacheKey() {
   const now  = new Date();
   const y    = now.getUTCFullYear();
   const m    = String(now.getUTCMonth() + 1).padStart(2, '0');
   const d    = String(now.getUTCDate()).padStart(2, '0');
-  const h    = String(now.getUTCHours()).padStart(2, '0');
-  const half = String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0');
-  return `rec35_mtf_${y}${m}${d}${h}${half}`;
+  const slot = String(Math.floor(now.getUTCHours() / REC_SLOT_HOURS) * REC_SLOT_HOURS)
+                 .padStart(2, '0');
+  return `rec44_4h_${y}${m}${d}${slot}`;
 }
 
 function _recCacheGet() {
@@ -4999,10 +5008,15 @@ function _buildRecCard(r, i) {
 
   // Parse tf labels from aligned_tfs (e.g. "1H·2H" or "2H·4H")
   const [tfLabel1, tfLabel2] = (r.aligned_tfs || '').split('·');
+  // The average of the two is the RANKING key — it is what put this trade in
+  // the top three — so show it next to the numbers it comes from.
+  const avgTf = r.avg_tf_strength != null
+    ? `<span>avg <strong>${r.avg_tf_strength}</strong></span>` : '';
   const tfBreakdown = (r.h1_strength != null && tfLabel1 && tfLabel2)
     ? `<div class="rec-tf-breakdown">
         <span>${tfLabel1} <strong>${r.h1_strength}</strong></span>
         <span>${tfLabel2} <strong>${r.h2_strength}</strong></span>
+        ${avgTf}
        </div>` : '';
 
   // Higher-timeframe confluence badge: 1D + 1W + 1M
@@ -5041,7 +5055,9 @@ function _buildRecCard(r, i) {
       <span class="rec-rank">#${i+1}</span>
       <span class="rec-sym">${r.symbol}/USDT</span>
       <span class="rec-dir ${dirCls}">${dirIcon} ${r.direction}</span>
-      <span class="rec-strength ${_strengthTier(r.display_strength ?? r.h2_strength)}">${r.display_strength ?? r.h2_strength}/100</span>
+      <span class="rec-strength ${_strengthTier(r.display_strength ?? r.h2_strength)}"
+            title="Strength recorded when this set was published on the 4H close.">${r.display_strength ?? r.h2_strength}/100</span>
+      <span class="rec-strength-now"></span>
     </div>
     ${tfAlign}
     ${btcWarn}
@@ -5066,6 +5082,31 @@ function _buildRecCard(r, i) {
   </div>`;
 }
 
+/* What to say when a slot holds no cards. The reason matters: "nothing cleared
+   the bar" and "the set has not been published yet" are different facts, and
+   showing the conviction-threshold copy for a database problem would be a lie. */
+function _recEmptyState(data) {
+  const next = data.valid_until_fmt || 'next 4H close';
+  const states = {
+    NOT_PUBLISHED_YET: ['⏳', 'No Set Published For This Slot',
+      `Signals publish on the 4H close. The ${data.slot || 'current'} set has not been recorded yet — ` +
+      `either the bar has not been processed, or nothing cleared the quality gates.`],
+    DB_NOT_CONFIGURED: ['🔌', 'Signal Store Not Configured',
+      'Recommendations are served from the recorded set, and no database is configured for this deploy.'],
+    DB_READ_FAILED: ['⚠️', 'Could Not Read This Slot',
+      'The published set could not be read. Nothing is shown rather than showing an unrecorded set.'],
+  };
+  const [icon, title, desc] = states[data.reason] || ['📉', 'No High-Quality Signals Right Now',
+    'All current setups are below the minimum conviction threshold (32/100). ' +
+    'Waiting for stronger alignment is the correct decision — a bad trade is worse than no trade.'];
+  return `<div class="rec-no-signal">
+    <div class="rec-no-signal-icon">${icon}</div>
+    <div class="rec-no-signal-title">${title}</div>
+    <div class="rec-no-signal-desc">${desc}</div>
+    <div class="rec-no-signal-next">Next set: ${next}</div>
+  </div>`;
+}
+
 async function loadRecommendations() {
   const section = document.getElementById('recSection');
   const cards   = document.getElementById('recCards');
@@ -5074,24 +5115,20 @@ async function loadRecommendations() {
   if (!section || !cards) return;
 
   try {
-    // Use localStorage cache for token list / entry-SL-TP — always refresh scores live
+    // The cache holds one slot's published set; it expires with the slot.
     let data = _recCacheGet();
     if (!data) {
       const res = await fetch(`${API}/recommendations`);
       data = await res.json();
+      // Never cache an empty slot — the set may land at any moment, and a
+      // cached "nothing published" would hide it until the next boundary.
       if (data.recommendations?.length) _recCacheSet(data);
     }
     if (!data.recommendations?.length) {
       // Show section with informative message rather than hiding it
       section.classList.remove('hidden');
       if (dateEl) dateEl.textContent = data.date_label || '';
-      cards.innerHTML = `<div class="rec-no-signal">
-        <div class="rec-no-signal-icon">📉</div>
-        <div class="rec-no-signal-title">No High-Quality Signals Right Now</div>
-        <div class="rec-no-signal-desc">All current setups are below the minimum conviction threshold (32/100).
-        Waiting for stronger alignment is the correct decision — a bad trade is worse than no trade.</div>
-        <div class="rec-no-signal-next">Next scan: ${data.valid_until_fmt || 'next slot'}</div>
-      </div>`;
+      cards.innerHTML = _recEmptyState(data);
       return;
     }
 
@@ -5102,7 +5139,7 @@ async function loadRecommendations() {
     const genEl = document.getElementById('recGenerated');
     if (genEl && data.generated_fmt) {
       genEl.textContent = `⏱ Generated: ${data.generated_fmt}`;
-      genEl.title = 'Rating & strength are a snapshot from this exact moment. Only changes at 8AM / 4PM / 8PM SGT.';
+      genEl.title = 'Rating & strength are a snapshot from this exact moment. Only changes on a 4H close: 12AM / 4AM / 8AM / 12PM / 4PM / 8PM SGT.';
     }
 
     // Options expiry banner — update with full BTC-priced data from recs endpoint
@@ -5135,6 +5172,16 @@ async function loadRecommendations() {
   } catch (_) {}
 }
 
+/* Show how the score has moved SINCE publication — without overwriting it.
+
+   This used to replace .rec-strength with a freshly computed number, directly
+   under a tooltip promising "a snapshot from this exact moment". The headline
+   figure silently stopped being the one the trade was recorded at, and there
+   was no way to tell that it had drifted.
+
+   The published strength is the record of the decision and stays put. The live
+   score is additive and labelled, so a setup that has decayed since it was
+   published is visible as decay rather than quietly rewritten. */
 async function _refreshRecScores(recs) {
   if (!recs?.length) return;
   const syms = recs.map(r => r.symbol).join(',');
@@ -5143,13 +5190,22 @@ async function _refreshRecScores(recs) {
     const scores = await fetch(`${API}/scores?symbols=${syms}&tf=${tf}`).then(r => r.json());
     recs.forEach(r => {
       const live = scores[r.symbol];
-      if (!live) return;
+      if (live?.strength == null) return;
       const card = document.querySelector(`.rec-card[data-rec-sym="${r.symbol}"]`);
       if (!card) return;
-      const strEl  = card.querySelector('.rec-strength');
-      const fillEl = card.querySelector('.rec-str-fill');
-      if (strEl)  strEl.textContent = `${live.strength}/100`;
-      if (fillEl) fillEl.style.width = `${Math.min(live.strength, 100)}%`;
+      const published = Number(r.display_strength ?? r.h2_strength);
+      const now = Number(live.strength);
+      const el = card.querySelector('.rec-strength-now');
+      if (!el) return;
+      if (!Number.isFinite(published) || !Number.isFinite(now) || now === published) {
+        el.textContent = '';
+        return;
+      }
+      const delta = now - published;
+      el.textContent = `now ${now}`;
+      el.className = `rec-strength-now ${delta < 0 ? 'weaker' : 'stronger'}`;
+      el.title = `Published at ${published}/100 on the 4H close; scores ${now}/100 right now `
+               + `(${delta > 0 ? '+' : ''}${delta}). The published figure is what was recorded.`;
     });
   } catch (_) {}
 }
@@ -6200,7 +6256,8 @@ function _tkTable(rows) {
 /* Which batches are expanded. Persisted, because the tracker re-renders on a
    5-minute poll — without this, anything you opened would snap shut under you.
 
-   Every batch starts COLLAPSED. With 50 live signals across three slots, opening
+   Every batch starts COLLAPSED. With dozens of live signals across the six 4H
+   slots, opening
    them all makes the section hundreds of rows long; the batch headers alone —
    date, slot, count, scoreboard — are the summary most of the time, and you
    open the one you want. */

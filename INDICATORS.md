@@ -662,6 +662,65 @@ this gate are not comparable with those scored without it.
 
 ---
 
+### 4H Publication Cadence · *when a set is published, not what scores*
+*Decides which bars produce signals; never changes a strength number.*
+
+A recommendation used to be recorded on every **2H** close. The set was
+recomputed and re-persisted bar after bar, and because the idempotency key is
+per-candle, the same setup that stayed valid across six bars became six rows.
+That is how sixty-odd "working" signals accumulated while only a handful of
+distinct trades were ever taken.
+
+Publication now happens on the **4H close and nowhere else**:
+
+| | Before (v43) | After (v44) |
+|---|---|---|
+| Publication bars per day | 12 (every 2H close) | **6** (00, 04, 08, 12, 16, 20) |
+| Trades per bar | 3 | 3 |
+| Maximum published per day | 36 | **18** |
+
+`_is_publication_bar(close_t)` is the whole gate: a closed candle is a
+publication bar when its epoch second is a multiple of `4 × 3600`. 4H boundaries
+fall at the same *instants* in UTC and SGT — the offset is a whole multiple of
+four hours — so the check needs no timezone argument, and the six SGT slots the
+tracker groups by are the same six bars.
+
+| Rule | Behaviour |
+|---|---|
+| Serve between bars, record nothing | A recompute off a publication bar (a cold start, an on-demand call) still returns the set. It reports `persistence.skipped_reason = "NOT_A_PUBLICATION_BAR"` and stays **actionable** — the set for this bar was already decided and written, so blanking the dashboard for three hours out of four would be wrong. |
+| A skip is not an error | `error_code` stays `null` and `persisted` is `0`. `DB_REQUIRED` does not turn a skip into a 503. |
+| No candle, no publication | A set with no closed-candle timestamp has no candle identity to de-duplicate on, so it is never treated as a publication point. |
+| The slot cache follows the same six bars | `_rec_cache_key()` buckets to the containing 4H boundary, so the served set changes when a 4H candle closes and not in between. |
+
+### 1H/2H Average Ranking · *ordering, not gating*
+
+The composite `quality_score` (R/R, 4H agreement, reversal-against, exhaustion)
+used to be the ranking key. It is now the **tiebreak**, and candidates are ranked
+by the plain average of **1H and 2H strength**:
+
+```
+sort key = (avg_tf_strength, quality_score, h2_strength)   — descending
+avg_tf_strength = round((h1_strength + h2_strength) / 2, 1)
+```
+
+Both timeframes must already agree on direction for a candidate to exist at all,
+so their average measures *how strongly they agree*. Ranking on 2H alone let a
+strong 2H with a barely-qualifying 1H outrank a setup both timeframes liked.
+
+What did **not** change: every quality gate still gates. R/R ≥ 1.3, direction
+agreement, the data-quality flag, the expired-setup filter above and
+correlation-aware diversification all still remove candidates. Demoting
+`quality_score` changes the **order** of candidates that already passed, not
+whether they pass — but it does mean R/R and reversal risk no longer *weight* the
+ordering, only break ties between equally-agreed setups. `quality_score` and
+`quality_factors` stay in the payload so the two orderings can be compared.
+
+Both the cadence and the ranking change which trades exist, so `STRATEGY_VERSION`
+moved to **v44_4h_avg** — signals from before this are not comparable with
+signals from after.
+
+---
+
 ### Triangles & Wedges · *detection integrity*
 *Changes which patterns are confirmed, and confirmed patterns feed the score.*
 

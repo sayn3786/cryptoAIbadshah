@@ -184,12 +184,18 @@ def test_strategy_version_is_reported():
 # ── Strategy version must track the scoring ────────────────────────────────
 
 def test_strategy_version_reflects_the_current_rules():
-    # The scoring moved six times (v36..v41: confluence, decay, pool ladder,
-    # liquidity-aware stops, TP anchoring, pool recency). Signals scored before
-    # that are not comparable with signals scored after, which is what this
-    # column exists to separate.
-    assert sp.STRATEGY_VERSION == "v43_wedgefix"
-    assert "v35" not in sp.STRATEGY_VERSION
+    # The scoring has moved many times (v36..v44: confluence, decay, pool
+    # ladder, liquidity-aware stops, TP anchoring, pool recency, wedge memory,
+    # 4H publication cadence). Signals scored before a change are not comparable
+    # with signals scored after, which is what this column exists to separate.
+    #
+    # Pin the GENERATION, not the exact string, so a later bump does not have to
+    # edit this test — only a bump backwards, or dropping the vNN scheme, fails.
+    import re
+    m = re.match(r"^v(\d+)_", sp.STRATEGY_VERSION)
+    assert m, f"strategy version must be vNN_slug, got {sp.STRATEGY_VERSION!r}"
+    assert int(m.group(1)) >= 44, \
+        "strategy version must not go backwards past the 4H-cadence rules"
 
 
 def test_strategy_version_is_overridable_by_env(monkeypatch):
@@ -202,7 +208,8 @@ def test_strategy_version_is_overridable_by_env(monkeypatch):
         monkeypatch.undenv = None
         monkeypatch.delenv("STRATEGY_VERSION", raising=False)
         importlib.reload(sp)
-    assert sp.STRATEGY_VERSION == "v43_wedgefix"
+    # Back to the built-in default once the override is gone.
+    assert sp.STRATEGY_VERSION == sp._DEFAULT_STRATEGY_VERSION
 
 
 # ── Pooler compatibility ────────────────────────────────────────────────────
