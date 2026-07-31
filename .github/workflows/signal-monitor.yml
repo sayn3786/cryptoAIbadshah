@@ -12,7 +12,12 @@ on:
     # default (72h) is EXPIRED. Expired is terminal but is NOT a loss — it is
     # excluded from the win rate — so a backlog of stale signals resolves
     # honestly rather than being scored against the strategy.
-    - cron: '5 * * * *'
+    #
+    # Every 30 minutes, not hourly. One run gets through roughly 30 signals
+    # inside its budget, and there are about 65 working at a time — so hourly
+    # left each signal checked only every other run. Twice an hour covers them
+    # all, and the work rotates stalest-first so nothing is starved either way.
+    - cron: '5,35 * * * *'
   workflow_dispatch:        # also triggerable by hand from the Actions tab
     inputs:
       max_age_hours:

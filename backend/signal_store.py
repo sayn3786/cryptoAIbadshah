@@ -633,6 +633,8 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
                  environment: Optional[str] = None,
                  limit: int = DEFAULT_PAGE_SIZE,
                  offset: int = 0,
+                 stalest_first: bool = False,
+                 with_total: bool = True,
                  session=None) -> Dict[str, Any]:
     """
     Paginated history, newest first. Archived rows are hidden unless asked for.
@@ -681,15 +683,20 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
         env_sql, env_params = _environment_clause(s, environment)
         clause = base + env_sql
         p = {**params, **env_params}
-        total = s.execute(_sql(f"SELECT count(*) FROM signals WHERE {clause}"),
-                          p).scalar() or 0
+        # A caller that does not paginate does not need the count, and on a
+        # remote database every avoidable statement is a round trip.
+        total = (s.execute(_sql(f"SELECT count(*) FROM signals WHERE {clause}"),
+                           p).scalar() or 0) if with_total else 0
+        order = ("updated_at ASC, generated_at ASC" if stalest_first
+                 else "generated_at DESC, id DESC")
         rows = s.execute(_sql(
             f"SELECT * FROM signals WHERE {clause} "
-            f"ORDER BY generated_at DESC, id DESC LIMIT :limit OFFSET :offset"
+            f"ORDER BY {order} LIMIT :limit OFFSET :offset"
         ), p).all()
         items = [_row_to_dict(r) for r in rows]
         return {"items": items, "limit": limit, "offset": offset,
-                "total": int(total), "has_more": offset + len(items) < int(total)}
+                "total": int(total) if with_total else None,
+                "has_more": (offset + len(items) < int(total)) if with_total else None}
 
     if session is not None:
         return _work(session)
@@ -731,15 +738,23 @@ def attach_targets(rows: List[Dict[str, Any]], *, session=None) -> List[Dict[str
 
 
 def list_active_signals(*, environment: Optional[str] = None, session=None,
-                        limit: int = MAX_PAGE_SIZE) -> List[Dict[str, Any]]:
+                        limit: int = MAX_PAGE_SIZE,
+                        stalest_first: bool = False) -> List[Dict[str, Any]]:
     """
     Signals still working, unarchived, in this environment.
 
     Includes PENDING: a working order is unresolved and the monitor must keep
     watching it, both to fill it and to withdraw it if it never fills.
+
+    ``stalest_first`` orders by how long it has been since each signal was last
+    touched, oldest first. The monitor needs this: it processes under a time
+    budget, and newest-first ordering meant the SAME tail was dropped on every
+    single run — those signals would never be monitored at all. Least-recently-
+    updated first turns a truncated run into a rotation instead of a blind spot.
     """
     return list_signals(statuses=sorted(WORKING_STATUSES), limit=limit,
-                        environment=environment, session=session)["items"]
+                        environment=environment, session=session,
+                        stalest_first=stalest_first, with_total=False)["items"]
 
 
 # ── Lifecycle updates ────────────────────────────────────────────────────────
@@ -1228,7 +1243,8 @@ def list_postmortems(*, outcome: Optional[str] = None,
         """), params).all()
         items = [_row_to_dict(r) for r in rows]
         return {"items": items, "limit": limit, "offset": offset,
-                "total": int(total), "has_more": offset + len(items) < int(total)}
+                "total": int(total) if with_total else None,
+                "has_more": (offset + len(items) < int(total)) if with_total else None}
 
     if session is not None:
         return _work(session)

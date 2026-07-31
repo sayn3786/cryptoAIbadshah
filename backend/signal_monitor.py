@@ -450,7 +450,8 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     started = time.monotonic()
     # Where the time actually goes. Two rounds of tuning were guided by guesses
     # about which half was slow; this reports it instead.
-    timing = {"load_s": 0.0, "fetch_s": 0.0, "decide_s": 0.0, "write_s": 0.0}
+    timing = {"list_s": 0.0, "targets_s": 0.0, "fetch_s": 0.0,
+              "decide_s": 0.0, "write_s": 0.0}
     summary = {"checked": 0, "filled": 0, "targets_hit": 0, "stops_moved": 0,
                "stopped": 0, "expired": 0, "cancelled": 0, "measured": 0,
                "unchanged": 0, "skipped": 0, "truncated": False,
@@ -458,7 +459,12 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
 
     _t = time.monotonic()
     try:
-        active = store.list_active_signals(limit=limit)
+        # Stalest first: the run is time-budgeted, and newest-first meant the
+        # same tail was skipped every time — those signals would never be
+        # monitored at all. This makes truncation a rotation, not a blind spot.
+        active = store.list_active_signals(limit=limit, stalest_first=True)
+        timing["list_s"] = round(time.monotonic() - _t, 2)
+        _t = time.monotonic()
         # Targets for EVERY signal in one query. The loop used to call
         # get_signal per row, which is five queries — signal, targets, snapshot,
         # events, postmortem — and the connection pool is NullPool, so each one
@@ -470,7 +476,7 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     except Exception as exc:
         summary["errors"].append({"symbol": None, "error": str(exc)[:200]})
         return summary
-    timing["load_s"] = round(time.monotonic() - _t, 2)
+    timing["targets_s"] = round(time.monotonic() - _t, 2)
 
     # Fetch every symbol's candles ONCE, in parallel, before touching anything.
     # Serially this was the sum of every symbol's round trip, which is what blew
