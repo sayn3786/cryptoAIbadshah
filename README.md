@@ -367,10 +367,19 @@ trades were ever taken.
   warmed by the attempt that died, so a follow-up usually completes inside the
   limit. A 401 or 404 is not retried; those do not improve by waiting.
   Retrying is safe because publication is idempotent on the candle.
-  This is mitigation, not a cure: **if all three attempts start failing
-  together, raise `maxDuration` or make the publish path cheaper.** A slot that
-  publishes nothing now shows nothing, because the read path no longer computes
-  a fallback.
+  This is mitigation, not the cure.
+* **The publish path fetches 4H only where it is read.** On the Hobby plan 60s
+  is a hard ceiling — `maxDuration` cannot be raised — so the work came down
+  instead. The 4H analysis contributes exactly two fields (`direction`,
+  `tradeable`) and both are consumed *after* the 1H/2H gates, purely to feed
+  `htf_4h_dir` into the quality tiebreak. A symbol that fails those gates never
+  reads its 4H data, yet a full `build_analysis` was run for it anyway. Fetching
+  it only for the survivors cut roughly **a fifth** of the heavy calls and
+  changes **nothing** about the output — every candidate still gets the same 4H
+  reading. `_passes_tf_gates` is shared by the prefetch and the candidate loop
+  so the two cannot drift; if they did, a symbol could arrive with no 4H data
+  and be scored as though 4H were neutral. A slot that publishes nothing now
+  shows nothing, because the read path no longer computes a fallback.
 * Everything that publishes fires **after** a boundary, never before it — the
   in-process pre-warm scheduler at :02 past, the GitHub and Vercel crons at :05.
   The gate reads the last CLOSED candle, so a job that fires early sees the

@@ -2125,6 +2125,26 @@ def _slot_envelope(slot: dict) -> dict:
     }
 
 
+def _passes_tf_gates(h1, h2) -> bool:
+    """
+    Could this symbol still become a candidate on its 1H/2H reading alone?
+
+    The gates that do not depend on 4H: both timeframes present and tradeable,
+    neither NEUTRAL, and the two agreeing on direction.
+
+    Deliberately shared with the candidate loop rather than duplicated there.
+    It decides which symbols are worth fetching a 4H analysis for, so if the two
+    copies ever drifted, a symbol could reach the loop with no 4H data and be
+    scored as though 4H were neutral — a silent change to the published set.
+    """
+    if not h1 or not h2:
+        return False
+    if not h1.get("tradeable", True) or not h2.get("tradeable", True):
+        return False
+    d1, d2 = h1.get("direction", "NEUTRAL"), h2.get("direction", "NEUTRAL")
+    return d1 != "NEUTRAL" and d2 != "NEUTRAL" and d1 == d2
+
+
 def _compute_recommendations() -> dict:
     """
     Best-signal engine (Phase 3 — composite quality ranking):
@@ -2148,39 +2168,64 @@ def _compute_recommendations() -> dict:
     all_syms = list(SYMBOLS)
     raw: dict = {}
 
-    # Use get_analysis (cached) so rec engine sees the same data as the analysis view.
-    with ThreadPoolExecutor(max_workers=20) as ex:
-        fmap = {ex.submit(get_analysis, sym, tf): (sym, tf)
-                for sym in all_syms for tf in ("1H", "2H", "4H")}
-        for future in as_completed(fmap):
-            sym, tf = fmap[future]
-            try:
-                data = future.result()
-                sig  = data.get("signal", {})
-                raw.setdefault(sym, {})[tf] = {
-                    "direction":     sig.get("direction", "NEUTRAL"),
-                    "strength":      sig.get("strength", 0) or 0,
-                    "sig":           sig,
-                    "rsi":           data.get("rsi"),
-                    "current_price": sig.get("current_price"),
-                    "live_price":    data.get("live_price"),
-                    "signal_price":  data.get("signal_price"),
-                    "data_quality":  data.get("data_quality", "good"),
-                    "dq_reasons":    data.get("data_quality_reasons", []),
-                    "tradeable":     data.get("tradeable", True),
-                    # Reversal Radar is returned INSIDE the signal dict
-                    # (generate_signal -> "reversal_radar"), not at the analysis
-                    # root. Reading data.get("reversal_radar") always yielded {},
-                    # so the reversal-against penalty in _rec_quality never fired.
-                    "reversal_radar": sig.get("reversal_radar") or {},
-                    # Full analysis kept for the 2H view only — entry/SL/TP come
-                    # from the 2H signal, so that is the decision snapshot we
-                    # persist. Keeping all three would triple the retained data
-                    # for no benefit.
-                    "analysis":      data if tf == "2H" else None,
-                }
-            except Exception:
-                pass
+    def _fetch_tfs(pairs):
+        """Fill `raw` for each (symbol, timeframe). Uses the cached get_analysis
+        so the engine sees exactly what the analysis view does."""
+        if not pairs:
+            return
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            fmap = {ex.submit(get_analysis, sym, tf): (sym, tf) for sym, tf in pairs}
+            for future in as_completed(fmap):
+                sym, tf = fmap[future]
+                try:
+                    data = future.result()
+                    sig  = data.get("signal", {})
+                    raw.setdefault(sym, {})[tf] = {
+                        "direction":     sig.get("direction", "NEUTRAL"),
+                        "strength":      sig.get("strength", 0) or 0,
+                        "sig":           sig,
+                        "rsi":           data.get("rsi"),
+                        "current_price": sig.get("current_price"),
+                        "live_price":    data.get("live_price"),
+                        "signal_price":  data.get("signal_price"),
+                        "data_quality":  data.get("data_quality", "good"),
+                        "dq_reasons":    data.get("data_quality_reasons", []),
+                        "tradeable":     data.get("tradeable", True),
+                        # Reversal Radar is returned INSIDE the signal dict
+                        # (generate_signal -> "reversal_radar"), not at the analysis
+                        # root. Reading data.get("reversal_radar") always yielded {},
+                        # so the reversal-against penalty in _rec_quality never fired.
+                        "reversal_radar": sig.get("reversal_radar") or {},
+                        # Full analysis kept for the 2H view only — entry/SL/TP come
+                        # from the 2H signal, so that is the decision snapshot we
+                        # persist. Keeping all three would triple the retained data
+                        # for no benefit.
+                        "analysis":      data if tf == "2H" else None,
+                    }
+                except Exception:
+                    pass
+
+    # ── Two-phase fetch: 1H/2H for everything, 4H only where it is read ──────
+    # The 4H analysis contributes exactly two fields — `direction` and
+    # `tradeable` — and both are consumed AFTER the 1H/2H gates, purely to feed
+    # htf_4h_dir into the quality tiebreak. A symbol that fails those gates
+    # never reads its 4H data at all, yet a full build_analysis (candles,
+    # funding, open interest, CVD, on-chain) was being run for every symbol on
+    # a third timeframe regardless.
+    #
+    # This matters because the whole compute has to fit inside Vercel's 60s
+    # maxDuration, which is a hard ceiling on this plan — /api/cron/daily has
+    # already been killed at 61s. Skipping the 4H work for symbols that were
+    # never going to use it is the one cut available that changes NOTHING about
+    # the output: every candidate still gets the same 4H reading it had before.
+    _fetch_tfs([(sym, tf) for sym in all_syms for tf in ("1H", "2H")])
+
+    _needs_4h = [sym for sym in all_syms
+                 if sym != "BTC" and _passes_tf_gates(raw.get(sym, {}).get("1H"),
+                                                      raw.get(sym, {}).get("2H"))]
+    _fetch_tfs([(sym, "4H") for sym in _needs_4h])
+    print(f"[recs] 4H fetched for {len(_needs_4h)}/{len(all_syms)} symbols "
+          f"({len(all_syms) - len(_needs_4h)} skipped — failed the 1H/2H gates)")
 
     # BTC 2H direction — applied at 2H (same TF as the signal)
     btc_2h    = raw.get("BTC", {}).get("2H", {})
@@ -2226,17 +2271,17 @@ def _compute_recommendations() -> dict:
         # is still tradeable when 4H is neutral, just scored a touch lower).
         htf_4h_dir = h4.get("direction", "NEUTRAL") if h4.get("tradeable", True) else "NEUTRAL"
 
-        # ── Data-integrity gate — never publish a trade on bad/stale data ─────
+        # ── Data-integrity gate + the confirmation filter ─────────────────────
         # A recommendation is an execution call, so both timeframes must be
-        # clean (demo, stale, misaligned, missing candles, or live price too
-        # far from the signal price all disqualify it — see _assess_data_quality).
-        if not h1.get("tradeable", True) or not h2.get("tradeable", True):
-            continue
-
-        # Both timeframes must agree — this IS the confirmation filter
-        if h1["direction"] == "NEUTRAL" or h2["direction"] == "NEUTRAL":
-            continue
-        if h1["direction"] != h2["direction"]:
+        # clean (demo, stale, misaligned, missing candles, or live price too far
+        # from the signal price all disqualify it — see _assess_data_quality),
+        # and both must agree on direction.
+        #
+        # Same helper the 4H prefetch uses. Sharing it is the point: it decides
+        # which symbols got a 4H analysis at all, so a second copy here could
+        # drift and let a symbol through with no 4H data, scored as though 4H
+        # were neutral.
+        if not _passes_tf_gates(h1, h2):
             continue
 
         direction = h2["direction"]   # 2H is primary
