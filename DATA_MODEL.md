@@ -49,6 +49,11 @@ still true and `error_code` null — a skip is not a failure. See
 [INDICATORS.md § 4H Publication Cadence](INDICATORS.md) for the ranking change
 that shipped with it.
 
+Reading and publishing are separate paths. `/api/cron/publish` writes;
+`/api/recommendations` only reads `signals` back. Nothing is served that is not
+first recorded, so the recommendation cards and the Signal Tracker cannot
+disagree about what was published.
+
 ---
 
 ## 2. Lifecycle
@@ -142,7 +147,7 @@ post-trade analysis possible: it records the decision inputs, not today's market
 | Column | Type | Null | Meaning |
 |---|---|---|---|
 | `indicator_values` | `jsonb` | no | Allow-listed indicators: RSI, MACD, EMAs, ATR, `structure_adjustment`, `structure_factors`, `stop_liquidity`, `tp_anchor`, … |
-| `market_context` | `jsonb` | no | Funding, open interest, BTC correlation, aligned timeframes, quality score. |
+| `market_context` | `jsonb` | no | Funding, open interest, BTC correlation, aligned timeframes, quality score, and `published_card` — see below. |
 | `source_timestamps` | `jsonb` | no | Provider timestamps, so staleness is provable after the fact. |
 | `input_candle_count` | `integer` | no | How many candles fed the decision. |
 | `data_quality_flags` | `jsonb` | no | Degradations recorded at decision time. |
@@ -151,6 +156,32 @@ post-trade analysis possible: it records the decision inputs, not today's market
 > credentials, raw provider payloads, or per-tick data. Built from a fixed
 > **allow-list** in `backend/signal_snapshot.py` — a deny-list would leak the
 > first time a provider added a field.
+
+**`market_context.published_card`** — what the dashboard rendered for this
+signal, stored so `/api/recommendations` can serve the RECORDED set instead of a
+cached recomputation. Same allow-list discipline: `signal_snapshot.CARD_KEYS`
+names every field, and `build_card` copies nothing else.
+
+| Group | Keys |
+|---|---|
+| Conviction | `strength`, `display_strength`, `h1_strength`, `h2_strength`, `avg_tf_strength`, `aligned_tfs` |
+| Risk framing | `rr_ratio`, `sl_pct`, `tp_pcts`, `leverage`, `vol_tier`, `vol_tier_label` |
+| BTC context | `btc_consensus`, `btc_corr`, `btc_adj`, `btc_aligned`, `btc_conflict` |
+| HTF confluence | `mtf_dirs`, `mtf_adj`, `mtf_aligned`, `mtf_confirm`, `mtf_counter` |
+| Why | `reasons` |
+| Presentation | `view_tf`, `detected_at` |
+
+Three things are deliberately **absent**:
+
+| Not in the card | Because |
+|---|---|
+| `entry` / `sl` / `tp_targets` / `symbol` / `direction` / `timeframe` | They are real columns on `signals` and `signal_targets`. A second copy could drift from the record of the decision, so the reader fills them in from the row. |
+| `quality_score` | Already stored on `market_context`. One copy, not two. |
+| `targets_behind_live` | Which rungs are spent is a fact about the LIVE price — true at publication and stale by the time the slot is read back. Storing it would freeze a moving number. |
+
+A signal published before cards were stored has no `published_card`. It renders
+from its columns, with `display_strength` falling back to `confidence_score`;
+missing fields stay missing rather than being invented.
 
 ### 3.4 `signal_events` — append-only audit trail
 
@@ -267,6 +298,8 @@ mutation endpoints stay **closed**, not open.
 
 | Method | Route | Auth | Returns |
 |---|---|---|---|
+| GET | `/api/recommendations` | public | The set RECORDED for the current 4H slot, read back from `signals`. Never computes, never publishes. `published: false` + `reason` when the slot is empty. |
+| GET/POST | `/api/cron/publish` | internal | The publication driver — computes and persists, sends nothing. Runs at :05 past all six 4H boundaries. |
 | GET | `/api/signals/tracker` | public | The dashboard view. `days` (default 3, max 30), `environment`. |
 | GET | `/api/signals/active` | public | Working signals. |
 | GET | `/api/signals/history` | public | Paginated. `symbol`, `timeframe`, `direction`, `status`×N, `strategy_version`, `exchange`, `include_archived=1`, `environment`, `limit`, `offset`. |

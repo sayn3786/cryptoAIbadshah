@@ -21,7 +21,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-__all__ = ["build_snapshot", "SNAPSHOT_INDICATOR_KEYS", "redact"]
+__all__ = ["build_snapshot", "build_card", "CARD_KEYS",
+           "SNAPSHOT_INDICATOR_KEYS", "redact"]
 
 # Anything whose key looks like a credential is dropped even if it somehow
 # reaches a nested dict we do copy. Belt and braces on top of the allow-list.
@@ -98,6 +99,55 @@ def _pattern_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
         "triangle_pattern_count": len(analysis.get("triangle_patterns") or []),
         "flag_diagnostics": redact(analysis.get("flag_diagnostics")),
     }
+
+
+# ── The published card ──────────────────────────────────────────────────────
+# What the dashboard rendered for this signal, stored so the card can be served
+# back from the database instead of from a cache of a recomputed set. Every key
+# here is one the renderer actually reads (dashboard.js _buildRecCard) — same
+# allow-list discipline as the snapshot: nothing is copied unless it is named.
+#
+# Deliberately NOT stored: entry / sl / tp_targets / direction / symbol /
+# timeframe. Those are real columns on `signals` and `signal_targets`, and a
+# second copy could drift from the record of the decision. The reader fills them
+# in from the row.
+CARD_KEYS = (
+    # Conviction, and how the two timeframes that had to agree scored it.
+    # avg_tf_strength is the RANKING key, so the card shows what put this
+    # trade in the top three rather than only the 2H number.
+    "strength", "display_strength", "h1_strength", "h2_strength",
+    "avg_tf_strength", "aligned_tfs",
+    # Risk framing
+    "rr_ratio", "sl_pct", "tp_pcts", "leverage",
+    "vol_tier", "vol_tier_label",
+    # BTC context
+    "btc_consensus", "btc_corr", "btc_adj", "btc_aligned", "btc_conflict",
+    # Higher-timeframe confluence badge
+    "mtf_dirs", "mtf_adj", "mtf_aligned", "mtf_confirm", "mtf_counter",
+    # Plain-language why
+    "reasons",
+    # Presentation
+    "view_tf", "detected_at",
+)
+# Deliberately NOT here either:
+#   quality_score       — already stored on market_context; one copy, not two.
+#   targets_behind_live — which rungs are spent is a fact about the LIVE price,
+#                         true at publication and stale by the time the slot is
+#                         read back. Storing it would freeze a moving number.
+
+
+def build_card(rec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    The renderable part of a published recommendation, bounded and redacted.
+
+    Stored alongside the signal so ``/api/recommendations`` can serve what was
+    actually published rather than a cached recomputation. Small by
+    construction: scalars, short lists and one flat dict of timeframe
+    directions. Keys absent from ``rec`` are simply absent here — a card that
+    lies about what the strategy reported is worse than a sparse one.
+    """
+    rec = rec or {}
+    return redact({k: rec[k] for k in CARD_KEYS if rec.get(k) is not None})
 
 
 def build_snapshot(analysis: Dict[str, Any],

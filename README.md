@@ -360,6 +360,40 @@ trades were ever taken.
   request recomputes against the fresh candle instead of serving an unrecorded
   set for four hours.
 
+### The cards are served from the database
+
+`/api/recommendations` **reads the recorded set** for the current slot. It does
+not compute and it does not publish — publication is driven by
+`/api/cron/publish` at all six boundaries, and this route is a pure read of what
+that wrote.
+
+It used to be the other way round: three caches sat in front of the cards
+(browser `localStorage` on a 30-minute key, a server-side JSON blob, and the
+compute itself) and none of them was the database — the `signals` table was
+write-only in that path. So the cards and the Signal Tracker could legitimately
+disagree about what had been published, and under the 4H cadence that would have
+become the normal case for three hours out of every four.
+
+* **Nothing published for a slot shows as exactly that** (`published: false`
+  with a `reason`), never as a set computed on the fly. An unrecorded set shown
+  as a recommendation is what the publication gate exists to prevent.
+* **The browser cache is keyed to the 4H slot**, so it expires when the thing it
+  caches is replaced. On a 30-minute key a browser kept showing the previous set
+  for up to half an hour after a new one published.
+* **The published strength stays put.** The live-score refresh used to overwrite
+  it with a fresh recomputation; it now shows alongside as a labelled `now N`
+  badge, so a setup that has decayed since publication reads as decay rather
+  than being quietly rewritten.
+* Prices are served as exact numeric strings straight off the column — never
+  floated on the way out.
+
+What the card renders is stored at publish time as `published_card` on the
+snapshot's `market_context`, under the same allow-list discipline as the rest of
+the snapshot: named keys only, bounded and redacted, no prices (those are
+columns) and no credentials.
+
+### Ranking
+
 Ranking changed with the cadence: candidates are ordered by the **average of 1H
 and 2H strength**, with the composite `quality_score` demoted to the tiebreak.
 Every quality gate still gates — R/R ≥ 1.3, direction agreement, data quality,
@@ -449,18 +483,28 @@ rendering as a healthy open trade.
 
 ## Database outage behaviour
 
-With **`DB_REQUIRED=true`**:
+Publishing and reading fail differently, because they are now different paths.
+
+**Publishing** (`/api/cron/publish`, the scheduler, `/api/cron/daily`) with
+**`DB_REQUIRED=true`**:
 
 * A signal is published only after its transaction commits.
-* If persistence fails, `/api/recommendations` returns **503** with a sanitized
-  `error_code` and an **empty** `recommendations` array. Telegram dispatch is
-  skipped. The result is **not cached**, so the next request retries instead of
-  serving an unrecorded set for the rest of the slot.
-* Read-only market analysis (`/api/analysis/*`) is unaffected and continues to
-  work — it is clearly non-actionable output.
+* If persistence fails the set is marked not-actionable with a sanitized
+  `error_code`, nothing is cached, and Telegram dispatch is skipped — so the
+  next run retries instead of a slot going out unrecorded.
 
-With **`DB_REQUIRED=false`** (default), a persistence failure is logged and
-recommendations continue to be served, exactly as before this feature existed.
+With **`DB_REQUIRED=false`** (default), a persistence failure is logged and does
+not block the rest of the run.
+
+**Reading** (`/api/recommendations`) cannot publish anything, so it has no 503 to
+give. A database it cannot read simply means it has nothing to show: it returns
+**200** with `published: false` and `reason: "DB_READ_FAILED"`, and the dashboard
+says so. It never falls back to computing a set — that would put an unrecorded
+recommendation on screen, which is the one outcome the whole gate exists to
+prevent.
+
+Read-only market analysis (`/api/analysis/*`) is unaffected either way — it is
+clearly non-actionable output.
 
 A signal that fails **price-structure validation** is never published under
 either setting — that is broken data, not a risky trade.

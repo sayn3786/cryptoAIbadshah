@@ -2005,6 +2005,125 @@ def _slot_start(t):
     return t.replace(hour=bucket, minute=0, second=0, microsecond=0)
 
 
+def _rec_from_row(row: dict) -> dict:
+    """
+    Rebuild one recommendation card from a stored signal row.
+
+    Prices, direction and the ladder come from the COLUMNS — they are the record
+    of the decision. Everything cosmetic (strengths, reasons, BTC and MTF
+    context) comes from the ``published_card`` stored on the snapshot. A row
+    published before cards were stored simply renders without them rather than
+    having them invented.
+    """
+    card = dict(row.get("published_card") or {})
+    targets = sorted(row.get("targets") or [],
+                     key=lambda t: t.get("target_number") or 0)
+
+    # Prices stay exactly as the store returns them — plain-notation strings off
+    # a numeric column, never floats. The dashboard's fmtPrice takes Number(v),
+    # so nothing downstream needs the lossy conversion, and this is the same
+    # convention the tracker already serves prices under.
+    rec = {
+        "symbol":     row.get("symbol"),
+        "direction":  row.get("direction"),
+        "timeframe":  row.get("timeframe"),
+        "entry":      row.get("entry_price"),
+        "sl":         row.get("stop_loss"),
+        "tp_targets": [t.get("target_price") for t in targets],
+        "signal_id":  str(row["id"]) if row.get("id") else None,
+        # This row exists because it was written. Saying otherwise here would
+        # contradict the database it just came out of.
+        "persisted":  True,
+        "actionable": True,
+        "published_at": row.get("generated_at"),
+        "candle_close_time": row.get("candle_close_time"),
+        "status":     row.get("status"),
+    }
+    # The card carries the display scalars as plain JSON numbers, which is what
+    # the renderer wants. It never carries prices — those are columns.
+    rec.update(card)
+    # Stored on market_context, not duplicated into the card.
+    ctx = row.get("market_context") or {}
+    if ctx.get("quality_score") is not None:
+        rec["quality_score"] = ctx["quality_score"]
+    if rec.get("display_strength") is None and row.get("confidence_score") is not None:
+        try:
+            rec["display_strength"] = float(row["confidence_score"])
+        except (TypeError, ValueError):
+            pass
+    return rec
+
+
+def _published_slot(now_sgt=None) -> dict:
+    """
+    The set RECORDED for the current 4H slot, read back from the database.
+
+    ``/api/recommendations`` serves this rather than a cached recomputation, so
+    the cards and the tracker can never disagree about what was published.
+    Returns ``{"recommendations", "published", "reason", "slot", ...}``;
+    ``published`` is false when the slot holds nothing, and ``reason`` says why
+    as far as it can be known.
+    """
+    import db as _db
+    now_sgt = now_sgt or datetime.now(_SGT)
+    start = _slot_start(now_sgt)
+    end = start + timedelta(hours=PUBLICATION_INTERVAL_HOURS)
+
+    def _empty(reason):
+        return {"recommendations": [], "published": False, "reason": reason,
+                "slot_start": start.isoformat(), "slot_end": end.isoformat()}
+
+    if not _db.db_enabled():
+        return _empty("DB_NOT_CONFIGURED")
+    try:
+        import signal_publish as _sp
+        rows = _signal_store().list_published_between(
+            start, end, strategy_version=_sp.STRATEGY_VERSION, limit=20)
+    except Exception as exc:
+        print(f"[recs] slot read failed — {_db.sanitize_db_error(exc)}")
+        return _empty("DB_READ_FAILED")
+
+    recs = [_rec_from_row(r) for r in rows]
+    return {
+        "recommendations": recs,
+        "published": bool(recs),
+        "reason": None if recs else "NOT_PUBLISHED_YET",
+        "slot_start": start.isoformat(),
+        "slot_end": end.isoformat(),
+    }
+
+
+def _slot_envelope(slot: dict) -> dict:
+    """
+    Wrap a slot read in the payload shape the dashboard expects.
+
+    Pure date arithmetic over the slot window — no network and no analysis, so
+    serving a slot costs the database read and nothing else.
+    """
+    start = datetime.fromisoformat(slot["slot_start"])
+    end = datetime.fromisoformat(slot["slot_end"])
+    recs = slot["recommendations"]
+    label = start.strftime("%-I:%M %p")
+    return {
+        "generated_at":    start.isoformat(),
+        "generated_fmt":   start.strftime(f"%-I:%M %p SGT, %b %d, %Y  [{label} slot]"),
+        "valid_until":     end.isoformat(),
+        "valid_until_fmt": end.strftime("%-I:%M %p SGT, %b %d") + " (next signal)",
+        "date_label":      start.strftime("%b %d, %Y (SGT)"),
+        "slot":            label,
+        "recommendations": recs,
+        # True only when this slot's set is in the database. The dashboard shows
+        # "no set published for this slot" rather than anything computed.
+        "published":       slot["published"],
+        "reason":          slot["reason"],
+        # Everything here came out of the database, so it is by definition
+        # recorded — the old `actionable` gate has nothing left to guard.
+        "actionable":      True,
+        "source":          "database",
+        "publication_interval_hours": PUBLICATION_INTERVAL_HOURS,
+    }
+
+
 def _compute_recommendations() -> dict:
     """
     Best-signal engine (Phase 3 — composite quality ranking):
@@ -2542,31 +2661,23 @@ _threading.Thread(target=_daily_rec_scheduler, daemon=True, name="rec-scheduler"
 @app.get("/api/recommendations")
 def api_recommendations():
     """
-    Returns this slot's top-3 recommendations.
-    Pre-computed at :02 past each 4H boundary by the scheduler and served from
-    cache to all users. Falls back to on-demand compute if the scheduler has not
-    run for this slot yet.
+    Returns the set RECORDED for the current 4H slot, read back from the
+    database.
+
+    This route does not publish and does not recompute. Publication happens on
+    the 4H close, driven by the cron (`/api/cron/publish`) and the in-process
+    pre-warm scheduler; this is a pure read of what they wrote. That is what
+    keeps the cards and the Signal Tracker from disagreeing — before, the cards
+    were a cached recomputation that could be built on a later candle than the
+    one actually stored.
+
+    When the slot holds nothing, the response says so (`published: false` with a
+    `reason`) instead of computing a set on the fly: an unrecorded set shown as
+    a recommendation is exactly what the publication gate exists to prevent.
     """
-    force = request.args.get("force") == "1"
-    key   = _rec_cache_key()
-
-    if not force:
-        with _rec_lock:
-            mem = _rec_cache_load()
-            if mem.get("key") == key and mem.get("data"):
-                return jsonify(mem["data"])
-
-    result = _compute_recommendations()
-    # Only cache a set that was actually recorded. Caching a non-actionable set
-    # would keep serving it for the rest of the slot after the database
-    # recovered, so the signals would never get persisted. Same for a set built
-    # before this slot's candle was available — it was not recorded either.
-    if not result.get("actionable", True):
-        return _not_actionable(result)
-    if result.get("slot_current", True):
-        with _rec_lock:
-            _rec_cache_save(key, result)
-    return jsonify(result)
+    # 200 either way: "nothing published for this slot" is a real and legitimate
+    # answer, not an error, and the dashboard renders it as such.
+    return jsonify(_slot_envelope(_published_slot()))
 
 
 def _not_actionable(result):
@@ -2724,23 +2835,72 @@ def api_twitter_send():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _cron_authorized() -> bool:
+    """Bearer token (Vercel) or x-cron-secret header (GitHub Actions)."""
+    import os as _os
+    cron_secret = _os.getenv("CRON_SECRET", "")
+    if not cron_secret:
+        return True
+    return (request.headers.get("authorization", "") == f"Bearer {cron_secret}"
+            or request.headers.get("x-cron-secret", "") == cron_secret)
+
+
+@app.get("/api/cron/publish")
+@app.post("/api/cron/publish")
+def api_cron_publish():
+    """
+    THE publication driver. Runs at :05 past every 4H boundary.
+
+    `/api/recommendations` is now a pure read of what was recorded, so something
+    has to do the recording — and it has to be all six boundaries. The Telegram
+    cron only covers three of them, and firing Telegram six times a day to get
+    the other three would be spam. This computes and persists; it sends nothing.
+
+    Off a publication bar it is a no-op by design: the gate inside
+    `_compute_recommendations` declines to record, and the response says so.
+    """
+    if not _cron_authorized():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    try:
+        result = _compute_recommendations()
+    except Exception as exc:
+        import db as _db
+        return jsonify({"ok": False, "error": _db.sanitize_db_error(exc)}), 500
+
+    persistence = result.get("persistence") or {}
+    if result.get("actionable", True) and result.get("slot_current", True):
+        with _rec_lock:
+            _rec_cache_save(_rec_cache_key(), result)
+
+    return jsonify({
+        "ok": bool(result.get("actionable", True)),
+        "slot": result.get("slot"),
+        "computed": len(result.get("recommendations", [])),
+        "persisted": persistence.get("persisted", 0),
+        "duplicates": persistence.get("duplicates", 0),
+        "skipped_reason": persistence.get("skipped_reason"),
+        "error_code": persistence.get("error_code"),
+        "slot_current": result.get("slot_current"),
+        "source_candle_close": result.get("source_candle_close"),
+    })
+
+
 @app.get("/api/cron/daily")
 @app.post("/api/cron/daily")
 def api_cron_daily():
     """
-    Cron endpoint — called by Vercel at 12:00 UTC (20:00 SGT) and by GitHub
-    Actions at ~23:50 UTC (08:00 SGT) and ~07:50 UTC (16:00 SGT).
+    Notification cron — Vercel at 12:05 UTC (20:05 SGT) and GitHub Actions at
+    00:05 UTC (08:05 SGT) and 08:05 UTC (16:05 SGT).
     Computes fresh recommendations, sends to Telegram, posts BTC+ETH 1D to Twitter.
     Vercel calls this with a GET; GitHub Actions uses POST with x-cron-secret.
+
+    Publication itself is driven by `/api/cron/publish`, which covers all six 4H
+    boundaries; this one also persists when it lands on a bar, which is harmless
+    — the write is idempotent on the candle.
     """
-    import os as _os
-    # Accept Bearer token (Vercel) or x-cron-secret header (GitHub Actions)
-    cron_secret = _os.getenv("CRON_SECRET", "")
-    if cron_secret:
-        auth   = request.headers.get("authorization", "")
-        secret = request.headers.get("x-cron-secret", "")
-        if auth != f"Bearer {cron_secret}" and secret != cron_secret:
-            return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    if not _cron_authorized():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     results = {}
     try:

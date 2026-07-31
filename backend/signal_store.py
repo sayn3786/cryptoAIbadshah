@@ -737,6 +737,78 @@ def attach_targets(rows: List[Dict[str, Any]], *, session=None) -> List[Dict[str
         return _work(s)
 
 
+def list_published_between(since, until, *,
+                           strategy_version: Optional[str] = None,
+                           environment: Optional[str] = None,
+                           limit: int = 50,
+                           session=None) -> List[Dict[str, Any]]:
+    """
+    Signals PUBLISHED in a ``generated_at`` window, oldest first, with their
+    targets and the stored ``published_card`` attached.
+
+    This is how ``/api/recommendations`` serves a slot: the set that was
+    recorded, read back, rather than a cached recomputation that may have been
+    built on a later candle. Three round trips at most — signals, targets,
+    snapshots — not one per signal, because every statement is a fresh
+    connection on a serverless pool.
+
+    ``since`` is inclusive and ``until`` exclusive, so adjacent slots can never
+    both claim a signal published exactly on the boundary.
+    """
+    since = _utc(since, "since")
+    until = _utc(until, "until")
+    if until <= since:
+        raise SignalValidationError("until must be after since")
+    limit = max(1, min(int(limit or 50), MAX_PAGE_SIZE))
+
+    def _work(s):
+        env_sql, env_params = _environment_clause(s, environment)
+        where = ["generated_at >= :since", "generated_at < :until",
+                 "archived_at IS NULL"]
+        params: Dict[str, Any] = {"since": since, "until": until,
+                                  "limit": limit, **env_params}
+        if strategy_version:
+            where.append("strategy_version = :sver")
+            params["sver"] = strategy_version.strip()
+        clause = " AND ".join(where) + env_sql
+        rows = s.execute(_sql(
+            f"SELECT * FROM signals WHERE {clause} "
+            f"ORDER BY generated_at ASC, id ASC LIMIT :limit"
+        ), params).all()
+        items = [_row_to_dict(r) for r in rows]
+        if not items:
+            return items
+        attach_targets(items, session=s)
+
+        ids = [str(r["id"]) for r in items]
+        cards: Dict[str, Any] = {}
+        for row in s.execute(_sql("""
+            SELECT signal_id, market_context FROM signal_indicator_snapshots
+            WHERE  signal_id = ANY(CAST(:ids AS uuid[]))
+        """), {"ids": ids}).all():
+            d = _row_to_dict(row)
+            ctx = d.get("market_context") or {}
+            if isinstance(ctx, str):
+                try:
+                    ctx = json.loads(ctx)
+                except Exception:
+                    ctx = {}
+            cards[str(d["signal_id"])] = ctx if isinstance(ctx, dict) else {}
+        for r in items:
+            ctx = cards.get(str(r["id"])) or {}
+            # Absent on rows published before the card was stored. The reader
+            # renders what the signal row itself carries rather than inventing
+            # the missing parts.
+            r["published_card"] = ctx.get("published_card") or {}
+            r["market_context"] = ctx
+        return items
+
+    if session is not None:
+        return _work(session)
+    with session_scope() as s:
+        return _work(s)
+
+
 def list_active_signals(*, environment: Optional[str] = None, session=None,
                         limit: int = MAX_PAGE_SIZE,
                         stalest_first: bool = False) -> List[Dict[str, Any]]:

@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 import db
 import deploy_context
 import signal_store as store
-from signal_snapshot import build_snapshot
+from signal_snapshot import build_card, build_snapshot
 
 __all__ = [
     "STRATEGY_NAME", "STRATEGY_VERSION", "PersistResult",
@@ -134,6 +134,10 @@ def persist_recommendation(rec: Dict[str, Any],
     snap["market_context"]["btc_correlation"] = rec.get("btc_corr")
     snap["market_context"]["aligned_timeframes"] = rec.get("aligned_tfs")
     snap["market_context"]["quality_score"] = rec.get("quality_score")
+    # What the dashboard rendered for this signal. Stored so /api/recommendations
+    # can serve the RECORDED set rather than a cached recomputation — otherwise
+    # the cards and the tracker can disagree about what was published.
+    snap["market_context"]["published_card"] = build_card(rec)
 
     generated_at = rec.get("generated_at_utc") or datetime.now(timezone.utc)
 
