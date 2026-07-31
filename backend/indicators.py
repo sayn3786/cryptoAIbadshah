@@ -1249,22 +1249,44 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
     # report it flagged forming=True so it can be scored lighter / labelled ⏳.
     if not cands and n > pw:
         tail = range(n - pw, n)
+
+        def _left(ti: int) -> int:
+            """
+            Closes still needed before this provisional pivot is a real one.
+
+            A pivot needs `pw` closed candles AFTER it — but some have already
+            printed since this one, so the wait SHRINKS with every close. The
+            message used to quote `pw` flat, so a divergence spotted yesterday
+            still claimed the same number of closes to go today and looked
+            frozen. Always between 1 and pw here: the tail only reaches back pw
+            candles, and at 0 the pivot would already be confirmed above.
+            """
+            return max(pw - (n - 1 - ti), 1)
+
+        def _wait(left: int) -> str:
+            return ("1 more close holds" if left == 1
+                    else f"{left} more closes hold")
+
         if swing_lows:
             _, p_price, p_rsi = swing_lows[-1]
             ti = min(tail, key=lambda i: lows[i])
             if (p_price - lows[ti]) / (p_price + 1e-12) > PX and rsi_v[ti] - p_rsi > RS:
+                left = _left(ti)
                 cands.append({"type": "bullish", "forming": True, "_idx": ti,
                     "strength": round(rsi_v[ti] - p_rsi, 1),
+                    "closes_to_confirm": left,
                     "description": (f"⏳ Forming bullish RSI divergence — price lower low but RSI higher "
-                                    f"(+{rsi_v[ti] - p_rsi:.1f} pts); unconfirmed until {pw} more closes hold")})
+                                    f"(+{rsi_v[ti] - p_rsi:.1f} pts); unconfirmed until {_wait(left)}")})
         if swing_highs:
             _, p_price, p_rsi = swing_highs[-1]
             ti = max(tail, key=lambda i: highs[i])
             if (highs[ti] - p_price) / (p_price + 1e-12) > PX and p_rsi - rsi_v[ti] > RS:
+                left = _left(ti)
                 cands.append({"type": "bearish", "forming": True, "_idx": ti,
                     "strength": round(p_rsi - rsi_v[ti], 1),
+                    "closes_to_confirm": left,
                     "description": (f"⏳ Forming bearish RSI divergence — price higher high but RSI lower "
-                                    f"(−{p_rsi - rsi_v[ti]:.1f} pts); unconfirmed until {pw} more closes hold")})
+                                    f"(−{p_rsi - rsi_v[ti]:.1f} pts); unconfirmed until {_wait(left)}")})
 
     if not cands:
         return empty
