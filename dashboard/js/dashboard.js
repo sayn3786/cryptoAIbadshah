@@ -6198,18 +6198,26 @@ function _tkOpenMap() {
   catch (_) { return {}; }
 }
 
+/* The SAME slot appears in both sections — a batch published at 8am can have
+   live signals and closed ones. The slot alone is therefore not a unique key:
+   querySelector returned the first match, so clicking the closed batch toggled
+   the live one above it, and the two shared one stored open/closed state. */
+function _tkBatchKey(key, section) { return `${section}:${key}`; }
+
 function _tkIsOpen(key, section) {
   const map = _tkOpenMap();
-  return key in map ? !!map[key] : false;
+  const k = _tkBatchKey(key, section);
+  return k in map ? !!map[k] : false;
 }
 
 function _tkToggleBatch(key, section) {
   const map = _tkOpenMap();
-  map[key] = !_tkIsOpen(key, section);
+  const k = _tkBatchKey(key, section);
+  map[k] = !_tkIsOpen(key, section);
   try { localStorage.setItem(TK_OPEN_KEY, JSON.stringify(map)); } catch (_) {}
-  const row = document.querySelector(`.tk-batch[data-key="${CSS.escape(key)}"]`);
+  const row = document.querySelector(`.tk-batch[data-uid="${CSS.escape(k)}"]`);
   if (!row) return;
-  const open = map[key];
+  const open = map[k];
   row.classList.toggle('collapsed', !open);
   const hdr = row.querySelector('.tk-batch-hdr');
   if (hdr) hdr.setAttribute('aria-expanded', String(open));
@@ -6279,7 +6287,8 @@ function _tkBatches(batches, flatRows, section) {
   if (!batches?.length) return _tkTable(flatRows);
   return batches.map(b => {
     const open = _tkIsOpen(b.key, section);
-    return `<div class="tk-batch${open ? '' : ' collapsed'}" data-key="${b.key}">
+    return `<div class="tk-batch${open ? '' : ' collapsed'}" data-key="${b.key}"
+         data-uid="${_tkBatchKey(b.key, section)}">
       <div class="tk-batch-hdr" role="button" tabindex="0" aria-expanded="${open}"
            data-key="${b.key}" data-section="${section}"
            title="Click to ${open ? 'collapse' : 'expand'} this batch">
