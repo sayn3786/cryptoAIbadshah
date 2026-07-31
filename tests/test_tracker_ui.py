@@ -181,6 +181,21 @@ def test_the_batch_scoreboard_matches_the_backend_summary():
         assert key in summary, f"batch header reads sum.{key}, which is not returned"
 
 
+def test_the_ladder_shows_the_target_PRICES():
+    # "TP2" alone says nothing you can act on. The level, and how far away it
+    # is, are the point — so neither belongs only in a tooltip.
+    ladder = JS[JS.index("function _tkLadder"):JS.index("function _tkExcursion")]
+    assert "fmtPrice(" in ladder, "the ladder renders no price at all"
+    assert "distance_pct" in ladder
+    assert "tk-tp-px" in ladder and ".tk-tp-px" in CSS
+
+
+def test_a_hit_rung_shows_the_price_it_was_hit_at():
+    # The fill price, not the level it was aiming for — they can differ on a gap.
+    ladder = JS[JS.index("function _tkLadder"):JS.index("function _tkExcursion")]
+    assert "t.hit_price" in ladder
+
+
 def test_a_batch_is_addressable_per_section():
     """
     The same slot appears in BOTH sections — an 8am batch can have live signals

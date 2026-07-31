@@ -6106,16 +6106,29 @@ function _tkAge(h) {
 }
 
 function _tkLadder(row) {
+  // The PRICES, not just whether a rung was reached. "TP2" alone says nothing
+  // you can act on; the level and how far away it is are the whole point.
   if (!row.targets?.length) return '<span class="tk-muted">—</span>';
-  const chips = row.targets.map(t => {
+  const rows = row.targets.map(t => {
     const cls = t.hit ? 'hit' : (t.number === row.next_target ? 'next' : '');
+    const px  = fmtPrice(t.hit ? (t.hit_price ?? t.price) : t.price);
+    const state = t.hit
+      ? '<span class="tk-tp-state hit">✓</span>'
+      : (t.distance_pct == null
+          ? ''
+          : `<span class="tk-tp-state">${t.distance_pct >= 0
+              ? `${t.distance_pct.toFixed(2)}%`
+              : 'through'}</span>`);
     const tip = t.hit
-      ? `TP${t.number} hit at ${fmtPrice(t.hit_price ?? t.price)}`
-      : (t.distance_pct == null ? `TP${t.number} ${fmtPrice(t.price)}`
-         : `TP${t.number} ${fmtPrice(t.price)} — ${Math.abs(t.distance_pct).toFixed(2)}% ${t.distance_pct >= 0 ? 'away' : 'through'}`);
-    return `<span class="tk-tp ${cls}" title="${tip}">TP${t.number}${t.hit ? ' ✓' : ''}</span>`;
+      ? `TP${t.number} hit at ${px}`
+      : (t.distance_pct == null ? `TP${t.number} at ${px}`
+         : `TP${t.number} at ${px} — ${Math.abs(t.distance_pct).toFixed(2)}% ${
+             t.distance_pct >= 0 ? 'away' : 'through'}`);
+    return `<div class="tk-tp-row ${cls}" title="${tip}">`
+         + `<span class="tk-tp-lbl">TP${t.number}</span>`
+         + `<span class="tk-tp-px">${px}</span>${state}</div>`;
   }).join('');
-  return `<div class="tk-ladder">${chips}</div>`;
+  return `<div class="tk-ladder">${rows}</div>`;
 }
 
 function _tkExcursion(row) {
