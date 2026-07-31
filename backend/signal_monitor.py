@@ -403,6 +403,22 @@ def _record_excursion(store, signal: Dict[str, Any],
     ex = excursion((signal.get("direction") or "").upper(), entry, since)
     if ex["mfe_pct"] is None and ex["mae_pct"] is None:
         return False
+
+    # Only write when a high-water mark actually moved. The store clamps both to
+    # widen-only, so re-writing the same numbers is a round trip that changes
+    # nothing — and on NullPool every round trip is a fresh connection to Neon.
+    # The quiet case is the common case: most signals sit still most hours.
+    have_mfe = _dec(signal.get("mfe_pct"))
+    have_mae = _dec(signal.get("mae_pct"))
+    new_mfe = _dec(ex["mfe_pct"])
+    new_mae = _dec(ex["mae_pct"])
+    widened = ((have_mfe is None and new_mfe is not None)
+               or (have_mae is None and new_mae is not None)
+               or (have_mfe is not None and new_mfe is not None and new_mfe > have_mfe)
+               or (have_mae is not None and new_mae is not None and new_mae < have_mae))
+    if not widened:
+        return False
+
     try:
         store.record_excursion(signal["id"], mfe_pct=ex["mfe_pct"],
                                mae_pct=ex["mae_pct"])
@@ -438,6 +454,14 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
 
     try:
         active = store.list_active_signals(limit=limit)
+        # Targets for EVERY signal in one query. The loop used to call
+        # get_signal per row, which is five queries — signal, targets, snapshot,
+        # events, postmortem — and the connection pool is NullPool, so each one
+        # opened a fresh TLS connection to Neon. At roughly 4.7 seconds a signal
+        # the run got through 10 of 68 before its budget ran out. The monitor
+        # needs the row and its targets, and list_active_signals already
+        # returned the row.
+        store.attach_targets(active)
     except Exception as exc:
         summary["errors"].append({"symbol": None, "error": str(exc)[:200]})
         return summary
@@ -486,9 +510,7 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
             if key not in candle_cache:
                 summary["skipped"] += 1
                 continue                 # no market data this run
-            detail = store.get_signal(sid)
-            if not detail:
-                continue
+            detail = row
             actions = evaluate(detail, detail.get("targets") or [],
                                candle_cache[key], now=now,
                                max_age_hours=max_age_hours,

@@ -175,6 +175,13 @@ class _Store:
     def list_active_signals(self, **kw):
         return [dict(self.sig)]
 
+    def attach_targets(self, rows, **kw):
+        # The real store fills this in ONE query for every row; the fixtures
+        # already carry their targets, so this only guarantees the key exists.
+        for r in rows:
+            r.setdefault("targets", [])
+        return rows
+
     def get_signal(self, sid, **kw):
         return dict(self.sig)
 
