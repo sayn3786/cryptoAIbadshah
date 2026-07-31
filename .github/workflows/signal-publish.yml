@@ -21,17 +21,55 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # The compute runs close to Vercel's 60s maxDuration and has started
+      # tipping over it (a 504 FUNCTION_INVOCATION_TIMEOUT on /api/cron/daily,
+      # killed at 61s). Retrying is worth it because the per-symbol analysis
+      # cache is warmed by the attempt that died, so a follow-up usually
+      # completes well inside the limit.
+      #
+      # This is mitigation, not a cure: the durable fixes are a higher
+      # maxDuration or a cheaper publish path. If the retries below start
+      # failing together, that is the signal to do one of those.
+      #
+      # Publishing is idempotent on the candle, so a retry after a run that DID
+      # commit records nothing new — retrying can never double-publish.
       - name: Publish this slot's signals
         run: |
-          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-            -X POST "${{ secrets.APP_URL }}/api/cron/publish" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
-            --max-time 90)
-          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
-          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
-          echo "Status: $HTTP_STATUS"
-          echo "Response: $BODY"
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: API returned HTTP $HTTP_STATUS"
-            exit 1
-          fi
+          set -u
+          ATTEMPTS=3
+          BACKOFF=20
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "--- attempt $i of $ATTEMPTS ---"
+            RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+              -X POST "${{ secrets.APP_URL }}/api/cron/publish" \
+              -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+              --max-time 90 || echo "HTTP_STATUS:000")
+            HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+            BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
+            echo "Status: $HTTP_STATUS"
+            echo "Response: $BODY"
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+              # A 200 that recorded nothing off a publication bar is a correct
+              # no-op; a 200 that recorded nothing ON one is not, so say which.
+              echo "$BODY" | grep -q '"skipped_reason":"NOT_A_PUBLICATION_BAR"' \
+                && echo "Between bars — nothing to record, as designed."
+              exit 0
+            fi
+
+            # 401 is a bad secret and 404 a bad URL. Neither improves by waiting.
+            if [ "$HTTP_STATUS" = "401" ] || [ "$HTTP_STATUS" = "404" ]; then
+              echo "ERROR: HTTP $HTTP_STATUS — configuration problem, not transient. Not retrying."
+              exit 1
+            fi
+
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              echo "Retrying in ${BACKOFF}s (the analysis cache is warmer now)…"
+              sleep $BACKOFF
+              BACKOFF=$((BACKOFF * 2))
+            fi
+          done
+
+          echo "ERROR: all $ATTEMPTS attempts failed — this slot published nothing."
+          echo "Repeated timeouts mean the compute no longer fits in maxDuration."
+          exit 1
