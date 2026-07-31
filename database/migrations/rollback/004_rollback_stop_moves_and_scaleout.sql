@@ -1,0 +1,55 @@
+-- ============================================================================
+-- 004_rollback_stop_moves_and_scaleout.sql — FOR REVIEW ONLY. DO NOT RUN CASUALLY.
+--
+--   *** THIS SCRIPT LOSES INFORMATION AND CAN FAIL OUTRIGHT.                ***
+--
+-- Dropping current_stop_loss discards where each stop actually sat when the
+-- trade resolved. The realised returns already written from those stops STAY —
+-- so afterwards the numbers no longer reconcile with the stop on the row, and
+-- nothing records why.
+--
+-- Narrowing the event CHECK back FAILS while any STOP_MOVED event exists, and
+-- those events are append-only history: deleting them to make the constraint
+-- apply would be rewriting the audit trail to fit the schema.
+--
+-- Nothing in this repository executes this file. database/migrate.py explicitly
+-- refuses to run rollbacks.
+--
+-- Before even considering running it:
+--   1. Take a Neon branch or backup of the database.
+--   2. Check what the narrowed CHECK would reject:
+--        SELECT count(*) FROM signal_events WHERE event_type = 'STOP_MOVED';
+--   3. Export what will be lost:
+--        \copy (SELECT id, symbol, stop_loss, current_stop_loss, stop_moved_at,
+--                      realized_return_pct FROM signals
+--               WHERE current_stop_loss IS NOT NULL) TO 'stop_moves.csv' CSV HEADER
+--   4. Deploy application code that does not write STOP_MOVED first.
+--   5. Have a second person confirm.
+--
+-- In almost every case the correct rollback is to revert the APPLICATION code
+-- and LEAVE THE COLUMNS IN PLACE. Three nullable columns cost a few kilobytes;
+-- the record of how each trade was managed cannot be reconstructed.
+--
+-- To run deliberately, uncomment the block below.
+-- ============================================================================
+
+-- BEGIN;
+--
+-- -- FAILS if any STOP_MOVED event exists — see step 2 above.
+-- ALTER TABLE signal_events DROP CONSTRAINT IF EXISTS signal_events_type_chk;
+-- ALTER TABLE signal_events
+--     ADD CONSTRAINT signal_events_type_chk
+--     CHECK (event_type IN ('CREATED', 'ENTRY_FILLED', 'TARGET_HIT',
+--                           'STOP_LOSS_HIT', 'CLOSED', 'EXPIRED', 'CANCELLED',
+--                           'ANALYSIS_ADDED', 'ARCHIVED'));
+--
+-- ALTER TABLE signal_targets DROP CONSTRAINT IF EXISTS signal_targets_fraction_chk;
+-- ALTER TABLE signal_targets DROP COLUMN IF EXISTS exit_fraction;
+--
+-- ALTER TABLE signals
+--     DROP COLUMN IF EXISTS current_stop_loss,
+--     DROP COLUMN IF EXISTS stop_moved_at;
+--
+-- DELETE FROM schema_migrations WHERE version = '004';
+--
+-- COMMIT;

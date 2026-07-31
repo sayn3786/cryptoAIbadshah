@@ -107,7 +107,17 @@ def cmd_up() -> int:
         try:
             # AUTOCOMMIT: the file supplies its own transaction boundaries.
             with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-                conn.exec_driver_sql(sql)
+                # Straight to the driver cursor with NO parameter argument.
+                # exec_driver_sql passes an empty parameter set, which makes
+                # psycopg parse the text for placeholders — so a migration whose
+                # COMMENTS mention a percentage died with "incomplete
+                # placeholder: '%'". A migration is a script, not a query; it
+                # has no parameters and must not be scanned for any.
+                cur = conn.connection.dbapi_connection.cursor()
+                try:
+                    cur.execute(sql)
+                finally:
+                    cur.close()
         except Exception as exc:
             print(f"FAILED on {version}: {sanitize_db_error(exc)}")
             print("Nothing from this migration was committed. Fix and re-run.")

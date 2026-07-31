@@ -41,6 +41,37 @@ def test_the_section_exists_and_starts_hidden():
     assert "hidden" in section, "must not flash an empty table before data loads"
 
 
+def test_the_whole_section_starts_collapsed():
+    # The tracker is a reference you open when you want it, not something that
+    # pushes the charts down the page on every load.
+    section = HTML.split('id="trackerSection"')[1][:160]
+    assert "collapsed" in section
+    assert ".tracker-section.collapsed .tracker-body" in CSS, "collapsing does nothing"
+    assert 'aria-expanded="false"' in HTML
+
+
+def test_the_section_toggle_is_remembered_separately_from_the_batches():
+    assert "TK_SECTION_KEY" in JS
+    assert "_tkApplySection" in JS
+    load = JS[JS.index("async function loadTracker"):]
+    assert "_tkApplySection()" in load, \
+        "the choice must be re-applied on every render, not just the first"
+
+
+def test_the_refresh_button_does_not_toggle_the_section():
+    # It sits inside the clickable header. Without this, refreshing collapses
+    # the thing you were reading.
+    assert "event.stopPropagation()" in HTML
+    handler = JS[JS.index("const sec = e.target.closest?.('.tracker-header')"):][:200]
+    assert "closest('button')" in handler
+
+
+def test_the_section_can_be_toggled_from_the_keyboard():
+    assert "document.addEventListener('keydown'" in JS
+    block = JS[JS.index("document.addEventListener('keydown'"):][:600]
+    assert "tracker-header" in block and "tk-batch-hdr" in block
+
+
 def test_the_section_is_styled():
     for cls in (".tracker-section", ".tracker-table", ".tk-status", ".tk-ladder"):
         assert cls in CSS, f"{cls} has no styling"

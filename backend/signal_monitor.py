@@ -43,6 +43,12 @@ DEFAULT_MAX_AGE_HOURS = 72
 # measuring a population that included trades nobody could have taken.
 DEFAULT_FILL_WINDOW_HOURS = 24
 
+# After a non-final target is banked, the stop moves to the entry. The tracker
+# has always ADVISED this ("move stop to entry (breakeven)") — recording the
+# trade as though the stop never moved contradicted our own instruction and
+# booked a full loss on a position that had already been made risk-free.
+BREAKEVEN_AFTER_PARTIAL = True
+
 Action = Dict[str, Any]
 
 
@@ -124,7 +130,9 @@ def evaluate(signal: Dict[str, Any],
              *,
              now: Optional[datetime] = None,
              max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
-             fill_window_hours: int = DEFAULT_FILL_WINDOW_HOURS) -> List[Action]:
+             fill_window_hours: int = DEFAULT_FILL_WINDOW_HOURS,
+             breakeven_after_partial: bool = BREAKEVEN_AFTER_PARTIAL
+             ) -> List[Action]:
     """
     Decide what has happened to one signal, from the candles since it was made.
 
@@ -154,7 +162,10 @@ def evaluate(signal: Dict[str, Any],
     if direction not in ("LONG", "SHORT"):
         return []
 
-    stop = _dec(signal.get("stop_loss"))
+    # The EFFECTIVE stop: where it actually sits now, which is the original
+    # until something moved it. stop_loss itself is never rewritten — it is the
+    # record of the risk originally taken.
+    stop = _dec(signal.get("current_stop_loss")) or _dec(signal.get("stop_loss"))
     if stop is None or stop <= 0:
         return []
 
@@ -233,6 +244,16 @@ def evaluate(signal: Dict[str, Any],
         if not pending and actions:
             return actions               # final target reached: terminal
 
+        # Part of the position is banked and the rest is still running, so the
+        # stop goes to breakeven — the same move the tracker tells you to make.
+        # From here the trade cannot lose, which is exactly what the record
+        # should say if it happens.
+        if (hit_now and breakeven_after_partial and entry is not None
+                and entry > 0 and stop != entry):
+            actions.append({"kind": "STOP_MOVED", "price": entry, "at": at,
+                            "source_ts": src, "reason": "BREAKEVEN_AFTER_TP"})
+            stop = entry
+
     # A working order that price never came back to is CANCELLED, not expired
     # and certainly not a loss. It never became a position, so it must not reach
     # the win rate, the averages or the P/L in any form.
@@ -286,6 +307,11 @@ def apply_actions(store, signal_id, actions: Sequence[Action]) -> List[Dict[str,
                 res = store.record_entry_fill(
                     signal_id, action["price"], action["at"],
                     source_ts=action["source_ts"])
+            elif kind == "STOP_MOVED":
+                res = store.record_stop_move(
+                    signal_id, action["price"], action["at"],
+                    reason=action.get("reason", "BREAKEVEN"),
+                    source_ts=action["source_ts"])
             elif kind == "CANCELLED":
                 res = store.cancel_signal(
                     signal_id, action["at"], reason=action.get("reason", "CANCELLED"),
@@ -313,6 +339,14 @@ def apply_actions(store, signal_id, actions: Sequence[Action]) -> List[Dict[str,
         except store.SignalValidationError as exc:
             applied.append({"kind": kind, "applied": False,
                             "error": "INVALID", "detail": str(exc)})
+            break
+        except Exception as exc:
+            # Anything else — a store that predates this action, a column that
+            # migration 004 has not added yet — is reported HERE rather than
+            # thrown, so the actions already applied are not lost from the
+            # summary. They committed; the caller must be told about them.
+            applied.append({"kind": kind, "applied": False,
+                            "error": "FAILED", "detail": str(exc)[:200]})
             break
         applied.append({"kind": kind, "applied": bool(res.get("applied")),
                         "duplicate": bool(res.get("duplicate")),
@@ -364,6 +398,7 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
                 *, now: Optional[datetime] = None,
                 max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
                 fill_window_hours: int = DEFAULT_FILL_WINDOW_HOURS,
+                breakeven_after_partial: bool = BREAKEVEN_AFTER_PARTIAL,
                 limit: int = 100) -> Dict[str, Any]:
     """
     Evaluate every working signal and record what the market did to it.
@@ -377,9 +412,9 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     continue. A monitor that abandons the batch on the first bad row is worse
     than no monitor, because the remaining trades silently stay open.
     """
-    summary = {"checked": 0, "filled": 0, "targets_hit": 0, "stopped": 0,
-               "expired": 0, "cancelled": 0, "measured": 0, "unchanged": 0,
-               "errors": [], "results": []}
+    summary = {"checked": 0, "filled": 0, "targets_hit": 0, "stops_moved": 0,
+               "stopped": 0, "expired": 0, "cancelled": 0, "measured": 0,
+               "unchanged": 0, "errors": [], "results": []}
 
     try:
         active = store.list_active_signals(limit=limit)
@@ -403,7 +438,8 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
             actions = evaluate(detail, detail.get("targets") or [],
                                candle_cache[key], now=now,
                                max_age_hours=max_age_hours,
-                               fill_window_hours=fill_window_hours)
+                               fill_window_hours=fill_window_hours,
+                               breakeven_after_partial=breakeven_after_partial)
 
             # MFE/MAE is a measurement of a position, not a change to it, so it
             # is recorded outside the action list — and only from the fill
@@ -430,6 +466,8 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
                     summary["expired"] += 1
                 elif a["kind"] == "CANCELLED":
                     summary["cancelled"] += 1
+                elif a["kind"] == "STOP_MOVED":
+                    summary["stops_moved"] += 1
             summary["results"].append({"signal_id": sid, "symbol": symbol,
                                        "applied": applied})
         except Exception as exc:

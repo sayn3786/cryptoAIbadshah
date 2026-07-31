@@ -143,7 +143,10 @@ def build_row(signal: Dict[str, Any],
     direction = (signal.get("direction") or "").upper()
     status = (signal.get("status") or "").upper()
     entry = _dec(signal.get("entry_price"))
-    stop = _dec(signal.get("stop_loss"))
+    original_stop = _dec(signal.get("stop_loss"))
+    # Where the stop actually sits. The original is kept as the record of the
+    # risk first taken, but every live calculation uses the effective one.
+    stop = _dec(signal.get("current_stop_loss")) or original_stop
     live = _dec(live_price)
     close_price = _dec(signal.get("close_price"))
     is_terminal = status in TERMINAL_STATUSES
@@ -176,7 +179,15 @@ def build_row(signal: Dict[str, Any],
     # A working order has no position, so it has no move at all — reporting one
     # would be P/L on a trade that was never entered.
     reference = close_price if (is_terminal and close_price) else live
-    move_pct = None if status == "PENDING" else _signed(direction, entry, reference)
+    # A closed trade reports what was REALISED — which, after a scale-out, is the
+    # weighted average of the exits, not the last price it happened to close at.
+    realized = _dec(signal.get("realized_return_pct"))
+    if status == "PENDING":
+        move_pct = None
+    elif is_terminal and realized is not None:
+        move_pct = round(float(realized), 2)
+    else:
+        move_pct = _signed(direction, entry, reference)
 
     # Risk/reward realised so far, in R — the move divided by the original risk.
     r_multiple = None
@@ -210,6 +221,13 @@ def build_row(signal: Dict[str, Any],
                           else "pending" if status == "PENDING" else "live"),
         "entry":         _f(entry),
         "stop_loss":     _f(stop),
+        "original_stop": _f(original_stop),
+        # True once the stop has been moved to entry or better: the trade can no
+        # longer lose, and the row should say so plainly.
+        "risk_free":     bool(stop is not None and entry is not None
+                              and ((direction == "LONG" and stop >= entry) or
+                                   (direction == "SHORT" and stop <= entry))),
+        "stop_moved":    signal.get("current_stop_loss") is not None,
         "live_price":    _f(live),
         "close_price":   _f(close_price),
         "targets":       ladder,
@@ -314,13 +332,18 @@ def _remark(row: Dict[str, Any]) -> tuple:
             # move on a position that is already stopped is worse than useless.
             return (f"{remark}, now through the stop",
                     "Treat as stopped. The record updates on the next closed candle.")
-        action = "Move stop to entry (breakeven) and let the rest run."
+        if row.get("risk_free"):
+            # The monitor already moved it. Do not tell someone to do a thing
+            # that has been done — say what it means instead.
+            action = "Stop is at breakeven — the trade cannot lose. Let it run."
+        else:
+            action = "Move stop to entry (breakeven) and let the rest run."
         if nxt and near(nxt) is not None:
-            action = (f"Move stop to entry (breakeven); TP{nxt} is "
-                      f"{abs(near(nxt)):.2f}% away."
+            lead = ("Stop is at breakeven" if row.get("risk_free")
+                    else "Move stop to entry (breakeven)")
+            action = (f"{lead}; TP{nxt} is {abs(near(nxt)):.2f}% away."
                       if near(nxt) >= 0 else
-                      f"Move stop to entry (breakeven); TP{nxt} already trading "
-                      f"through — take it.")
+                      f"{lead}; TP{nxt} already trading through — take it.")
         return remark, action
 
     # OPEN
