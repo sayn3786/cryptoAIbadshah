@@ -1846,14 +1846,50 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
     if len(ph) < TW_MIN_PIVOTS or len(pl) < TW_MIN_PIVOTS:
         return []
 
-    hs = ph[-4:] if len(ph) >= 4 else ph[-TW_MIN_PIVOTS:]
-    ls = pl[-4:] if len(pl) >= 4 else pl[-TW_MIN_PIVOTS:]
+    raw_hs = ph[-4:] if len(ph) >= 4 else ph[-TW_MIN_PIVOTS:]
+    raw_ls = pl[-4:] if len(pl) >= 4 else pl[-TW_MIN_PIVOTS:]
 
     # A breakout candle must not become part of the boundary it broke — see
     # _peel_breakout_pivots. Without this the pattern silently un-breaks itself
     # a few bars after a failed breakout.
-    hs, ls = _peel_breakout_pivots(hs, ls, candles)
+    hs, ls = _peel_breakout_pivots(raw_hs, raw_ls, candles)
 
+    out = []
+    broken = _pattern_from_pivots(candles, hs, ls, tf_label, tf_weight)
+    if broken:
+        out.append(broken)
+
+    # A structure that has already resolved does not stop the NEXT one existing.
+    # When peeling removed a breakout pivot, the unpeeled fit is the structure
+    # price is building NOW — report it alongside, so an invalidated pattern and
+    # the one forming in its place are both visible instead of one hiding the
+    # other. (Requested directly: "if the old one is invalidated it should still
+    # show, and the new one forming".)
+    peeled_something = ([p["index"] for p in hs] != [p["index"] for p in raw_hs]
+                        or [p["index"] for p in ls] != [p["index"] for p in raw_ls])
+    if peeled_something:
+        current = _pattern_from_pivots(candles, raw_hs, raw_ls, tf_label, tf_weight)
+        if current and not any(_same_structure(current, p) for p in out):
+            out.append(current)
+
+    # Resolved/confirmed first, then whatever is still forming.
+    _rank = {"failed": 0, "confirmed": 0, "forming": 1}
+    out.sort(key=lambda p: _rank.get(p["status"], 1))
+    return out[:TW_MAX_RETURNED]
+
+
+def _same_structure(a: Dict, b: Dict) -> bool:
+    """Two fits describing the same rails — avoid showing a near-duplicate card."""
+    def close(x, y):
+        return abs(x - y) <= max(abs(x), abs(y), 1e-9) * 0.005      # within 0.5%
+    return (a["type"] == b["type"]
+            and close(a["upper_now"], b["upper_now"])
+            and close(a["lower_now"], b["lower_now"]))
+
+
+def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
+                         tf_weight: float) -> Optional[Dict]:
+    """Build ONE triangle/wedge from a pivot set, or None when it is not clean."""
     start_i = min(hs[0]["index"], ls[0]["index"])
     last_i  = max(hs[-1]["index"], ls[-1]["index"])   # END OF STRUCTURE (last pivot),
                                                        # not the current bar — after a
@@ -1867,13 +1903,13 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
     gap_start = upper(start_i) - lower(start_i)
     gap_end   = upper(last_i)  - lower(last_i)
     if gap_start <= 0 or gap_end <= 0:
-        return []                                   # rails already crossed → not clean
+        return None                                   # rails already crossed → not clean
     if gap_end > gap_start * TW_CONVERGE_FRAC:
-        return []                                   # not converging enough
+        return None                                   # not converging enough
 
     mid = (upper(last_i) + lower(last_i)) / 2.0
     if mid <= 0:
-        return []
+        return None
     h_pct = h_slope / mid * 100.0                   # %/bar
     l_pct = l_slope / mid * 100.0
     flat_h = abs(h_pct) <= TW_FLAT_PCT
@@ -1891,7 +1927,7 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
     elif h_pct < -TW_FLAT_PCT and l_pct < -TW_FLAT_PCT:
         kind, direction = "falling_wedge", "bullish"
     else:
-        return []
+        return None
 
     label = {
         "ascending_triangle":  "Ascending Triangle",
@@ -1917,7 +1953,7 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
     # takes whichever side broke.
     expected_up = direction == "bullish"
     if confirmed and direction != "neutral" and (brk_dir == "up") != expected_up:
-        return []                                   # broke against the pattern → drop
+        return None                                   # broke against the pattern → drop
     if direction == "neutral" and confirmed:
         direction = "bullish" if brk_dir == "up" else "bearish"
 
@@ -1989,12 +2025,12 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
                if (confirmed and bo_i is not None) else None)
     if failed_ts is not None:
         if not _failure_is_fresh(candles, failed_ts):
-            return []                      # old failure — disappear entirely
+            return None                      # old failure — disappear entirely
         status, confirmed = "failed", False
         if (_retest or {}).get("status") == "retest_failed":
             failure_reason = "retest failed — broke back through the level"
 
-    out = [{
+    return {
         "type":       kind, "label": label, "direction": direction,
         "timeframe":  tf_label, "tf_weight": tf_weight,
         "upper_now":  round(upper(last_i), 8),
@@ -2016,8 +2052,7 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         "lower_line": [
             {"timestamp": candles[start_i]["timestamp"], "price": round(lower(start_i), 8)},
             {"timestamp": candles[last_i]["timestamp"],   "price": round(lower(last_i), 8)}],
-    }]
-    return out[:TW_MAX_RETURNED]
+    }
 
 
 # ── Market-structure status panel ─────────────────────────────────────────────

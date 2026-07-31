@@ -75,21 +75,56 @@ def _break_then_return(extra_bars):
 
 # ── The reported regression ─────────────────────────────────────────────────
 
-def test_a_broken_wedge_never_reverts_to_forming():
+def test_a_broken_wedge_is_never_replaced_by_a_forming_one():
     """
     THE bug. Two candles after the breakout the card read 'failed'; two candles
-    later it read 'forming' again, inviting a trade on a break that had already
-    happened and failed.
-    """
-    seen = []
-    for extra in range(1, 8):
-        candles, _ = _break_then_return(extra)
-        for p in P.detect_triangles_wedges(candles, "1D"):
-            seen.append((extra, p["status"]))
+    later it read 'forming' again — the SAME structure, with its breakout erased,
+    inviting a trade on a break that had already happened and failed.
 
-    assert seen, "the scenario produced no pattern at all — the test is not exercising it"
-    assert not any(status == "forming" for _, status in seen), (
-        f"a wedge that broke out reverted to 'forming': {seen}")
+    A new forming pattern appearing ALONGSIDE the invalidated one is fine and
+    wanted. What must never happen is the resolved one vanishing while it is
+    still inside the failure window.
+    """
+    for extra in range(1, P.FAILURE_SHOW_BARS + 1):
+        candles, _ = _break_then_return(extra)
+        statuses = [p["status"] for p in P.detect_triangles_wedges(candles, "1D")]
+        assert statuses, f"+{extra}: no pattern at all — the test is not exercising it"
+        assert any(s in ("failed", "confirmed") for s in statuses), (
+            f"+{extra}: the breakout was erased — statuses were {statuses}")
+
+
+def test_the_invalidated_pattern_and_the_new_one_are_both_shown():
+    """
+    Asked for directly: when a pattern invalidates, keep showing it for a few
+    candles AND show the one forming in its place. One card hiding the other
+    means either the failure or the new setup goes unseen.
+    """
+    found = {}
+    for extra in range(1, P.FAILURE_SHOW_BARS + 2):
+        candles, _ = _break_then_return(extra)
+        got = P.detect_triangles_wedges(candles, "1D")
+        if len(got) > 1:
+            found = {p["status"]: p for p in got}
+            break
+
+    assert found, "the invalidated pattern and the new one were never shown together"
+    assert "forming" in found
+    assert {"failed", "confirmed"} & set(found), \
+        "the resolved pattern is missing — only the new one is visible"
+    resolved = found.get("failed") or found.get("confirmed")
+    assert resolved["breakout_dir"] == "up", "the resolved card must keep its breakout"
+
+
+def test_the_resolved_card_is_listed_first():
+    # What already happened outranks what might: a trader scanning the list needs
+    # the failure before the fresh setup, not after it.
+    for extra in range(1, P.FAILURE_SHOW_BARS + 2):
+        got = P.detect_triangles_wedges(_break_then_return(extra)[0], "1D")
+        if len(got) > 1:
+            assert got[0]["status"] in ("failed", "confirmed")
+            assert got[-1]["status"] == "forming"
+            return
+    pytest.skip("no step produced two patterns in this fixture")
 
 
 def test_the_breakout_is_still_reported_after_it_happens():

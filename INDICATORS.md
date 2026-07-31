@@ -693,8 +693,21 @@ fitted (`_peel_breakout_pivots`).
 | Clean structures untouched | With nothing to peel the rails are bit-identical to before. |
 | Still forming stays forming | The fix must not make every pattern look broken. |
 
-A failed breakout still disappears once it ages past `FAILURE_SHOW_BARS` — that
-is unchanged. What is fixed is the state it passes through on the way there.
+**Both cards show.** A structure that has resolved does not stop the next one
+existing, so the detector now emits the invalidated pattern *and* the one price
+is building in its place — resolved first, forming after. One card hiding the
+other meant either the failure or the new setup went unseen:
+
+```
++1 candle   Falling Wedge  failed (up, closed back below the lower rail)
++2 candles  Falling Wedge  failed
++3 candles  Falling Wedge  failed   ·  Falling Wedge  forming   ← both
++4 candles  Falling Wedge  failed   ·  Falling Wedge  forming
++5 candles  Falling Wedge  forming            (the failure aged out)
+```
+
+A failed breakout still disappears once it ages past `FAILURE_SHOW_BARS` (3
+candles) — that is unchanged, and it is what ends the pairing above.
 
 ---
 
