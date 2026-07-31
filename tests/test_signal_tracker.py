@@ -250,8 +250,12 @@ def test_the_window_is_configurable():
 
 
 def test_live_and_closed_are_separated_and_newest_first():
-    live = [_sig(id="a", generated_at=NOW - timedelta(hours=1), targets=_targets(110)),
-            _sig(id="b", generated_at=NOW - timedelta(hours=5), targets=_targets(110))]
+    # Distinct symbols: two rows with the same symbol AND the same levels are one
+    # setup republished, and are collapsed — see collapse_republished.
+    live = [_sig(id="a", symbol="ETH", generated_at=NOW - timedelta(hours=1),
+                 targets=_targets(110)),
+            _sig(id="b", symbol="SOL", generated_at=NOW - timedelta(hours=5),
+                 targets=_targets(110))]
     closed = [_closed("c", "TP_HIT", "110", 2), _closed("d", "SL_HIT", "95", 1)]
     view = tracker.build_tracker(live, closed, {"BTC": "105"}, now=NOW)
     assert [r["signal_id"] for r in view["live"]] == ["a", "b"]
@@ -329,10 +333,14 @@ def test_a_row_with_no_timestamp_has_no_slot_rather_than_a_wrong_one():
 
 
 def test_signals_are_grouped_into_their_batches_newest_first():
-    live = [_sig(id="a", generated_at=_at(2026, 3, 5, 20, 5), targets=_targets(110)),
-            _sig(id="b", generated_at=_at(2026, 3, 5, 20, 8), targets=_targets(110)),
-            _sig(id="c", generated_at=_at(2026, 3, 5, 16, 2), targets=_targets(110)),
-            _sig(id="d", generated_at=_at(2026, 3, 4, 8, 1), targets=_targets(110))]
+    live = [_sig(id="a", symbol="ETH", generated_at=_at(2026, 3, 5, 20, 5),
+                 targets=_targets(110)),
+            _sig(id="b", symbol="SOL", generated_at=_at(2026, 3, 5, 20, 8),
+                 targets=_targets(110)),
+            _sig(id="c", symbol="XMR", generated_at=_at(2026, 3, 5, 16, 2),
+                 targets=_targets(110)),
+            _sig(id="d", symbol="ADA", generated_at=_at(2026, 3, 4, 8, 1),
+                 targets=_targets(110))]
     batches = tracker.build_tracker(live, [], now=NOW)["live_batches"]
 
     assert [b["title"] for b in batches] == [
@@ -342,7 +350,8 @@ def test_signals_are_grouped_into_their_batches_newest_first():
 
 
 def test_every_row_appears_in_exactly_one_batch():
-    live = [_sig(id=str(i), generated_at=_at(2026, 3, 5, h), targets=_targets(110))
+    live = [_sig(id=str(i), symbol=f"SYM{i}", generated_at=_at(2026, 3, 5, h),
+                 targets=_targets(110))
             for i, h in enumerate((8, 9, 16, 20, 23))]
     view = tracker.build_tracker(live, [], now=NOW)
     grouped = [r["signal_id"] for b in view["live_batches"] for r in b["rows"]]
@@ -353,8 +362,9 @@ def test_every_row_appears_in_exactly_one_batch():
 def test_a_row_with_no_date_is_kept_in_an_ungrouped_batch_at_the_end():
     # Hiding a signal because its timestamp could not be read would be the worst
     # possible failure for a tracking view.
-    live = [_sig(id="ok", generated_at=_at(2026, 3, 5, 20), targets=_targets(110)),
-            _sig(id="odd", generated_at=None, targets=_targets(110))]
+    live = [_sig(id="ok", symbol="ETH", generated_at=_at(2026, 3, 5, 20),
+                 targets=_targets(110)),
+            _sig(id="odd", symbol="SOL", generated_at=None, targets=_targets(110))]
     batches = tracker.build_tracker(live, [], now=NOW)["live_batches"]
     assert batches[-1]["title"] == "Ungrouped"
     assert [r["signal_id"] for r in batches[-1]["rows"]] == ["odd"]
@@ -378,6 +388,78 @@ def test_a_live_batch_scoreboard_counts_nothing_yet():
     batch = tracker.build_tracker(live, [], now=NOW)["live_batches"][0]
     assert batch["summary"]["closed"] == 0
     assert batch["summary"]["win_rate_pct"] is None
+
+
+# ── One line per setup, not per candle ──────────────────────────────────────
+
+def _tao(gen_hours_ago, **over):
+    """One TAO setup as published on a given candle. Overrides win, so a test
+    can change the entry or the status without duplicating the keyword."""
+    base = dict(id=f"tao-{gen_hours_ago}", symbol="TAO", direction="LONG",
+                entry_price="196.2871", stop_loss="193.5722", status="PENDING",
+                generated_at=NOW - timedelta(hours=gen_hours_ago),
+                targets=_targets(200, 205, 210))
+    base.update(over)
+    return _sig(**base)
+
+
+def test_the_same_setup_republished_on_the_next_candle_is_one_row():
+    """
+    Reported from the dashboard: TAO listed twice, identical entry, stop and
+    targets, an hour apart.
+
+    Not a duplicate — the strategy re-evaluates every closed candle and
+    republishes a setup whose levels have not moved. Two rows in the database is
+    correct; two lines in a working list is not, because it is one position.
+    """
+    view = tracker.build_tracker([_tao(0), _tao(1)], [], now=NOW)
+    assert len(view["live"]) == 1
+    row = view["live"][0]
+    assert row["republished"] == 2
+    assert len(row["signal_ids"]) == 2
+
+
+def test_the_collapsed_row_keeps_the_age_of_the_FIRST_publication():
+    # The setup has been working since it first appeared; that is the age that
+    # matters when deciding whether to keep waiting on it.
+    view = tracker.build_tracker([_tao(0), _tao(4)], [], now=NOW)
+    row = view["live"][0]
+    assert row["age_hours"] == 4.0
+    assert row["signal_id"] == "tao-4"
+
+
+def test_different_levels_are_different_setups():
+    a = _tao(0)
+    b = _tao(1, entry_price="197.5")      # the strategy moved the entry
+    view = tracker.build_tracker([a, b], [], now=NOW)
+    assert len(view["live"]) == 2, "a different entry is a different trade"
+
+
+def test_a_filled_one_is_never_hidden_behind_a_working_order():
+    # Same levels, but one filled. Collapsing these would hide a live position.
+    filled = _tao(1, status="OPEN")
+    view = tracker.build_tracker([_tao(0), filled], [], now=NOW)
+    assert {r["status"] for r in view["live"]} == {"PENDING", "OPEN"}
+
+
+def test_a_single_publication_still_reports_a_count():
+    view = tracker.build_tracker([_tao(0)], [], now=NOW)
+    assert view["live"][0]["republished"] == 1
+
+
+def test_closed_trades_are_never_merged():
+    # History stays whole: two closed rows are two results, however alike.
+    closed = [_tao(5, status="TP_HIT", close_price="200", closed_at=NOW),
+              _tao(6, status="TP_HIT", close_price="200", closed_at=NOW)]
+    view = tracker.build_tracker([], closed, now=NOW)
+    assert len(view["closed"]) == 2
+
+
+def test_a_row_with_no_levels_is_never_merged_away():
+    # Not enough identity to merge safely — show it rather than guess.
+    odd = _sig(id="x", symbol="TAO", entry_price=None, stop_loss=None)
+    view = tracker.build_tracker([odd, _tao(0)], [], now=NOW)
+    assert len(view["live"]) == 2
 
 
 # ── The scoreboard ──────────────────────────────────────────────────────────

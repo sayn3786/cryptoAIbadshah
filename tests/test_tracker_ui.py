@@ -181,6 +181,12 @@ def test_the_batch_scoreboard_matches_the_backend_summary():
         assert key in summary, f"batch header reads sum.{key}, which is not returned"
 
 
+def test_a_republished_setup_is_shown_once_with_a_count():
+    rendered = JS[JS.index("function _tkRow"):JS.index("function _tkTable")]
+    assert "row.republished" in rendered, "the count is not surfaced anywhere"
+    assert ".tk-rep" in CSS
+
+
 def test_batches_are_styled():
     for cls in (".tk-batch-hdr", ".tk-batch-title", ".tk-batch-score"):
         assert cls in CSS, f"{cls} has no styling"

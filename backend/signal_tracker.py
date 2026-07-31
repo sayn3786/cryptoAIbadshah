@@ -18,7 +18,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 __all__ = [
     "CLOSED_WINDOW_DAYS", "TERMINAL_STATUSES", "build_row", "build_tracker",
-    "summarise", "slot_for", "group_by_slot", "SGT", "SLOT_HOURS_SGT",
+    "summarise", "slot_for", "group_by_slot", "collapse_republished",
+    "SGT", "SLOT_HOURS_SGT",
 ]
 
 # Recommendations are published in three daily slots (SGT), and a slot is the
@@ -260,6 +261,12 @@ def build_row(signal: Dict[str, Any],
         "realized_return_pct": _f(signal.get("realized_return_pct")),
         "outcome":       outcome,
         "environment":   signal.get("environment"),
+        # How many candles published this same setup. Always at least 1 — the
+        # collapse below raises it. Defaulting it HERE rather than only when
+        # merging means the field always exists, so the table never reads
+        # undefined off a row that happened not to be merged.
+        "republished":   1,
+        "signal_ids":    [signal.get("id")],
         "strategy_version": signal.get("strategy_version"),
     }
     row["remark"], row["action"] = _remark(row)
@@ -410,6 +417,7 @@ def build_tracker(active: Sequence[Dict[str, Any]],
         closed_rows.append(build_row(s, s.get("targets"),
                                      prices.get(s.get("symbol")), now=now))
 
+    live_rows = collapse_republished(live_rows)
     live_rows.sort(key=lambda r: (r["opened_at"] or ""), reverse=True)
     closed_rows.sort(key=lambda r: (r["closed_at"] or r["opened_at"] or ""), reverse=True)
 
@@ -424,6 +432,53 @@ def build_tracker(active: Sequence[Dict[str, Any]],
         "summary": summarise(closed_rows),
         "generated_at": now.isoformat(),
     }
+
+
+def collapse_republished(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    One line per setup, not per candle.
+
+    The strategy re-evaluates every closed candle, so a setup whose levels have
+    not moved is published again on the next one — a NEW signal row, correctly,
+    because candle_close_time is part of the idempotency key and each candle is
+    its own decision. But it is not a new position. Showing TAO twice with the
+    same entry, the same stop and the same targets reads as two trades.
+
+    Rows are merged only when they are indistinguishable as positions: same
+    symbol, timeframe, direction, entry, stop AND status. A different entry or
+    stop is a different setup. A different status means one filled and the other
+    did not, and collapsing those would hide a live position behind a working
+    order.
+
+    The EARLIEST is kept — the setup has been working since it was first
+    published, and that is the age that matters — with ``republished`` counting
+    how many times it came back and ``signal_ids`` listing every row behind it,
+    so nothing is hidden from anyone who wants to look.
+
+    Closed trades are never merged: history stays whole.
+    """
+    merged: Dict[tuple, Dict[str, Any]] = {}
+    out: List[Dict[str, Any]] = []
+    for row in rows or []:
+        key = (row.get("symbol"), row.get("timeframe"), row.get("direction"),
+               row.get("entry"), row.get("stop_loss"), row.get("status"))
+        if None in (key[0], key[3], key[4]):
+            out.append(row)              # not enough identity to merge safely
+            continue
+        first = merged.get(key)
+        if first is None:
+            row = {**row, "republished": 1,
+                   "signal_ids": list(row.get("signal_ids") or [row.get("signal_id")])}
+            merged[key] = row
+            out.append(row)
+            continue
+        first["republished"] += 1
+        first["signal_ids"].append(row.get("signal_id"))
+        # Keep the earliest as the row shown — including its age and its id.
+        if (row.get("opened_at") or "") < (first.get("opened_at") or ""):
+            for field in ("opened_at", "age_hours", "signal_id", "slot"):
+                first[field] = row.get(field)
+    return out
 
 
 def group_by_slot(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:

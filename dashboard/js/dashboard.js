@@ -6153,7 +6153,10 @@ function _tkRow(row) {
         ? `${row.entry_distance_pct.toFixed(2)}% away` : 'reached'}</div>`;
 
   return `<tr>
-    <td class="tk-sym">${row.symbol}<span class="tk-tf">${row.timeframe || ''}</span></td>
+    <td class="tk-sym">${row.symbol}<span class="tk-tf">${row.timeframe || ''}</span>${
+      row.republished > 1
+        ? `<span class="tk-rep" title="Republished on ${row.republished} candles with the same levels — one setup, not ${row.republished} trades">×${row.republished}</span>`
+        : ''}</td>
     <td><span class="tk-dir ${dir}">${row.direction}</span></td>
     <td><span class="tk-status ${status}">${_TK_STATUS_LABEL[row.status] || row.status}</span></td>
     <td class="tk-num">${fmtPrice(row.entry)}${entryGap}</td>
