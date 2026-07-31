@@ -250,6 +250,20 @@ Fear & Greed and News update at most daily — applying full weight on 1H is mis
 | Bearish divergence, strength ≥ 5 | −18 |
 | Bearish divergence, strength < 5 | −12 |
 
+**Forming (unconfirmed) divergences.** A pivot needs `pivot_window` closed
+candles on *both* sides, so a fresh second low is invisible for that many closes
+— on the weekly, that is weeks of lag on exactly the charts where a divergence is
+called early. When no confirmed divergence exists, the last few candles are
+checked as a *provisional* second pivot and reported with `forming: true`.
+
+Such a signal carries `closes_to_confirm` — how many more closes must hold before
+the pivot is real — and it **counts down**: some of the required closes have
+usually already printed, so the wait shrinks with every candle. It previously
+quoted the full window flat, which meant a divergence spotted yesterday still
+claimed the same number of closes to go today. That read as a live countdown
+while being a constant, and invited waiting for a confirmation that had already
+happened. `pivot_window` is 2 on weekly and above, 3 below.
+
 ---
 
 ### Bollinger Bands · `pattern`
