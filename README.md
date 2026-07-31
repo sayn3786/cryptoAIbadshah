@@ -460,11 +460,23 @@ candle, so a setup whose levels have not moved is published again on the next on
 — a new row in the database, correctly, because `candle_close_time` is part of
 the idempotency key and each candle is its own decision. It is not a new
 position. The tracker collapses rows that are indistinguishable as positions
-(same symbol, timeframe, direction, entry, stop **and** status), keeps the
-earliest — the setup has been working since it first appeared — and shows `×N`
-for how many candles republished it. A different entry or stop is a different
-setup; a different status means one filled and the other did not, and those are
-never merged. Closed trades are never merged at all: history stays whole.
+(same symbol, timeframe, direction and status, with entry and stop agreeing to
+within `MERGE_TOLERANCE_PCT`, 0.25%), keeps the earliest — the setup has been
+working since it first appeared, and the levels shown are the ones published at
+that age — and shows `×N` for how many candles republished it.
+
+**Why a tolerance and not exact equality.** Levels are re-derived from each
+candle, so an unchanged setup still returns a few basis points off: SOL at
+74.0885 and 74.1503, ETH at 1911.11 and 1911.27, XMR at 350.9238 and 351.5500 —
+all observed on one screen, each listed twice. Exact matching merged none of
+them, and a tracker that shows one position twice misreports your exposure. Each
+candidate is compared against its **cluster's representative**, never against the
+row before it: chained comparison would let a long run of small drifts collapse
+genuinely different setups into one.
+
+A materially different entry or stop is still a different setup; a different
+status means one filled and the other did not, and those are never merged.
+Closed trades are never merged at all: history stays whole.
 
 Rows are grouped into the **publication batch** they came from — *"Jul 30 · 8:00
 PM SGT"*, one of the six 4H slots — because a slot is the unit these are decided and reviewed in, and each
@@ -495,6 +507,21 @@ to read one number; with forty-odd working signals nothing finished inside the
 budget and every row rendered with no PRICE, no distance to entry and no cushion
 above the stop. A missing price is still not an error — the row renders without
 live progress rather than reporting a move of zero.
+
+**A stale bundle says so.** An installed PWA can keep an old `dashboard.js`
+alive across a deploy. The tracker then renders through an older code path —
+no batch grouping, no collapse controls — which on screen is indistinguishable
+from the feature having been removed, and cost a long investigation to identify
+as a stale frontend rather than a broken feature. `/api/signals/tracker` now
+reports `frontend_build` (the `?v=` stamp parsed out of `index.html`, so it
+cannot drift from the real asset), the page compares it against the bundle it is
+running, and a mismatch raises a banner with a reload button and the Cmd+Q hint
+for an installed app. It fails **silent**: if either side cannot be read, no
+banner — a false "you are out of date" would be worse than none.
+
+Relatedly, when the API returns no batches the tracker still falls back to one
+flat table, but now labels it as a degraded render instead of quietly looking
+like the collapse controls were removed.
 
 The view is read-only. It reports what the monitor recorded and never advances a
 signal itself — and because the monitor only acts on closed candles, a row can
