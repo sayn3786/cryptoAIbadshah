@@ -147,6 +147,46 @@ def test_batches_are_styled():
         assert cls in CSS, f"{cls} has no styling"
 
 
+# ── Expand / collapse ───────────────────────────────────────────────────────
+
+def test_a_batch_can_be_collapsed():
+    block = JS[JS.index("function _tkBatches"):JS.index("async function loadTracker")]
+    assert "collapsed" in block
+    assert "aria-expanded" in block, "a toggle with no state is not usable by keyboard"
+    assert 'role="button"' in block and "tabindex" in block
+    assert ".tk-batch.collapsed .tk-batch-body" in CSS, "collapsing has no effect"
+
+
+def test_the_open_state_survives_the_refresh_poll():
+    """
+    The tracker re-renders every 5 minutes. Without persistence, a batch you
+    opened would snap shut under you on the next poll.
+    """
+    assert "TK_OPEN_KEY" in JS
+    assert "localStorage.setItem(TK_OPEN_KEY" in JS
+    assert "localStorage.getItem(TK_OPEN_KEY" in JS
+
+
+def test_the_toggle_is_delegated_not_bound_per_header():
+    # The table is replaced wholesale on every refresh, so a handler bound to
+    # each header would stop working after the first poll.
+    assert "document.addEventListener('click'" in JS
+    assert "closest?.('.tk-batch-hdr')" in JS
+
+
+def test_live_batches_open_and_closed_ones_collapse_by_default():
+    # The working list should be in front of you; the history should not bury it.
+    fn = JS[JS.index("function _tkIsOpen"):JS.index("function _tkToggleBatch")]
+    assert "section === 'live'" in fn, "the default does not distinguish the sections"
+    assert "key in map" in fn, "a stored choice must win over the default"
+
+
+def test_a_stored_choice_is_read_back_safely():
+    # A corrupt localStorage value must not take the whole tracker down with it.
+    fn = JS[JS.index("function _tkOpenMap"):JS.index("function _tkIsOpen")]
+    assert "catch" in fn
+
+
 # ── Contract: every field the table reads is one the API produces ───────────
 
 def test_every_row_field_the_js_reads_exists_in_the_api_response():

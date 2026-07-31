@@ -106,6 +106,26 @@ def test_outcomes_map_from_status():
     assert outcome("CANCELLED") == "CANCELLED"
 
 
+def test_an_expired_trade_reads_as_closed_with_its_pl():
+    # A sideways trade is still a result. Expiry closes it at the last price
+    # seen, so the row shows where it was abandoned and what that cost.
+    row = tracker.build_row(
+        _sig(status="EXPIRED", close_price="101", closed_at=NOW,
+             realized_return_pct="1"),
+        _targets(110), now=NOW)
+    assert row["move_pct"] == 1.0
+    assert "Went sideways" in row["remark"]
+    assert "closed +1.00%" in row["remark"]
+    assert "Exit if you are still in the position" in row["action"]
+
+
+def test_an_expired_trade_with_no_price_says_so_plainly():
+    # Nothing was observed, so there is no honest exit price — do not imply one.
+    row = tracker.build_row(_sig(status="EXPIRED"), _targets(110), now=NOW)
+    assert row["move_pct"] is None
+    assert "without resolving" in row["remark"]
+
+
 def test_an_expired_signal_is_not_counted_as_a_loss():
     # Nothing was lost — the setup stopped being current. Calling it a loss
     # would make the strategy look worse than it is.

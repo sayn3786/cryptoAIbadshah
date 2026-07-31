@@ -2131,7 +2131,16 @@ html { overflow-x: hidden; }
   display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
   padding: 6px 8px; margin-top: 4px;
   background: rgba(148,163,184,.06); border-radius: 6px;
+  cursor: pointer; user-select: none;
 }
+.tk-batch-hdr:hover { background: rgba(148,163,184,.12); }
+.tk-batch-hdr:focus-visible { outline: 2px solid var(--bull); outline-offset: 2px; }
+
+/* Caret points down when open, right when collapsed. */
+.tk-caret { font-size: .7rem; color: var(--muted2); transition: transform .12s ease;
+            display: inline-block; }
+.tk-batch.collapsed .tk-caret { transform: rotate(-90deg); }
+.tk-batch.collapsed .tk-batch-body { display: none; }
 .tk-batch-title { font-size: .78rem; font-weight: 700; color: var(--text); }
 .tk-batch-count { font-size: .7rem; color: var(--muted2); }
 .tk-batch-score { font-size: .7rem; color: var(--muted2); margin-left: auto; }

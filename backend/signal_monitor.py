@@ -127,6 +127,7 @@ def evaluate(signal: Dict[str, Any],
 
     actions: List[Action] = []
     last_seen: Optional[datetime] = None
+    last_close: Optional[Decimal] = None
 
     for candle in candles or []:
         at = _utc(candle.get("timestamp"))
@@ -138,6 +139,7 @@ def evaluate(signal: Dict[str, Any],
         if high is None or low is None:
             continue
         last_seen = at
+        last_close = _dec(candle.get("close")) or last_close
         # The candle's own open time IS the source timestamp. It must be a real
         # datetime, not an epoch string: record_target_hit parses source_ts as a
         # timestamp (the other lifecycle calls hash it raw), so a bare "17724…"
@@ -174,7 +176,13 @@ def evaluate(signal: Dict[str, Any],
             # the moment the signal became too old. Two runs an hour apart must
             # produce the same key, or the second would look like a new event.
             at = last_seen or (started + timedelta(hours=max_age_hours))
+            # Expiry CLOSES the trade at the last price we saw, so the record
+            # says where it was abandoned and what that cost. Without a price
+            # the row lands with a NULL close and NULL return — "expired" with
+            # no number, which is not an outcome anyone can learn from. A
+            # sideways trade is still a result.
             actions.append({"kind": "EXPIRED", "at": at, "source_ts": at,
+                            "price": last_close,
                             "age_hours": round(
                                 (reference - started).total_seconds() / 3600, 1)})
     return actions
@@ -204,8 +212,11 @@ def apply_actions(store, signal_id, actions: Sequence[Action]) -> List[Dict[str,
                     signal_id, action["price"], action["at"],
                     source_ts=action["source_ts"])
             elif kind == "EXPIRED":
+                # price closes the trade on the record and lets the store
+                # compute realized_return_pct; None leaves both NULL.
                 res = store.expire_signal(
-                    signal_id, action["at"], source_ts=action["source_ts"])
+                    signal_id, action["at"], price=action.get("price"),
+                    source_ts=action["source_ts"])
             else:
                 continue
         except store.InvalidTransition as exc:

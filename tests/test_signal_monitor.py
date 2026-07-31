@@ -11,6 +11,7 @@ a level still counts as reached.
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -192,6 +193,48 @@ def test_a_stale_signal_expires():
                             now=BASE + timedelta(hours=73), max_age_hours=72)
     assert [a["kind"] for a in acts] == ["EXPIRED"]
     assert acts[0]["age_hours"] == 73.0
+
+
+def test_expiry_closes_the_trade_at_the_last_price_seen():
+    """
+    A sideways trade is still a result.
+
+    Without a price the row lands with a NULL close and a NULL return —
+    "expired" with no number, which teaches nobody anything. The store computes
+    realized_return_pct from whatever price it is given, so the monitor has to
+    supply one.
+    """
+    acts = monitor.evaluate(_sig(), _targets(110),
+                            [_candle(2, 104, 99), _candle(4, 103, 98)],
+                            now=BASE + timedelta(hours=99), max_age_hours=72)
+    assert acts[0]["kind"] == "EXPIRED"
+    assert acts[0]["price"] == Decimal("98"), "the last candle's close"
+
+
+def test_expiry_with_no_candles_carries_no_invented_price():
+    # Nothing was observed, so there is no honest exit price. NULL is correct;
+    # a made-up one would show as a real P/L.
+    acts = monitor.evaluate(_sig(), _targets(110), [],
+                            now=BASE + timedelta(hours=99), max_age_hours=72)
+    assert acts[0]["kind"] == "EXPIRED"
+    assert acts[0]["price"] is None
+
+
+def test_the_expiry_price_reaches_the_store():
+    a = _sig(id="a")
+    a["targets"] = _targets(110)
+    store = _FakeStore([a])
+    seen = {}
+
+    def expire(sid, at=None, **kw):
+        seen.update(kw)
+        return {"applied": True, "signal": {"status": "EXPIRED"}}
+
+    store.expire_signal = expire
+    monitor.run_monitor(store, lambda sym, tf: [_candle(2, 104, 99)],
+                        now=BASE + timedelta(hours=99), max_age_hours=72)
+    assert seen.get("price") == Decimal("99"), \
+        "the close price never reached expire_signal, so the row would have no P/L"
 
 
 def test_a_young_signal_does_not_expire():

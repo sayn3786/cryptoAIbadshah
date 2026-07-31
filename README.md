@@ -338,20 +338,21 @@ since the signal's own candle and decides what the market did:
 | The signal's own candle is excluded | Otherwise a trade could be stopped out by the very bar that triggered it. |
 | One candle touching BOTH a target and the stop records the **STOP** | A candle says where price went, not in what order. Recording the target would claim a win the data cannot prove — `backtest.py` has always made the same assumption. |
 | A gap straight through a level still counts | Price traded through it; pretending otherwise would invent a fill that never happened. |
-| Stale signals `EXPIRE` after 72h | Terminal, but **not** a loss. Nothing was lost — the setup stopped being current. Conflating the two would corrupt the win rate in both directions. |
+| Stale signals `EXPIRE` after 72h | The trade is **closed at the last price seen**, so the row carries a real exit and a real P/L — a sideways trade is still a result, and "expired" with a NULL return teaches nobody anything. Still **not** a loss: it never reached a target and was never stopped, so it stays out of the win rate while its P/L counts towards the averages. |
 | Idempotent | Every decision is keyed on the candle that caused it, never wall-clock time, so re-running over the same candles changes nothing. |
 | One bad signal never abandons the batch | A monitor that stops at the first error silently leaves the rest open. |
 
-`.github/workflows/signal-monitor.yml` ships **manual-only**. Enabling the hourly
-schedule in the same change that ships the monitor would resolve every signal
-already in the database on the first tick — including old ones that would age
-straight out — before anyone had seen what it decided.
+`.github/workflows/signal-monitor.yml` runs **hourly**, and can also be triggered
+by hand from the Actions tab. Running it more often is harmless — every decision
+is keyed on the candle that caused it, so an extra run records nothing new.
 
-**First run:** Actions tab → *Signal Outcome Monitor* → *Run workflow*, leaving
-`max_age_hours` at **720**. Nothing expires at that setting, so only genuine
-target and stop hits are recorded. Check `/api/signals/tracker` (or the dashboard
-section), then uncomment the `schedule:` block to make it hourly. Running it more
-often than that is harmless.
+**The first tick resolves the whole backlog.** Genuine target and stop hits are
+recorded, and anything older than `max_age_hours` (72 by default) is EXPIRED —
+closed at the last price seen, with its P/L.
+Expired is terminal but is **not** a loss — it is excluded from the win rate — so
+a backlog of stale signals resolves honestly rather than being scored against the
+strategy. To record hits without ageing anything out, trigger it by hand first
+with `max_age_hours` set to **720**.
 
 ## Signal Tracker (dashboard)
 
@@ -362,7 +363,10 @@ closed in the last 3 days, marked win or loss.
 
 Rows are grouped into the **publication batch** they came from — *"Jul 30 · 8:00
 PM SGT"* — because a slot is the unit these are decided and reviewed in, and each
-batch carries its own scoreboard. Grouping reads `generated_at`, not the candle
+batch carries its own scoreboard. Batch headers expand and collapse; live batches
+start open and closed ones start collapsed, and your choice is remembered in
+`localStorage` — the table re-renders on a 5-minute poll, so without that a batch
+you opened would snap shut under you. Grouping reads `generated_at`, not the candle
 time: two symbols in one batch can sit on different candles but were still one
 decision. Anything published between midnight and 08:00 SGT belongs to the
 previous day's 20:00 batch, matching the recommendation cache — those hours are
