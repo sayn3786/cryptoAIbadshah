@@ -372,6 +372,17 @@ live signal with its ladder state, distance to the next target, cushion above th
 stop, plain-language remarks and the next course of action — then trades that
 closed in the last 3 days, marked win or loss.
 
+**One line per setup, not per candle.** The strategy re-evaluates every closed
+candle, so a setup whose levels have not moved is published again on the next one
+— a new row in the database, correctly, because `candle_close_time` is part of
+the idempotency key and each candle is its own decision. It is not a new
+position. The tracker collapses rows that are indistinguishable as positions
+(same symbol, timeframe, direction, entry, stop **and** status), keeps the
+earliest — the setup has been working since it first appeared — and shows `×N`
+for how many candles republished it. A different entry or stop is a different
+setup; a different status means one filled and the other did not, and those are
+never merged. Closed trades are never merged at all: history stays whole.
+
 Rows are grouped into the **publication batch** they came from — *"Jul 30 · 8:00
 PM SGT"* — because a slot is the unit these are decided and reviewed in, and each
 batch carries its own scoreboard. Batch headers expand and collapse; live batches
