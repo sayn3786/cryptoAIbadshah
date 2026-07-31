@@ -350,6 +350,17 @@ trades were ever taken.
   and says so: `persistence.skipped_reason = "NOT_A_PUBLICATION_BAR"`, with
   `actionable` still true and `error_code` null. A skip is not a failure, and
   `DB_REQUIRED` does not turn it into a 503.
+* **Publishing runs close to Vercel's 60s `maxDuration`.** `/api/cron/daily` has
+  already been killed at 61s with `FUNCTION_INVOCATION_TIMEOUT`, and
+  `/api/cron/publish` runs the same compute. `signal-publish.yml` therefore
+  retries up to three times with backoff — the per-symbol analysis cache is
+  warmed by the attempt that died, so a follow-up usually completes inside the
+  limit. A 401 or 404 is not retried; those do not improve by waiting.
+  Retrying is safe because publication is idempotent on the candle.
+  This is mitigation, not a cure: **if all three attempts start failing
+  together, raise `maxDuration` or make the publish path cheaper.** A slot that
+  publishes nothing now shows nothing, because the read path no longer computes
+  a fallback.
 * Everything that publishes fires **after** a boundary, never before it — the
   in-process pre-warm scheduler at :02 past, the GitHub and Vercel crons at :05.
   The gate reads the last CLOSED candle, so a job that fires early sees the

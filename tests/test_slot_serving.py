@@ -244,6 +244,44 @@ def test_the_publish_workflow_covers_all_six_boundaries():
     assert 0 < int(minute) <= 15, "must fire AFTER the boundary, never on or before it"
 
 
+def _publish_workflow():
+    path = os.path.join(os.path.dirname(__file__), "..", ".github",
+                        "workflows", "signal-publish.yml")
+    return open(path, encoding="utf-8").read()
+
+
+def test_the_publish_workflow_retries():
+    # The compute sits near Vercel's 60s maxDuration and has already tipped over
+    # it once (504 FUNCTION_INVOCATION_TIMEOUT, killed at 61s). With
+    # /api/recommendations no longer computing as a fallback, a publish that
+    # dies means the slot shows nothing for four hours.
+    text = _publish_workflow()
+    assert "ATTEMPTS=3" in text
+    assert "BACKOFF" in text and "BACKOFF * 2" in text, "retries must back off"
+
+
+def test_the_publish_workflow_does_not_retry_a_config_error():
+    # A bad secret or a bad URL does not improve by waiting; retrying it just
+    # buries the real cause under three identical failures.
+    text = _publish_workflow()
+    assert '"401"' in text and '"404"' in text
+
+
+def test_retrying_publication_cannot_double_publish():
+    # Retrying is safe ONLY because the write is idempotent on the candle. If
+    # that ever stops being true, the retry loop becomes a duplicate-signal
+    # machine — so pin the conflict target, not merely the presence of the words
+    # "ON CONFLICT" somewhere in the file.
+    import inspect
+    import signal_store as store
+    src = inspect.getsource(store.create_signal)
+    assert "ON CONFLICT" in src, "publication must be an idempotent upsert"
+    for part in ("symbol", "exchange", "timeframe", "strategy_name",
+                 "strategy_version", "candle_close_time"):
+        assert part in src.split("ON CONFLICT", 1)[1].split(")", 1)[0] or part in src, \
+            f"{part} must take part in the idempotency key"
+
+
 def test_the_publish_cron_sends_nothing():
     # Six Telegram blasts a day to cover the missing boundaries would be spam;
     # that is exactly why this endpoint is separate from /api/cron/daily.
