@@ -181,6 +181,37 @@ def test_the_batch_scoreboard_matches_the_backend_summary():
         assert key in summary, f"batch header reads sum.{key}, which is not returned"
 
 
+def test_the_ladder_shows_the_target_PRICES():
+    # "TP2" alone says nothing you can act on. The level, and how far away it
+    # is, are the point — so neither belongs only in a tooltip.
+    ladder = JS[JS.index("function _tkLadder"):JS.index("function _tkExcursion")]
+    assert "fmtPrice(" in ladder, "the ladder renders no price at all"
+    assert "distance_pct" in ladder
+    assert "tk-tp-px" in ladder and ".tk-tp-px" in CSS
+
+
+def test_a_hit_rung_shows_the_price_it_was_hit_at():
+    # The fill price, not the level it was aiming for — they can differ on a gap.
+    ladder = JS[JS.index("function _tkLadder"):JS.index("function _tkExcursion")]
+    assert "t.hit_price" in ladder
+
+
+def test_a_batch_is_addressable_per_section():
+    """
+    The same slot appears in BOTH sections — an 8am batch can have live signals
+    and closed ones. Keyed on the slot alone, querySelector returned the first
+    match, so clicking the closed batch toggled the live one above it, and the
+    two shared a single stored open/closed state.
+    """
+    block = JS[JS.index("function _tkBatchKey"):JS.index("async function loadTracker")]
+    assert "data-uid=" in block, "batches are still addressed by slot alone"
+    assert 'querySelector(`.tk-batch[data-uid=' in JS, \
+        "the toggle still looks the batch up by a key two batches can share"
+    # The stored state must be per section too, or one collapse hides both.
+    fn = JS[JS.index("function _tkIsOpen"):JS.index("function _tkToggleBatch")]
+    assert "_tkBatchKey(key, section)" in fn
+
+
 def test_a_republished_setup_is_shown_once_with_a_count():
     rendered = JS[JS.index("function _tkRow"):JS.index("function _tkTable")]
     assert "row.republished" in rendered, "the count is not surfaced anywhere"
@@ -223,8 +254,8 @@ def test_every_batch_starts_collapsed():
     # With 50 live signals across three slots, opening them all makes the section
     # hundreds of rows long. You open the batch you want.
     fn = JS[JS.index("function _tkIsOpen"):JS.index("function _tkToggleBatch")]
-    assert "key in map ? !!map[key] : false" in fn
-    assert "key in map" in fn, "a stored choice must win over the default"
+    assert "in map ? !!map[" in fn and ": false" in fn, "the default is not closed"
+    assert "in map" in fn, "a stored choice must win over the default"
 
 
 def test_a_stored_choice_is_read_back_safely():
