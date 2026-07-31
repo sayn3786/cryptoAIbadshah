@@ -117,7 +117,12 @@ Creating the database does not create the tables. Continue below.
    it. Check the five result sets described at the top of that file.
 9. Never paste `DATABASE_URL` into a chat, an issue, or a support ticket.
 
-Then repeat steps 4-6 for `database/migrations/002_signal_environment.sql`,
+Repeat steps 4-6 for each later migration in order —
+`002_signal_environment.sql`, then `003_entry_fill_and_excursion.sql`. The notes
+below are about 002; 003 follows the same deploy-then-migrate rule and its own
+header explains why.
+
+Then for `database/migrations/002_signal_environment.sql`,
 which tags each signal with the deployment that wrote it.
 
 > **Deploy the application code BEFORE running 002.** It replaces the
@@ -247,7 +252,7 @@ makes the shared setup *safe*; a separate branch makes it *unnecessary*.
 ## Signal lifecycle
 
 ```
-OPEN ──┬─> PARTIAL_TP ──┬─> TP_HIT      (terminal)
+PENDING ─> OPEN ──┬─> PARTIAL_TP ──┬─> TP_HIT      (terminal)
        │                ├─> SL_HIT      (terminal)
        ├────────────────┼─> CLOSED      (terminal)
        │                ├─> EXPIRED     (terminal)
@@ -256,13 +261,14 @@ OPEN ──┬─> PARTIAL_TP ──┬─> TP_HIT      (terminal)
 
 | Status | Meaning |
 |---|---|
-| `OPEN` | Published, nothing hit yet. |
+| `PENDING` | Published, **working order** — price has not reached the entry. No position, no P/L, in no statistic. |
+| `OPEN` | Entry filled. This is where the trade actually starts. |
 | `PARTIAL_TP` | At least one target hit, more remain. |
 | `TP_HIT` | Final target reached. Terminal. |
 | `SL_HIT` | Stop hit. Terminal. |
 | `CLOSED` | Closed manually or by rule. Terminal. |
 | `EXPIRED` | Timed out without resolving. Terminal. |
-| `CANCELLED` | Withdrawn before resolving. Terminal. |
+| `CANCELLED` | Withdrawn before resolving — including `NEVER_FILLED`, an order price never came back to. Terminal, and **not a trade**. |
 
 **Terminal means terminal.** A terminal signal can never return to `OPEN` or
 `PARTIAL_TP`, and a signal can never record both `TP_HIT` and `SL_HIT` —
@@ -334,6 +340,9 @@ since the signal's own candle and decides what the market did:
 
 | Rule | Behaviour |
 |---|---|
+| **A signal is a working order first** | The monitor used to ignore `entry_price` entirely, so a setup was treated as filled the moment it published — and a target reached without price ever trading the entry booked a win nobody could have taken. An order now becomes `OPEN` only when a candle trades AT the entry, from either side. |
+| **Never filled is not a trade** | An order price never returned to is `CANCELLED` after `fill_window_hours` (24 by default), excluded from the win rate, the averages and the P/L. |
+| **MFE / MAE** | Every filled trade records how far it ran in favour and against, measured from the fill. A loss that first ran +1.8R is a stop-placement problem, not a signal problem. Both only ever widen — a shorter candle window must not shrink a high-water mark already observed. |
 | Closed candles only | A forming candle can un-touch a level before it closes. Recording a hit from one would write an outcome the market never confirmed. |
 | The signal's own candle is excluded | Otherwise a trade could be stopped out by the very bar that triggered it. |
 | One candle touching BOTH a target and the stop records the **STOP** | A candle says where price went, not in what order. Recording the target would claim a win the data cannot prove — `backtest.py` has always made the same assumption. |

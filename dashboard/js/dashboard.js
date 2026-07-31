@@ -6092,7 +6092,7 @@ function renderMacro(data) {
    browser — two places computing "is this a win" is one place too many. */
 
 const _TK_STATUS_LABEL = {
-  OPEN: 'Open', PARTIAL_TP: 'Partial TP', TP_HIT: 'All TP hit',
+  PENDING: 'Waiting', OPEN: 'Open', PARTIAL_TP: 'Partial TP', TP_HIT: 'All TP hit',
   SL_HIT: 'Stopped', EXPIRED: 'Expired', CANCELLED: 'Cancelled', CLOSED: 'Closed',
 };
 
@@ -6118,6 +6118,17 @@ function _tkLadder(row) {
   return `<div class="tk-ladder">${chips}</div>`;
 }
 
+function _tkExcursion(row) {
+  // How far it ran for and against, from the fill. A loss that first ran well
+  // in your favour is a stop-placement problem, not a signal problem — that is
+  // only visible if the peak is shown next to the result.
+  if (row.mfe_pct == null && row.mae_pct == null) return '';
+  const up = row.mfe_pct == null ? '\u2014' : `+${row.mfe_pct.toFixed(2)}%`;
+  const dn = row.mae_pct == null ? '\u2014' : `${row.mae_pct.toFixed(2)}%`;
+  return `<div class="tk-exc" title="Best and worst the trade ran, measured from the fill">`
+       + `<span class="tk-pos">${up}</span> / <span class="tk-neg">${dn}</span></div>`;
+}
+
 function _tkRow(row) {
   const dir = (row.direction || '').toLowerCase();
   const status = (row.status || '').toLowerCase();
@@ -6130,17 +6141,24 @@ function _tkRow(row) {
     ? ''
     : `<div class="tk-muted" style="font-size:.68rem">${row.stop_distance_pct >= 0
         ? `${row.stop_distance_pct.toFixed(2)}% clear` : 'breached'}</div>`;
+  /* A working order has no position, so the entry cell shows how far price
+     still has to come rather than a P/L that does not exist yet. */
+  const entryGap = row.entry_distance_pct == null
+    ? ''
+    : `<div class="tk-muted" style="font-size:.68rem">${row.entry_distance_pct >= 0
+        ? `${row.entry_distance_pct.toFixed(2)}% away` : 'reached'}</div>`;
 
   return `<tr>
     <td class="tk-sym">${row.symbol}<span class="tk-tf">${row.timeframe || ''}</span></td>
     <td><span class="tk-dir ${dir}">${row.direction}</span></td>
     <td><span class="tk-status ${status}">${_TK_STATUS_LABEL[row.status] || row.status}</span></td>
-    <td class="tk-num">${fmtPrice(row.entry)}</td>
+    <td class="tk-num">${fmtPrice(row.entry)}${entryGap}</td>
     <td class="tk-num">${priceCell}</td>
     <td class="tk-num">${fmtPrice(row.stop_loss)}${cushion}</td>
     <td>${_tkLadder(row)}</td>
     <td class="tk-num">${_tkPct(move)}${row.r_multiple != null
-        ? `<div class="tk-muted" style="font-size:.68rem">${row.r_multiple >= 0 ? '+' : ''}${row.r_multiple.toFixed(2)}R</div>` : ''}</td>
+        ? `<div class="tk-muted" style="font-size:.68rem">${row.r_multiple >= 0 ? '+' : ''}${row.r_multiple.toFixed(2)}R</div>` : ''}
+      ${_tkExcursion(row)}</td>
     <td class="tk-num tk-muted">${_tkAge(row.age_hours)}</td>
     <td class="tk-remark">${row.remark || ''}</td>
     <td class="tk-action">${row.action || ''}</td>

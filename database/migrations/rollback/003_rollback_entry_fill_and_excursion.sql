@@ -1,0 +1,63 @@
+-- ============================================================================
+-- 003_rollback_entry_fill_and_excursion.sql  — FOR REVIEW ONLY. DO NOT RUN CASUALLY.
+--
+--   *** THIS SCRIPT LOSES INFORMATION AND CAN FAIL OUTRIGHT.                ***
+--
+-- Dropping entry_filled_at, entry_fill_price, mfe_pct and mae_pct discards where
+-- each trade actually filled and how far it ran either way. None of it is
+-- recorded anywhere else and none of it can be recomputed once the candles have
+-- aged out of the provider's window.
+--
+-- Worse, narrowing the status CHECK back FAILS while any signal sits in
+-- PENDING — and PENDING is the normal state of a working order, so on a live
+-- database that is the expected case, not the edge case.
+--
+-- Nothing in this repository executes this file. No migration runner, no test,
+-- no API route and no deployment step references it. database/migrate.py
+-- explicitly refuses to run rollbacks.
+--
+-- Before even considering running it:
+--   1. Take a Neon branch or backup of the database.
+--   2. Check what the narrowed CHECK would reject:
+--        SELECT count(*) FROM signals WHERE status = 'PENDING';
+--      Every one of those rows has to be resolved first — and "resolving" a
+--      working order that never filled means CANCELLED, which is a real
+--      decision about your trade history, not a mechanical step.
+--   3. Deploy application code that does not write PENDING or ENTRY_FILLED
+--      first, or the next monitor run will violate the narrowed constraint.
+--   4. Have a second person confirm.
+--
+-- In almost every case the correct rollback is to revert the APPLICATION code
+-- and LEAVE THE COLUMNS IN PLACE. Four nullable columns cost a few kilobytes;
+-- the fill and excursion history cannot be reconstructed.
+--
+-- To run deliberately, uncomment the block below.
+-- ============================================================================
+
+-- BEGIN;
+--
+-- -- FAILS if any signal is still PENDING — see step 2 above.
+-- ALTER TABLE signals DROP CONSTRAINT IF EXISTS signals_status_chk;
+-- ALTER TABLE signals
+--     ADD CONSTRAINT signals_status_chk
+--     CHECK (status IN ('OPEN', 'PARTIAL_TP', 'TP_HIT', 'SL_HIT',
+--                       'CLOSED', 'EXPIRED', 'CANCELLED'));
+--
+-- -- FAILS if any ENTRY_FILLED event exists.
+-- ALTER TABLE signal_events DROP CONSTRAINT IF EXISTS signal_events_type_chk;
+-- ALTER TABLE signal_events
+--     ADD CONSTRAINT signal_events_type_chk
+--     CHECK (event_type IN ('CREATED', 'TARGET_HIT', 'STOP_LOSS_HIT', 'CLOSED',
+--                           'EXPIRED', 'CANCELLED', 'ANALYSIS_ADDED', 'ARCHIVED'));
+--
+-- DROP INDEX IF EXISTS signals_pending_idx;
+--
+-- ALTER TABLE signals
+--     DROP COLUMN IF EXISTS entry_filled_at,
+--     DROP COLUMN IF EXISTS entry_fill_price,
+--     DROP COLUMN IF EXISTS mfe_pct,
+--     DROP COLUMN IF EXISTS mae_pct;
+--
+-- DELETE FROM schema_migrations WHERE version = '003';
+--
+-- COMMIT;

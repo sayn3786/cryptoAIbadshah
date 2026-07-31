@@ -26,7 +26,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 __all__ = [
-    "evaluate", "Action", "DEFAULT_MAX_AGE_HOURS", "run_monitor",
+    "evaluate", "Action", "DEFAULT_MAX_AGE_HOURS", "DEFAULT_FILL_WINDOW_HOURS",
+    "run_monitor", "excursion",
 ]
 
 # A signal that has neither hit a target nor been stopped after this long is
@@ -34,6 +35,13 @@ __all__ = [
 # longer the market it was published into. Terminal, but distinct from a loss —
 # EXPIRED and SL_HIT must never be conflated in the outcome history.
 DEFAULT_MAX_AGE_HOURS = 72
+
+# How long a working order stays live before it is withdrawn unfilled. A limit
+# entry that price never came back to is NOT a trade: it is cancelled, and it
+# never enters the win rate, the averages or the P/L. Counting unfilled orders
+# was the single largest distortion in the outcome history — every statistic was
+# measuring a population that included trades nobody could have taken.
+DEFAULT_FILL_WINDOW_HOURS = 24
 
 Action = Dict[str, Any]
 
@@ -72,12 +80,51 @@ def _stopped(direction: str, stop: Decimal, high: Decimal, low: Decimal) -> bool
     return low <= stop if direction == "LONG" else high >= stop
 
 
+def _touched(level: Decimal, high: Decimal, low: Decimal) -> bool:
+    """Did this candle trade AT the level, from either side?"""
+    return low <= level <= high
+
+
+def excursion(direction: str, entry: Decimal,
+              candles: Sequence[Dict[str, Any]]) -> Dict[str, Optional[float]]:
+    """
+    How far the trade ran in favour (MFE) and against (MAE), in percent of entry.
+
+    Signed in the TRADE's favour: mfe is positive, mae negative. For a LONG the
+    best is the highest high and the worst the lowest low; a SHORT mirrors it.
+
+    This is the standard diagnostic for stop and target placement — a loss that
+    first ran +1.8R is a stop problem, not a signal problem — and it costs
+    nothing, because the caller has already walked these candles.
+    """
+    highs = [_dec(c.get("high")) for c in candles or []]
+    lows = [_dec(c.get("low")) for c in candles or []]
+    highs = [h for h in highs if h is not None]
+    lows = [l for l in lows if l is not None]
+    if not highs or not lows or entry is None or entry <= 0:
+        return {"mfe_pct": None, "mae_pct": None}
+
+    if direction == "LONG":
+        best, worst = max(highs), min(lows)
+        mfe = (best - entry) / entry * 100
+        mae = (worst - entry) / entry * 100
+    else:
+        best, worst = min(lows), max(highs)
+        mfe = (entry - best) / entry * 100
+        mae = (entry - worst) / entry * 100
+    # An excursion never crosses zero the wrong way: a trade that only ever went
+    # against you has an MFE of 0, not a negative "best".
+    return {"mfe_pct": round(float(max(mfe, Decimal(0))), 8),
+            "mae_pct": round(float(min(mae, Decimal(0))), 8)}
+
+
 def evaluate(signal: Dict[str, Any],
              targets: Sequence[Dict[str, Any]],
              candles: Sequence[Dict[str, Any]],
              *,
              now: Optional[datetime] = None,
-             max_age_hours: int = DEFAULT_MAX_AGE_HOURS) -> List[Action]:
+             max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
+             fill_window_hours: int = DEFAULT_FILL_WINDOW_HOURS) -> List[Action]:
     """
     Decide what has happened to one signal, from the candles since it was made.
 
@@ -100,7 +147,7 @@ def evaluate(signal: Dict[str, Any],
     store's idempotency layer rather than a duplicate event.
     """
     status = (signal.get("status") or "").upper()
-    if status not in ("OPEN", "PARTIAL_TP"):
+    if status not in ("PENDING", "OPEN", "PARTIAL_TP"):
         return []                        # already terminal: nothing to decide
 
     direction = (signal.get("direction") or "").upper()
@@ -110,6 +157,14 @@ def evaluate(signal: Dict[str, Any],
     stop = _dec(signal.get("stop_loss"))
     if stop is None or stop <= 0:
         return []
+
+    entry = _dec(signal.get("entry_price"))
+    # PENDING means the order has not filled yet. Until price TOUCHES the entry
+    # there is no position, so no target and no stop can be hit — the monitor
+    # used to skip this entirely and book outcomes on trades nobody was in.
+    pending_fill = status == "PENDING"
+    if pending_fill and (entry is None or entry <= 0):
+        return []                        # cannot decide a fill without an entry
 
     # Only candles AFTER the one the signal was made on. The signal candle
     # itself already happened when the decision was taken; counting it would
@@ -140,6 +195,16 @@ def evaluate(signal: Dict[str, Any],
             continue
         last_seen = at
         last_close = _dec(candle.get("close")) or last_close
+
+        if pending_fill:
+            if not _touched(entry, high, low):
+                continue                 # order still working — nothing to judge
+            actions.append({"kind": "ENTRY_FILLED", "price": entry,
+                            "at": at, "source_ts": at})
+            pending_fill = False
+            # The filling candle can also resolve the trade — a bar that reaches
+            # the entry and then runs to the stop is a real same-bar stop-out —
+            # so fall through rather than skipping to the next candle.
         # The candle's own open time IS the source timestamp. It must be a real
         # datetime, not an epoch string: record_target_hit parses source_ts as a
         # timestamp (the other lifecycle calls hash it raw), so a bare "17724…"
@@ -167,6 +232,20 @@ def evaluate(signal: Dict[str, Any],
 
         if not pending and actions:
             return actions               # final target reached: terminal
+
+    # A working order that price never came back to is CANCELLED, not expired
+    # and certainly not a loss. It never became a position, so it must not reach
+    # the win rate, the averages or the P/L in any form.
+    if pending_fill and started is not None and fill_window_hours:
+        reference = now or datetime.now(timezone.utc)
+        if reference - started >= timedelta(hours=fill_window_hours):
+            at = last_seen or (started + timedelta(hours=fill_window_hours))
+            return [{"kind": "CANCELLED", "at": at, "source_ts": at,
+                     "reason": "NEVER_FILLED",
+                     "age_hours": round(
+                         (reference - started).total_seconds() / 3600, 1)}]
+    if pending_fill:
+        return actions               # still working — nothing more to decide
 
     # Nothing terminal. Has it simply gone stale?
     if started is not None and max_age_hours:
@@ -203,7 +282,15 @@ def apply_actions(store, signal_id, actions: Sequence[Action]) -> List[Dict[str,
     for action in actions:
         kind = action["kind"]
         try:
-            if kind == "TARGET_HIT":
+            if kind == "ENTRY_FILLED":
+                res = store.record_entry_fill(
+                    signal_id, action["price"], action["at"],
+                    source_ts=action["source_ts"])
+            elif kind == "CANCELLED":
+                res = store.cancel_signal(
+                    signal_id, action["at"], reason=action.get("reason", "CANCELLED"),
+                    source_ts=action["source_ts"])
+            elif kind == "TARGET_HIT":
                 res = store.record_target_hit(
                     signal_id, action["target_number"], action["price"],
                     action["at"], source_ts=action["source_ts"])
@@ -233,9 +320,50 @@ def apply_actions(store, signal_id, actions: Sequence[Action]) -> List[Dict[str,
     return applied
 
 
+def _record_excursion(store, signal: Dict[str, Any],
+                      candles: Sequence[Dict[str, Any]],
+                      actions: Sequence[Action]) -> bool:
+    """
+    Measure MFE/MAE from the fill onwards and store it. True when recorded.
+
+    The fill time comes from the row, or from an ENTRY_FILLED decided in THIS
+    run — otherwise a trade that filled and moved in the same pass would not be
+    measured until the next one.
+    """
+    filled_at = _utc(signal.get("entry_filled_at"))
+    if filled_at is None:
+        filled_at = next((a["at"] for a in actions if a["kind"] == "ENTRY_FILLED"),
+                         None)
+    if filled_at is None:
+        # Never filled — or a pre-003 row that was never marked. For the latter
+        # the signal candle is the honest starting point.
+        if (signal.get("status") or "").upper() == "PENDING":
+            return False
+        filled_at = _utc(signal.get("candle_close_time"))
+    if filled_at is None:
+        return False
+
+    since = [c for c in candles or []
+             if (_utc(c.get("timestamp")) or filled_at) >= filled_at]
+    if not since:
+        return False
+
+    entry = _dec(signal.get("entry_fill_price")) or _dec(signal.get("entry_price"))
+    ex = excursion((signal.get("direction") or "").upper(), entry, since)
+    if ex["mfe_pct"] is None and ex["mae_pct"] is None:
+        return False
+    try:
+        store.record_excursion(signal["id"], mfe_pct=ex["mfe_pct"],
+                               mae_pct=ex["mae_pct"])
+    except Exception:
+        return False                     # a measurement must never break a run
+    return True
+
+
 def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, Any]]],
                 *, now: Optional[datetime] = None,
                 max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
+                fill_window_hours: int = DEFAULT_FILL_WINDOW_HOURS,
                 limit: int = 100) -> Dict[str, Any]:
     """
     Evaluate every working signal and record what the market did to it.
@@ -249,8 +377,9 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     continue. A monitor that abandons the batch on the first bad row is worse
     than no monitor, because the remaining trades silently stay open.
     """
-    summary = {"checked": 0, "targets_hit": 0, "stopped": 0, "expired": 0,
-               "unchanged": 0, "errors": [], "results": []}
+    summary = {"checked": 0, "filled": 0, "targets_hit": 0, "stopped": 0,
+               "expired": 0, "cancelled": 0, "measured": 0, "unchanged": 0,
+               "errors": [], "results": []}
 
     try:
         active = store.list_active_signals(limit=limit)
@@ -273,7 +402,17 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
                 continue
             actions = evaluate(detail, detail.get("targets") or [],
                                candle_cache[key], now=now,
-                               max_age_hours=max_age_hours)
+                               max_age_hours=max_age_hours,
+                               fill_window_hours=fill_window_hours)
+
+            # MFE/MAE is a measurement of a position, not a change to it, so it
+            # is recorded outside the action list — and only from the fill
+            # onwards, because an order that had not filled yet was not exposed
+            # to anything. Runs even when nothing else happened: the high-water
+            # marks move while the trade just sits there.
+            if _record_excursion(store, detail, candle_cache[key], actions):
+                summary["measured"] += 1
+
             if not actions:
                 summary["unchanged"] += 1
                 continue
@@ -281,12 +420,16 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
             for a in applied:
                 if not a.get("applied"):
                     continue
-                if a["kind"] == "TARGET_HIT":
+                if a["kind"] == "ENTRY_FILLED":
+                    summary["filled"] += 1
+                elif a["kind"] == "TARGET_HIT":
                     summary["targets_hit"] += 1
                 elif a["kind"] == "STOP_LOSS_HIT":
                     summary["stopped"] += 1
                 elif a["kind"] == "EXPIRED":
                     summary["expired"] += 1
+                elif a["kind"] == "CANCELLED":
+                    summary["cancelled"] += 1
             summary["results"].append({"signal_id": sid, "symbol": symbol,
                                        "applied": applied})
         except Exception as exc:
