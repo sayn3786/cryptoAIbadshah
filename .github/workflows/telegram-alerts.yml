@@ -2,10 +2,14 @@ name: Telegram Daily Alerts
 
 on:
   schedule:
-    # All times UTC — SGT is UTC+8
-    - cron: '50 23 * * *'  # ~08:00 AM SGT (fires early to absorb GitHub delay)
-    - cron: '50 7 * * *'   # ~04:00 PM SGT
-    # 8PM SGT handled by Vercel cron (12:00 UTC)
+    # All times UTC — SGT is UTC+8, and 4H boundaries are the same instants in
+    # both. Since v44 a signal is only RECORDED on a 4H close, so these must fire
+    # just AFTER the boundary, never before it: a run at 23:50 UTC sees the 06:00
+    # SGT candle, records nothing, and would send an unrecorded set to Telegram.
+    # :05 past absorbs GitHub's scheduling delay, which is late-skewed anyway.
+    - cron: '5 0 * * *'    # ~08:05 AM SGT
+    - cron: '5 8 * * *'    # ~04:05 PM SGT
+    # 8PM SGT handled by Vercel cron (12:05 UTC)
   workflow_dispatch:       # allow manual trigger from GitHub UI
 
 jobs:

@@ -36,13 +36,12 @@ __all__ = [
 # the signal maths changes, so old and new signals stay independently analysable
 # and the idempotency key does not collide across versions.
 STRATEGY_NAME = "mtf_confluence_top3"
-# v43: as v42 (market-structure confluence, liquidity-aware stops, pool-anchored
-# take-profits, the expired-setup gate) plus a pattern-detection fix: a breakout
-# candle can no longer become part of the rail it broke, so a triangle or wedge
-# stops silently reverting to "forming" after a failed breakout. Confirmed
-# patterns feed the score, so signals from before this are NOT comparable with
-# signals from after — which is exactly what this column is for.
-_DEFAULT_STRATEGY_VERSION = "v43_wedgefix"
+# v44: published on the 4H CLOSE only — six sets a day, three trades each, so at
+# most eighteen a day — and ranked by the AVERAGE of 1H and 2H strength rather
+# than by the composite quality score, which is demoted to the tiebreak. Both the
+# cadence and the ranking change WHICH trades exist, so signals from before this
+# are NOT comparable with signals from after — exactly what this column is for.
+_DEFAULT_STRATEGY_VERSION = "v44_4h_avg"
 STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
                     or _DEFAULT_STRATEGY_VERSION)
 

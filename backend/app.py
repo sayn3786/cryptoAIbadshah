@@ -1976,6 +1976,35 @@ def _targets_behind_live(direction: str, tp_targets, live_price) -> dict:
     }
 
 
+class _SkipPersistence(Exception):
+    """Between publication bars — serve the set, record nothing."""
+
+
+PUBLICATION_INTERVAL_HOURS = 4
+
+def _is_publication_bar(close_t) -> bool:
+    """
+    Is this closed candle a PUBLICATION bar?
+
+    Signals publish on the 4H close and nowhere else: six sets a day, three
+    trades each, so at most 18 published trades in a day. Every 2H close used to
+    be a publication point, which is why sixty-odd working signals accumulated —
+    the same setups republished bar after bar.
+
+    4H boundaries fall at the same instants in UTC and SGT (the offset is a whole
+    multiple of four hours), so this needs no timezone argument.
+    """
+    if close_t is None:
+        return False
+    return int(close_t.timestamp()) % (PUBLICATION_INTERVAL_HOURS * 3600) == 0
+
+
+def _slot_start(t):
+    """Start of the 4H publication slot containing ``t``, in t's own timezone."""
+    bucket = (t.hour // PUBLICATION_INTERVAL_HOURS) * PUBLICATION_INTERVAL_HOURS
+    return t.replace(hour=bucket, minute=0, second=0, microsecond=0)
+
+
 def _compute_recommendations() -> dict:
     """
     Best-signal engine (Phase 3 — composite quality ranking):
@@ -2239,16 +2268,27 @@ def _compute_recommendations() -> dict:
             "reversal_against": _rev_against,
         }
 
-        # ── Composite trade-quality score (Phase 3 ranking key) ──────────
+        # ── Composite trade-quality score ────────────────────────────────
+        # Still computed and reported: it folds in R/R, 4H agreement,
+        # reversal-against and exhaustion. It is no longer the ranking key, but
+        # it is the tiebreak — and it stays visible so the two can be compared.
         _q, _qf = _rec_quality(cand, htf_4h_dir)
         cand["quality_score"]   = _q
         cand["quality_factors"] = _qf
+        # The ranking key: the AVERAGE of the two timeframes that had to agree
+        # for this to be a candidate at all. Ranking on 2H alone let a strong 2H
+        # with a barely-qualifying 1H outrank a setup both timeframes liked.
+        cand["avg_tf_strength"] = round(
+            (float(h1["strength"]) + float(h2["strength"])) / 2.0, 1)
         candidates.append(cand)
 
-    # ── Rank by composite trade-quality, best trade first ───────────────
-    # (was: pure adjusted-strength. Quality folds in R/R, HTF agreement,
-    #  reversal-against, exhaustion and data quality — see _rec_quality.)
-    candidates.sort(key=lambda x: (x.get("quality_score", x["strength"]), x["strength"]),
+    # ── Rank by the 1H/2H average, quality as the tiebreak ──────────────
+    # Both timeframes must already agree on direction for a candidate to exist,
+    # so their average measures how strongly they agree. Quality breaks ties, so
+    # between two equally-agreed setups the one with better R/R and less
+    # reversal risk still wins.
+    candidates.sort(key=lambda x: (x.get("avg_tf_strength", x["strength"]),
+                                   x.get("quality_score", 0), x["strength"]),
                     reverse=True)
 
     # ── Correlation-aware diversification ────────────────────────────────
@@ -2292,8 +2332,22 @@ def _compute_recommendations() -> dict:
     # publishing a signal that was never recorded.
     _persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
                 "failed": [], "error_code": None}
+    _close_t = None
     try:
         import signal_publish as _sp
+
+        # Publish on the 4H close only. A recompute between bars (a cold start,
+        # an on-demand call) still SERVES recommendations — it just does not
+        # record new ones, because the set for this bar has already been decided.
+        _first = next((raw.get(r["symbol"], {}).get("2H", {}) or {}
+                       for r in intraday_recs), {})
+        _, _close_t = _sp._candle_window(_first.get("analysis") or {}, "2H")
+        _publication_bar = _is_publication_bar(_close_t)
+        if intraday_recs and not _publication_bar:
+            _persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
+                        "failed": [], "error_code": None,
+                        "skipped_reason": "NOT_A_PUBLICATION_BAR"}
+            raise _SkipPersistence
         _analyses = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
                      for r in intraday_recs}
         for _r in intraday_recs:
@@ -2307,6 +2361,8 @@ def _compute_recommendations() -> dict:
         if not _out["all_actionable"]:
             print(f"[recs] NOT actionable — persistence failed for "
                   f"{', '.join(_out['failed'])} ({_out.get('error_code')})")
+    except _SkipPersistence:
+        pass                       # between publication bars — nothing to record
     except Exception as _exc:
         # A bug in the persistence layer must not take down analysis. It only
         # blocks publication when the database is REQUIRED.
@@ -2317,13 +2373,17 @@ def _compute_recommendations() -> dict:
                     "duplicates": 0, "failed": [r["symbol"] for r in intraday_recs],
                     "error_code": "PERSISTENCE_ERROR"}
 
-    # Next signal slot at 8AM / 4PM / 8PM SGT
-    _slots   = [now_sgt.replace(hour=h, minute=0, second=0, microsecond=0) for h in (8, 16, 20)]
+    # Next signal slot on the next 4H boundary SGT: 12AM/4AM/8AM/12PM/4PM/8PM.
+    # 4H boundaries are the same instants in UTC and SGT, so the published set is
+    # valid exactly until the next 4H candle closes.
+    _slot_hours = list(range(0, 24, PUBLICATION_INTERVAL_HOURS))
+    _slots   = [now_sgt.replace(hour=h, minute=0, second=0, microsecond=0)
+                for h in _slot_hours]
     _slots  += [s + timedelta(days=1) for s in _slots]
     valid_until_sgt = next(s for s in sorted(_slots) if s > now_sgt)
 
-    h = now_sgt.hour
-    slot_label = "8:00 AM" if h < 12 else ("4:00 PM" if h < 20 else "8:00 PM")
+    _bucket = (now_sgt.hour // PUBLICATION_INTERVAL_HOURS) * PUBLICATION_INTERVAL_HOURS
+    slot_label = now_sgt.replace(hour=_bucket, minute=0).strftime("%-I:%M %p")
     generated_fmt = now_sgt.strftime(f"%-I:%M:%S %p SGT, %b %d, %Y  [{slot_label} slot]")
 
     result = {
@@ -2349,6 +2409,17 @@ def _compute_recommendations() -> dict:
         # and must be treated as analysis only, never as tradeable output.
         "actionable":       bool(_persist.get("all_actionable", True)),
         "persistence":      _persist,
+        "publication_interval_hours": PUBLICATION_INTERVAL_HOURS,
+        # The closed candle this set was built on.
+        "source_candle_close": _close_t.isoformat() if _close_t else None,
+        # Is this set built on the CURRENT 4H slot's data? The scheduler wakes at
+        # :02 past the boundary, and exchange data occasionally lags a couple of
+        # minutes — in that case the set is still built on the PREVIOUS bar, was
+        # not persisted, and must not be cached, or a stale unrecorded set would
+        # be served for the whole four hours. No recommendations means there is
+        # nothing to be stale about, so that counts as current.
+        "slot_current": (not intraday_recs) or bool(
+            _close_t is not None and _close_t >= _slot_start(now_sgt)),
     }
 
     # Audit log — record snapshot of each slot generation (last 9 kept in memory)
@@ -2378,57 +2449,48 @@ _SGT = timezone(timedelta(hours=8))
 
 def _rec_cache_key() -> str:
     """
-    Cache key tied to the three daily signal slots (SGT):
-      08:00 SGT  →  key "08"  (valid 08:00–15:59 SGT)
-      16:00 SGT  →  key "16"  (valid 16:00–19:59 SGT)
-      20:00 SGT  →  key "20"  (valid 20:00–07:59 SGT next day)
+    Cache key tied to the six daily signal slots (SGT), one per 4H candle close:
 
-    Recs stay identical between alerts — they only change when a new
-    Telegram alert fires, not every 30 minutes.
+      00:00 → "00"   04:00 → "04"   08:00 → "08"
+      12:00 → "12"   16:00 → "16"   20:00 → "20"
+
+    Each key is valid until the next 4H close, so the published set stays
+    identical between bars rather than changing every 30 minutes. Six slots of
+    three trades is the eighteen-a-day ceiling.
     """
     sgt  = datetime.now(_SGT)
-    hour = sgt.hour
-    if hour >= 20:
-        slot = "20"
-        date = sgt.strftime("%Y%m%d")
-    elif hour >= 16:
-        slot = "16"
-        date = sgt.strftime("%Y%m%d")
-    elif hour >= 8:
-        slot = "08"
-        date = sgt.strftime("%Y%m%d")
-    else:
-        # 00:00–07:59 SGT belongs to the previous day's 20:00 slot
-        slot = "20"
-        date = (sgt - timedelta(days=1)).strftime("%Y%m%d")
-    # Bump the version prefix whenever the scoring changes, or the cache would
-    # keep serving strengths computed by the OLD rules for the rest of the slot.
-    # v36: market-structure confluence (stop-run risk / chase / BOS persistence)
-    #      now adjusts strength.
-    # v37: BOS confluence decays with age, so a stale break no longer scores.
-    # v38: stop-run risk reads the full liquidity_pools ladder, not the single
-    #      equal-high/low pair.
-    # v39: stops are moved clear of a liquidity pool sitting just beyond them,
-    #      which also changes R/R and therefore which candidates qualify.
-    # v40: liquidity pools are candidate TP walls, so the ladder can trade to
-    #      where resting orders actually sit.
-    # v41: pool weight decays with how long ago the level was last touched.
-    # v42: a candidate whose TP1 has already traded through is dropped, so the
-    #      published set changes as price moves inside the slot.
-    # v43: a breakout candle can no longer be refitted into the rail it broke,
-    #      so triangle/wedge confirmation — which feeds the score — is stable.
-    return f"v43_wedgefix_{date}_{slot}"
+    # Six slots a day, on the 4H boundaries: 00, 04, 08, 12, 16, 20 SGT. The
+    # published set changes when a 4H candle closes and not in between, so a day
+    # holds at most six sets of three — eighteen trades.
+    bucket = (sgt.hour // PUBLICATION_INTERVAL_HOURS) * PUBLICATION_INTERVAL_HOURS
+    slot = f"{bucket:02d}"
+    date = sgt.strftime("%Y%m%d")
+    # Bump the version prefix whenever the scoring or the cadence changes, or the
+    # cache would keep serving a set built by the OLD rules for the rest of the
+    # slot. History (details in INDICATORS.md):
+    #   v36 market-structure confluence  v37 BOS confluence decays with age
+    #   v38 stop-run risk reads the full pool ladder
+    #   v39 stops moved clear of a pool  v40 pools as TP walls
+    #   v41 pool weight decays with recency
+    #   v42 a candidate whose TP1 already traded through is dropped
+    #   v43 a breakout candle can no longer be refitted into the rail it broke
+    #   v44 published on the 4H close only — three per bar, eighteen a day — and
+    #       ranked by the average of 1H and 2H strength, with the composite
+    #       quality score demoted to the tiebreak.
+    return f"v44_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
     """
     Background thread: pre-warms the rec cache shortly after each
     signal slot boundary so the first user request doesn't block.
-    Runs at :02 past each slot change (08:02, 16:02, 20:02 SGT).
+    Runs at :02 past each 4H slot change — 00:02, 04:02, 08:02, 12:02, 16:02 and
+    20:02 SGT — which is also where publication happens, so this is the run that
+    records the slot's three trades.
     Notifications are handled exclusively by GitHub Actions cron.
     """
     print("[scheduler] Signal-slot recommendation scheduler started")
-    _SLOT_HOURS_SGT = (8, 16, 20)
+    _SLOT_HOURS_SGT = tuple(range(0, 24, PUBLICATION_INTERVAL_HOURS))
     while True:
         sgt  = datetime.now(_SGT)
         # Find the next slot boundary
@@ -2453,10 +2515,17 @@ def _daily_rec_scheduler():
         try:
             print(f"[scheduler] Running recommendation scan (key={key})")
             result = _compute_recommendations()
-            if result.get("actionable", True):
+            if result.get("actionable", True) and result.get("slot_current", True):
                 with _rec_lock:
                     _rec_cache_save(key, result)
                 print(f"[scheduler] Cached {len(result.get('recommendations', []))} recommendations")
+            elif not result.get("slot_current", True):
+                # Exchange data still lags the boundary, so this set was built on
+                # the previous bar and was not recorded. Leaving the cache cold
+                # makes the next request recompute against the fresh candle
+                # instead of serving an unrecorded set for four hours.
+                print("[scheduler] NOT cached — exchange data still behind the "
+                      f"{key.rsplit('_', 1)[-1]}:00 boundary; will recompute on demand")
             else:
                 # Never warm the cache with an unrecorded set — it would be
                 # served for the rest of the slot and never re-attempted.
@@ -2473,9 +2542,10 @@ _threading.Thread(target=_daily_rec_scheduler, daemon=True, name="rec-scheduler"
 @app.get("/api/recommendations")
 def api_recommendations():
     """
-    Returns today's top-3 recommendations.
-    Pre-computed at 08:00 SGT by the daily scheduler; served from cache to all users.
-    Falls back to on-demand compute if the scheduler hasn't run yet today.
+    Returns this slot's top-3 recommendations.
+    Pre-computed at :02 past each 4H boundary by the scheduler and served from
+    cache to all users. Falls back to on-demand compute if the scheduler has not
+    run for this slot yet.
     """
     force = request.args.get("force") == "1"
     key   = _rec_cache_key()
@@ -2489,12 +2559,13 @@ def api_recommendations():
     result = _compute_recommendations()
     # Only cache a set that was actually recorded. Caching a non-actionable set
     # would keep serving it for the rest of the slot after the database
-    # recovered, so the signals would never get persisted.
-    if result.get("actionable", True):
+    # recovered, so the signals would never get persisted. Same for a set built
+    # before this slot's candle was available — it was not recorded either.
+    if not result.get("actionable", True):
+        return _not_actionable(result)
+    if result.get("slot_current", True):
         with _rec_lock:
             _rec_cache_save(key, result)
-    else:
-        return _not_actionable(result)
     return jsonify(result)
 
 
@@ -2527,7 +2598,8 @@ def api_rec_audit():
     """
     Returns the last 9 slot generations with snapshot of symbols, directions,
     strengths and entry/SL/TP1 at the exact moment they were computed.
-    Use this to verify recs only changed at 8AM / 4PM / 8PM SGT.
+    Use this to verify recs only changed on a 4H boundary (12AM / 4AM / 8AM /
+    12PM / 4PM / 8PM SGT).
     """
     with _rec_lock:
         mem = _rec_cache_load()
@@ -2556,7 +2628,7 @@ def api_telegram_send():
         result = mem["data"]
     else:
         result = _compute_recommendations()
-        if result.get("actionable", True):
+        if result.get("actionable", True) and result.get("slot_current", True):
             with _rec_lock:
                 _rec_cache_save(key, result)
 
@@ -2674,9 +2746,10 @@ def api_cron_daily():
     try:
         result = _compute_recommendations()
         if result.get("actionable", True):
-            key = _rec_cache_key()
-            with _rec_lock:
-                _rec_cache_save(key, result)
+            if result.get("slot_current", True):
+                key = _rec_cache_key()
+                with _rec_lock:
+                    _rec_cache_save(key, result)
             results["recs"] = len(result.get("recommendations", []))
         else:
             # Do not cache or count an unrecorded set — the next run retries.

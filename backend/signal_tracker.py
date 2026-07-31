@@ -22,15 +22,18 @@ __all__ = [
     "SGT", "SLOT_HOURS_SGT",
 ]
 
-# Recommendations are published in three daily slots (SGT), and a slot is the
-# unit people actually think in — "the 8pm batch", not "that signal from
-# Tuesday". Signals are grouped by the slot they were PUBLISHED in, which is why
+# Recommendations publish on the 4H close — six batches a day — and a batch is
+# the unit people actually think in: "the 8pm set", not "that signal from
+# Tuesday". Signals are grouped by the batch they were PUBLISHED in, which is why
 # this reads generated_at and not the candle time: two symbols in one batch can
 # sit on different candles, but they were still one decision.
 SGT = timezone(timedelta(hours=8))
 
-# Descending, so the first boundary at or below the hour is the signal's slot.
-SLOT_HOURS_SGT = ((20, "8:00 PM"), (16, "4:00 PM"), (8, "8:00 AM"))
+# Descending, so the first boundary at or below the hour is the signal's batch.
+# 4H boundaries fall at the same instants in UTC and SGT, the offset being a
+# whole multiple of four hours.
+SLOT_HOURS_SGT = ((20, "8:00 PM"), (16, "4:00 PM"), (12, "12:00 PM"),
+                  (8, "8:00 AM"), (4, "4:00 AM"), (0, "12:00 AM"))
 
 # Closed trades are shown for three days and then drop off the list. The point
 # of the view is the decisions in front of you; older outcomes belong in the
@@ -96,10 +99,10 @@ def slot_for(when) -> Optional[Dict[str, Any]]:
     """
     Which publication batch a signal belongs to.
 
-    Times are in SGT because that is what the slots are defined in — 08:00,
-    16:00 and 20:00. Anything published between midnight and 08:00 belongs to
-    the PREVIOUS day's 20:00 batch, matching the recommendation cache: those
-    hours are served the 8pm set, so a signal written then is part of it.
+    Times are shown in SGT, on the 4H boundaries the publication cadence uses:
+    00:00, 04:00, 08:00, 12:00, 16:00, 20:00 — six batches a day. (4H boundaries
+    are the same instants in UTC and SGT, so the labels move with the display
+    zone but never regroup the signals.)
 
     Returns ``{"key", "label", "date_label", "title", "at"}`` — key sorts
     chronologically as a plain string, which is what the grouping relies on.
@@ -115,9 +118,8 @@ def slot_for(when) -> Optional[Dict[str, Any]]:
         if local.hour >= boundary:
             hour, label = boundary, text
             break
-    if hour is None:                      # 00:00–07:59 → yesterday's 8pm batch
-        day = local - timedelta(days=1)
-        hour, label = SLOT_HOURS_SGT[0]
+    if hour is None:                     # cannot happen: 0 is a boundary now
+        hour, label = SLOT_HOURS_SGT[-1]
 
     return {
         "key":        f"{day:%Y%m%d}-{hour:02d}",

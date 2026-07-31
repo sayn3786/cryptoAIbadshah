@@ -40,6 +40,15 @@ Three rules hold the whole design together:
 3. **Absence is not zero.** A missing live price, an unmeasured excursion and an
    unresolved trade are all recorded as NULL, never as `0`.
 
+Since **v44**, `persist_recommendation` only runs on a **4H candle close** — six
+publication slots a day (00, 04, 08, 12, 16, 20 SGT/UTC alike), three trades
+each, so at most **eighteen** rows a day. A recompute between those bars still
+serves the set but writes nothing, reporting
+`persistence.skipped_reason = "NOT_A_PUBLICATION_BAR"` with `all_actionable`
+still true and `error_code` null — a skip is not a failure. See
+[INDICATORS.md § 4H Publication Cadence](INDICATORS.md) for the ranking change
+that shipped with it.
+
 ---
 
 ## 2. Lifecycle
@@ -90,7 +99,7 @@ the P/L.
 | `timeframe` | `text` | no | `2H` for published recommendations. |
 | `direction` | `text` | no | `LONG` or `SHORT`. CHECK-constrained. |
 | `strategy_name` | `text` | no | `mtf_confluence_top3`. |
-| `strategy_version` | `text` | no | e.g. `v43_wedgefix`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
+| `strategy_version` | `text` | no | e.g. `v44_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
 | `candle_open_time` | `timestamptz` | no | Open of the closed candle the decision was made on. |
 | `candle_close_time` | `timestamptz` | no | Close of that candle. **Part of the idempotency key.** |
 | `generated_at` | `timestamptz` | no | When the recommendation was published. Drives the batch/slot grouping. |
@@ -203,7 +212,7 @@ UNIQUE (environment, symbol, exchange, timeframe,
 | Why each part | |
 |---|---|
 | `environment` | A preview deploy sharing the database cannot claim a candle and make production's write look like a duplicate. |
-| `candle_close_time` | The next closed candle is a NEW signal — so a symbol legitimately produces several rows a day. |
+| `candle_close_time` | The next closed candle is a NEW signal — so a symbol legitimately produces several rows a day. Since v44 only the **4H** closes publish, so that is at most six rows a day per symbol, not twelve. |
 | `strategy_version` | Old and new rules can be evaluated on the same candles without colliding. |
 | **`direction` is deliberately absent** | If it were in the key, a re-evaluation that flipped LONG→SHORT would insert a second row for the same candle, leaving two contradictory live signals. Excluding it means the first published decision for that candle stands. |
 
@@ -292,7 +301,7 @@ Row fields that are **derived, not stored**:
 | `risk_free` | Stop is at entry or better. |
 | `targets[].distance_pct` | Per rung: how far to go. Negative = price already through it. |
 | `republished` / `signal_ids` | One setup published on several candles is shown once; this is how many rows are behind it. |
-| `slot` | The publication batch (`Jul 30 · 8:00 PM SGT`). |
+| `slot` | The publication batch (`Jul 30 · 8:00 PM SGT`) — one of the six 4H slots: 12AM, 4AM, 8AM, 12PM, 4PM, 8PM SGT. |
 | `remark` / `action` | Plain-language state, and the next course of action. |
 | `outcome` | `WIN` / `LOSS` / `BREAKEVEN` / `EXPIRED` / `CANCELLED`. |
 

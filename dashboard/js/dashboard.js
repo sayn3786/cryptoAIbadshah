@@ -5102,7 +5102,7 @@ async function loadRecommendations() {
     const genEl = document.getElementById('recGenerated');
     if (genEl && data.generated_fmt) {
       genEl.textContent = `⏱ Generated: ${data.generated_fmt}`;
-      genEl.title = 'Rating & strength are a snapshot from this exact moment. Only changes at 8AM / 4PM / 8PM SGT.';
+      genEl.title = 'Rating & strength are a snapshot from this exact moment. Only changes on a 4H close: 12AM / 4AM / 8AM / 12PM / 4PM / 8PM SGT.';
     }
 
     // Options expiry banner — update with full BTC-priced data from recs endpoint
@@ -6200,7 +6200,8 @@ function _tkTable(rows) {
 /* Which batches are expanded. Persisted, because the tracker re-renders on a
    5-minute poll — without this, anything you opened would snap shut under you.
 
-   Every batch starts COLLAPSED. With 50 live signals across three slots, opening
+   Every batch starts COLLAPSED. With dozens of live signals across the six 4H
+   slots, opening
    them all makes the section hundreds of rows long; the batch headers alone —
    date, slot, count, scoreboard — are the summary most of the time, and you
    open the one you want. */

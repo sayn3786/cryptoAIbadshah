@@ -65,7 +65,7 @@ Set these in **Vercel → Project → Settings → Environment Variables**
 |---|---|---|
 | `DATABASE_URL` | yes, to persist | Neon connection string. Injected automatically by the Vercel↔Neon integration. |
 | `DB_REQUIRED` | recommended | `true` in production: refuse to publish a signal that was not recorded. Defaults to `false`. |
-| `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v43_wedgefix`. Bump whenever the signal maths changes. |
+| `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v44_4h_avg`. Bump whenever the signal maths changes. |
 | `TRACKER_PRICE_BUDGET_S` | optional | How long `/api/signals/tracker` may spend fetching live prices before serving the table without them. Default 6s. |
 | `SIGNAL_ENVIRONMENT` | optional | Overrides the environment label written on every signal. Defaults to Vercel's own `VERCEL_ENV`, then `local`. See *Shared database, separate environments*. |
 | `CRON_SECRET` | yes, for mutations | Existing project secret. Protects archive / postmortem / usage endpoints. |
@@ -209,7 +209,7 @@ without it.)
   candle — several times a day, all on the same calendar date.
 * **Strategy versions are independent.** Bump `STRATEGY_VERSION` and the new
   rules can be evaluated on the same candles without colliding with the old.
-  The current default is `v43_wedgefix`; anything scored before the
+  The current default is `v44_4h_avg`; anything scored before the
   market-structure confluence work is not comparable with anything after it.
 
 * **Environments do not collide.** A preview deploy sharing `DATABASE_URL`
@@ -335,6 +335,37 @@ by default and results are scoped to this deployment's environment.
 `/api/signals/tracker` takes `days` (closed window, default 3, max 30) and
 `environment`.
 
+## Publication cadence
+
+A set is **recorded on the 4H candle close and nowhere else** — six slots a day
+(00, 04, 08, 12, 16, 20; SGT and UTC boundaries coincide), three trades each, so
+at most **eighteen** published trades a day.
+
+Before this, every 2H close was a publication point. The idempotency key is
+per-candle, so a setup that stayed valid across six bars became six rows — which
+is how sixty-odd "working" signals accumulated while only a handful of distinct
+trades were ever taken.
+
+* A recompute **between** bars still serves recommendations. It records nothing
+  and says so: `persistence.skipped_reason = "NOT_A_PUBLICATION_BAR"`, with
+  `actionable` still true and `error_code` null. A skip is not a failure, and
+  `DB_REQUIRED` does not turn it into a 503.
+* Everything that publishes fires **after** a boundary, never before it — the
+  in-process pre-warm scheduler at :02 past, the GitHub and Vercel crons at :05.
+  The gate reads the last CLOSED candle, so a job that fires early sees the
+  previous bar and publishes nothing — `telegram-alerts.yml` used to fire at
+  23:50 UTC precisely to absorb GitHub's delay, and that became a bug.
+* If exchange data still lags at the boundary, the set is built on the previous
+  bar. It is served but **not cached** (`slot_current: false`), so the next
+  request recomputes against the fresh candle instead of serving an unrecorded
+  set for four hours.
+
+Ranking changed with the cadence: candidates are ordered by the **average of 1H
+and 2H strength**, with the composite `quality_score` demoted to the tiebreak.
+Every quality gate still gates — R/R ≥ 1.3, direction agreement, data quality,
+the expired-setup filter and correlation diversification all still remove
+candidates. See [INDICATORS.md](INDICATORS.md) for the detail.
+
 ## Outcome tracking
 
 Signals used to be recorded and then left at `OPEN` forever: the lifecycle
@@ -360,7 +391,7 @@ since the signal's own candle and decides what the market did:
 | Runs on a clock | One run is bounded by `MONITOR_BUDGET_S` (45s, inside the 60s serverless ceiling) and fetches every symbol's candles in parallel. Past the budget it stops cleanly and reports `truncated`: what was decided has committed, and the next tick resumes, because every decision is keyed on its candle. Being killed mid-run records **nothing**. |
 | One bad signal never abandons the batch | A monitor that stops at the first error silently leaves the rest open. |
 
-`.github/workflows/signal-monitor.yml` runs **hourly**, and can also be triggered
+`.github/workflows/signal-monitor.yml` runs **every 30 minutes**, and can also be triggered
 by hand from the Actions tab. Running it more often is harmless — every decision
 is keyed on the candle that caused it, so an extra run records nothing new.
 
@@ -391,16 +422,16 @@ setup; a different status means one filled and the other did not, and those are
 never merged. Closed trades are never merged at all: history stays whole.
 
 Rows are grouped into the **publication batch** they came from — *"Jul 30 · 8:00
-PM SGT"* — because a slot is the unit these are decided and reviewed in, and each
+PM SGT"*, one of the six 4H slots — because a slot is the unit these are decided and reviewed in, and each
 batch carries its own scoreboard. Batch headers expand and collapse; live batches
 start open and closed ones start collapsed, and your choice is remembered in
 `localStorage` — the table re-renders on a 5-minute poll, so without that a batch
 you opened would snap shut under you. Grouping reads `generated_at`, not the candle
 time: two symbols in one batch can sit on different candles but were still one
-decision. Anything published between midnight and 08:00 SGT belongs to the
-previous day's 20:00 batch, matching the recommendation cache — those hours are
-served the 8pm set. A row whose timestamp cannot be read lands in an *Ungrouped*
-batch rather than disappearing.
+decision. Every hour of the day now falls inside a batch — the six 4H boundaries
+tile the whole day, so there is no overnight gap to fold into the previous
+evening. A row whose timestamp cannot be read lands in an *Ungrouped* batch
+rather than disappearing.
 
 The API returns `live_batches` and `closed_batches` alongside the flat `live` and
 `closed` lists, so a caller that just wants every live signal need not walk them.
