@@ -36,12 +36,13 @@ __all__ = [
 # the signal maths changes, so old and new signals stay independently analysable
 # and the idempotency key does not collide across versions.
 STRATEGY_NAME = "mtf_confluence_top3"
-# v42: as v41 (market-structure confluence moving strength, liquidity-aware
-# stops, pool-anchored take-profits) plus the expired-setup gate: a candidate
-# whose first target has already traded through is no longer published. Signals
-# scored before that are NOT comparable with signals scored after, which is
-# exactly what this column is for.
-_DEFAULT_STRATEGY_VERSION = "v42_tpfilter"
+# v43: as v42 (market-structure confluence, liquidity-aware stops, pool-anchored
+# take-profits, the expired-setup gate) plus a pattern-detection fix: a breakout
+# candle can no longer become part of the rail it broke, so a triangle or wedge
+# stops silently reverting to "forming" after a failed breakout. Confirmed
+# patterns feed the score, so signals from before this are NOT comparable with
+# signals from after — which is exactly what this column is for.
+_DEFAULT_STRATEGY_VERSION = "v43_wedgefix"
 STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
                     or _DEFAULT_STRATEGY_VERSION)
 

@@ -188,7 +188,7 @@ def test_strategy_version_reflects_the_current_rules():
     # liquidity-aware stops, TP anchoring, pool recency). Signals scored before
     # that are not comparable with signals scored after, which is what this
     # column exists to separate.
-    assert sp.STRATEGY_VERSION == "v42_tpfilter"
+    assert sp.STRATEGY_VERSION == "v43_wedgefix"
     assert "v35" not in sp.STRATEGY_VERSION
 
 
@@ -202,7 +202,7 @@ def test_strategy_version_is_overridable_by_env(monkeypatch):
         monkeypatch.undenv = None
         monkeypatch.delenv("STRATEGY_VERSION", raising=False)
         importlib.reload(sp)
-    assert sp.STRATEGY_VERSION == "v42_tpfilter"
+    assert sp.STRATEGY_VERSION == "v43_wedgefix"
 
 
 # ── Pooler compatibility ────────────────────────────────────────────────────

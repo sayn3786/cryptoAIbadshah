@@ -662,6 +662,55 @@ this gate are not comparable with those scored without it.
 
 ---
 
+### Triangles & Wedges · *detection integrity*
+*Changes which patterns are confirmed, and confirmed patterns feed the score.*
+
+Rails are fitted through the recent swing pivots, and a breakout is the first
+decisive **close** beyond a rail after the last pivot. That last part had a hole:
+after a breakout the breaking candle usually becomes a swing pivot itself, so the
+rail was refitted **through** it and the scan window slid past the very bar that
+broke. The pattern quietly un-broke itself.
+
+Observed on a live TAO 1D falling wedge: breakout, retest the next day, and days
+later the card read *"Forming — awaiting a break above the rail"* again. Same
+series in a test harness, before the fix:
+
+```
++1 candle   failed      ← correct
++2 candles  failed
++3 candles  forming     ← the breakout has been erased
++4 candles  forming
+```
+
+**A candle cannot be part of the boundary it broke.** Pivots whose candle closed
+beyond the structure that preceded them are now dropped before the rails are
+fitted (`_peel_breakout_pivots`).
+
+| Rule | Behaviour |
+|---|---|
+| Which pivots are dropped | Any whose close was beyond rails fitted from the pivots *before* it — newest first, since a breakout pivot stops being the trailing one after a few bars and would otherwise poison the fit from the middle of the set. |
+| Bounded | At most 3, and never below `TW_MIN_PIVOTS` per rail. A noisy stretch must not dissolve a valid structure. |
+| Clean structures untouched | With nothing to peel the rails are bit-identical to before. |
+| Still forming stays forming | The fix must not make every pattern look broken. |
+
+**Both cards show.** A structure that has resolved does not stop the next one
+existing, so the detector now emits the invalidated pattern *and* the one price
+is building in its place — resolved first, forming after. One card hiding the
+other meant either the failure or the new setup went unseen:
+
+```
++1 candle   Falling Wedge  failed (up, closed back below the lower rail)
++2 candles  Falling Wedge  failed
++3 candles  Falling Wedge  failed   ·  Falling Wedge  forming   ← both
++4 candles  Falling Wedge  failed   ·  Falling Wedge  forming
++5 candles  Falling Wedge  forming            (the failure aged out)
+```
+
+A failed breakout still disappears once it ages past `FAILURE_SHOW_BARS` (3
+candles) — that is unchanged, and it is what ends the pairing above.
+
+---
+
 ### BTC-Only Indicators
 
 These only score when the symbol is `BTCUSDT`.

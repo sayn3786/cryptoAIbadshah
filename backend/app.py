@@ -2415,7 +2415,9 @@ def _rec_cache_key() -> str:
     # v41: pool weight decays with how long ago the level was last touched.
     # v42: a candidate whose TP1 has already traded through is dropped, so the
     #      published set changes as price moves inside the slot.
-    return f"v42_tpfilter_{date}_{slot}"
+    # v43: a breakout candle can no longer be refitted into the rail it broke,
+    #      so triangle/wedge confirmation — which feeds the score — is stable.
+    return f"v43_wedgefix_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

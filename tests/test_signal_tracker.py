@@ -24,7 +24,7 @@ def _sig(**over):
     s = {"id": "s1", "symbol": "BTC", "direction": "LONG", "timeframe": "2H",
          "status": "OPEN", "entry_price": "100", "stop_loss": "95",
          "generated_at": OPENED, "confidence_score": "61.5",
-         "environment": "production", "strategy_version": "v42_tpfilter"}
+         "environment": "production", "strategy_version": "v43_wedgefix"}
     s.update(over)
     return s
 

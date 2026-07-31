@@ -185,8 +185,19 @@ def test_a_spent_later_rung_is_surfaced_on_a_published_card(engine_stub):
 
 
 def test_strategy_version_marks_the_new_rules(engine_stub):
+    """
+    Signals scored with the gate must be distinguishable from those without.
+
+    Pinned by generation, not by exact string: the version legitimately moves on
+    every scoring change, and a test that hard-codes it only ever teaches you to
+    edit the test. What matters is that it is at or past the gate, and that the
+    slot cache key moves WITH it — otherwise the cache keeps serving sets scored
+    by the old rules for the rest of the slot.
+    """
+    import re
     import signal_publish as sp
-    assert sp.STRATEGY_VERSION == "v42_tpfilter", \
-        "signals scored with the gate must be distinguishable from those without"
-    assert appmod._rec_cache_key().startswith("v42_tpfilter_"), \
-        "the slot cache must not keep serving pre-gate sets"
+
+    generation = int(re.match(r"v(\d+)", sp.STRATEGY_VERSION).group(1))
+    assert generation >= 42, "the expired-setup gate shipped in v42"
+    assert appmod._rec_cache_key().startswith(sp.STRATEGY_VERSION + "_"), \
+        "the slot cache key and the strategy version must move together"
