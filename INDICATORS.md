@@ -254,6 +254,11 @@ different answer than a long one. The app fetches **240 candles** on 1H–1D,
 where the drift against a 3000-bar seed measures **0.000**. At 60 bars it is
 still only ~0.06.
 
+The panel's 70/30 threshold lines are **price lines**, not data series. Drawn as
+series they carried a time coordinate — anchored 2.85 years in the past — which
+stretched the chart's time domain back to 2023 and made `fitContent()` frame
+three years to show thirty days.
+
 **When ours and TradingView disagree, check the timeframe first.** Daily and
 weekly RSI are different numbers about different things. Note also that
 TradingView's RSI pane prints *two* values — the RSI and its own moving average
