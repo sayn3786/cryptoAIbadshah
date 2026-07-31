@@ -305,6 +305,13 @@ class _FakeStore:
     def list_active_signals(self, **kw):
         return [dict(s) for s in self._signals.values()]
 
+    def attach_targets(self, rows, **kw):
+        # The real store fills this in ONE query for every row; the fixtures
+        # already carry their targets, so this only guarantees the key exists.
+        for r in rows:
+            r.setdefault("targets", [])
+        return rows
+
     def get_signal(self, sid, **kw):
         if self.fail_on == sid:
             raise RuntimeError("boom")
@@ -350,10 +357,19 @@ def test_candles_are_fetched_once_per_symbol_and_timeframe():
     assert fetched == [("BTC", "2H")], "the market cannot have moved differently for two signals"
 
 
-def test_one_bad_signal_does_not_abandon_the_rest():
+def test_one_bad_signal_does_not_abandon_the_rest(monkeypatch):
     a = _sig(id="a"); a["targets"] = _targets(110)
     b = _sig(id="b", symbol="ETH"); b["targets"] = _targets(110)
-    store = _FakeStore([a, b], fail_on="a")
+    store = _FakeStore([a, b])
+
+    real = monitor.evaluate
+
+    def boom(signal, *args, **kw):
+        if signal.get("id") == "a":
+            raise RuntimeError("bad row")
+        return real(signal, *args, **kw)
+
+    monkeypatch.setattr(monitor, "evaluate", boom)
     out = monitor.run_monitor(store, lambda sym, tf: [_candle(2, 115, 99)], now=BASE)
     assert out["checked"] == 2
     assert len(out["errors"]) == 1 and out["errors"][0]["signal_id"] == "a"
@@ -391,7 +407,73 @@ def test_market_data_is_fetched_in_parallel():
     assert peak[0] > 1, "symbols were still fetched one at a time"
 
 
-def test_a_run_that_exceeds_its_budget_stops_instead_of_being_killed():
+def test_targets_are_fetched_once_for_the_whole_batch():
+    """
+    The run got through 10 of 68 signals in 47 seconds.
+
+    Each one called get_signal — five queries (signal, targets, snapshot,
+    events, postmortem) — and the engine uses NullPool, so every query opened a
+    fresh TLS connection to Neon. The monitor needs the row and its targets, and
+    the row already came back from list_active_signals.
+    """
+    sigs = []
+    for i in range(20):
+        sg = _sig(id=str(i), symbol=f"S{i}")
+        sg["targets"] = _targets(110)
+        sigs.append(sg)
+
+    store = _FakeStore(sigs)
+    store.get_signal_calls = 0
+    store.attach_calls = 0
+    real_attach = store.attach_targets
+
+    def counted_attach(rows, **kw):
+        store.attach_calls += 1
+        return real_attach(rows, **kw)
+
+    def counted_get(sid, **kw):
+        store.get_signal_calls += 1
+        return dict(store._signals[sid])
+
+    store.attach_targets = counted_attach
+    store.get_signal = counted_get
+
+    monitor.run_monitor(store, lambda s, t: [_candle(2, 104, 99)], now=BASE)
+    assert store.attach_calls == 1, "targets must come back in ONE query"
+    assert store.get_signal_calls == 0, \
+        "a per-signal round trip is what made the run time out"
+
+
+def test_an_unchanged_excursion_is_not_rewritten():
+    # The store clamps MFE/MAE to widen-only, so rewriting the same numbers is a
+    # round trip that changes nothing — and most signals sit still most hours.
+    sg = _sig(id="a", status="OPEN", entry_filled_at=BASE.isoformat(),
+              entry_fill_price="100", mfe_pct="4.0", mae_pct="-1.0")
+    sg["targets"] = _targets(110)
+    store = _FakeStore([sg])
+    store.excursions = []
+    store.record_excursion = lambda sid, **kw: store.excursions.append(kw)
+
+    # Candles whose extremes are INSIDE what is already recorded.
+    out = monitor.run_monitor(store, lambda s, t: [_candle(2, 102, 99.5)], now=BASE)
+    assert store.excursions == [], "nothing widened, so nothing should be written"
+    assert out["measured"] == 0
+
+
+def test_a_widening_excursion_is_written():
+    sg = _sig(id="a", status="OPEN", entry_filled_at=BASE.isoformat(),
+              entry_fill_price="100", mfe_pct="1.0", mae_pct="-1.0")
+    sg["targets"] = _targets(200)
+    store = _FakeStore([sg])
+    store.excursions = []
+    store.record_excursion = lambda sid, **kw: store.excursions.append(kw)
+
+    monitor.run_monitor(store, lambda s, t: [_candle(2, 108, 97)], now=BASE)
+    assert store.excursions, "a new high-water mark must be recorded"
+    assert store.excursions[0]["mfe_pct"] == 8.0
+
+
+def test_a_run_that_exceeds_its_budget_stops_instead_of_being_killed(monkeypatch):
     # Stopping cleanly beats being killed: what was decided has committed, and
     # the next tick resumes because every decision is keyed on its candle.
     sigs = []
@@ -401,13 +483,13 @@ def test_a_run_that_exceeds_its_budget_stops_instead_of_being_killed():
         sigs.append(sg)
 
     store = _FakeStore(sigs)
-    real_get = store.get_signal
+    real = monitor.evaluate
 
-    def slow_get(sid, **kw):
+    def slow(*args, **kw):
         time.sleep(0.05)
-        return real_get(sid, **kw)
+        return real(*args, **kw)
 
-    store.get_signal = slow_get
+    monkeypatch.setattr(monitor, "evaluate", slow)
     out = monitor.run_monitor(store, lambda s, t: [_candle(2, 104, 99)],
                               now=BASE, budget_seconds=0.1)
     assert out["truncated"] is True
