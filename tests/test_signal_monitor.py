@@ -521,11 +521,32 @@ def test_a_store_without_session_scope_still_works():
     assert out["targets_hit"] == 1
 
 
+def test_work_is_taken_stalest_first_so_nothing_starves():
+    """
+    The run is time-budgeted, and the list came back newest-first — so the SAME
+    tail was dropped on every run. 34 of 65 signals were being skipped, and it
+    was always the same 34: they would never have been monitored at all.
+    """
+    sg = _sig(id="a"); sg["targets"] = _targets(110)
+    store = _FakeStore([sg])
+    asked = {}
+
+    def listing(**kw):
+        asked.update(kw)
+        return [dict(sg)]
+
+    store.list_active_signals = listing
+    monitor.run_monitor(store, lambda s, t: [_candle(2, 104, 99)], now=BASE)
+    assert asked.get("stalest_first") is True, \
+        "truncation would keep skipping the same signals forever"
+
+
 def test_the_run_reports_where_its_time_went():
     sg = _sig(id="a"); sg["targets"] = _targets(110)
     out = monitor.run_monitor(_FakeStore([sg]), lambda s, t: [_candle(2, 104, 99)],
                               now=BASE)
-    assert set(out["timing"]) == {"load_s", "fetch_s", "decide_s", "write_s"}
+    assert set(out["timing"]) == {"list_s", "targets_s", "fetch_s",
+                                  "decide_s", "write_s"}
     assert all(v >= 0 for v in out["timing"].values())
 
 
