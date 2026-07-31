@@ -16,18 +16,48 @@ jobs:
   send-alert:
     runs-on: ubuntu-latest
     steps:
+      # This cron sends Telegram AFTER computing, so a run killed by the 60s
+      # serverless timeout *after* the send would, on retry, announce the same
+      # set twice. That is why this workflow had no retries while the publish
+      # cron got them.
+      #
+      # /api/cron/daily now claims a per-slot key BEFORE dispatching (atomic
+      # SET NX via kv.py) and releases it if the send fails, so a retry can
+      # either finish the job or correctly do nothing. Retrying is safe.
       - name: Trigger Telegram notification
         run: |
-          echo "Calling: ${{ secrets.APP_URL }}/api/cron/daily"
-          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-            -X POST "${{ secrets.APP_URL }}/api/cron/daily" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
-            --max-time 90)
-          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
-          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
-          echo "Status: $HTTP_STATUS"
-          echo "Response: $BODY"
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: API returned HTTP $HTTP_STATUS"
-            exit 1
-          fi
+          set -u
+          ATTEMPTS=3
+          BACKOFF=20
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "--- attempt $i of $ATTEMPTS ---"
+            RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+              -X POST "${{ secrets.APP_URL }}/api/cron/daily" \
+              -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+              --max-time 90 || echo "HTTP_STATUS:000")
+            HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+            BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
+            echo "Status: $HTTP_STATUS"
+            echo "Response: $BODY"
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "$BODY" | grep -q '"telegram":"skipped' \
+                && echo "Already announced for this slot — dedup did its job."
+              exit 0
+            fi
+
+            # A bad secret or URL does not improve by waiting.
+            if [ "$HTTP_STATUS" = "401" ] || [ "$HTTP_STATUS" = "404" ]; then
+              echo "ERROR: HTTP $HTTP_STATUS — configuration problem, not transient. Not retrying."
+              exit 1
+            fi
+
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              echo "Retrying in ${BACKOFF}s…"
+              sleep $BACKOFF
+              BACKOFF=$((BACKOFF * 2))
+            fi
+          done
+
+          echo "ERROR: all $ATTEMPTS attempts failed."
+          exit 1

@@ -87,3 +87,32 @@ def exists(key: str) -> bool:
         except Exception:
             return key in _file_load()
     return key in _file_load()
+
+
+def release(key: str) -> None:
+    """
+    Give a claimed key back.
+
+    Needed because dedup here is claim-BEFORE-act: we claim, then send. If the
+    send fails and the claim stands, that slot's alert is suppressed forever and
+    a retry silently does nothing. Releasing on failure keeps "at most one
+    successful send" without turning a transient error into a permanent one.
+
+    Best-effort by design — a release that fails leaves the key claimed, which
+    loses an alert but never duplicates one. That is the safer direction.
+    """
+    if kv_enabled():
+        try:
+            _kv_cmd("DEL", key)
+            return
+        except Exception:
+            pass
+    with _lock:
+        ids = _file_load()
+        if key in ids:
+            ids.discard(key)
+            try:
+                with open(_FILE, "w") as f:
+                    json.dump({"ids": list(ids)}, f)
+            except Exception:
+                pass
