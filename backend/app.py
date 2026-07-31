@@ -2749,8 +2749,16 @@ def api_telegram_send():
     if not result.get("actionable", True):
         return _not_actionable(result)
 
+    # A person pressing the button means it, so this is NOT gated on the
+    # per-slot dedup — but a successful send does claim the slot, so the cron
+    # will not then announce the same set again.
     ok = _send_telegram_recs(result)
     if ok:
+        try:
+            import kv
+            kv.claim(f"tg:recs:{_deploy_env()}:{key}", ttl_seconds=7 * 24 * 3600)
+        except Exception:
+            pass                      # dedup is a nicety here; the send happened
         return jsonify({"ok": True, "count": len(result.get("recommendations", []))})
     return jsonify({"ok": False, "error": "Telegram send failed — check server logs"}), 500
 
@@ -2836,6 +2844,39 @@ def api_twitter_send():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _dispatch_once(channel: str, slot_key: str, send) -> str:
+    """
+    Dispatch to an outside audience AT MOST ONCE per publication slot.
+
+    Retrying the notification cron used to be unsafe: `/api/cron/daily` sends
+    Telegram AFTER computing, so a run killed by the serverless timeout *after*
+    the send would, on retry, announce the same set twice. That is the only
+    reason the workflow had no retries while the publish cron got them.
+
+    Claim BEFORE sending, so two concurrent invocations cannot both send — the
+    claim is an atomic ``SET NX`` when a KV is configured. Release on failure,
+    because a claim left standing after a failed send suppresses that slot's
+    alert forever and makes the retry silently do nothing.
+
+    The asymmetry is deliberate: a release that itself fails loses an alert but
+    never duplicates one, and for something that goes out to subscribers that is
+    the safer direction to fail in.
+    """
+    import kv
+    key = f"{channel}:{_deploy_env()}:{slot_key}"
+    if not kv.claim(key, ttl_seconds=7 * 24 * 3600):
+        return "skipped (already sent for this slot)"
+    try:
+        ok = send()
+    except Exception as exc:
+        kv.release(key)
+        return f"error: {exc}"
+    if not ok:
+        kv.release(key)
+        return "failed"
+    return "sent"
+
+
 def _cron_authorized() -> bool:
     """Bearer token (Vercel) or x-cron-secret header (GitHub Actions)."""
     import os as _os
@@ -2904,6 +2945,7 @@ def api_cron_daily():
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     results = {}
+    result = None
     try:
         result = _compute_recommendations()
         if result.get("actionable", True):
@@ -2919,21 +2961,25 @@ def api_cron_daily():
     except Exception as e:
         results["recs_error"] = str(e)
 
-    # Telegram
-    try:
-        tg_ok = _send_telegram_recs(result)
-        results["telegram"] = "sent" if tg_ok else "failed"
-    except Exception as e:
-        results["telegram"] = f"error: {e}"
+    slot_key = _rec_cache_key()
 
-    # Twitter — BTC + ETH 1D
-    try:
+    # Telegram. Nothing to announce if the set could not be computed — sending
+    # the previous run's `result` would publish a stale set.
+    if result is None:
+        results["telegram"] = "skipped (no recommendations computed)"
+    else:
+        results["telegram"] = _dispatch_once(
+            "tg:recs", slot_key, lambda: _send_telegram_recs(result))
+
+    # Twitter — BTC + ETH 1D. The two analyses are built INSIDE the closure, so
+    # a run that is going to skip does not pay for them. That also makes a retry
+    # after a timeout much cheaper than the run that timed out.
+    def _twitter():
         btc = build_analysis("BTC", "1D")
         eth = build_analysis("ETH", "1D")
-        tw_ok = _post_twitter_signals(btc, eth)
-        results["twitter"] = "sent" if tw_ok else "failed/not configured"
-    except Exception as e:
-        results["twitter"] = f"error: {e}"
+        return _post_twitter_signals(btc, eth)
+
+    results["twitter"] = _dispatch_once("tw:daily", slot_key, _twitter)
 
     # NOTE: chart-pattern confirmation alerts are intentionally NOT run here — the
     # daily cron is already close to the serverless time budget (recommendations +

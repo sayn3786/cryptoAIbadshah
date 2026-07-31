@@ -350,6 +350,16 @@ trades were ever taken.
   and says so: `persistence.skipped_reason = "NOT_A_PUBLICATION_BAR"`, with
   `actionable` still true and `error_code` null. A skip is not a failure, and
   `DB_REQUIRED` does not turn it into a 503.
+* **Announcements go out at most once per slot.** `/api/cron/daily` sends
+  Telegram *after* computing, so a run killed by the timeout after the send
+  would, on retry, announce the same set twice — which is why that workflow
+  had no retries while the publish cron did. It now claims a per-slot key
+  **before** dispatching (atomic `SET NX` via `kv.py`) and **releases it if the
+  send fails**, so a retry either finishes the job or correctly does nothing.
+  The asymmetry is deliberate: a release that itself fails loses an alert but
+  never duplicates one. The manual *Send to Telegram* button is not gated — a
+  person pressing it means it — but a successful manual send claims the slot so
+  the cron will not repeat it.
 * **Publishing runs close to Vercel's 60s `maxDuration`.** `/api/cron/daily` has
   already been killed at 61s with `FUNCTION_INVOCATION_TIMEOUT`, and
   `/api/cron/publish` runs the same compute. `signal-publish.yml` therefore
