@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '186';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '187';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1077,16 +1077,30 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
 }
 
 /* ─── RSI sub-chart ───────────────────────────────────────────────────────── */
+/* No data must CLEAR the chart, never leave the previous one on screen.
+
+   This returned early without clearing, so switching timeframe when the new
+   payload had no RSI left the OLD series rendered — its timestamps and, because
+   lightweight-charts labels the price scale with each series' last value, its
+   RSI number too. A 1D view could sit there showing a weekly RSI over a 2023
+   axis with nothing saying so. On a trading dashboard a number from a different
+   timeframe presented as the current one is worse than no number at all. */
 function renderRSIChart(rsiSeries) {
-  if (!rsiSeries?.length || !S.rsiSeries) return;
-  const data = rsiSeries
-    .filter(d => d.rsi != null)
+  if (!S.rsiSeries) return;
+  const data = (rsiSeries || [])
+    .filter(d => d && d.rsi != null && d.timestamp != null)
     .map(d => ({ time: Math.floor(d.timestamp / 1000), value: d.rsi }));
-  if (data.length) {
-    const unique = [...new Map(data.map(d => [d.time, d])).values()].sort((a, b) => a.time - b.time);
-    S.rsiSeries.setData(unique);
-    S.rsiChart.timeScale().fitContent();
-  }
+  if (!data.length) { clearRSIChart(); return; }
+  const unique = [...new Map(data.map(d => [d.time, d])).values()].sort((a, b) => a.time - b.time);
+  S.rsiSeries.setData(unique);
+  try { S.rsiChart.timeScale().fitContent(); } catch (_) {}
+}
+
+/* Called the moment the symbol or timeframe changes, before the new analysis
+   arrives — so a slow or failed request shows an empty panel rather than the
+   previous selection's RSI. */
+function clearRSIChart() {
+  try { S.rsiSeries?.setData([]); } catch (_) {}
 }
 
 /* ─── CVD charts ──────────────────────────────────────────────────────────── */
@@ -4586,6 +4600,7 @@ function wireSelectors() {
     document.querySelectorAll('.asset-tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     S.symbol = btn.dataset.sym;
+    clearRSIChart();          // never show the old symbol's RSI while loading
     loadAnalysis();
   });
 
@@ -4595,6 +4610,7 @@ function wireSelectors() {
     document.querySelectorAll('.tf-tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     S.timeframe = btn.dataset.tf;
+    clearRSIChart();          // never show the old timeframe's RSI while loading
     loadAnalysis();
   });
 

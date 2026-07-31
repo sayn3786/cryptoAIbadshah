@@ -240,6 +240,25 @@ Fear & Greed and News update at most daily — applying full weight on 1H is mis
 
 ---
 
+### RSI (14) — the value itself
+
+Wilder's smoothing (RMA), which is exactly what TradingView's RSI uses, so the
+two agree. The seed is a simple mean of the first 14 gains and losses; every bar
+after that is `avg = (avg × 13 + new) / 14`. Verified against an exact-decimal
+Wilder reference to within **0.01**, and against the classic SMA-of-gains
+variant to prove it is *not* that — the two agree at the seed and drift after,
+so a test checking only the first value would miss the difference.
+
+Wilder's smoothing has unbounded memory, so a short warm-up gives a slightly
+different answer than a long one. The app fetches **240 candles** on 1H–1D,
+where the drift against a 3000-bar seed measures **0.000**. At 60 bars it is
+still only ~0.06.
+
+**When ours and TradingView disagree, check the timeframe first.** Daily and
+weekly RSI are different numbers about different things. Note also that
+TradingView's RSI pane prints *two* values — the RSI and its own moving average
+— and the second is not an RSI.
+
 ### RSI Divergence · `momentum`
 *14-candle window. Divergence between price and RSI.*
 
