@@ -3174,13 +3174,20 @@ def api_signals_monitor():
             fill_window_hours=_int_arg("fill_window_hours",
                                        monitor.DEFAULT_FILL_WINDOW_HOURS,
                                        1, 24 * 30),
+            # Stay inside the serverless ceiling (vercel.json maxDuration).
+            # Being killed mid-run records nothing; stopping short records what
+            # it got and the next tick resumes.
+            budget_seconds=float(os.getenv("MONITOR_BUDGET_S",
+                                           monitor.DEFAULT_BUDGET_SECONDS)),
             limit=_int_arg("limit", 100, 1, 200))
     except Exception as exc:
         return _db_error_response(exc)
     print(f"[monitor] checked={summary['checked']} filled={summary['filled']} "
           f"tp={summary['targets_hit']} sl={summary['stopped']} "
           f"expired={summary['expired']} cancelled={summary['cancelled']} "
-          f"errors={len(summary['errors'])}")
+          f"skipped={summary.get('skipped', 0)} "
+          f"truncated={summary.get('truncated')} "
+          f"in {summary.get('elapsed_s')}s errors={len(summary['errors'])}")
     return jsonify(summary)
 
 

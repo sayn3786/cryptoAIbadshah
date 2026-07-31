@@ -10,6 +10,7 @@ a level still counts as reached.
 """
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -357,6 +358,79 @@ def test_one_bad_signal_does_not_abandon_the_rest():
     assert out["checked"] == 2
     assert len(out["errors"]) == 1 and out["errors"][0]["signal_id"] == "a"
     assert ("TP", "b", 1) in store.calls, "the healthy signal must still be recorded"
+
+
+# ── Staying inside the function's time limit ───────────────────────────────
+
+def test_market_data_is_fetched_in_parallel():
+    """
+    The first real run died at exactly 60s with FUNCTION_INVOCATION_TIMEOUT and
+    recorded NOTHING. Candles were fetched one symbol at a time, so wall-clock
+    was the sum of every symbol's round trip.
+    """
+    import threading
+    sigs = []
+    for i in range(6):
+        sg = _sig(id=str(i), symbol=f"S{i}")
+        sg["targets"] = _targets(110)
+        sigs.append(sg)
+
+    inflight, peak, lock = 0, [0], threading.Lock()
+
+    def slow(sym, tf):
+        nonlocal inflight
+        with lock:
+            inflight += 1
+            peak[0] = max(peak[0], inflight)
+        time.sleep(0.05)
+        with lock:
+            inflight -= 1
+        return [_candle(2, 104, 99)]
+
+    monitor.run_monitor(_FakeStore(sigs), slow, now=BASE)
+    assert peak[0] > 1, "symbols were still fetched one at a time"
+
+
+def test_a_run_that_exceeds_its_budget_stops_instead_of_being_killed():
+    # Stopping cleanly beats being killed: what was decided has committed, and
+    # the next tick resumes because every decision is keyed on its candle.
+    sigs = []
+    for i in range(8):
+        sg = _sig(id=str(i), symbol=f"S{i}")
+        sg["targets"] = _targets(110)
+        sigs.append(sg)
+
+    store = _FakeStore(sigs)
+    real_get = store.get_signal
+
+    def slow_get(sid, **kw):
+        time.sleep(0.05)
+        return real_get(sid, **kw)
+
+    store.get_signal = slow_get
+    out = monitor.run_monitor(store, lambda s, t: [_candle(2, 104, 99)],
+                              now=BASE, budget_seconds=0.1)
+    assert out["truncated"] is True
+    assert out["skipped"] > 0
+    assert out["checked"] < len(sigs), "it kept going past the budget"
+
+
+def test_a_normal_run_is_not_marked_truncated():
+    a = _sig(id="a"); a["targets"] = _targets(110)
+    out = monitor.run_monitor(_FakeStore([a]), lambda s, t: [_candle(2, 104, 99)],
+                              now=BASE)
+    assert out["truncated"] is False
+    assert out["skipped"] == 0
+    assert out["elapsed_s"] >= 0
+
+
+def test_a_symbol_whose_data_never_arrived_is_skipped_not_guessed_at():
+    a = _sig(id="a"); a["targets"] = _targets(110)
+    out = monitor.run_monitor(_FakeStore([a]), lambda s, t: (_ for _ in ()).throw(
+        RuntimeError("provider down")), now=BASE)
+    assert out["skipped"] == 1
+    assert out["errors"], "a failed fetch must be reported, not silently dropped"
+    assert out["targets_hit"] == 0
 
 
 def test_a_rejected_transition_stops_that_signal_and_is_reported():

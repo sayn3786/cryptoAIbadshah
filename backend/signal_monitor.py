@@ -21,13 +21,16 @@ cannot flatter the strategy:
 """
 from __future__ import annotations
 
+import time
+from concurrent.futures import (ThreadPoolExecutor, as_completed,
+                                TimeoutError as FuturesTimeout)
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 __all__ = [
     "evaluate", "Action", "DEFAULT_MAX_AGE_HOURS", "DEFAULT_FILL_WINDOW_HOURS",
-    "run_monitor", "excursion",
+    "DEFAULT_BUDGET_SECONDS", "run_monitor", "excursion",
 ]
 
 # A signal that has neither hit a target nor been stopped after this long is
@@ -48,6 +51,20 @@ DEFAULT_FILL_WINDOW_HOURS = 24
 # trade as though the stop never moved contradicted our own instruction and
 # booked a full loss on a position that had already been made risk-free.
 BREAKEVEN_AFTER_PARTIAL = True
+
+# Wall-clock budget for one run, comfortably inside the serverless function's
+# 60-second ceiling. The first real run timed out at exactly 60s
+# (FUNCTION_INVOCATION_TIMEOUT) with two dozen signals: market data was fetched
+# one symbol at a time, and the whole run died with NOTHING recorded.
+#
+# Stopping cleanly beats being killed. Every decision is keyed on the candle
+# that caused it, so a partial run commits what it got and the next hourly tick
+# resumes from there — a monitor that times out records nothing, forever.
+DEFAULT_BUDGET_SECONDS = 45.0
+
+# How many symbols to fetch market data for at once. The fetches are IO-bound
+# and independent; serially, wall-clock was the sum of every symbol.
+FETCH_WORKERS = 8
 
 Action = Dict[str, Any]
 
@@ -399,6 +416,7 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
                 max_age_hours: int = DEFAULT_MAX_AGE_HOURS,
                 fill_window_hours: int = DEFAULT_FILL_WINDOW_HOURS,
                 breakeven_after_partial: bool = BREAKEVEN_AFTER_PARTIAL,
+                budget_seconds: float = DEFAULT_BUDGET_SECONDS,
                 limit: int = 100) -> Dict[str, Any]:
     """
     Evaluate every working signal and record what the market did to it.
@@ -412,9 +430,11 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     continue. A monitor that abandons the batch on the first bad row is worse
     than no monitor, because the remaining trades silently stay open.
     """
+    started = time.monotonic()
     summary = {"checked": 0, "filled": 0, "targets_hit": 0, "stops_moved": 0,
                "stopped": 0, "expired": 0, "cancelled": 0, "measured": 0,
-               "unchanged": 0, "errors": [], "results": []}
+               "unchanged": 0, "skipped": 0, "truncated": False,
+               "elapsed_s": 0.0, "errors": [], "results": []}
 
     try:
         active = store.list_active_signals(limit=limit)
@@ -422,16 +442,50 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
         summary["errors"].append({"symbol": None, "error": str(exc)[:200]})
         return summary
 
+    # Fetch every symbol's candles ONCE, in parallel, before touching anything.
+    # Serially this was the sum of every symbol's round trip, which is what blew
+    # the 60-second function ceiling with two dozen signals.
+    pairs = {(r.get("symbol"), r.get("timeframe")) for r in active
+             if r.get("symbol")}
     candle_cache: Dict[tuple, Sequence[Dict[str, Any]]] = {}
+    if pairs:
+        ex = ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, len(pairs)))
+        try:
+            futures = {ex.submit(fetch_candles, sym, tf or "2H"): (sym, tf)
+                       for sym, tf in pairs}
+            remaining = max(budget_seconds - (time.monotonic() - started), 1.0)
+            try:
+                for fut in as_completed(futures, timeout=remaining):
+                    key = futures[fut]
+                    try:
+                        candle_cache[key] = fut.result() or []
+                    except Exception as exc:
+                        summary["errors"].append({"symbol": key[0],
+                                                  "error": str(exc)[:200]})
+            except (FuturesTimeout, TimeoutError):
+                # Aliases on 3.11+, distinct classes before it.
+                # Whatever arrived is usable. The symbols that did not are
+                # simply not evaluated this run.
+                summary["truncated"] = True
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
 
     for row in active:
         sid, symbol = row.get("id"), row.get("symbol")
         timeframe = row.get("timeframe")
+        if time.monotonic() - started > budget_seconds:
+            # Stop cleanly rather than being killed mid-write. Everything
+            # decided so far has already committed, and the next run resumes
+            # from here because every decision is keyed on its candle.
+            summary["truncated"] = True
+            summary["skipped"] += 1
+            continue
         summary["checked"] += 1
         try:
             key = (symbol, timeframe)
             if key not in candle_cache:
-                candle_cache[key] = fetch_candles(symbol, timeframe) or []
+                summary["skipped"] += 1
+                continue                 # no market data this run
             detail = store.get_signal(sid)
             if not detail:
                 continue
@@ -473,4 +527,5 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
         except Exception as exc:
             summary["errors"].append({"symbol": symbol, "signal_id": sid,
                                       "error": str(exc)[:200]})
+    summary["elapsed_s"] = round(time.monotonic() - started, 2)
     return summary
