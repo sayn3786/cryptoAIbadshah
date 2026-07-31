@@ -2054,6 +2054,15 @@ html { overflow-x: hidden; }
 .tracker-score .tk-loss { color: var(--bear); font-weight: 700; }
 
 .tracker-body { overflow-x: auto; }
+
+/* The whole section collapses. It starts closed: the tracker is a reference you
+   open when you want it, not something that should push the charts down the page
+   every time you load the dashboard. */
+.tracker-header { cursor: pointer; user-select: none; }
+.tracker-header:focus-visible { outline: 2px solid var(--bull); outline-offset: 2px; }
+.tk-section-caret { font-size: .8rem; margin-right: 2px; }
+.tracker-section.collapsed .tk-section-caret { transform: rotate(-90deg); }
+.tracker-section.collapsed .tracker-body { display: none; }
 .tracker-group-title {
   font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted2); margin: 12px 0 6px;
@@ -2119,6 +2128,9 @@ html { overflow-x: hidden; }
 /* MFE / MAE under the P/L — how far it ran either way, from the fill. */
 .tk-exc { font-size: .64rem; color: var(--muted2); white-space: nowrap; margin-top: 1px; }
 .tk-exc .tk-pos, .tk-exc .tk-neg { font-weight: 600; }
+
+/* The stop has been moved from where the strategy first put it. */
+.tk-moved { color: var(--bull); font-size: .7rem; }
 
 .tk-remark { overflow-wrap: anywhere; }
 .tk-action { color: var(--muted); overflow-wrap: anywhere; }

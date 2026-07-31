@@ -340,6 +340,8 @@ since the signal's own candle and decides what the market did:
 
 | Rule | Behaviour |
 |---|---|
+| **Scale-outs are weighted** | Banking TP1 takes part of the position off at TP1's price; only the remainder closes at whatever ends the trade. The realised return used to come from the FINAL exit alone, so a trade that took TP1 and reversed recorded a full loss and none of the profit it had already taken. Shares come from `signal_targets.exit_fraction`, or an even split across the ladder. |
+| **The stop moves to breakeven after a partial** | The tracker has always advised it; the record now does it, as a `STOP_MOVED` event. `stop_loss` is never rewritten — it is the record of the risk originally taken — and `current_stop_loss` is where the stop actually sits. A stop is never moved FURTHER from entry: widening mid-trade is how a small loss becomes a large one, and the record must not make it look like a plan. |
 | **A signal is a working order first** | The monitor used to ignore `entry_price` entirely, so a setup was treated as filled the moment it published — and a target reached without price ever trading the entry booked a win nobody could have taken. An order now becomes `OPEN` only when a candle trades AT the entry, from either side. |
 | **Never filled is not a trade** | An order price never returned to is `CANCELLED` after `fill_window_hours` (24 by default), excluded from the win rate, the averages and the P/L. |
 | **MFE / MAE** | Every filled trade records how far it ran in favour and against, measured from the fill. A loss that first ran +1.8R is a stop-placement problem, not a signal problem. Both only ever widen — a shorter candle window must not shrink a high-water mark already observed. |

@@ -6137,10 +6137,14 @@ function _tkRow(row) {
   const priceCell = row.state === 'closed'
     ? `${fmtPrice(row.close_price)}<div class="tk-muted" style="font-size:.68rem">close</div>`
     : `${fmtPrice(row.live_price)}<div class="tk-muted" style="font-size:.68rem">live</div>`;
-  const cushion = row.stop_distance_pct == null
-    ? ''
-    : `<div class="tk-muted" style="font-size:.68rem">${row.stop_distance_pct >= 0
-        ? `${row.stop_distance_pct.toFixed(2)}% clear` : 'breached'}</div>`;
+  /* Once the stop is at entry or better the trade cannot lose — that is worth
+     more than the distance number, so it replaces it. */
+  const cushion = row.risk_free
+    ? `<div class="tk-pos" style="font-size:.68rem">risk-free</div>`
+    : row.stop_distance_pct == null
+      ? ''
+      : `<div class="tk-muted" style="font-size:.68rem">${row.stop_distance_pct >= 0
+          ? `${row.stop_distance_pct.toFixed(2)}% clear` : 'breached'}</div>`;
   /* A working order has no position, so the entry cell shows how far price
      still has to come rather than a P/L that does not exist yet. */
   const entryGap = row.entry_distance_pct == null
@@ -6154,7 +6158,8 @@ function _tkRow(row) {
     <td><span class="tk-status ${status}">${_TK_STATUS_LABEL[row.status] || row.status}</span></td>
     <td class="tk-num">${fmtPrice(row.entry)}${entryGap}</td>
     <td class="tk-num">${priceCell}</td>
-    <td class="tk-num">${fmtPrice(row.stop_loss)}${cushion}</td>
+    <td class="tk-num">${fmtPrice(row.stop_loss)}${row.stop_moved
+        ? ` <span class="tk-moved" title="Moved from ${fmtPrice(row.original_stop)}">↑</span>` : ''}${cushion}</td>
     <td>${_tkLadder(row)}</td>
     <td class="tk-num">${_tkPct(move)}${row.r_multiple != null
         ? `<div class="tk-muted" style="font-size:.68rem">${row.r_multiple >= 0 ? '+' : ''}${row.r_multiple.toFixed(2)}R</div>` : ''}
@@ -6208,9 +6213,45 @@ function _tkToggleBatch(key, section) {
 // refresh, so a handler bound to each header would be lost on the next poll.
 document.addEventListener('click', e => {
   const hdr = e.target.closest?.('.tk-batch-hdr');
-  if (!hdr) return;
-  _tkToggleBatch(hdr.dataset.key, hdr.dataset.section);
+  if (hdr) { _tkToggleBatch(hdr.dataset.key, hdr.dataset.section); return; }
+  // The section header itself. Ignore clicks on the Refresh button inside it.
+  const sec = e.target.closest?.('.tracker-header');
+  if (sec && !e.target.closest('button')) _tkToggleSection();
 });
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const t = e.target;
+  if (t?.classList?.contains('tracker-header')) { e.preventDefault(); _tkToggleSection(); }
+  else if (t?.classList?.contains('tk-batch-hdr')) {
+    e.preventDefault(); _tkToggleBatch(t.dataset.key, t.dataset.section);
+  }
+});
+
+/* The whole section starts COLLAPSED: the tracker is a reference you open when
+   you want it, not something that pushes the charts down the page on every
+   load. The choice is remembered, so someone who works from it keeps it open. */
+const TK_SECTION_KEY = 'cryptomonk.tracker.section';
+
+function _tkSectionOpen() {
+  try { return localStorage.getItem(TK_SECTION_KEY) === 'open'; }
+  catch (_) { return false; }
+}
+
+function _tkApplySection() {
+  const sec = document.getElementById('trackerSection');
+  const hdr = document.getElementById('trackerHeader');
+  if (!sec) return;
+  const open = _tkSectionOpen();
+  sec.classList.toggle('collapsed', !open);
+  if (hdr) hdr.setAttribute('aria-expanded', String(open));
+}
+
+function _tkToggleSection() {
+  try { localStorage.setItem(TK_SECTION_KEY, _tkSectionOpen() ? 'closed' : 'open'); }
+  catch (_) {}
+  _tkApplySection();
+}
 
 function _tkBatchScore(sum) {
   // Only decided trades count. A batch still running shows nothing rather than
@@ -6260,6 +6301,7 @@ async function loadTracker(force) {
     const data = await res.json();
     const live = data.live || [], closed = data.closed || [];
     section.classList.remove('hidden');
+    _tkApplySection();     // collapsed unless this browser chose otherwise
 
     const s = data.summary || {};
     scoreEl.innerHTML = s.decided

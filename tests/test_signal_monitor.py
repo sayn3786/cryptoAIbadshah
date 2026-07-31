@@ -70,15 +70,19 @@ def test_the_signal_candle_itself_cannot_stop_the_trade():
 def test_a_target_is_reached_when_the_high_touches_it():
     acts = monitor.evaluate(_sig(), _targets(110, 120, 130),
                             [_candle(2, 110, 99)], now=BASE)
-    assert [a["kind"] for a in acts] == ["TARGET_HIT"]
+    # TP1 banked, and the stop goes to breakeven behind it — the same move the
+    # tracker tells you to make.
+    assert [a["kind"] for a in acts] == ["TARGET_HIT", "STOP_MOVED"]
     assert acts[0]["target_number"] == 1
     assert float(acts[0]["price"]) == 110.0, "recorded at the level, not the high"
+    assert float(acts[1]["price"]) == 100.0, "breakeven is the entry"
 
 
 def test_several_targets_in_one_candle_are_recorded_in_order():
     acts = monitor.evaluate(_sig(), _targets(110, 120, 130),
                             [_candle(2, 125, 99)], now=BASE)
-    assert [a["target_number"] for a in acts] == [1, 2]
+    hits = [a for a in acts if a["kind"] == "TARGET_HIT"]
+    assert [a["target_number"] for a in hits] == [1, 2]
 
 
 def test_reaching_the_final_target_ends_the_walk():
@@ -93,7 +97,8 @@ def test_an_already_hit_target_is_not_recorded_twice():
     acts = monitor.evaluate(_sig(status="PARTIAL_TP"),
                             _targets(110, 120, 130, hit=(1,)),
                             [_candle(2, 121, 99)], now=BASE)
-    assert [a["target_number"] for a in acts] == [2]
+    hits = [a for a in acts if a["kind"] == "TARGET_HIT"]
+    assert [a["target_number"] for a in hits] == [2]
 
 
 def test_a_gap_through_a_level_still_counts():
@@ -137,7 +142,8 @@ def test_nothing_is_recorded_after_a_stop():
 def test_short_targets_are_below_and_the_stop_is_above():
     short = _sig(direction="SHORT", entry_price="100", stop_loss="105")
     acts = monitor.evaluate(short, _targets(90, 80), [_candle(2, 101, 90)], now=BASE)
-    assert [a["target_number"] for a in acts] == [1]
+    hits = [a for a in acts if a["kind"] == "TARGET_HIT"]
+    assert [a["target_number"] for a in hits] == [1]
 
     acts = monitor.evaluate(short, _targets(90, 80), [_candle(2, 105, 99)], now=BASE)
     assert [a["kind"] for a in acts] == ["STOP_LOSS_HIT"]
@@ -307,6 +313,10 @@ class _FakeStore:
         self.calls.append(("TP", sid, n))
         return {"applied": True, "signal": {"status": "PARTIAL_TP"}}
 
+    def record_stop_move(self, sid, price, at, **kw):
+        self.calls.append(("MOVE", sid, str(price)))
+        return {"applied": True, "signal": {"status": "PARTIAL_TP"}}
+
     def record_stop_loss_hit(self, sid, price, at, **kw):
         self.calls.append(("SL", sid))
         return {"applied": True, "signal": {"status": "SL_HIT"}}
@@ -323,7 +333,7 @@ def test_the_run_records_hits_and_reports_a_summary():
     out = monitor.run_monitor(store, lambda sym, tf: [_candle(2, 115, 99)], now=BASE)
     assert out["checked"] == 1
     assert out["targets_hit"] == 1
-    assert store.calls == [("TP", "a", 1)]
+    assert ("TP", "a", 1) in store.calls
 
 
 def test_candles_are_fetched_once_per_symbol_and_timeframe():

@@ -35,7 +35,7 @@ __all__ = [
     "has_environment_column", "reset_capabilities",
     "create_signal", "get_signal", "list_active_signals", "list_signals",
     "attach_targets", "record_entry_fill", "record_excursion",
-    "WORKING_STATUSES",
+    "record_stop_move", "weighted_return", "WORKING_STATUSES",
     "record_target_hit", "record_stop_loss_hit", "close_signal",
     "expire_signal", "cancel_signal", "upsert_postmortem", "archive_signal",
     "list_postmortems", "usage_report",
@@ -62,8 +62,9 @@ WORKING_STATUSES = frozenset({"PENDING", "OPEN", "PARTIAL_TP"})
 
 TERMINAL_STATUSES = frozenset({"TP_HIT", "SL_HIT", "CLOSED", "EXPIRED", "CANCELLED"})
 
-EVENT_TYPES = ("CREATED", "ENTRY_FILLED", "TARGET_HIT", "STOP_LOSS_HIT",
-               "CLOSED", "EXPIRED", "CANCELLED", "ANALYSIS_ADDED", "ARCHIVED")
+EVENT_TYPES = ("CREATED", "ENTRY_FILLED", "TARGET_HIT", "STOP_MOVED",
+               "STOP_LOSS_HIT", "CLOSED", "EXPIRED", "CANCELLED",
+               "ANALYSIS_ADDED", "ARCHIVED")
 
 # A terminal status maps to an EMPTY set: nothing may follow it. That single
 # fact is what stops a closed trade being reopened and what stops a signal
@@ -143,6 +144,56 @@ def _utc(value: Any, field: str) -> datetime:
             f"{field} is naive; supply an aware UTC datetime or epoch milliseconds"
         )
     return value.astimezone(timezone.utc)
+
+
+def weighted_return(direction: str, entry: Any,
+                    exits: Sequence[Any], final_price: Any = None) -> Optional[Decimal]:
+    """
+    Realised return across a scaled-out position, in percent. Pure.
+
+    ``exits`` is [(fraction, price), …] for the pieces already taken off, and
+    ``final_price`` closes whatever is left. Fractions are of the WHOLE position.
+
+    Taking TP1 and then reversing is not a full loss — part of the position was
+    already banked. Reporting the final exit alone recorded the whole trade at
+    the stop and threw the profit away, which made every partial-then-reverse
+    trade look worse than it was.
+
+    Returns None when there is nothing to measure. An over-subscribed ladder
+    (fractions summing past 1) is clamped rather than rejected: a bad fraction
+    must not make a real trade unreportable.
+    """
+    e = _opt_dec(entry, "entry")
+    if e is None or e <= 0:
+        return None
+
+    def _leg(price) -> Optional[Decimal]:
+        p = _opt_dec(price, "exit_price")
+        if p is None or p <= 0:
+            return None
+        return ((p - e) if direction == "LONG" else (e - p)) / e * Decimal(100)
+
+    total, taken = Decimal(0), Decimal(0)
+    for frac, price in exits or []:
+        f = _opt_dec(frac, "exit_fraction")
+        leg = _leg(price)
+        if f is None or leg is None or f <= 0:
+            continue
+        f = min(f, Decimal(1) - taken)
+        if f <= 0:
+            break
+        total += f * leg
+        taken += f
+
+    remainder = Decimal(1) - taken
+    if remainder > 0:
+        leg = _leg(final_price)
+        if leg is None:
+            # Nothing closed the remainder. Report only what was actually
+            # realised rather than inventing a price for the open part.
+            return round(total, 8) if taken > 0 else None
+        total += remainder * leg
+    return round(total, 8)
 
 
 def validate_price_structure(direction: str,
@@ -693,6 +744,102 @@ def list_active_signals(*, environment: Optional[str] = None, session=None,
 
 # ── Lifecycle updates ────────────────────────────────────────────────────────
 
+def _realized_pct(s, signal_id, direction: str, entry, final_price):
+    """
+    Realised return for a position that may have been scaled out.
+
+    Targets already hit each take their share of the position at the price they
+    were hit; whatever is left closes at ``final_price``. Without this, a trade
+    that banked TP1 and then reversed recorded the FULL loss and none of the
+    profit it had taken.
+
+    Shares come from signal_targets.exit_fraction when set, otherwise the
+    position is split evenly across the ladder — which is what a three-target
+    recommendation implies.
+    """
+    rows = s.execute(_sql("""
+        SELECT * FROM signal_targets WHERE signal_id=:sid ORDER BY target_number
+    """), {"sid": str(signal_id)}).all()
+    if not rows:
+        return weighted_return(direction, entry, [], final_price)
+
+    total = len(rows)
+    exits = []
+    for r in rows:
+        m = r._mapping
+        if not m.get("hit_at"):
+            continue
+        frac = m.get("exit_fraction") if "exit_fraction" in m else None
+        if frac is None:
+            frac = Decimal(1) / Decimal(total)
+        exits.append((frac, m.get("hit_price") or m.get("target_price")))
+    return weighted_return(direction, entry, exits, final_price)
+
+
+def record_stop_move(signal_id, new_stop, moved_at, *, reason="BREAKEVEN",
+                     source_ts=None, session=None) -> Dict[str, Any]:
+    """
+    Move the stop. The ORIGINAL stop_loss is never rewritten.
+
+    stop_loss is what the strategy decided and the only record of the risk
+    originally taken; current_stop_loss is where the stop actually sits now. The
+    tracker has always advised moving to breakeven after TP1 — until this, the
+    record ignored its own advice and booked a full loss on a trade that had
+    already been made risk-free.
+
+    Refuses to move a stop FURTHER from entry: widening a stop mid-trade is how
+    a small loss becomes a large one, and the record must not make it look like
+    a plan. Idempotent on the source timestamp.
+    """
+    at_t = _utc(moved_at, "moved_at")
+    stop_d = _dec(new_stop, "new_stop")
+    if stop_d <= 0:
+        raise SignalValidationError("new_stop must be > 0")
+    src = source_ts if source_ts is not None else at_t
+
+    def _work(s):
+        row = _lock_signal(s, signal_id)
+        m = row._mapping
+        if m["status"] not in WORKING_STATUSES:
+            raise InvalidTransition(
+                f"refusing to move the stop on a {m['status']} signal")
+
+        entry = m["entry_price"]
+        current = m.get("current_stop_loss") or m["stop_loss"]
+        direction = m["direction"]
+        # "Closer to entry" is direction-dependent: up for a LONG, down for a
+        # SHORT. Anything else is widening the risk.
+        tighter = (stop_d > current) if direction == "LONG" else (stop_d < current)
+        if not tighter:
+            return {"signal": _row_to_dict(row), "applied": False,
+                    "reason": "not tighter than the current stop"}
+        beyond = (stop_d > entry) if direction == "LONG" else (stop_d < entry)
+
+        key = make_idempotency_key(signal_id, "STOP_MOVED", src)
+        if s.execute(_sql("SELECT 1 FROM signal_events WHERE idempotency_key=:k"),
+                     {"k": key}).first():
+            return {"signal": _row_to_dict(row), "applied": False, "duplicate": True}
+
+        s.execute(_sql("""
+            UPDATE signals
+            SET current_stop_loss=CAST(:stop AS NUMERIC), stop_moved_at=:at,
+                updated_at=now()
+            WHERE id=:sid
+        """), {"stop": stop_d, "at": at_t, "sid": str(signal_id)})
+
+        _insert_event(s, signal_id, "STOP_MOVED", at_t, price=stop_d,
+                      metadata={"reason": reason, "from": str(current),
+                                "beyond_entry": bool(beyond)},
+                      idempotency_key=key)
+        return {"signal": _row_to_dict(_lock_signal(s, signal_id)),
+                "applied": True, "duplicate": False}
+
+    if session is not None:
+        return _work(session)
+    with session_scope() as s:
+        return _work(s)
+
+
 def record_entry_fill(signal_id, fill_price, filled_at, *,
                       source_ts=None, session=None) -> Dict[str, Any]:
     """
@@ -826,17 +973,23 @@ def record_target_hit(signal_id, target_number: int, hit_price, hit_at, *,
         # Compare-and-set: only advance if the status is still what we checked.
         params = {"status": new_status, "sid": str(signal_id), "cur": current}
         if new_status == "TP_HIT":
+            # Weighted across the whole ladder, not just this last rung: the
+            # earlier targets banked their share at THEIR prices, so reporting
+            # the final one alone would credit the whole position with the best
+            # exit it ever got.
+            m = row._mapping
+            realized = _realized_pct(s, signal_id, m["direction"], m["entry_price"],
+                                     _dec(hit_price, "hit_price"))
             s.execute(_sql("""
                 UPDATE signals
                 SET status=:status, closed_at=:at,
                     close_price=CAST(:price AS NUMERIC),
                     close_reason='TARGET_HIT',
-                    realized_return_pct = CASE WHEN direction='LONG'
-                        THEN (CAST(:price AS NUMERIC) - entry_price) / entry_price * 100
-                        ELSE (entry_price - CAST(:price AS NUMERIC)) / entry_price * 100 END,
+                    realized_return_pct=CAST(:realized AS NUMERIC),
                     updated_at=now()
                 WHERE id=:sid AND status=:cur
-            """), {**params, "at": hit_at_t, "price": _dec(hit_price, "hit_price")})
+            """), {**params, "at": hit_at_t, "price": _dec(hit_price, "hit_price"),
+                   "realized": realized})
         else:
             s.execute(_sql("""
                 UPDATE signals SET status=:status, updated_at=now()
@@ -874,17 +1027,22 @@ def record_stop_loss_hit(signal_id, hit_price, hit_at, *,
 
         assert_transition(current, "SL_HIT")
 
+        # Whatever was already banked at a target stays banked. A trade that
+        # took TP1 and then reversed is not a full loss, and recording it as one
+        # was the single biggest distortion left in the outcome history.
+        m = row._mapping
+        realized = _realized_pct(s, signal_id, m["direction"], m["entry_price"],
+                                 price_d)
         s.execute(_sql("""
             UPDATE signals
             SET status='SL_HIT', closed_at=:at,
                 close_price=CAST(:price AS NUMERIC),
                 close_reason='STOP_LOSS_HIT',
-                realized_return_pct = CASE WHEN direction='LONG'
-                    THEN (CAST(:price AS NUMERIC) - entry_price) / entry_price * 100
-                    ELSE (entry_price - CAST(:price AS NUMERIC)) / entry_price * 100 END,
+                realized_return_pct=CAST(:realized AS NUMERIC),
                 updated_at=now()
             WHERE id=:sid AND status=:cur
-        """), {"at": hit_at_t, "price": price_d, "sid": str(signal_id), "cur": current})
+        """), {"at": hit_at_t, "price": price_d, "sid": str(signal_id),
+               "cur": current, "realized": realized})
 
         _insert_event(s, signal_id, "STOP_LOSS_HIT", hit_at_t, price=price_d,
                       metadata={"previous_status": current}, idempotency_key=key)
@@ -916,22 +1074,27 @@ def _terminal_update(signal_id, new_status: str, event_type: str,
 
         assert_transition(current, new_status)
 
+        # Weighted like every other close: partials already taken keep their
+        # prices, and only the remainder closes here. NULL price means nothing
+        # closed the remainder, so the existing figure stands.
+        m = row._mapping
+        realized = (_realized_pct(s, signal_id, m["direction"], m["entry_price"],
+                                  price_d)
+                    if price_d is not None else None)
         # :price is CAST explicitly — on a CANCELLED/EXPIRED signal it is NULL,
-        # and Postgres cannot infer a bare parameter's type inside a CASE.
+        # and Postgres cannot infer a bare parameter's type.
         s.execute(_sql("""
             UPDATE signals
             SET status=:status, closed_at=:at,
                 close_price=CAST(:price AS NUMERIC),
                 close_reason=:reason,
-                realized_return_pct = CASE
-                    WHEN CAST(:price AS NUMERIC) IS NULL THEN realized_return_pct
-                    WHEN direction='LONG'
-                        THEN (CAST(:price AS NUMERIC) - entry_price) / entry_price * 100
-                    ELSE (entry_price - CAST(:price AS NUMERIC)) / entry_price * 100 END,
+                realized_return_pct = COALESCE(CAST(:realized AS NUMERIC),
+                                               realized_return_pct),
                 updated_at=now()
             WHERE id=:sid AND status=:cur
         """), {"status": new_status, "at": at_t, "price": price_d,
-               "reason": reason or new_status, "sid": str(signal_id), "cur": current})
+               "reason": reason or new_status, "sid": str(signal_id),
+               "cur": current, "realized": realized})
 
         _insert_event(s, signal_id, event_type, at_t, price=price_d,
                       metadata={**(metadata or {}), "previous_status": current},
