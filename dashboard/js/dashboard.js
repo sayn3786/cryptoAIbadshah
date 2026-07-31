@@ -6158,6 +6158,42 @@ function _tkTable(rows) {
   </table>`;
 }
 
+/* Which batches are expanded. Persisted, because the tracker re-renders on a
+   5-minute poll — without this, anything you opened would snap shut under you.
+   Live batches default to open (that is the working list); closed ones default
+   to collapsed so the history does not bury it. */
+const TK_OPEN_KEY = 'cryptomonk.tracker.open';
+
+function _tkOpenMap() {
+  try { return JSON.parse(localStorage.getItem(TK_OPEN_KEY)) || {}; }
+  catch (_) { return {}; }
+}
+
+function _tkIsOpen(key, section) {
+  const map = _tkOpenMap();
+  return key in map ? !!map[key] : section === 'live';
+}
+
+function _tkToggleBatch(key, section) {
+  const map = _tkOpenMap();
+  map[key] = !_tkIsOpen(key, section);
+  try { localStorage.setItem(TK_OPEN_KEY, JSON.stringify(map)); } catch (_) {}
+  const row = document.querySelector(`.tk-batch[data-key="${CSS.escape(key)}"]`);
+  if (!row) return;
+  const open = map[key];
+  row.classList.toggle('collapsed', !open);
+  const hdr = row.querySelector('.tk-batch-hdr');
+  if (hdr) hdr.setAttribute('aria-expanded', String(open));
+}
+
+// Delegated once, on the container — the table is replaced wholesale on every
+// refresh, so a handler bound to each header would be lost on the next poll.
+document.addEventListener('click', e => {
+  const hdr = e.target.closest?.('.tk-batch-hdr');
+  if (!hdr) return;
+  _tkToggleBatch(hdr.dataset.key, hdr.dataset.section);
+});
+
 function _tkBatchScore(sum) {
   // Only decided trades count. A batch still running shows nothing rather than
   // an implied 0%.
@@ -6167,19 +6203,25 @@ function _tkBatchScore(sum) {
     + ` · ${sum.win_rate_pct}%</span>`;
 }
 
-function _tkBatches(batches, flatRows) {
+function _tkBatches(batches, flatRows, section) {
   // Grouped by the slot each signal was PUBLISHED in — "the 8pm batch" is the
   // unit these are decided and reviewed in. Falls back to one flat table if an
   // older API build returns no batches, so the section never renders empty.
   if (!batches?.length) return _tkTable(flatRows);
-  return batches.map(b => `<div class="tk-batch">
-      <div class="tk-batch-hdr">
+  return batches.map(b => {
+    const open = _tkIsOpen(b.key, section);
+    return `<div class="tk-batch${open ? '' : ' collapsed'}" data-key="${b.key}">
+      <div class="tk-batch-hdr" role="button" tabindex="0" aria-expanded="${open}"
+           data-key="${b.key}" data-section="${section}"
+           title="Click to ${open ? 'collapse' : 'expand'} this batch">
+        <span class="tk-caret" aria-hidden="true">▾</span>
         <span class="tk-batch-title">${b.title}</span>
         <span class="tk-batch-count">${b.count} signal${b.count === 1 ? '' : 's'}</span>
         ${_tkBatchScore(b.summary)}
       </div>
-      ${_tkTable(b.rows)}
-    </div>`).join('');
+      <div class="tk-batch-body">${_tkTable(b.rows)}</div>
+    </div>`;
+  }).join('');
 }
 
 async function loadTracker(force) {
@@ -6213,11 +6255,11 @@ async function loadTracker(force) {
     body.innerHTML =
       (live.length
         ? `<div class="tracker-group-title">Live — ${live.length}</div>`
-          + _tkBatches(data.live_batches, live)
+          + _tkBatches(data.live_batches, live, 'live')
         : `<div class="tk-empty">No live signals. The next set publishes at the next slot.</div>`)
       + (closed.length
         ? `<div class="tracker-group-title">Closed — last ${data.window_days} days</div>`
-          + _tkBatches(data.closed_batches, closed)
+          + _tkBatches(data.closed_batches, closed, 'closed')
         : '');
   } catch (e) {
     console.warn('[tracker] load failed', e);

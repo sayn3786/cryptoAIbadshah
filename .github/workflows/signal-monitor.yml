@@ -1,19 +1,19 @@
 name: Signal Outcome Monitor
 
 on:
-  # MANUAL ONLY, deliberately. Enabling the schedule in the same change that
-  # ships the monitor would resolve every signal already in the database on the
-  # first tick, including old ones that would age straight out — before anyone
-  # had looked at what it decided. Run it by hand once, check the result, then
-  # uncomment the schedule below.
-  #
-  # schedule:
-  #   # All times UTC. Signals are published on 2H candles, so hourly catches
-  #   # every close without ever acting on a forming candle. The endpoint is
-  #   # idempotent — each decision is keyed on the CANDLE that caused it — so an
-  #   # extra run records nothing new and a missed run loses nothing.
-  #   - cron: '5 * * * *'
-  workflow_dispatch:        # trigger from the Actions tab
+  schedule:
+    # All times UTC. Signals are published on 2H candles, so hourly catches
+    # every close without ever acting on a forming candle. The endpoint is
+    # idempotent — each decision is keyed on the CANDLE that caused it — so an
+    # extra run records nothing new and a missed run loses nothing.
+    #
+    # The FIRST scheduled tick resolves everything already in the database:
+    # genuine target/stop hits are recorded, and anything older than the server
+    # default (72h) is EXPIRED. Expired is terminal but is NOT a loss — it is
+    # excluded from the win rate — so a backlog of stale signals resolves
+    # honestly rather than being scored against the strategy.
+    - cron: '5 * * * *'
+  workflow_dispatch:        # also triggerable by hand from the Actions tab
     inputs:
       max_age_hours:
         description: >-
