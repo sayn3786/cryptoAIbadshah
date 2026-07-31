@@ -351,6 +351,7 @@ since the signal's own candle and decides what the market did:
 | A gap straight through a level still counts | Price traded through it; pretending otherwise would invent a fill that never happened. |
 | Stale signals `EXPIRE` after 72h | The trade is **closed at the last price seen**, so the row carries a real exit and a real P/L — a sideways trade is still a result, and "expired" with a NULL return teaches nobody anything. Still **not** a loss: it never reached a target and was never stopped, so it stays out of the win rate while its P/L counts towards the averages. |
 | Idempotent | Every decision is keyed on the candle that caused it, never wall-clock time, so re-running over the same candles changes nothing. |
+| Runs on a clock | One run is bounded by `MONITOR_BUDGET_S` (45s, inside the 60s serverless ceiling) and fetches every symbol's candles in parallel. Past the budget it stops cleanly and reports `truncated`: what was decided has committed, and the next tick resumes, because every decision is keyed on its candle. Being killed mid-run records **nothing**. |
 | One bad signal never abandons the batch | A monitor that stops at the first error silently leaves the rest open. |
 
 `.github/workflows/signal-monitor.yml` runs **hourly**, and can also be triggered

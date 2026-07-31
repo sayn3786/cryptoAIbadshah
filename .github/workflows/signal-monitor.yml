@@ -17,12 +17,15 @@ on:
     inputs:
       max_age_hours:
         description: >-
-          How old a signal may get before it is EXPIRED. Use 720 (30 days) on the
-          first run so only genuine target/stop hits are recorded and nothing
-          ages out before you have seen what the monitor decides. Leave blank
-          afterwards for the server default of 72.
+          HOURS a signal may go unresolved before it is EXPIRED. Blank uses the
+          server default of 72 (3 days), which is what scheduled runs use — leave
+          it blank unless you have a reason. 720 is 30 days and effectively
+          disables expiry; that is only useful for a one-off run meant to record
+          genuine target and stop hits without ageing anything out. Unrelated to
+          how long closed trades stay VISIBLE in the tracker — that is a
+          separate 3-day window on the view.
         required: false
-        default: '720'
+        default: ''
 
 jobs:
   monitor-signals:
