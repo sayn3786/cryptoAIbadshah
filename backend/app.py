@@ -3187,7 +3187,8 @@ def api_signals_monitor():
           f"expired={summary['expired']} cancelled={summary['cancelled']} "
           f"skipped={summary.get('skipped', 0)} "
           f"truncated={summary.get('truncated')} "
-          f"in {summary.get('elapsed_s')}s errors={len(summary['errors'])}")
+          f"in {summary.get('elapsed_s')}s {summary.get('timing')} "
+          f"errors={len(summary['errors'])}")
     return jsonify(summary)
 
 

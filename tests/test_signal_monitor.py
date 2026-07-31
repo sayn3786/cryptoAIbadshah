@@ -473,6 +473,62 @@ def test_a_widening_excursion_is_written():
     assert store.excursions[0]["mfe_pct"] == 8.0
 
 
+def test_every_write_shares_one_connection():
+    """
+    Each store call opened its own session, and the engine is NullPool for
+    serverless — so every lifecycle write paid a fresh TLS handshake to Neon.
+    """
+    import contextlib
+
+    class _Sess:
+        def __init__(self):
+            self.commits = 0
+
+        def commit(self):
+            self.commits += 1
+
+    sess = _Sess()
+    opened = []
+
+    sg = _sig(id="a"); sg["targets"] = _targets(110, 120)
+    store = _FakeStore([sg])
+
+    @contextlib.contextmanager
+    def scope():
+        opened.append(sess)
+        yield sess
+
+    store.session_scope = scope
+    seen = []
+    store.record_target_hit = lambda sid, n, price, at, **kw: (
+        seen.append(kw.get("session")),
+        {"applied": True, "signal": {"status": "PARTIAL_TP"}})[1]
+    store.record_stop_move = lambda sid, price, at, **kw: (
+        seen.append(kw.get("session")),
+        {"applied": True, "signal": {"status": "PARTIAL_TP"}})[1]
+
+    monitor.run_monitor(store, lambda s, t: [_candle(2, 115, 99)], now=BASE)
+    assert len(opened) == 1, "the run opened more than one connection"
+    assert seen and all(x is sess for x in seen), "a write bypassed the shared session"
+    assert sess.commits >= 1, "a truncated run must leave finished signals durable"
+
+
+def test_a_store_without_session_scope_still_works():
+    # The tracker's fakes, and any caller that does not expose one.
+    sg = _sig(id="a"); sg["targets"] = _targets(110)
+    store = _FakeStore([sg])
+    out = monitor.run_monitor(store, lambda s, t: [_candle(2, 115, 99)], now=BASE)
+    assert out["targets_hit"] == 1
+
+
+def test_the_run_reports_where_its_time_went():
+    sg = _sig(id="a"); sg["targets"] = _targets(110)
+    out = monitor.run_monitor(_FakeStore([sg]), lambda s, t: [_candle(2, 104, 99)],
+                              now=BASE)
+    assert set(out["timing"]) == {"load_s", "fetch_s", "decide_s", "write_s"}
+    assert all(v >= 0 for v in out["timing"].values())
+
+
 def test_a_run_that_exceeds_its_budget_stops_instead_of_being_killed(monkeypatch):
     # Stopping cleanly beats being killed: what was decided has committed, and
     # the next tick resumes because every decision is keyed on its candle.
