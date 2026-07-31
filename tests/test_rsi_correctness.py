@@ -156,3 +156,47 @@ def test_rows_without_a_timestamp_are_dropped_not_plotted_at_epoch():
     src = _js()
     fn = src.split("function renderRSIChart", 1)[1].split("\n}", 1)[0]
     assert "d.timestamp != null" in fn
+
+
+# ── Threshold lines must not drag the time axis ────────────────────────────
+# The overbought/oversold lines were two-point line SERIES anchored at
+# `Date.now()/1000 - 9e7`. Ninety million seconds is 2.85 years, so every RSI
+# panel carried a hidden data point in 2023: the chart's time domain stretched
+# back to it, and fitContent() framed three years to show thirty days. The stray
+# "2023" on the axis was this, not the RSI data.
+
+def test_the_thresholds_are_price_lines_not_data_series():
+    src = _js()
+    init = src.split("S.rsiSeries = S.rsiChart.addLineSeries", 1)[1].split("// CVD mini charts", 1)[0]
+    assert init.count("createPriceLine") == 2, "70 and 30 must be price lines"
+    assert "addLineSeries" not in init, \
+        "a threshold drawn as a series puts a point on the time axis"
+
+
+def _strip_comments(src):
+    """Real code only — the comment explaining this bug names the old constant."""
+    import re
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)     # block comments
+    return "\n".join(re.sub(r"//.*$", "", l) for l in src.splitlines())
+
+
+def test_no_threshold_is_anchored_to_a_past_timestamp():
+    code = _strip_comments(_js())
+    assert "9e7" not in code, "the 2.85-year anchor must be gone from the code"
+    assert "Date.now() / 1000 -" not in code and "Date.now()/1000 -" not in code
+
+
+def test_the_stripper_actually_strips():
+    # Otherwise the assertion above passes for the wrong reason.
+    assert "9e7" in _js(), "the explanatory comment should still mention it"
+    assert "keepme" in _strip_comments("var a = 'keepme'; /* 9e7 */ // 9e7")
+    assert "9e7" not in _strip_comments("var a = 'keepme'; /* 9e7 */ // 9e7")
+
+
+def test_the_thresholds_still_label_the_scale():
+    # The 70 / 30 badges on the price scale came from those series' last values.
+    # Price lines have to be asked for their label explicitly.
+    src = _js()
+    init = src.split("S.rsiSeries = S.rsiChart.addLineSeries", 1)[1].split("// CVD mini charts", 1)[0]
+    assert init.count("axisLabelVisible: true") == 2
+    assert "price: 70" in init and "price: 30" in init

@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '187';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '188';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -145,11 +145,25 @@ function initCharts() {
   });
   S.rsiSeries = S.rsiChart.addLineSeries({ color: '#f59e0b', lineWidth: 2 });
 
-  // OB/OS reference lines
-  S.rsiChart.addLineSeries({ color: '#ef444455', lineWidth: 1, lineStyle: 2 })
-    .setData([{ time: Date.now() / 1000 - 9e7, value: 70 }, { time: Date.now() / 1000, value: 70 }]);
-  S.rsiChart.addLineSeries({ color: '#10b98155', lineWidth: 1, lineStyle: 2 })
-    .setData([{ time: Date.now() / 1000 - 9e7, value: 30 }, { time: Date.now() / 1000, value: 30 }]);
+  /* Overbought / oversold thresholds as PRICE LINES, not data series.
+
+     They used to be two-point line series anchored at `Date.now()/1000 - 9e7`
+     — ninety million seconds, which is 2.85 YEARS. So every RSI panel carried a
+     hidden data point in 2023, the chart's time domain stretched back to it,
+     and fitContent() had to frame three years to show thirty days. That stray
+     "2023" on the axis was this, not the RSI data.
+
+     A price line is horizontal by definition: it has no time coordinate, so it
+     cannot drag the axis. It also gets its own scale label for free, which is
+     what the 70 / 30 badges are. */
+  S.rsiSeries.createPriceLine({
+    price: 70, color: '#ef444455', lineWidth: 1, lineStyle: 2,
+    axisLabelVisible: true, title: 'OB',
+  });
+  S.rsiSeries.createPriceLine({
+    price: 30, color: '#10b98155', lineWidth: 1, lineStyle: 2,
+    axisLabelVisible: true, title: 'OS',
+  });
 
   // CVD mini charts
   const sEl = document.getElementById('spotCvdChart');
