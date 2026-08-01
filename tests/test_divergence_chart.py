@@ -181,8 +181,8 @@ def test_pivot_values_are_inside_the_drawn_range():
     # A pivot is a low or a high, so it sits OUTSIDE the close line. If the
     # y-domain came only from closes, the marker would fall outside the box.
     src = _js()
-    assert "p.prev.price, p.curr.price" in src
-    assert "p.prev.rsi, p.curr.rsi, 30, 70" in src
+    assert "p.prev.price, p.curr.price, nowPrice" in src
+    assert "p.prev.rsi, p.curr.rsi, nowRsi, 30, 70" in src
 
 
 def test_a_flat_series_does_not_divide_by_zero():
@@ -303,3 +303,59 @@ def test_the_gradient_id_is_unique_per_render():
     src = _js()
     fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
     assert "const uid = " in fn and "url(#${uid})" in fn
+
+
+# ── Where is it NOW ────────────────────────────────────────────────────────
+# The chart showed where price was at the two pivots and left "so where is it
+# now?" unanswered — the first thing anyone asks of a reversal setup.
+
+def test_the_current_price_and_rsi_are_drawn():
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "nowLine(P.y(nowPrice)" in fn and "nowLine(R.y(nowRsi)" in fn
+
+
+def test_the_current_values_come_from_the_analysis_not_the_last_point():
+    # live_price is the still-forming candle and a.rsi is the latest reading;
+    # the last DRAWN point is the last closed candle, which is not "now".
+    src = _js()
+    assert "a.live_price ?? a.signal_price" in src
+    assert "rsi: a.rsi" in src
+
+
+def test_the_current_values_fall_back_to_the_last_plotted_point():
+    # A caller that passes nothing must still get the lines, not a broken chart.
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "px[px.length - 1].v" in fn and "rs[rs.length - 1].v" in fn
+    assert "Number.isFinite(+now?.price)" in fn
+
+
+def test_the_current_values_join_the_y_domain():
+    # Price moves after the pivots. If "now" is outside the domain its line
+    # draws outside the box — the same class of bug as the pivot markers.
+    src = _js()
+    assert "p.curr.price, nowPrice]" in src
+    assert "p.curr.rsi, nowRsi, 30, 70]" in src
+
+
+def test_the_now_line_is_clamped_into_its_panel():
+    # Belt and braces: even with the domain widened, a rounding edge must not
+    # let the badge escape its panel and overlap the other one.
+    src = _js()
+    fn = src.split("const nowLine =", 1)[1].split("};", 1)[0]
+    assert "Math.max(top + 7, Math.min(top + height - 2, y))" in fn
+
+
+def test_the_now_lines_are_not_the_divergence_colour():
+    # Drawn in each series' own colour so they read as an extension of that
+    # line, never as part of the divergence.
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "'#cbd5e1'" in fn and "'#f59e0b'" in fn
+    assert "nowLine(P.y(nowPrice), _dvValFmt(nowPrice), accent" not in fn
+
+
+def test_the_right_gutter_has_room_for_the_badges():
+    src = _js()
+    assert "R: 76" in src, "badges need a right margin to live in"
