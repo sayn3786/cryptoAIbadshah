@@ -102,47 +102,104 @@ def _js():
     return open(path, encoding="utf-8").read()
 
 
-def test_the_card_draws_only_when_it_has_real_pivots():
+def test_the_panel_draws_only_when_it_has_real_pivots():
     # A card with no picture is honest; a picture drawn from guessed points
     # would not be.
     src = _js()
-    fn = src.split("function buildDivergenceSVG", 1)[1].split("\n}", 1)[0]
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}", 1)[0]
     assert "if (!p?.prev || !p?.curr" in fn
     assert "return ''" in fn
 
 
-def test_a_stale_chart_is_cleared_when_the_divergence_goes_away():
-    # Same failure mode as the RSI chart: leaving the previous render up makes a
-    # vanished signal look like a live one.
+def test_non_finite_timestamps_are_refused():
+    # Math.floor(null/1000) is 0 — a point in 1970 that drags the axis with it.
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}", 1)[0]
+    assert "Number.isFinite(p.prev.timestamp)" in fn
+
+
+def test_a_vanished_divergence_hides_the_whole_section():
+    # Same failure mode as the RSI chart: leaving the last render up makes a
+    # signal that has gone away look live. An empty frame is also wrong — it
+    # reads as "no data" when the truth is "no divergence".
+    src = _js()
+    fn = src.split("function renderDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "box.innerHTML = ''" in fn
+    assert "sec.style.display = 'none'" in fn
+
+
+def test_the_card_clears_the_panel_when_there_is_no_divergence():
     src = _js()
     fn = src.split("function renderRsiDivCard", 1)[1].split("\n}\n", 1)[0]
-    assert "chartEl.innerHTML = ''" in fn
+    assert "renderDivergencePanel(null)" in fn
 
 
-def test_the_pivot_prices_are_inside_the_drawn_range():
+# ── It has to be readable as NUMBERS, not just a shape ─────────────────────
+
+def test_both_pivots_are_labelled_with_their_real_price():
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert fn.count("fmtPrice(p.prev.price)") == 1
+    assert fn.count("fmtPrice(p.curr.price)") == 1
+
+
+def test_both_pivots_are_labelled_with_their_rsi_value():
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "p.prev.rsi.toFixed(1)" in fn and "p.curr.rsi.toFixed(1)" in fn
+
+
+def test_the_price_axis_is_labelled():
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "fmtPrice(P.hi)" in fn and "fmtPrice(P.lo)" in fn
+
+
+def test_the_rsi_axis_shows_the_levels_that_matter():
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "'70'" in fn and "'30'" in fn
+    # 30 and 70 must be inside the domain or the gridlines fall outside the box.
+    assert "30, 70" in fn
+
+
+def test_each_pivot_is_dated():
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "_dvDate(p.prev.timestamp)" in fn
+
+
+def test_the_panel_says_which_symbol_and_timeframe_it_is():
+    # A chart that does not name its instrument invites reading it as another.
+    src = _js()
+    fn = src.split("function renderDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "S.symbol" in fn and "S.timeframe" in fn
+
+
+def test_pivot_values_are_inside_the_drawn_range():
     # A pivot is a low or a high, so it sits OUTSIDE the close line. If the
     # y-domain came only from closes, the marker would fall outside the box.
     src = _js()
     assert "p.prev.price, p.curr.price" in src
-    assert "p.prev.rsi, p.curr.rsi" in src
+    assert "p.prev.rsi, p.curr.rsi, 30, 70" in src
 
 
 def test_a_flat_series_does_not_divide_by_zero():
     src = _js()
-    fn = src.split("function _divScales", 1)[1].split("\n}", 1)[0]
+    fn = src.split("function _dvScale", 1)[1].split("\n}", 1)[0]
     assert "if (!(hi > lo))" in fn, "a flat series must still produce a scale"
 
 
 def test_forming_and_confirmed_are_drawn_differently():
     # A forming divergence is not yet a fact; it must not look like one.
     src = _js()
-    assert "div.forming ? '3 3' : '4 2'" in src
+    assert "div.forming ? '4 4' : '6 3'" in src
 
 
 def test_the_chart_needs_no_charting_library():
     # Inline SVG on purpose: the CDN-hosted chart library is exactly what makes
-    # the other panels unverifiable here.
+    # the other panels unverifiable in this environment.
     src = _js()
-    fn = src.split("function buildDivergenceSVG", 1)[1].split("\n}", 1)[0]
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
     assert "LightweightCharts" not in fn
     assert "<svg" in fn
