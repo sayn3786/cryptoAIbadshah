@@ -1009,6 +1009,23 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     choch    = detect_choch(spot, window=3)
     liq_grab = detect_liquidity_grab(spot, window=3, lookback=5)
     acc_setup = detect_acc_eql_fvg_setup(spot, fvgs, window=20)
+
+    # ── Say the lifecycle out loud ───────────────────────────────────────────
+    # These detectors already reported `candles_ago`, and signals.py already
+    # faded them by it — but only inside the scorer, as bare divisions. The
+    # dashboard could not tell a CHoCH that printed this candle from one nine
+    # candles old and nearly worthless, because nothing said so.
+    #
+    # `annotate` attaches the status, window and freshness the scorer uses. It
+    # returns None once a pattern has aged past its grace bars, so a lapsed
+    # signal is dropped rather than shown as live.
+    import lifecycle as _life
+    choch     = _life.annotate(choch, "choch") or {"signal": "none"}
+    liq_grab  = _life.annotate(liq_grab, "liquidity_grab") or {"signal": "none"}
+    acc_setup = _life.annotate(acc_setup, "acc_eql_fvg") or {}
+    engulfing = [e for e in
+                 (_life.annotate(e, "engulfing") for e in (engulfing or []))
+                 if e]
     # Equal highs/lows = resting liquidity pools (feeds the structure panel).
     equal_levels = detect_equal_levels(spot)
     # BOS streak + trading-session ranges (feed the structure panel).
@@ -2125,6 +2142,38 @@ def _slot_envelope(slot: dict) -> dict:
     }
 
 
+def _observed_patterns(analysis: dict) -> list:
+    """
+    The lifecycle-bearing patterns in one analysis, ready to log.
+
+    Reads only what the detectors already produced — it runs no detection of its
+    own, so it cannot disagree with what the dashboard showed. Each entry
+    carries the `kind` the store and lifecycle module agree on.
+    """
+    out = []
+    if not analysis:
+        return out
+
+    div = analysis.get("rsi_divergence") or {}
+    if div.get("type") and div.get("status"):
+        out.append({**div, "kind": "rsi_divergence",
+                    "direction": ("LONG" if "bullish" in div["type"] else "SHORT")})
+
+    for key, kind in (("choch", "choch"), ("liquidity_grab", "liquidity_grab")):
+        d = analysis.get(key) or {}
+        if d.get("signal") and d["signal"] != "none" and d.get("status"):
+            out.append({**d, "kind": kind,
+                        "direction": ("LONG" if d["signal"] == "bullish" else "SHORT")})
+
+    # Flags and triangles already carry forming/confirmed/invalidated of their
+    # own; they are logged under the status the detector itself assigned.
+    for key, kind in (("flags", "flag"), ("triangle_patterns", "triangle")):
+        for pat in (analysis.get(key) or [])[:3]:
+            if pat.get("status"):
+                out.append({**pat, "kind": kind})
+    return out
+
+
 def _passes_tf_gates(h1, h2) -> bool:
     """
     Could this symbol still become a candidate on its 1H/2H reading alone?
@@ -2526,6 +2575,32 @@ def _compute_recommendations() -> dict:
         if not _out["all_actionable"]:
             print(f"[recs] NOT actionable — persistence failed for "
                   f"{', '.join(_out['failed'])} ({_out.get('error_code')})")
+
+        # ── Log what the detectors saw on this bar ───────────────────────────
+        # A LOG, never an input. The detectors read candles and are the only
+        # source of truth about pattern state; nothing in the scoring path reads
+        # this back. It exists so "was this divergence ever confirmed, and what
+        # followed?" can be answered after the candles have aged out of every
+        # lookback window, which today is unanswerable.
+        #
+        # Only the PUBLISHED symbols. Logging all 32 on every 4H bar would be
+        # roughly a hundred rows a bar for symbols nobody acted on; these three
+        # are the ones a postmortem will actually ask about.
+        try:
+            import pattern_store as _pstore
+            _pat_rows = []
+            for _r in intraday_recs:
+                _an = (raw.get(_r["symbol"], {}).get("2H", {}) or {}).get("analysis") or {}
+                _pat_rows += _pstore.build_events(
+                    _r["symbol"], "2H", _close_t, _observed_patterns(_an))
+            if _pat_rows:
+                _pat_out = _pstore.record_events(_pat_rows)
+                _persist["patterns"] = _pat_out
+                print(f"[recs] pattern log: {_pat_out}")
+        except Exception as _pexc:
+            # Losing a log entry must never stop a signal being published.
+            import db as _db2
+            print(f"[recs] pattern log skipped — {_db2.sanitize_db_error(_pexc)}")
     except _SkipPersistence:
         pass                       # between publication bars — nothing to record
     except Exception as _exc:
@@ -3528,6 +3603,39 @@ def api_signals_tracker():
     # it costs no extra request.
     view["frontend_build"] = dashboard_build()
     return jsonify(view)
+
+
+@app.get("/api/patterns/history")
+def api_pattern_history():
+    """
+    What the detectors saw, and when — newest bar first.
+
+    A LOG. Nothing in the scoring path reads it, so it can never move a signal;
+    it exists to answer "was this pattern ever confirmed, how long did it last,
+    and what followed?" once the candles have aged out of every lookback.
+
+    Empty (not an error) until migration 005 has been run, so a deploy that
+    lands before the migration degrades to "no history yet".
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    try:
+        import pattern_store as _pstore
+        rows = _pstore.list_events(
+            symbol=request.args.get("symbol"),
+            timeframe=request.args.get("timeframe"),
+            pattern_kind=request.args.get("kind"),
+            status=request.args.get("status"),
+            environment=request.args.get("environment") or _deploy_env(),
+            limit=_int_arg("limit", 100, 1, 500),
+        )
+    except Exception as exc:
+        return _db_error_response(exc)
+    return jsonify({"events": rows, "count": len(rows),
+                    "environment": _deploy_env(),
+                    "kinds": list(_pstore.PATTERN_KINDS),
+                    "statuses": list(_pstore.OBSERVABLE_STATUSES)})
 
 
 @app.post("/api/signals/monitor")

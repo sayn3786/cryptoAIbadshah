@@ -430,6 +430,61 @@ Every quality gate still gates — R/R ≥ 1.3, direction agreement, data qualit
 the expired-setup filter and correlation diversification all still remove
 candidates. See [INDICATORS.md](INDICATORS.md) for the detail.
 
+## Pattern lifecycle
+
+Every detector answered "how old is this, and does it still count?" differently,
+and none of them said it out loud. CHoCH faded over 10 candles and the liquidity
+grab over 5 - both as bare divisions buried inside `signals.py`, invisible to the
+dashboard. Flags and wedges carried a `status` but no weight. **RSI divergence
+had no age term at all**: it scored the same on candle 1 as on candle 29, then
+vanished outright when its pivots fell out of the lookback.
+
+`backend/lifecycle.py` owns the windows and the vocabulary:
+
+| `status` | Meaning |
+|---|---|
+| `forming` | not yet a fact - waiting on a close |
+| `confirmed` | inside its window |
+| `expired` | past it, fading over 3 grace bars |
+| *(dropped)* | beyond that, not reported |
+
+Two decay curves, and they are **not** interchangeable. CHoCH and the liquidity
+grab fade from the moment they happen (`1 - age/window`); a called turn like a
+divergence holds full weight inside its window then fades. Collapsing them into
+one would silently double the weight of a 5-candle-old CHoCH - a strategy change
+nobody asked for - so tests assert both curves stay **bit-identical** to the
+arithmetic `signals.py` has always used.
+
+The 3-candle grace is `patterns.FAILURE_SHOW_BARS`, the same window failed flags
+already used. One number, not two.
+
+### The log
+
+`pattern_events` (migration **005**) records what the detectors saw, one row per
+`(pattern, status, bar)`. It exists because pattern state is otherwise entirely
+ephemeral - recomputed from candles every request, so *"this divergence was
+confirmed on the 4pm bar and expired eleven candles later"* survived only while
+those candles stayed in the lookback.
+
+**It is a log, never an input.** The detectors read candles and are the only
+source of truth; if a row ever disagreed with a recomputation, the recomputation
+is right. Nothing in the scoring path reads it, and a test asserts `signals.py`,
+`indicators.py` and `patterns.py` never import the store - the same rule that
+keeps postmortem data from modifying live strategy parameters.
+
+* Written on the **publication bar only**, and only for the **published**
+  symbols. Logging all 32 every 4H bar would be ~100 rows a bar for symbols
+  nobody acted on.
+* Idempotent on the **bar**, never the clock - the analysis is recomputed on
+  every dashboard load, and without this a busy afternoon would write the same
+  CHoCH hundreds of times.
+* `detail` is allow-listed, exactly as the decision snapshot is.
+* Recording is a **no-op until migration 005 has run**, and losing a log entry
+  never stops a signal being published.
+
+`GET /api/patterns/history` reads it; the dashboard's **Pattern History** panel
+renders it and stays hidden until there is something to show.
+
 ## Outcome tracking
 
 Signals used to be recorded and then left at `OPEN` forever: the lifecycle

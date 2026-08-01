@@ -267,6 +267,27 @@ TradingView's RSI pane prints *two* values — the RSI and its own moving averag
 ### RSI Divergence · `momentum`
 *14-candle window. Divergence between price and RSI.*
 
+**Freshness.** A divergence is not a permanent fact about the chart — it called a
+turn on a particular candle. It used to score the same on candle 1 as on candle
+29 and then vanish outright when its pivots fell out of the lookback: full
+weight, full weight, nothing.
+
+| `status` | When | Weight |
+|---|---|---|
+| `forming` | second pivot still provisional | as before (8 pts) |
+| `confirmed` | ≤ `FRESH_BARS` (12) closed candles since the second pivot | full |
+| `expired` | past the window, within 3 more candles | linear fade to zero |
+| *(dropped)* | beyond that | not returned at all |
+
+`age_candles`, `fresh_bars` and `freshness` come back with the verdict, and
+`signals.py` multiplies the divergence points by `freshness` — never rounding a
+still-counting signal away to nothing. A missing `freshness` is treated as 1.0,
+so an analysis built before this existed is not silently zeroed.
+
+The 3-candle grace is the same window flags and wedges already use
+(`patterns.FAILURE_SHOW_BARS`), so a setup that expired reads as expired rather
+than disappearing. The dashboard draws the three states distinctly.
+
 The detector locates two swing pivots to reach its verdict, and now **returns
 them** as `points` — `{kind, prev:{timestamp, price, rsi}, curr:{…}}` — so the
 dashboard can draw the claim instead of only asserting it: price pivots on one

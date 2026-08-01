@@ -1972,20 +1972,34 @@ def generate_signal(analysis: Dict) -> Dict:
     div_desc = rsi_div.get("description", "")
     div_str  = rsi_div.get("strength", 0) or 0
     div_forming = bool(rsi_div.get("forming"))   # provisional 2nd pivot — not confirmed yet
+    # A divergence is not a permanent fact about the chart. It called a turn on a
+    # particular candle, and the further price gets from that candle the less it
+    # says about now. This scored the same on candle 1 as on candle 29 and then
+    # vanished outright when the pivots fell out of the lookback window — full
+    # weight, full weight, nothing. `freshness` fades it instead: 1.0 inside the
+    # window, then a linear fade to zero across the grace bars.
+    div_fresh = rsi_div.get("freshness")
+    div_fresh = 1.0 if div_fresh is None else max(0.0, min(1.0, float(div_fresh)))
+
+    def _decay(raw):
+        """Weight by freshness; never round a still-counting signal away to nothing."""
+        out = int(round(raw * div_fresh))
+        return out if out or div_fresh <= 0 else 1
+
     if div_type == "bullish":
-        pts = 8 if div_forming else (18 if div_str >= 5 else 12)
+        pts = _decay(8 if div_forming else (18 if div_str >= 5 else 12))
         score += pts; g['momentum'] += pts
         bull_reasons.append(div_desc or "Bullish RSI divergence — price lower low, RSI higher low")
     elif div_type == "bearish":
-        pts = 8 if div_forming else (18 if div_str >= 5 else 12)
+        pts = _decay(8 if div_forming else (18 if div_str >= 5 else 12))
         score -= pts; g['momentum'] -= pts
         bear_reasons.append(div_desc or "Bearish RSI divergence — price higher high, RSI lower high")
     elif div_type == "hidden_bullish":
-        pts = 14 if div_str >= 5 else 10
+        pts = _decay(14 if div_str >= 5 else 10)
         score += pts; g['momentum'] += pts
         bull_reasons.append(div_desc or "Hidden bullish divergence — price higher low, RSI lower low (uptrend continuation)")
     elif div_type == "hidden_bearish":
-        pts = 14 if div_str >= 5 else 10
+        pts = _decay(14 if div_str >= 5 else 10)
         score -= pts; g['momentum'] -= pts
         bear_reasons.append(div_desc or "Hidden bearish divergence — price lower high, RSI higher high (downtrend continuation)")
 

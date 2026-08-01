@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '193';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '195';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1492,7 +1492,9 @@ function buildDivergencePanel(div, candles, rsiSeries, now) {
 
   const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
   const accent = bull ? '#34d399' : '#f87171';
-  const dash = div.forming ? '5 5' : '7 4';
+  const dash = div.forming ? '5 5' : div.status === 'expired' ? '2 5' : '7 4';
+  // Faded, because it is history: the turn it called either happened or did not.
+  const liveOp = div.status === 'expired' ? '0.45' : '1';
   const uid = `dv${Math.abs((p.curr.timestamp | 0)).toString(36)}`;
 
   const grid = (y, label, cls) => `
@@ -1542,7 +1544,7 @@ function buildDivergencePanel(div, candles, rsiSeries, now) {
   const connector = (y1, y2) => `
     <line x1="${x(p.prev.timestamp).toFixed(1)}" y1="${y1.toFixed(1)}"
           x2="${x(p.curr.timestamp).toFixed(1)}" y2="${y2.toFixed(1)}"
-          class="dvp-conn" stroke="${accent}" stroke-width="2.25" stroke-dasharray="${dash}" stroke-linecap="round"/>`;
+          class="dvp-conn" opacity="${liveOp}" stroke="${accent}" stroke-width="2.25" stroke-dasharray="${dash}" stroke-linecap="round"/>`;
 
   // The move each leg made — the divergence stated as two numbers.
   const dPct = (p.curr.price - p.prev.price) / (p.prev.price || 1) * 100;
@@ -1619,6 +1621,7 @@ function renderRsiDivCard(div, candles, rsiSeries, now) {
   const isBull = div.type === 'bullish' || div.type === 'hidden_bullish';
   let label = LABELS[div.type] || (isBull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence');
   if (div.forming) label = label.replace('Divergence', 'Div. · forming ⏳');
+  else if (div.status === 'expired') label = label.replace('Divergence', 'Div. · expired');
   typeEl.textContent = label;
   typeEl.style.color = isBull ? 'var(--bull)' : 'var(--bear)';
   typeEl.style.opacity = div.forming ? '0.85' : '';
@@ -1652,7 +1655,16 @@ function renderDivergencePanel(div, candles, rsiSeries, now) {
       + (div.forming ? ' · forming ⏳' : '');
     t.style.color = bull ? 'var(--bull)' : 'var(--bear)';
   }
-  if (sub) sub.textContent = `${S.symbol} · ${S.timeframe} · ${div.strength} pt RSI gap`;
+  if (sub) {
+    // Age is the answer to "is this still worth acting on", so it belongs next
+    // to the reading rather than buried in the description.
+    const age = Number.isFinite(+div.age_candles)
+      ? ` · ${div.age_candles === 0 ? 'this candle'
+          : div.age_candles === 1 ? '1 candle ago' : `${div.age_candles} candles ago`}` : '';
+    const fade = div.status === 'expired'
+      ? ` · past its ${div.fresh_bars}-candle window` : '';
+    sub.textContent = `${S.symbol} · ${S.timeframe} · ${div.strength} pt RSI gap${age}${fade}`;
+  }
 }
 
 function renderVwapCard(vwap) {
@@ -4907,6 +4919,7 @@ function wireSelectors() {
     btn.classList.add('active');
     S.symbol = btn.dataset.sym;
     clearRSIChart();          // never show the old symbol's RSI while loading
+    loadPatternHistory();
     loadAnalysis();
   });
 
@@ -5809,6 +5822,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // that one fetch took.
   loadRecommendations();
   loadTracker();
+  loadPatternHistory();
 
   await renderAssetTabs();   // build tabs sorted by live market cap first
   wireSelectors();
@@ -6798,6 +6812,62 @@ function _checkBuild(serverBuild) {
 async function _forceRefresh() {
   try { sessionStorage.removeItem('cm.shellRecovered'); } catch (_) {}
   await _recoverStaleShell();
+}
+
+/* ─── Pattern history ────────────────────────────────────────────────────────
+   What the detectors saw on past bars, from the log. Pattern state is otherwise
+   entirely ephemeral: it is recomputed from candles every request, so once a
+   pattern's candles age out of the lookback there is no way to ask whether it
+   ever fired or how long it lasted.
+
+   Hidden until migration 005 has run AND something has been logged — an empty
+   frame would read as "nothing ever happened" when the truth is "not recorded
+   yet". */
+const PAT_LABEL = {
+  rsi_divergence: 'RSI Divergence', choch: 'CHoCH', liquidity_grab: 'Liquidity Grab',
+  engulfing: 'Engulfing', flag: 'Flag', triangle: 'Triangle', acc_eql_fvg: 'Acc+EQL+FVG',
+};
+const PAT_STATUS_CLS = {
+  forming: 'pat-forming', confirmed: 'pat-confirmed',
+  expired: 'pat-expired', invalidated: 'pat-invalid',
+};
+
+function _patRow(e) {
+  const when = e.candle_close_time
+    ? new Date(e.candle_close_time).toLocaleString('en-GB',
+        { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+    : '—';
+  const age = Number.isFinite(+e.age_candles) ? `${e.age_candles}` : '—';
+  const dir = e.direction ? `<span class="pat-dir ${e.direction === 'LONG' ? 'bull' : 'bear'}">${e.direction}</span>` : '';
+  const detail = (e.detail && (e.detail.description || e.detail.signal || e.detail.type)) || '';
+  return `<tr>
+    <td class="pat-when">${when}</td>
+    <td>${PAT_LABEL[e.pattern_kind] || e.pattern_kind}</td>
+    <td><span class="pat-status ${PAT_STATUS_CLS[e.status] || ''}">${e.status}</span></td>
+    <td>${dir}</td>
+    <td class="pat-age">${age}</td>
+    <td class="pat-detail">${detail}</td>
+  </tr>`;
+}
+
+async function loadPatternHistory() {
+  const sec = document.getElementById('patHistSection');
+  const body = document.getElementById('patHistBody');
+  const sub = document.getElementById('patHistSub');
+  if (!sec || !body) return;
+  try {
+    const res = await fetch(`${API}/patterns/history?symbol=${S.symbol}&limit=60`);
+    if (!res.ok) { sec.style.display = 'none'; return; }
+    const data = await res.json();
+    const rows = data.events || [];
+    if (!rows.length) { body.innerHTML = ''; sec.style.display = 'none'; return; }
+    body.innerHTML = `<table class="tracker-table pat-table">
+      <thead><tr><th>BAR</th><th>PATTERN</th><th>STATUS</th><th>SIDE</th>
+        <th>AGE</th><th>DETAIL</th></tr></thead>
+      <tbody>${rows.map(_patRow).join('')}</tbody></table>`;
+    if (sub) sub.textContent = `${S.symbol} · ${rows.length} observation${rows.length === 1 ? '' : 's'}`;
+    sec.style.display = '';
+  } catch (_) { sec.style.display = 'none'; }
 }
 
 async function loadTracker(force) {

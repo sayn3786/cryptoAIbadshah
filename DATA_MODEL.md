@@ -3,7 +3,7 @@
 How a recommendation becomes a stored trade, what every column means, and how to
 query it.
 
-Everything here is generated from the live schema (migrations `001`–`004`) and
+Everything here is generated from the live schema (migrations `001`–`005`) and
 the code that writes it. Where a column exists but nothing writes it yet, this
 says so.
 
@@ -183,6 +183,41 @@ A signal published before cards were stored has no `published_card`. It renders
 from its columns, with `display_strength` falling back to `confidence_score`;
 missing fields stay missing rather than being invented.
 
+### 3.35 `pattern_events` — what the detectors saw, and when
+
+**A log, never an input.** The detectors read candles and are the only source of
+truth about pattern state; if a row here ever disagreed with a recomputation,
+the recomputation is right. Nothing in the scoring path reads it — the same rule
+that keeps postmortem data from modifying live strategy parameters.
+
+It exists because pattern state was otherwise entirely ephemeral: recomputed
+from candles on every request, so *"this divergence was confirmed on the 4pm bar
+and expired eleven candles later"* survived only while those candles stayed
+inside the lookback window.
+
+| Column | Type | Null | Meaning |
+|---|---|---|---|
+| `environment` | `text` | no | Which deployment observed it. |
+| `symbol` / `timeframe` | `text` | no | CHECK enforces upper-case symbol. |
+| `pattern_kind` | `text` | no | `rsi_divergence`, `choch`, `liquidity_grab`, `engulfing`, `flag`, `triangle`, `acc_eql_fvg` — the keys in `backend/lifecycle.py`. |
+| `pattern_type` | `text` | yes | The detector's own label (`bullish`, `hidden_bearish`, …). |
+| `direction` | `text` | yes | `LONG` / `SHORT` where the pattern implies one. |
+| `status` | `text` | no | `forming` / `confirmed` / `expired` / `invalidated`. CHECK-constrained. |
+| `candle_close_time` | `timestamptz` | no | The bar observed. **Part of the identity key.** |
+| `age_candles` | `integer` | yes | Closed candles since the event that created the pattern. |
+| `fresh_bars` | `integer` | yes | Its window, so a reader can see why it expired. |
+| `freshness` | `numeric(6,4)` | yes | The weight the scorer used. CHECK 0–1. |
+| `strength` | `numeric(18,8)` | yes | Detector's own strength where it has one. |
+| `detail` | `jsonb` | no | Allow-listed: description, level, signal, type, reasons. Never a raw payload. |
+| `idempotency_key` | `text` | no | UNIQUE. From `(environment, symbol, timeframe, kind, status, candle_close_time)` — the **bar**, never the clock, so recomputing an analysis records nothing new. |
+
+Written on the **publication bar only**, and only for the **published** symbols.
+Logging all 32 on every 4H bar would be ~100 rows a bar for symbols nobody acted
+on; these three are the ones a postmortem actually asks about.
+
+`GET /api/patterns/history` reads it (`symbol`, `timeframe`, `kind`, `status`,
+`limit`). Empty — not an error — until migration `005` has been run.
+
 ### 3.4 `signal_events` — append-only audit trail
 
 Never updated, never deleted in normal operation.
@@ -298,6 +333,7 @@ mutation endpoints stay **closed**, not open.
 
 | Method | Route | Auth | Returns |
 |---|---|---|---|
+| GET | `/api/patterns/history` | public | The pattern lifecycle log. `symbol`, `timeframe`, `kind`, `status`, `limit`. Empty until migration 005. |
 | GET | `/api/recommendations` | public | The set RECORDED for the current 4H slot, read back from `signals`. Never computes, never publishes. `published: false` + `reason` when the slot is empty. |
 | GET/POST | `/api/cron/publish` | internal | The publication driver — computes and persists, sends nothing. Runs at :05 past all six 4H boundaries. |
 | GET | `/api/signals/tracker` | public | The dashboard view. `days` (default 3, max 30), `environment`. |
