@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '190';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '191';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1348,38 +1348,91 @@ function renderBollingerCard(bb) {
    Inline SVG, not another chart instance: no library and no CDN, it scales to
    whatever width the card gets, and it is the one chart here that can be
    verified in a browser without network access. */
-const DVP = { W: 900, H: 300, L: 68, R: 14, T: 24, B: 30 };
+const DVP = { W: 1000, H: 368, L: 78, R: 20, T: 30, B: 34 };
+
+/* Axis ticks a human would have chosen. Raw min/max gives labels like
+   $203.2164 — technically the extent, but noise dressed as precision. */
+function _dvTicks(lo, hi, count = 4) {
+  const raw = (hi - lo) / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || mag * 10;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(v);
+  return out;
+}
+
+/* Decimals for AXIS TICKS come from the tick STEP, not the range. Ticks are
+   round numbers by construction, so a $10 step needs none — "$190.0" is a
+   decimal place spent saying nothing. */
+function _dvTickFmt(step) {
+  const d = step >= 1 ? 0 : Math.min(8, Math.ceil(-Math.log10(step)));
+  return v => '$' + Number(v).toLocaleString('en-US',
+    { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+/* Decimals for a PIVOT VALUE come from its magnitude. A tick may round to $190;
+   the pivot it marks is $188.40 and must say so, or the label contradicts the
+   point it is attached to. */
+function _dvValFmt(v) {
+  const n = Math.abs(v);
+  const d = n >= 1000 ? 2 : n >= 1 ? 2 : n >= 0.1 ? 4 : n >= 0.01 ? 5 : 8;
+  return '$' + Number(v).toLocaleString('en-US',
+    { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+/* Evenly spaced dates across the window, snapped to candles that exist.
+   Choosing "nice" numbers in epoch MILLISECONDS is meaningless — a round number
+   of milliseconds is not a round date. */
+function _dvDateTicks(times, count = 5) {
+  if (times.length <= count) return times.slice();
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    out.push(times[Math.round(i * (times.length - 1) / (count - 1))]);
+  }
+  return [...new Set(out)];
+}
 
 function _dvScale(vals, top, height) {
   let lo = Math.min(...vals), hi = Math.max(...vals);
   if (!(hi > lo)) { hi = lo + 1; lo -= 1; }        // a flat series still draws
   const pad = (hi - lo) * 0.14;
   lo -= pad; hi += pad;
-  return {
-    y: v => top + height - ((v - lo) / (hi - lo)) * height,
-    lo, hi,
-  };
+  return { y: v => top + height - ((v - lo) / (hi - lo)) * height, lo, hi, top, height };
 }
 
 function _dvPath(pts, x, y) {
   return pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
 }
 
-function _dvDate(ts) {
-  const d = new Date(ts);
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+function _dvDate(ts, withYear) {
+  return new Date(ts).toLocaleDateString('en-GB',
+    withYear ? { day: '2-digit', month: 'short', year: '2-digit' }
+             : { day: '2-digit', month: 'short' });
 }
 
+/* ─── Divergence, drawn full-size ────────────────────────────────────────────
+   The card could only ASSERT "bullish divergence — price lower low but RSI
+   rising". Whether that is true had to be taken on trust unless you went and
+   looked at a chart yourself, which is the one thing a dashboard should save
+   you.
+
+   Two stacked panels sharing one time axis: price on top, RSI beneath. The two
+   pivots the detector actually used are marked on each and joined by a dashed
+   line. Those lines sloping OPPOSITE ways is the divergence — and each carries
+   its real value and date, plus the move between them, so the picture reads as
+   numbers rather than only as a shape.
+
+   Inline SVG, not another chart instance: no library and no CDN, it scales to
+   whatever width the card gets, and it is the one chart here that can be
+   verified in a browser without network access. */
 function buildDivergencePanel(div, candles, rsiSeries) {
   const p = div?.points;
   if (!p?.prev || !p?.curr || !candles?.length || !rsiSeries?.length) return '';
   if (!Number.isFinite(p.prev.timestamp) || !Number.isFinite(p.curr.timestamp)) return '';
 
-  // Window: a little before the first pivot through the last candle, so the
-  // divergence sits in context instead of filling the frame edge to edge.
   const tPivot = Math.min(p.prev.timestamp, p.curr.timestamp);
   const tEnd = candles[candles.length - 1].timestamp;
-  const start = tPivot - Math.max(1, tEnd - tPivot) * 0.15;
+  const start = tPivot - Math.max(1, tEnd - tPivot) * 0.18;
 
   const px = candles.filter(c => c.timestamp >= start).map(c => ({ t: c.timestamp, v: c.close }));
   const rs = rsiSeries.filter(r => r.timestamp >= start && r.rsi != null)
@@ -1389,62 +1442,96 @@ function buildDivergencePanel(div, candles, rsiSeries) {
   const innerW = DVP.W - DVP.L - DVP.R;
   const x = t => DVP.L + ((t - start) / Math.max(1, tEnd - start)) * innerW;
 
-  const pTop = DVP.T, pH = 150;
-  const rTop = DVP.T + pH + 44, rH = 62;
+  const pTop = DVP.T + 12, pH = 158;
+  const rTop = pTop + pH + 52, rH = 74;
+  const axisY = rTop + rH + 26;
 
-  // Pivot values must be inside the domain, or a marker lands outside the box —
-  // a pivot is a LOW or a HIGH, so it sits off the close line by construction.
   const P = _dvScale([...px.map(d => d.v), p.prev.price, p.curr.price], pTop, pH);
   const R = _dvScale([...rs.map(d => d.v), p.prev.rsi, p.curr.rsi, 30, 70], rTop, rH);
 
+
   const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
   const accent = bull ? '#34d399' : '#f87171';
-  const dash = div.forming ? '4 4' : '6 3';
+  const dash = div.forming ? '5 5' : '7 4';
+  const uid = `dv${Math.abs((p.curr.timestamp | 0)).toString(36)}`;
 
-  const gridline = (y, label, cls) => `
+  const grid = (y, label, cls) => `
     <line x1="${DVP.L}" y1="${y.toFixed(1)}" x2="${DVP.W - DVP.R}" y2="${y.toFixed(1)}"
-          stroke="#1e2d44" stroke-width="1"/>
-    <text x="${DVP.L - 8}" y="${(y + 3.5).toFixed(1)}" class="dvp-tick ${cls || ''}">${label}</text>`;
+          stroke="#1b2942" stroke-width="1"/>
+    <text x="${(DVP.L - 10).toFixed(1)}" y="${(y + 3.5).toFixed(1)}" class="dvp-tick ${cls || ''}">${label}</text>`;
+
+  // The window the divergence spans — shaded so the eye goes there first.
+  const xa = Math.min(x(p.prev.timestamp), x(p.curr.timestamp));
+  const xb = Math.max(x(p.prev.timestamp), x(p.curr.timestamp));
+  const band = `<rect x="${xa.toFixed(1)}" y="${pTop.toFixed(1)}"
+      width="${(xb - xa).toFixed(1)}" height="${(rTop + rH - pTop).toFixed(1)}"
+      fill="${accent}" opacity="0.045"/>`;
+
+  // Verticals through BOTH panels: they are what shows the price pivot and the
+  // RSI pivot are the same instant, which is the entire claim.
+  const stem = t => `<line x1="${x(t).toFixed(1)}" y1="${pTop.toFixed(1)}"
+      x2="${x(t).toFixed(1)}" y2="${(rTop + rH).toFixed(1)}"
+      stroke="${accent}" stroke-width="1" stroke-dasharray="2 4" opacity="0.5"/>`;
 
   const marker = (t, y, value, sub, side) => {
     const cx = x(t), anchor = side === 'left' ? 'start' : 'end';
-    const tx = side === 'left' ? cx + 9 : cx - 9;
+    const tx = side === 'left' ? cx + 11 : cx - 11;
     return `
-      <line x1="${cx.toFixed(1)}" y1="${y.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(y + 0.1).toFixed(1)}" stroke="${accent}"/>
-      <circle cx="${cx.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${accent}" stroke="#0d1b2e" stroke-width="1.5"/>
-      <text x="${tx.toFixed(1)}" y="${(y - 9).toFixed(1)}" text-anchor="${anchor}" class="dvp-val">${value}</text>
-      ${sub ? `<text x="${tx.toFixed(1)}" y="${(y + 15).toFixed(1)}" text-anchor="${anchor}" class="dvp-sub">${sub}</text>` : ''}`;
+      <circle cx="${cx.toFixed(1)}" cy="${y.toFixed(1)}" r="5" fill="${accent}" stroke="#0d1b2e" stroke-width="2"/>
+      <text x="${tx.toFixed(1)}" y="${(y - 11).toFixed(1)}" text-anchor="${anchor}" class="dvp-val">${value}</text>
+      ${sub ? `<text x="${tx.toFixed(1)}" y="${(y + 17).toFixed(1)}" text-anchor="${anchor}" class="dvp-sub">${sub}</text>` : ''}`;
   };
-
-  // The earlier pivot labels to the right, the later one to the left, so neither
-  // label runs off the edge of the frame.
-  const firstIsPrev = p.prev.timestamp <= p.curr.timestamp;
-  const sideA = firstIsPrev ? 'left' : 'end';
 
   const connector = (y1, y2) => `
     <line x1="${x(p.prev.timestamp).toFixed(1)}" y1="${y1.toFixed(1)}"
           x2="${x(p.curr.timestamp).toFixed(1)}" y2="${y2.toFixed(1)}"
-          stroke="${accent}" stroke-width="2" stroke-dasharray="${dash}"/>`;
+          class="dvp-conn" stroke="${accent}" stroke-width="2.25" stroke-dasharray="${dash}" stroke-linecap="round"/>`;
 
-  const kindLabel = p.kind === 'low' ? 'swing low' : 'swing high';
+  // The move each leg made — the divergence stated as two numbers.
+  const dPct = (p.curr.price - p.prev.price) / (p.prev.price || 1) * 100;
+  const dRsi = p.curr.rsi - p.prev.rsi;
+  const midX = (xa + xb) / 2;
+  const tag = (y, text, dy) => `
+    <text x="${midX.toFixed(1)}" y="${(y + dy).toFixed(1)}" text-anchor="middle" class="dvp-tag">${text}</text>`;
+
+  const firstIsPrev = p.prev.timestamp <= p.curr.timestamp;
+  const sideA = firstIsPrev ? 'left' : 'right';
+  const sideB = firstIsPrev ? 'right' : 'left';
+
+  const dateTicks = _dvDateTicks(px.map(d => d.t), 5)
+    .map(t => `<text x="${x(t).toFixed(1)}" y="${axisY}" text-anchor="middle" class="dvp-date">${_dvDate(t)}</text>`)
+    .join('');
 
   return `<svg viewBox="0 0 ${DVP.W} ${DVP.H}" width="100%" preserveAspectRatio="xMidYMid meet"
-       role="img" aria-label="${bull ? 'Bullish' : 'Bearish'} RSI divergence between two ${kindLabel}s">
-    <text x="${DVP.L}" y="14" class="dvp-cap">PRICE</text>
-    ${gridline(P.y(P.hi), fmtPrice(P.hi))}
-    ${gridline(P.y(P.lo), fmtPrice(P.lo))}
-    <path d="${_dvPath(px, x, P.y)}" fill="none" stroke="#7c8ba1" stroke-width="1.6"/>
+       role="img" aria-label="${bull ? 'Bullish' : 'Bearish'} RSI divergence: price ${_dvValFmt(p.prev.price)} to ${_dvValFmt(p.curr.price)} against RSI ${p.prev.rsi.toFixed(1)} to ${p.curr.rsi.toFixed(1)}">
+    <defs>
+      <linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#7c8ba1" stop-opacity="0.20"/>
+        <stop offset="100%" stop-color="#7c8ba1" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    ${band}
+    <text x="${DVP.L}" y="${(DVP.T - 6).toFixed(1)}" class="dvp-cap">PRICE</text>
+    ${(() => { const t = _dvTicks(P.lo, P.hi, 4); const f = _dvTickFmt(t.length > 1 ? t[1] - t[0] : 1); return t.map(v => grid(P.y(v), f(v))).join(''); })()}
+    <path d="${_dvPath(px, x, P.y)} L${x(px[px.length - 1].t).toFixed(1)},${(pTop + pH).toFixed(1)} L${x(px[0].t).toFixed(1)},${(pTop + pH).toFixed(1)} Z"
+          fill="url(#${uid})" stroke="none"/>
+    <path d="${_dvPath(px, x, P.y)}" fill="none" stroke="#94a3b8" stroke-width="1.8"
+          stroke-linejoin="round" stroke-linecap="round"/>
+    ${stem(p.prev.timestamp)}${stem(p.curr.timestamp)}
     ${connector(P.y(p.prev.price), P.y(p.curr.price))}
-    ${marker(p.prev.timestamp, P.y(p.prev.price), fmtPrice(p.prev.price), _dvDate(p.prev.timestamp), sideA)}
-    ${marker(p.curr.timestamp, P.y(p.curr.price), fmtPrice(p.curr.price), _dvDate(p.curr.timestamp), 'right')}
+    ${tag(Math.min(P.y(p.prev.price), P.y(p.curr.price)), `${dPct >= 0 ? '+' : ''}${dPct.toFixed(2)}% price`, -14)}
+    ${marker(p.prev.timestamp, P.y(p.prev.price), _dvValFmt(p.prev.price), _dvDate(p.prev.timestamp), sideA)}
+    ${marker(p.curr.timestamp, P.y(p.curr.price), _dvValFmt(p.curr.price), _dvDate(p.curr.timestamp), sideB)}
 
-    <text x="${DVP.L}" y="${(rTop - 12).toFixed(1)}" class="dvp-cap">RSI (14)</text>
-    ${gridline(R.y(70), '70', 'ob')}
-    ${gridline(R.y(30), '30', 'os')}
-    <path d="${_dvPath(rs, x, R.y)}" fill="none" stroke="#f59e0b" stroke-width="1.6"/>
+    <text x="${DVP.L}" y="${(rTop - 14).toFixed(1)}" class="dvp-cap">RSI (14)</text>
+    ${grid(R.y(70), '70', 'ob')}${grid(R.y(50), '50', 'mid')}${grid(R.y(30), '30', 'os')}
+    <path d="${_dvPath(rs, x, R.y)}" fill="none" stroke="#f59e0b" stroke-width="1.8"
+          stroke-linejoin="round" stroke-linecap="round"/>
     ${connector(R.y(p.prev.rsi), R.y(p.curr.rsi))}
+    ${tag(Math.min(R.y(p.prev.rsi), R.y(p.curr.rsi)), `${dRsi >= 0 ? '+' : ''}${dRsi.toFixed(1)} pts RSI`, -12)}
     ${marker(p.prev.timestamp, R.y(p.prev.rsi), p.prev.rsi.toFixed(1), '', sideA)}
-    ${marker(p.curr.timestamp, R.y(p.curr.rsi), p.curr.rsi.toFixed(1), '', 'right')}
+    ${marker(p.curr.timestamp, R.y(p.curr.rsi), p.curr.rsi.toFixed(1), '', sideB)}
+    ${dateTicks}
   </svg>`;
 }
 

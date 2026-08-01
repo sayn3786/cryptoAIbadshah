@@ -139,8 +139,7 @@ def test_the_card_clears_the_panel_when_there_is_no_divergence():
 def test_both_pivots_are_labelled_with_their_real_price():
     src = _js()
     fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
-    assert fn.count("fmtPrice(p.prev.price)") == 1
-    assert fn.count("fmtPrice(p.curr.price)") == 1
+    assert "_dvValFmt(p.prev.price)" in fn and "_dvValFmt(p.curr.price)" in fn
 
 
 def test_both_pivots_are_labelled_with_their_rsi_value():
@@ -149,10 +148,12 @@ def test_both_pivots_are_labelled_with_their_rsi_value():
     assert "p.prev.rsi.toFixed(1)" in fn and "p.curr.rsi.toFixed(1)" in fn
 
 
-def test_the_price_axis_is_labelled():
+def test_the_price_axis_has_several_labelled_gridlines():
+    # Two labels at the raw extremes is an extent, not an axis.
     src = _js()
     fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
-    assert "fmtPrice(P.hi)" in fn and "fmtPrice(P.lo)" in fn
+    assert "_dvTicks(P.lo, P.hi, 4)" in fn
+    assert "grid(P.y(v), f(v))" in fn
 
 
 def test_the_rsi_axis_shows_the_levels_that_matter():
@@ -193,7 +194,7 @@ def test_a_flat_series_does_not_divide_by_zero():
 def test_forming_and_confirmed_are_drawn_differently():
     # A forming divergence is not yet a fact; it must not look like one.
     src = _js()
-    assert "div.forming ? '4 4' : '6 3'" in src
+    assert "div.forming ? '5 5' : '7 4'" in src
 
 
 def test_the_chart_needs_no_charting_library():
@@ -203,3 +204,72 @@ def test_the_chart_needs_no_charting_library():
     fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
     assert "LightweightCharts" not in fn
     assert "<svg" in fn
+
+
+# ── Readable as a chart, not just an extent ────────────────────────────────
+
+def test_tick_decimals_come_from_the_step():
+    # Ticks are round numbers by construction, so a $10 step needs none —
+    # "$190.0" is a decimal place spent saying nothing.
+    src = _js()
+    fn = src.split("function _dvTickFmt", 1)[1].split("\n}", 1)[0]
+    assert "step >= 1 ? 0" in fn
+
+
+def test_a_pivot_label_keeps_more_precision_than_a_tick():
+    # A tick may round to $190; the pivot it marks is $188.40 and must say so,
+    # or the label contradicts the point it is attached to.
+    src = _js()
+    fn = src.split("function _dvValFmt", 1)[1].split("\n}", 1)[0]
+    assert "n >= 1 ? 2" in fn and "0.01 ? 5" in fn
+
+
+def test_the_ticks_are_round_numbers():
+    src = _js()
+    fn = src.split("function _dvTicks", 1)[1].split("\n}", 1)[0]
+    assert "[1, 2, 2.5, 5, 10]" in fn, "steps must snap to human-readable values"
+    assert "Math.log10" in fn
+
+
+def test_the_time_axis_is_dated():
+    # Two pivot dates alone leave the rest of the axis unreadable.
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "dateTicks" in fn and "_dvDateTicks(px.map(d => d.t)" in fn
+
+
+def test_date_ticks_snap_to_candles_that_exist():
+    # "Nice" numbers in epoch MILLISECONDS are not nice dates — a round number
+    # of milliseconds lands on an arbitrary instant.
+    src = _js()
+    fn = src.split("function _dvDateTicks", 1)[1].split("\n}", 1)[0]
+    assert "times[Math.round(" in fn, "ticks must be sampled from real candles"
+    assert "new Set(out)" in fn, "a short window must not repeat a date"
+
+
+def test_the_rsi_axis_shows_the_midline_too():
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "grid(R.y(50), '50'" in fn
+
+
+def test_the_two_pivots_are_tied_across_both_panels():
+    # A vertical through both panels is what shows the price pivot and the RSI
+    # pivot are the same instant — which is the entire claim being made.
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "stem(p.prev.timestamp)" in fn and "stem(p.curr.timestamp)" in fn
+
+
+def test_the_move_on_each_leg_is_stated():
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "% price" in fn and "pts RSI" in fn
+
+
+def test_the_gradient_id_is_unique_per_render():
+    # A hard-coded id collides when two SVGs share a document, and the second
+    # one silently borrows the first one's fill.
+    src = _js()
+    fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
+    assert "const uid = " in fn and "url(#${uid})" in fn
