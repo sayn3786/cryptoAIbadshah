@@ -2245,3 +2245,24 @@ html { overflow-x: hidden; }
    reads as an extension of that line, never as part of the divergence. */
 .dvp-now { font-size: 11.5px; font-weight: 700; }
 @media (max-width: 640px) { .dvp-now { font-size: 13px; } }
+
+/* ── Pattern history ────────────────────────────────────────────────────────
+   The lifecycle log. Statuses are colour-coded the same way the live cards are,
+   so "confirmed" means the same thing in both places. */
+.pat-hist { overflow-x: auto; }
+.pat-table { min-width: 620px; }
+.pat-when { color: var(--muted2); white-space: nowrap; }
+.pat-age, .pat-detail { color: var(--muted2); }
+.pat-detail { font-size: .72rem; }
+.pat-status {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: .68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; border: 1px solid currentColor;
+}
+.pat-status.pat-forming   { color: #fbbf24; }
+.pat-status.pat-confirmed { color: #34d399; }
+.pat-status.pat-expired   { color: #94a3b8; }
+.pat-status.pat-invalid   { color: #f87171; }
+.pat-dir { font-weight: 700; font-size: .72rem; }
+.pat-dir.bull { color: var(--bull); }
+.pat-dir.bear { color: var(--bear); }
