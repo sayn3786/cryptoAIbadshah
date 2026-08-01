@@ -2213,14 +2213,28 @@ html { overflow-x: hidden; }
   background: rgba(148,163,184,.08); border: 1px solid rgba(148,163,184,.18);
 }
 
-/* ── RSI divergence mini-chart ──────────────────────────────────────────────
-   Price pivots over RSI pivots, joined by dashed lines that slope opposite
-   ways. Empty when the detector reported no pivots, so the card simply has no
-   picture rather than a misleading one. */
-.rsi-div-chart { margin-top: 10px; }
-.rsi-div-chart:empty { display: none; }
-.rsi-div-chart svg { display: block; }
-.rdv-lbl {
-  fill: var(--muted2); font-size: 7px; font-weight: 700;
-  letter-spacing: .08em; font-family: inherit;
+
+
+/* ── RSI divergence panel ───────────────────────────────────────────────────
+   Price pivots over RSI pivots on one time axis, joined by dashed lines that
+   slope opposite ways. Both ends carry their real value, so the chart reads as
+   numbers and not just a shape. The whole section hides when there is nothing
+   to draw — an empty frame reads as "no data" when the truth is "no
+   divergence". */
+.div-panel { width: 100%; }
+.div-panel svg { display: block; width: 100%; height: auto; }
+.chart-sub { font-size: .72rem; color: var(--muted2); margin-left: auto; }
+.dvp-cap {
+  fill: var(--muted2); font-size: 10px; font-weight: 700; letter-spacing: .1em;
+}
+.dvp-tick { fill: var(--muted2); font-size: 10px; text-anchor: end; }
+.dvp-tick.ob { fill: #ef4444aa; }
+.dvp-tick.os { fill: #10b981aa; }
+.dvp-val { fill: var(--text); font-size: 11.5px; font-weight: 700; }
+.dvp-sub { fill: var(--muted2); font-size: 9.5px; }
+
+@media (max-width: 640px) {
+  .dvp-val { font-size: 13px; }
+  .dvp-sub, .dvp-tick { font-size: 11px; }
+  .dvp-cap { font-size: 11px; }
 }

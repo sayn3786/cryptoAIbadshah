@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '189';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '190';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1333,80 +1333,118 @@ function renderBollingerCard(bb) {
     <div class="bb-row"><span class="bb-label">Lower</span><span class="bear">${fmt(bb.lower)}</span></div>`;
 }
 
-/* ─── Divergence, drawn ───────────────────────────────────────────────────────
+/* ─── Divergence, drawn full-size ────────────────────────────────────────────
    The card could only ASSERT "bullish divergence — price lower low but RSI
-   rising". Whether that is true has to be taken on trust unless you go and look
-   at a chart yourself, which is the one thing a dashboard should save you.
+   rising". Whether that is true had to be taken on trust unless you went and
+   looked at a chart yourself, which is the one thing a dashboard should save
+   you.
 
    Two stacked panels sharing one time axis: price on top, RSI beneath. The two
-   pivots the detector actually used are marked on each, joined by a dashed line.
-   Those two lines sloping OPPOSITE ways is the divergence — nothing else in the
-   picture needs explaining.
+   pivots the detector actually used are marked on each and joined by a dashed
+   line. Those lines sloping OPPOSITE ways is the divergence — and both ends
+   carry their real value, so the picture is readable as numbers rather than
+   just a shape.
 
-   Inline SVG rather than another chart instance: no library, no CDN, and it
-   renders identically at card size, where an axis-and-crosshair chart would be
-   unreadable anyway. */
-const DIV_W = 260, DIV_H = 108, DIV_PAD = 6;
+   Inline SVG, not another chart instance: no library and no CDN, it scales to
+   whatever width the card gets, and it is the one chart here that can be
+   verified in a browser without network access. */
+const DVP = { W: 900, H: 300, L: 68, R: 14, T: 24, B: 30 };
 
-function _divPath(pts, x, y) {
+function _dvScale(vals, top, height) {
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (!(hi > lo)) { hi = lo + 1; lo -= 1; }        // a flat series still draws
+  const pad = (hi - lo) * 0.14;
+  lo -= pad; hi += pad;
+  return {
+    y: v => top + height - ((v - lo) / (hi - lo)) * height,
+    lo, hi,
+  };
+}
+
+function _dvPath(pts, x, y) {
   return pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
 }
 
-function _divScales(vals, top, height) {
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  if (!(hi > lo)) { hi = lo + 1; lo -= 1; }          // flat series still draws
-  const pad = (hi - lo) * 0.12;
-  lo -= pad; hi += pad;
-  return v => top + height - ((v - lo) / (hi - lo)) * height;
+function _dvDate(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
 
-function buildDivergenceSVG(div, candles, rsiSeries) {
+function buildDivergencePanel(div, candles, rsiSeries) {
   const p = div?.points;
   if (!p?.prev || !p?.curr || !candles?.length || !rsiSeries?.length) return '';
+  if (!Number.isFinite(p.prev.timestamp) || !Number.isFinite(p.curr.timestamp)) return '';
 
-  // Window: from a little before the first pivot to the last candle, so the
-  // divergence sits in context rather than filling the frame edge to edge.
-  const t0 = Math.min(p.prev.timestamp, p.curr.timestamp);
-  const span = Math.max(1, (candles[candles.length - 1].timestamp - t0));
-  const start = t0 - span * 0.12;
+  // Window: a little before the first pivot through the last candle, so the
+  // divergence sits in context instead of filling the frame edge to edge.
+  const tPivot = Math.min(p.prev.timestamp, p.curr.timestamp);
+  const tEnd = candles[candles.length - 1].timestamp;
+  const start = tPivot - Math.max(1, tEnd - tPivot) * 0.15;
 
-  const px = candles.filter(c => c.timestamp >= start)
-                    .map(c => ({ t: c.timestamp, v: c.close }));
+  const px = candles.filter(c => c.timestamp >= start).map(c => ({ t: c.timestamp, v: c.close }));
   const rs = rsiSeries.filter(r => r.timestamp >= start && r.rsi != null)
                       .map(r => ({ t: r.timestamp, v: r.rsi }));
   if (px.length < 2 || rs.length < 2) return '';
 
-  const tMin = start, tMax = candles[candles.length - 1].timestamp;
-  const x = t => DIV_PAD + ((t - tMin) / Math.max(1, tMax - tMin)) * (DIV_W - DIV_PAD * 2);
+  const innerW = DVP.W - DVP.L - DVP.R;
+  const x = t => DVP.L + ((t - start) / Math.max(1, tEnd - start)) * innerW;
 
-  // Pivot prices must be inside the y-domain or a marker can fall outside the box.
-  const priceY = _divScales([...px.map(d => d.v), p.prev.price, p.curr.price], 4, 56);
-  const rsiY   = _divScales([...rs.map(d => d.v), p.prev.rsi, p.curr.rsi], 70, 32);
+  const pTop = DVP.T, pH = 150;
+  const rTop = DVP.T + pH + 44, rH = 62;
+
+  // Pivot values must be inside the domain, or a marker lands outside the box —
+  // a pivot is a LOW or a HIGH, so it sits off the close line by construction.
+  const P = _dvScale([...px.map(d => d.v), p.prev.price, p.curr.price], pTop, pH);
+  const R = _dvScale([...rs.map(d => d.v), p.prev.rsi, p.curr.rsi, 30, 70], rTop, rH);
 
   const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
   const accent = bull ? '#34d399' : '#f87171';
-  const dash = div.forming ? '3 3' : '4 2';
+  const dash = div.forming ? '4 4' : '6 3';
 
-  const seg = (y1, y2, color) =>
-    `<line x1="${x(p.prev.timestamp).toFixed(1)}" y1="${y1.toFixed(1)}"
-           x2="${x(p.curr.timestamp).toFixed(1)}" y2="${y2.toFixed(1)}"
-           stroke="${color}" stroke-width="1.5" stroke-dasharray="${dash}"/>`;
-  const dot = (t, y, color) =>
-    `<circle cx="${x(t).toFixed(1)}" cy="${y.toFixed(1)}" r="2.6" fill="${color}"/>`;
+  const gridline = (y, label, cls) => `
+    <line x1="${DVP.L}" y1="${y.toFixed(1)}" x2="${DVP.W - DVP.R}" y2="${y.toFixed(1)}"
+          stroke="#1e2d44" stroke-width="1"/>
+    <text x="${DVP.L - 8}" y="${(y + 3.5).toFixed(1)}" class="dvp-tick ${cls || ''}">${label}</text>`;
 
-  return `<svg viewBox="0 0 ${DIV_W} ${DIV_H}" width="100%" height="${DIV_H}"
-       role="img" aria-label="${bull ? 'Bullish' : 'Bearish'} RSI divergence: price and RSI pivots sloping opposite ways">
-    <text x="${DIV_PAD}" y="10" class="rdv-lbl">PRICE</text>
-    <path d="${_divPath(px, x, priceY)}" fill="none" stroke="#64748b" stroke-width="1.2"/>
-    ${seg(priceY(p.prev.price), priceY(p.curr.price), accent)}
-    ${dot(p.prev.timestamp, priceY(p.prev.price), accent)}
-    ${dot(p.curr.timestamp, priceY(p.curr.price), accent)}
-    <line x1="0" y1="64" x2="${DIV_W}" y2="64" stroke="#1e2d44" stroke-width="1"/>
-    <text x="${DIV_PAD}" y="76" class="rdv-lbl">RSI</text>
-    <path d="${_divPath(rs, x, rsiY)}" fill="none" stroke="#f59e0b" stroke-width="1.2"/>
-    ${seg(rsiY(p.prev.rsi), rsiY(p.curr.rsi), accent)}
-    ${dot(p.prev.timestamp, rsiY(p.prev.rsi), accent)}
-    ${dot(p.curr.timestamp, rsiY(p.curr.rsi), accent)}
+  const marker = (t, y, value, sub, side) => {
+    const cx = x(t), anchor = side === 'left' ? 'start' : 'end';
+    const tx = side === 'left' ? cx + 9 : cx - 9;
+    return `
+      <line x1="${cx.toFixed(1)}" y1="${y.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(y + 0.1).toFixed(1)}" stroke="${accent}"/>
+      <circle cx="${cx.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${accent}" stroke="#0d1b2e" stroke-width="1.5"/>
+      <text x="${tx.toFixed(1)}" y="${(y - 9).toFixed(1)}" text-anchor="${anchor}" class="dvp-val">${value}</text>
+      ${sub ? `<text x="${tx.toFixed(1)}" y="${(y + 15).toFixed(1)}" text-anchor="${anchor}" class="dvp-sub">${sub}</text>` : ''}`;
+  };
+
+  // The earlier pivot labels to the right, the later one to the left, so neither
+  // label runs off the edge of the frame.
+  const firstIsPrev = p.prev.timestamp <= p.curr.timestamp;
+  const sideA = firstIsPrev ? 'left' : 'end';
+
+  const connector = (y1, y2) => `
+    <line x1="${x(p.prev.timestamp).toFixed(1)}" y1="${y1.toFixed(1)}"
+          x2="${x(p.curr.timestamp).toFixed(1)}" y2="${y2.toFixed(1)}"
+          stroke="${accent}" stroke-width="2" stroke-dasharray="${dash}"/>`;
+
+  const kindLabel = p.kind === 'low' ? 'swing low' : 'swing high';
+
+  return `<svg viewBox="0 0 ${DVP.W} ${DVP.H}" width="100%" preserveAspectRatio="xMidYMid meet"
+       role="img" aria-label="${bull ? 'Bullish' : 'Bearish'} RSI divergence between two ${kindLabel}s">
+    <text x="${DVP.L}" y="14" class="dvp-cap">PRICE</text>
+    ${gridline(P.y(P.hi), fmtPrice(P.hi))}
+    ${gridline(P.y(P.lo), fmtPrice(P.lo))}
+    <path d="${_dvPath(px, x, P.y)}" fill="none" stroke="#7c8ba1" stroke-width="1.6"/>
+    ${connector(P.y(p.prev.price), P.y(p.curr.price))}
+    ${marker(p.prev.timestamp, P.y(p.prev.price), fmtPrice(p.prev.price), _dvDate(p.prev.timestamp), sideA)}
+    ${marker(p.curr.timestamp, P.y(p.curr.price), fmtPrice(p.curr.price), _dvDate(p.curr.timestamp), 'right')}
+
+    <text x="${DVP.L}" y="${(rTop - 12).toFixed(1)}" class="dvp-cap">RSI (14)</text>
+    ${gridline(R.y(70), '70', 'ob')}
+    ${gridline(R.y(30), '30', 'os')}
+    <path d="${_dvPath(rs, x, R.y)}" fill="none" stroke="#f59e0b" stroke-width="1.6"/>
+    ${connector(R.y(p.prev.rsi), R.y(p.curr.rsi))}
+    ${marker(p.prev.timestamp, R.y(p.prev.rsi), p.prev.rsi.toFixed(1), '', sideA)}
+    ${marker(p.curr.timestamp, R.y(p.curr.rsi), p.curr.rsi.toFixed(1), '', 'right')}
   </svg>`;
 }
 
@@ -1414,13 +1452,12 @@ function renderRsiDivCard(div, candles, rsiSeries) {
   const typeEl = document.getElementById('rsiDivType');
   const descEl = document.getElementById('rsiDivDesc');
   if (!typeEl) return;
-  const chartEl = document.getElementById('rsiDivChart');
   if (!div || !div.type) {
     typeEl.textContent = 'No divergence';
     typeEl.style.color = 'var(--muted)';
     descEl.textContent = 'Price and RSI moving in sync';
     descEl.style.color = 'var(--muted2)';
-    if (chartEl) chartEl.innerHTML = '';    // never leave the last one drawn
+    renderDivergencePanel(null);           // never leave the last one drawn
     return;
   }
   // Four types: regular bullish/bearish (reversal) + hidden bullish/bearish
@@ -1440,9 +1477,35 @@ function renderRsiDivCard(div, candles, rsiSeries) {
   typeEl.style.opacity = div.forming ? '0.85' : '';
   descEl.textContent = div.description || '';
   descEl.style.color = 'var(--muted2)';
-  // Drawn only when the detector handed over its pivots. A card with no picture
-  // is honest; a picture drawn from guessed points would not be.
-  if (chartEl) chartEl.innerHTML = buildDivergenceSVG(div, candles, rsiSeries);
+  renderDivergencePanel(div, candles, rsiSeries);
+}
+
+/* The dedicated panel. Hidden entirely when there is nothing to draw — an empty
+   chart frame reads as "no data" when the truth is "no divergence", and a stale
+   one reads as a live signal. */
+function renderDivergencePanel(div, candles, rsiSeries) {
+  const sec = document.getElementById('divPanelSection');
+  const box = document.getElementById('divPanel');
+  if (!sec || !box) return;
+  const svg = div ? buildDivergencePanel(div, candles, rsiSeries) : '';
+  if (!svg) {
+    box.innerHTML = '';
+    sec.style.display = 'none';
+    return;
+  }
+  box.innerHTML = svg;
+  sec.style.display = '';
+  const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
+  const hidden = div.type === 'hidden_bullish' || div.type === 'hidden_bearish';
+  const t = document.getElementById('divPanelTitle');
+  const sub = document.getElementById('divPanelSub');
+  if (t) {
+    t.textContent = `RSI Divergence — ${bull ? 'Bullish' : 'Bearish'}`
+      + (hidden ? ' (hidden · continuation)' : '')
+      + (div.forming ? ' · forming ⏳' : '');
+    t.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+  }
+  if (sub) sub.textContent = `${S.symbol} · ${S.timeframe} · ${div.strength} pt RSI gap`;
 }
 
 function renderVwapCard(vwap) {

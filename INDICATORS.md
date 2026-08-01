@@ -272,6 +272,14 @@ them** as `points` — `{kind, prev:{timestamp, price, rsi}, curr:{…}}` — so
 dashboard can draw the claim instead of only asserting it: price pivots on one
 axis, RSI pivots on another, joined by lines sloping opposite ways.
 
+The dashboard draws them in a dedicated full-width panel (`#divPanelSection`),
+not in the metric card — at card size the prices are unreadable, which is the
+whole reason for showing it. Both pivots carry their real price and RSI value,
+each is dated, and the price and RSI axes are labelled, so the chart reads as
+numbers rather than only as a shape. The section is hidden entirely when there
+is no divergence: an empty frame reads as *no data* when the truth is *no
+divergence*.
+
 `points` is `null` when no divergence was found, and also when the candle feed
 carries no timestamps. Timestamps are needed to *draw*, never to *detect*, so a
 feed without them still detects normally and the card simply shows its text with
