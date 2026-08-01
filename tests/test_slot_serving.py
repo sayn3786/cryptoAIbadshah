@@ -229,9 +229,14 @@ def test_the_publish_cron_exists_and_is_authorized():
         _os.environ.pop("CRON_SECRET", None)
 
 
-def test_the_publish_workflow_covers_all_six_boundaries():
-    # The Telegram cron only covers three. If publication rode on that, three
-    # slots a day would silently never publish.
+def test_the_publish_workflow_runs_often_enough_to_absorb_cron_delay():
+    # It used to fire only at the six boundaries, which assumed GitHub cron
+    # arrives near its schedule. It does not — observed delays of one to THREE
+    # hours meant a run saw a non-boundary candle, published nothing and
+    # reported success. Two of the first four slots were lost that way.
+    #
+    # Running hourly is what makes a delay harmless: the slot publishes late
+    # rather than never.
     path = os.path.join(os.path.dirname(__file__), "..", ".github",
                         "workflows", "signal-publish.yml")
     text = open(path, encoding="utf-8").read()
@@ -240,8 +245,19 @@ def test_the_publish_workflow_covers_all_six_boundaries():
     m = re.search(r"cron:\s*'(\S+)\s+(\S+)\s+\*\s+\*\s+\*'", text)
     assert m, "the publish workflow must have a schedule"
     minute, hours = m.group(1), m.group(2)
-    assert sorted(int(h) for h in hours.split(",")) == [0, 4, 8, 12, 16, 20]
-    assert 0 < int(minute) <= 15, "must fire AFTER the boundary, never on or before it"
+    assert hours == "*", "must run every hour, not only on the boundaries"
+    assert 0 <= int(minute) <= 59
+
+
+def test_a_frequent_cron_is_only_affordable_because_it_checks_first():
+    # 24 full computes a day would be ~20 minutes of upstream fetching for six
+    # publications. The endpoint must answer "already published?" BEFORE
+    # computing, or hourly scheduling is unaffordable.
+    import inspect
+    src = inspect.getsource(appmod.api_cron_publish)
+    before = src.split("_compute_recommendations()", 1)[0]
+    assert "_slot_already_published()" in before, \
+        "the slot check must come before the compute"
 
 
 def _publish_workflow():

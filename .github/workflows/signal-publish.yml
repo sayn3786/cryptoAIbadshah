@@ -4,12 +4,21 @@ name: Publish Signals (4H close)
 # recorded, so something has to do the recording — at ALL SIX 4H boundaries.
 # The Telegram cron only covers three of them.
 #
-# Fires at :05 past the boundary, never before it: the gate reads the last
-# CLOSED candle, so a run that starts early sees the previous bar and publishes
-# nothing. :05 absorbs GitHub's scheduling delay, which is late-skewed anyway.
+# Publication is gated on "has this 4H SLOT published yet?", answered from the
+# database, NOT on the latest candle sitting exactly on a boundary. That earlier
+# gate assumed the cron fired near the boundary, and it does not.
 on:
   schedule:
-    - cron: '5 0,4,8,12,16,20 * * *'   # 08:05, 12:05, 16:05, 20:05, 00:05, 04:05 SGT
+    # HOURLY, not six times a day. GitHub Actions cron is best-effort and was
+    # running one to THREE hours late; a run that arrived after the next 2H
+    # close saw a non-boundary candle, published nothing, and reported success.
+    # Two of the first four slots were lost that way.
+    #
+    # The endpoint is now gated on "has this SLOT published yet?" and answers
+    # that from the database BEFORE computing, so the 23 runs a day that find
+    # the slot already done cost one cheap query each. Frequency is what makes
+    # a delayed run harmless: it publishes the slot late instead of never.
+    - cron: '5 * * * *'
   workflow_dispatch:
 
 # A late run must not overlap the next boundary's run.

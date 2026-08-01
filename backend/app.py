@@ -2111,6 +2111,25 @@ def _published_slot(now_sgt=None) -> dict:
     }
 
 
+def _slot_already_published(now_sgt=None) -> bool:
+    """
+    Has the current 4H slot already recorded a set?
+
+    This is the publication gate. Asking the DATABASE rather than inspecting the
+    latest candle is what makes a late cron harmless: the run publishes the slot
+    it belongs to whenever it manages to fire, instead of silently skipping
+    because the newest candle is no longer sitting exactly on a boundary.
+
+    On any doubt — no database, an unreadable slot — this returns False so the
+    run attempts to publish. Publication is idempotent on the candle, so a
+    needless attempt costs a duplicate check; the opposite mistake loses a slot.
+    """
+    try:
+        return bool(_published_slot(now_sgt).get("published"))
+    except Exception:
+        return False
+
+
 def _slot_envelope(slot: dict) -> dict:
     """
     Wrap a slot read in the payload shape the dashboard expects.
@@ -2550,17 +2569,25 @@ def _compute_recommendations() -> dict:
     try:
         import signal_publish as _sp
 
-        # Publish on the 4H close only. A recompute between bars (a cold start,
-        # an on-demand call) still SERVES recommendations — it just does not
-        # record new ones, because the set for this bar has already been decided.
+        # One published set per 4H SLOT — not per 4H candle.
+        #
+        # This used to require the latest CLOSED candle to BE a 4H boundary,
+        # which assumed the cron fired within two hours of it. GitHub Actions
+        # cron is best-effort and ran one to three hours late; a run delayed
+        # past the next 2H close saw a non-boundary candle, published nothing,
+        # and reported success. Two of the first four slots were lost that way.
+        #
+        # The question that actually matters is "has THIS slot published yet?",
+        # and the database already knows. A late run publishes the slot it
+        # belongs to, using whatever candle is current by then — fresher levels
+        # for the same slot, which is strictly better than no signal at all.
         _first = next((raw.get(r["symbol"], {}).get("2H", {}) or {}
                        for r in intraday_recs), {})
         _, _close_t = _sp._candle_window(_first.get("analysis") or {}, "2H")
-        _publication_bar = _is_publication_bar(_close_t)
-        if intraday_recs and not _publication_bar:
+        if intraday_recs and _slot_already_published(now_sgt):
             _persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
                         "failed": [], "error_code": None,
-                        "skipped_reason": "NOT_A_PUBLICATION_BAR"}
+                        "skipped_reason": "SLOT_ALREADY_PUBLISHED"}
             raise _SkipPersistence
         _analyses = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
                      for r in intraday_recs}
@@ -3023,6 +3050,14 @@ def api_cron_publish():
     """
     if not _cron_authorized():
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    # Check the slot BEFORE computing. The compute is ~50s of upstream fetching,
+    # and running it only to discover the slot was already published is the
+    # whole cost of the job for nothing. Checking first is what makes it cheap
+    # enough to schedule hourly, which is what absorbs the cron delay.
+    if _slot_already_published():
+        return jsonify({"ok": True, "skipped_reason": "SLOT_ALREADY_PUBLISHED",
+                        "computed": 0, "persisted": 0})
 
     try:
         result = _compute_recommendations()
