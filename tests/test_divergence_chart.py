@@ -152,7 +152,7 @@ def test_the_price_axis_has_several_labelled_gridlines():
     # Two labels at the raw extremes is an extent, not an axis.
     src = _js()
     fn = src.split("function buildDivergencePanel", 1)[1].split("\n}\n", 1)[0]
-    assert "_dvTicks(P.lo, P.hi, 4)" in fn
+    assert "{ ticks: 5, pad: 0.10 }" in fn, "the price axis must ask for ~5 lines"
     assert "grid(P.y(v), f(v))" in fn
 
 
@@ -226,9 +226,39 @@ def test_a_pivot_label_keeps_more_precision_than_a_tick():
 
 def test_the_ticks_are_round_numbers():
     src = _js()
-    fn = src.split("function _dvTicks", 1)[1].split("\n}", 1)[0]
+    fn = src.split("function _dvStep", 1)[1].split("\n}", 1)[0]
     assert "[1, 2, 2.5, 5, 10]" in fn, "steps must snap to human-readable values"
     assert "Math.log10" in fn
+
+
+def test_the_step_is_chosen_by_tick_count_not_by_rounding_up():
+    # Always taking the first candidate >= the raw step rounds UP, and one step
+    # up HALVES the gridline count: a $22 range wanting ~5 lines computed 5.66,
+    # jumped to 10, and drew two.
+    src = _js()
+    fn = src.split("function _dvStep", 1)[1].split("\n}", 1)[0]
+    assert "Math.abs(span / step - target)" in fn
+    assert ".find(" not in fn, "the round-up selection is the bug"
+
+
+def test_the_price_domain_snaps_to_whole_steps():
+    # Snapping is what puts gridlines above AND below the data. Without it the
+    # lowest line sat above the lowest point, so the bottom of the move had
+    # nothing to be read against.
+    src = _js()
+    fn = src.split("function _dvTicks", 1)[1].split("\n}", 1)[0]
+    assert "Math.floor(lo / step) * step" in fn
+    assert "Math.ceil(hi / step) * step" in fn
+    scale = src.split("function _dvScale", 1)[1].split("\n}", 1)[0]
+    assert "lo = ticks[0]" in scale
+    assert "hi = ticks[ticks.length - 1]" in scale
+
+
+def test_float_dust_never_reaches_a_label():
+    # Accumulating a step repeatedly yields 189.99999999999997.
+    src = _js()
+    fn = src.split("function _dvTicks", 1)[1].split("\n}", 1)[0]
+    assert "toPrecision(12)" in fn
 
 
 def test_the_time_axis_is_dated():

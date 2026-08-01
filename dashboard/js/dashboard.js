@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '191';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '192';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1350,14 +1350,37 @@ function renderBollingerCard(bb) {
    verified in a browser without network access. */
 const DVP = { W: 1000, H: 368, L: 78, R: 20, T: 30, B: 34 };
 
-/* Axis ticks a human would have chosen. Raw min/max gives labels like
-   $203.2164 — technically the extent, but noise dressed as precision. */
-function _dvTicks(lo, hi, count = 4) {
-  const raw = (hi - lo) / count;
+/* A "nice" step for roughly `target` gridlines.
+
+   Picking the first candidate >= the raw step always rounds UP, and one step up
+   halves the gridline count: a $22 range wanting ~4 lines computes a raw step of
+   5.66, jumps to 10, and draws two. Choosing the candidate whose tick COUNT is
+   closest to the target keeps 5 and draws five. */
+function _dvStep(span, target) {
+  const raw = span / Math.max(1, target);
   const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
-  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || mag * 10;
+  let best = mag, bestErr = Infinity;
+  for (const m of [1, 2, 2.5, 5, 10]) {
+    const step = m * mag;
+    const err = Math.abs(span / step - target);
+    if (err < bestErr) { bestErr = err; best = step; }
+  }
+  return best;
+}
+
+/* Ticks across a domain SNAPPED OUTWARD to whole steps.
+
+   Snapping is what puts gridlines above and below the data instead of only
+   between the extremes — without it the lowest line sat above the lowest point
+   and the chart had nothing to read the bottom of the move against. */
+function _dvTicks(lo, hi, target = 5) {
+  const step = _dvStep(hi - lo, target);
+  const a = Math.floor(lo / step) * step;
+  const b = Math.ceil(hi / step) * step;
   const out = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(v);
+  for (let v = a; v <= b + step * 1e-6; v += step) {
+    out.push(Number(v.toPrecision(12)));           // kill float dust like 189.99999
+  }
   return out;
 }
 
@@ -1392,12 +1415,20 @@ function _dvDateTicks(times, count = 5) {
   return [...new Set(out)];
 }
 
-function _dvScale(vals, top, height) {
+function _dvScale(vals, top, height, opts = {}) {
   let lo = Math.min(...vals), hi = Math.max(...vals);
   if (!(hi > lo)) { hi = lo + 1; lo -= 1; }        // a flat series still draws
-  const pad = (hi - lo) * 0.14;
+  const pad = (hi - lo) * (opts.pad ?? 0.14);
   lo -= pad; hi += pad;
-  return { y: v => top + height - ((v - lo) / (hi - lo)) * height, lo, hi, top, height };
+  let ticks = null;
+  if (opts.ticks) {
+    // Snap the domain to whole steps so the axis both STARTS and ENDS on a
+    // labelled line — otherwise the top and bottom of the chart are unreadable.
+    ticks = _dvTicks(lo, hi, opts.ticks);
+    lo = ticks[0];
+    hi = ticks[ticks.length - 1];
+  }
+  return { y: v => top + height - ((v - lo) / (hi - lo)) * height, lo, hi, ticks, top, height };
 }
 
 function _dvPath(pts, x, y) {
@@ -1446,7 +1477,8 @@ function buildDivergencePanel(div, candles, rsiSeries) {
   const rTop = pTop + pH + 52, rH = 74;
   const axisY = rTop + rH + 26;
 
-  const P = _dvScale([...px.map(d => d.v), p.prev.price, p.curr.price], pTop, pH);
+  const P = _dvScale([...px.map(d => d.v), p.prev.price, p.curr.price], pTop, pH,
+                     { ticks: 5, pad: 0.10 });
   const R = _dvScale([...rs.map(d => d.v), p.prev.rsi, p.curr.rsi, 30, 70], rTop, rH);
 
 
@@ -1512,7 +1544,7 @@ function buildDivergencePanel(div, candles, rsiSeries) {
     </defs>
     ${band}
     <text x="${DVP.L}" y="${(DVP.T - 6).toFixed(1)}" class="dvp-cap">PRICE</text>
-    ${(() => { const t = _dvTicks(P.lo, P.hi, 4); const f = _dvTickFmt(t.length > 1 ? t[1] - t[0] : 1); return t.map(v => grid(P.y(v), f(v))).join(''); })()}
+    ${(() => { const t = P.ticks; const f = _dvTickFmt(t.length > 1 ? t[1] - t[0] : 1); return t.map(v => grid(P.y(v), f(v))).join(''); })()}
     <path d="${_dvPath(px, x, P.y)} L${x(px[px.length - 1].t).toFixed(1)},${(pTop + pH).toFixed(1)} L${x(px[0].t).toFixed(1)},${(pTop + pH).toFixed(1)} Z"
           fill="url(#${uid})" stroke="none"/>
     <path d="${_dvPath(px, x, P.y)}" fill="none" stroke="#94a3b8" stroke-width="1.8"
