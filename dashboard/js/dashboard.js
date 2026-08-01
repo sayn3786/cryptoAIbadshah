@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '192';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '193';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -339,7 +339,8 @@ function renderAll(a) {
   renderSupertrendCard(a.supertrend);
   renderIchimokuCard(a.ichimoku);
   renderBollingerCard(a.bollinger);
-  renderRsiDivCard(a.rsi_divergence, a.candles, a.rsi_series);
+  renderRsiDivCard(a.rsi_divergence, a.candles, a.rsi_series,
+                   { price: a.live_price ?? a.signal_price, rsi: a.rsi });
   renderVwapCard(a.vwap);
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
@@ -1348,7 +1349,7 @@ function renderBollingerCard(bb) {
    Inline SVG, not another chart instance: no library and no CDN, it scales to
    whatever width the card gets, and it is the one chart here that can be
    verified in a browser without network access. */
-const DVP = { W: 1000, H: 368, L: 78, R: 20, T: 30, B: 34 };
+const DVP = { W: 1000, H: 368, L: 78, R: 76, T: 30, B: 34 };
 
 /* A "nice" step for roughly `target` gridlines.
 
@@ -1456,7 +1457,7 @@ function _dvDate(ts, withYear) {
    Inline SVG, not another chart instance: no library and no CDN, it scales to
    whatever width the card gets, and it is the one chart here that can be
    verified in a browser without network access. */
-function buildDivergencePanel(div, candles, rsiSeries) {
+function buildDivergencePanel(div, candles, rsiSeries, now) {
   const p = div?.points;
   if (!p?.prev || !p?.curr || !candles?.length || !rsiSeries?.length) return '';
   if (!Number.isFinite(p.prev.timestamp) || !Number.isFinite(p.curr.timestamp)) return '';
@@ -1477,9 +1478,16 @@ function buildDivergencePanel(div, candles, rsiSeries) {
   const rTop = pTop + pH + 52, rH = 74;
   const axisY = rTop + rH + 26;
 
-  const P = _dvScale([...px.map(d => d.v), p.prev.price, p.curr.price], pTop, pH,
+  // The CURRENT values, from the analysis rather than the last drawn point:
+  // live_price is the still-forming candle, and a.rsi is the latest reading.
+  // Falling back to the last plotted point keeps the lines present when the
+  // caller passes nothing.
+  const nowPrice = Number.isFinite(+now?.price) ? +now.price : px[px.length - 1].v;
+  const nowRsi = Number.isFinite(+now?.rsi) ? +now.rsi : rs[rs.length - 1].v;
+
+  const P = _dvScale([...px.map(d => d.v), p.prev.price, p.curr.price, nowPrice], pTop, pH,
                      { ticks: 5, pad: 0.10 });
-  const R = _dvScale([...rs.map(d => d.v), p.prev.rsi, p.curr.rsi, 30, 70], rTop, rH);
+  const R = _dvScale([...rs.map(d => d.v), p.prev.rsi, p.curr.rsi, nowRsi, 30, 70], rTop, rH);
 
 
   const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
@@ -1491,6 +1499,23 @@ function buildDivergencePanel(div, candles, rsiSeries) {
     <line x1="${DVP.L}" y1="${y.toFixed(1)}" x2="${DVP.W - DVP.R}" y2="${y.toFixed(1)}"
           stroke="#1b2942" stroke-width="1"/>
     <text x="${(DVP.L - 10).toFixed(1)}" y="${(y + 3.5).toFixed(1)}" class="dvp-tick ${cls || ''}">${label}</text>`;
+
+  /* The CURRENT level, carried across the panel to a badge on the right.
+     Without it the chart shows where price was at the two pivots and leaves
+     "so where is it now?" unanswered — which is the first thing anyone asks of
+     a reversal setup. Drawn in the series' own colour so it reads as an
+     extension of that line, never as part of the divergence. */
+  const nowLine = (y, label, color, top, height) => {
+    const yy = Math.max(top + 7, Math.min(top + height - 2, y));
+    const w = Math.max(46, label.length * 7.2 + 12);
+    return `
+      <line x1="${DVP.L}" y1="${yy.toFixed(1)}" x2="${(DVP.W - DVP.R + 4).toFixed(1)}" y2="${yy.toFixed(1)}"
+            stroke="${color}" stroke-width="1.25" stroke-dasharray="1 4" opacity="0.75"/>
+      <rect x="${(DVP.W - DVP.R + 6).toFixed(1)}" y="${(yy - 9).toFixed(1)}"
+            width="${w.toFixed(1)}" height="18" rx="4" fill="${color}" opacity="0.16"/>
+      <text x="${(DVP.W - DVP.R + 6 + w / 2).toFixed(1)}" y="${(yy + 4).toFixed(1)}"
+            text-anchor="middle" class="dvp-now" fill="${color}">${label}</text>`;
+  };
 
   // The window the divergence spans — shaded so the eye goes there first.
   const xa = Math.min(x(p.prev.timestamp), x(p.curr.timestamp));
@@ -1563,11 +1588,14 @@ function buildDivergencePanel(div, candles, rsiSeries) {
     ${tag(Math.min(R.y(p.prev.rsi), R.y(p.curr.rsi)), `${dRsi >= 0 ? '+' : ''}${dRsi.toFixed(1)} pts RSI`, -12)}
     ${marker(p.prev.timestamp, R.y(p.prev.rsi), p.prev.rsi.toFixed(1), '', sideA)}
     ${marker(p.curr.timestamp, R.y(p.curr.rsi), p.curr.rsi.toFixed(1), '', sideB)}
+    ${nowLine(P.y(nowPrice), _dvValFmt(nowPrice), '#cbd5e1', pTop, pH)}
+    ${nowLine(R.y(nowRsi), nowRsi.toFixed(1), '#f59e0b', rTop, rH)}
+    <text x="${(DVP.W - DVP.R + 6).toFixed(1)}" y="${(pTop - 8).toFixed(1)}" class="dvp-cap">NOW</text>
     ${dateTicks}
   </svg>`;
 }
 
-function renderRsiDivCard(div, candles, rsiSeries) {
+function renderRsiDivCard(div, candles, rsiSeries, now) {
   const typeEl = document.getElementById('rsiDivType');
   const descEl = document.getElementById('rsiDivDesc');
   if (!typeEl) return;
@@ -1596,17 +1624,17 @@ function renderRsiDivCard(div, candles, rsiSeries) {
   typeEl.style.opacity = div.forming ? '0.85' : '';
   descEl.textContent = div.description || '';
   descEl.style.color = 'var(--muted2)';
-  renderDivergencePanel(div, candles, rsiSeries);
+  renderDivergencePanel(div, candles, rsiSeries, now);
 }
 
 /* The dedicated panel. Hidden entirely when there is nothing to draw — an empty
    chart frame reads as "no data" when the truth is "no divergence", and a stale
    one reads as a live signal. */
-function renderDivergencePanel(div, candles, rsiSeries) {
+function renderDivergencePanel(div, candles, rsiSeries, now) {
   const sec = document.getElementById('divPanelSection');
   const box = document.getElementById('divPanel');
   if (!sec || !box) return;
-  const svg = div ? buildDivergencePanel(div, candles, rsiSeries) : '';
+  const svg = div ? buildDivergencePanel(div, candles, rsiSeries, now) : '';
   if (!svg) {
     box.innerHTML = '';
     sec.style.display = 'none';

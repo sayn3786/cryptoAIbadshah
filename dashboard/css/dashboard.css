@@ -2241,3 +2241,7 @@ html { overflow-x: hidden; }
   .dvp-sub, .dvp-tick, .dvp-date, .dvp-tag { font-size: 12px; }
   .dvp-cap { font-size: 12px; }
 }
+/* The current price / RSI badge on the right edge. Coloured by its series so it
+   reads as an extension of that line, never as part of the divergence. */
+.dvp-now { font-size: 11.5px; font-weight: 700; }
+@media (max-width: 640px) { .dvp-now { font-size: 13px; } }
