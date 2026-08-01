@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '193';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '194';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1492,7 +1492,9 @@ function buildDivergencePanel(div, candles, rsiSeries, now) {
 
   const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
   const accent = bull ? '#34d399' : '#f87171';
-  const dash = div.forming ? '5 5' : '7 4';
+  const dash = div.forming ? '5 5' : div.status === 'expired' ? '2 5' : '7 4';
+  // Faded, because it is history: the turn it called either happened or did not.
+  const liveOp = div.status === 'expired' ? '0.45' : '1';
   const uid = `dv${Math.abs((p.curr.timestamp | 0)).toString(36)}`;
 
   const grid = (y, label, cls) => `
@@ -1542,7 +1544,7 @@ function buildDivergencePanel(div, candles, rsiSeries, now) {
   const connector = (y1, y2) => `
     <line x1="${x(p.prev.timestamp).toFixed(1)}" y1="${y1.toFixed(1)}"
           x2="${x(p.curr.timestamp).toFixed(1)}" y2="${y2.toFixed(1)}"
-          class="dvp-conn" stroke="${accent}" stroke-width="2.25" stroke-dasharray="${dash}" stroke-linecap="round"/>`;
+          class="dvp-conn" opacity="${liveOp}" stroke="${accent}" stroke-width="2.25" stroke-dasharray="${dash}" stroke-linecap="round"/>`;
 
   // The move each leg made — the divergence stated as two numbers.
   const dPct = (p.curr.price - p.prev.price) / (p.prev.price || 1) * 100;
@@ -1619,6 +1621,7 @@ function renderRsiDivCard(div, candles, rsiSeries, now) {
   const isBull = div.type === 'bullish' || div.type === 'hidden_bullish';
   let label = LABELS[div.type] || (isBull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence');
   if (div.forming) label = label.replace('Divergence', 'Div. · forming ⏳');
+  else if (div.status === 'expired') label = label.replace('Divergence', 'Div. · expired');
   typeEl.textContent = label;
   typeEl.style.color = isBull ? 'var(--bull)' : 'var(--bear)';
   typeEl.style.opacity = div.forming ? '0.85' : '';
@@ -1652,7 +1655,16 @@ function renderDivergencePanel(div, candles, rsiSeries, now) {
       + (div.forming ? ' · forming ⏳' : '');
     t.style.color = bull ? 'var(--bull)' : 'var(--bear)';
   }
-  if (sub) sub.textContent = `${S.symbol} · ${S.timeframe} · ${div.strength} pt RSI gap`;
+  if (sub) {
+    // Age is the answer to "is this still worth acting on", so it belongs next
+    // to the reading rather than buried in the description.
+    const age = Number.isFinite(+div.age_candles)
+      ? ` · ${div.age_candles === 0 ? 'this candle'
+          : div.age_candles === 1 ? '1 candle ago' : `${div.age_candles} candles ago`}` : '';
+    const fade = div.status === 'expired'
+      ? ` · past its ${div.fresh_bars}-candle window` : '';
+    sub.textContent = `${S.symbol} · ${S.timeframe} · ${div.strength} pt RSI gap${age}${fade}`;
+  }
 }
 
 function renderVwapCard(vwap) {

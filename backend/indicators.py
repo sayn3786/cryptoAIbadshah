@@ -1212,6 +1212,17 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
     RS = 2.0     # min 2-pt RSI move between the two pivots
     cands = []
 
+    # How long a confirmed divergence stays worth acting on, in CLOSED candles
+    # since its second pivot. Beyond this it is history: the signal it called
+    # either happened or did not, and either way the setup is no longer live.
+    # It used to just vanish when the pivots fell out of the lookback window,
+    # scoring the same on candle 1 as on candle 29 and then nothing at all.
+    FRESH_BARS = 12
+    # An invalidated divergence keeps showing for this many closed candles, so a
+    # setup that failed is visible as having failed rather than silently gone.
+    # Same window flags and wedges already use (patterns.FAILURE_SHOW_BARS).
+    STALE_SHOW_BARS = 3
+
     def _pts(kind: str, i_prev: int, i_curr: int) -> Dict:
         """
         The two pivots the divergence is drawn between.
@@ -1334,6 +1345,38 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
         chosen["description"] += (f" · note: an opposing {opp} divergence also present "
                                   f"— mixed/choppy structure, wait for confirmation")
     chosen["trend"] = trend
+
+    # ── Age, and what it means ───────────────────────────────────────────────
+    # `_idx` indexes `pairs`, so the number of CLOSED candles since the second
+    # pivot is simply how many pairs came after it. That is the honest measure
+    # of "how old is this", and it is what the score decays on.
+    age = max(0, n - 1 - chosen["_idx"])
+    chosen["age_candles"] = age
+    chosen["fresh_bars"] = FRESH_BARS
+
+    if chosen.get("forming"):
+        # Not yet a fact, so it has no freshness to lose — it is waiting to
+        # become one, and `closes_to_confirm` already says how long that takes.
+        chosen["status"] = "forming"
+    elif age <= FRESH_BARS:
+        chosen["status"] = "confirmed"
+    else:
+        # Past its window. Kept visible for a few more candles so a setup that
+        # expired reads as expired rather than silently disappearing, then
+        # dropped entirely.
+        if age > FRESH_BARS + STALE_SHOW_BARS:
+            return empty
+        chosen["status"] = "expired"
+        chosen["description"] += (f" · expired — {age} candles since the second pivot, "
+                                  f"past the {FRESH_BARS}-candle window")
+
+    # Weight for the score: full inside the window, then a linear fade to zero
+    # across the grace bars. A cliff would make one candle flip a signal.
+    if chosen["status"] == "expired":
+        chosen["freshness"] = round(max(0.0, 1 - (age - FRESH_BARS) / (STALE_SHOW_BARS + 1)), 3)
+    else:
+        chosen["freshness"] = 1.0
+
     chosen.pop("_idx", None)
     return chosen
 

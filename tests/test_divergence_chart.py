@@ -191,10 +191,11 @@ def test_a_flat_series_does_not_divide_by_zero():
     assert "if (!(hi > lo))" in fn, "a flat series must still produce a scale"
 
 
-def test_forming_and_confirmed_are_drawn_differently():
-    # A forming divergence is not yet a fact; it must not look like one.
+def test_the_three_lifecycle_states_are_drawn_differently():
+    # Forming is not yet a fact and expired is no longer one; neither may look
+    # like a live confirmed signal.
     src = _js()
-    assert "div.forming ? '5 5' : '7 4'" in src
+    assert "div.forming ? '5 5' : div.status === 'expired' ? '2 5' : '7 4'" in src
 
 
 def test_the_chart_needs_no_charting_library():
