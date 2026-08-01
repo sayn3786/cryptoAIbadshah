@@ -2212,3 +2212,15 @@ html { overflow-x: hidden; }
   font-size: .74rem; color: var(--muted);
   background: rgba(148,163,184,.08); border: 1px solid rgba(148,163,184,.18);
 }
+
+/* ── RSI divergence mini-chart ──────────────────────────────────────────────
+   Price pivots over RSI pivots, joined by dashed lines that slope opposite
+   ways. Empty when the detector reported no pivots, so the card simply has no
+   picture rather than a misleading one. */
+.rsi-div-chart { margin-top: 10px; }
+.rsi-div-chart:empty { display: none; }
+.rsi-div-chart svg { display: block; }
+.rdv-lbl {
+  fill: var(--muted2); font-size: 7px; font-weight: 700;
+  letter-spacing: .08em; font-family: inherit;
+}

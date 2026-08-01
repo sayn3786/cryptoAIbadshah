@@ -267,6 +267,16 @@ TradingView's RSI pane prints *two* values — the RSI and its own moving averag
 ### RSI Divergence · `momentum`
 *14-candle window. Divergence between price and RSI.*
 
+The detector locates two swing pivots to reach its verdict, and now **returns
+them** as `points` — `{kind, prev:{timestamp, price, rsi}, curr:{…}}` — so the
+dashboard can draw the claim instead of only asserting it: price pivots on one
+axis, RSI pivots on another, joined by lines sloping opposite ways.
+
+`points` is `null` when no divergence was found, and also when the candle feed
+carries no timestamps. Timestamps are needed to *draw*, never to *detect*, so a
+feed without them still detects normally and the card simply shows its text with
+no picture.
+
 | Condition | Points |
 |---|---|
 | Bullish divergence, strength ≥ 5 | +18 |
