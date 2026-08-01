@@ -1,10 +1,15 @@
 """
 The 4H publication cadence (v44).
 
-Signals publish on the 4H candle close and nowhere else: six sets a day, three
-trades each, so at most eighteen published trades in a day. Before this, every
-2H close was a publication point, which is why sixty-odd working signals piled
-up — the same setups being republished bar after bar.
+One published set per 4H SLOT: six sets a day, three trades each, so at most
+eighteen published trades in a day. Before this, every 2H close was a
+publication point, which is why sixty-odd working signals piled up — the same
+setups being republished bar after bar.
+
+The gate is the SLOT, not the candle. Requiring the latest closed candle to BE a
+4H boundary assumed the cron fired near it; GitHub Actions cron ran one to three
+hours late and two of the first four real slots were lost, silently, because a
+skip is not an error by design.
 
 The ranking changed with the cadence: candidates are ordered by the AVERAGE of
 1H and 2H strength, with the composite quality score demoted to the tiebreak.
@@ -138,13 +143,13 @@ def test_skip_persistence_is_an_exception_used_as_control_flow():
     assert issubclass(appmod._SkipPersistence, Exception)
 
 
-def test_between_bars_the_set_is_still_actionable():
-    # A recompute between bars SERVES the set — it just records nothing, because
-    # the set for this bar was already decided and written. Marking it
-    # not-actionable would blank the dashboard for three hours out of every four.
+def test_a_slot_already_published_is_still_actionable():
+    # A recompute inside an already-published slot SERVES the set — it just
+    # records nothing, because the slot has already been decided and written.
+    # Marking it not-actionable would blank the dashboard for hours.
     persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
                "failed": [], "error_code": None,
-               "skipped_reason": "NOT_A_PUBLICATION_BAR"}
+               "skipped_reason": "SLOT_ALREADY_PUBLISHED"}
     assert persist["all_actionable"] is True
     assert persist["error_code"] is None, "a skip is not an error"
     assert persist["persisted"] == 0
@@ -303,3 +308,51 @@ def test_the_cadence_change_is_a_new_strategy_version():
 
 def test_publication_interval_is_four_hours():
     assert appmod.PUBLICATION_INTERVAL_HOURS == 4
+
+
+# ── The gate is the SLOT, not the candle ───────────────────────────────────
+# Requiring the latest closed candle to BE a 4H boundary assumed the cron fired
+# near that boundary. GitHub Actions cron is best-effort and ran one to THREE
+# hours late; a run arriving after the next 2H close saw a non-boundary candle,
+# published nothing, and reported success. Two of the first four real slots were
+# lost exactly that way — silently, because a skip is not an error by design.
+
+def test_publication_is_gated_on_the_slot_not_the_candle():
+    import inspect
+    src = inspect.getsource(appmod._compute_recommendations)
+    assert "_slot_already_published(now_sgt)" in src
+    assert "SLOT_ALREADY_PUBLISHED" in src
+    assert "NOT_A_PUBLICATION_BAR" not in src, \
+        "the candle-alignment gate is what lost the slots"
+
+
+def test_a_slot_with_nothing_recorded_publishes_however_late_the_run_is():
+    # The whole point: a run three hours late still publishes its slot.
+    import inspect
+    fn = inspect.getsource(appmod._slot_already_published)
+    assert "_published_slot" in fn, "the database decides, not the candle clock"
+
+
+def test_doubt_resolves_towards_publishing():
+    # No database, an unreadable slot — attempt anyway. Publication is
+    # idempotent on the candle, so a needless attempt costs a duplicate check;
+    # the opposite mistake loses a slot outright.
+    import inspect
+    fn = inspect.getsource(appmod._slot_already_published)
+    assert "except Exception" in fn and "return False" in fn
+
+
+def test_the_cron_checks_the_slot_before_paying_for_a_compute():
+    # ~50s of upstream fetching, 24 times a day, to publish six times. Checking
+    # first is what makes hourly scheduling affordable.
+    import inspect
+    src = inspect.getsource(appmod.api_cron_publish)
+    before = src.split("_compute_recommendations()", 1)[0]
+    assert "_slot_already_published()" in before
+
+
+def test_the_boundary_helper_still_describes_a_candle_correctly():
+    # `_is_publication_bar` no longer GATES anything, but it is still a true
+    # statement about a candle and is kept for reporting.
+    assert appmod._is_publication_bar(at(16)) is True
+    assert appmod._is_publication_bar(at(14)) is False

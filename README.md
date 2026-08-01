@@ -380,8 +380,20 @@ trades were ever taken.
   so the two cannot drift; if they did, a symbol could arrive with no 4H data
   and be scored as though 4H were neutral. A slot that publishes nothing now
   shows nothing, because the read path no longer computes a fallback.
-* Everything that publishes fires **after** a boundary, never before it — the
-  in-process pre-warm scheduler at :02 past, the GitHub and Vercel crons at :05.
+* **The gate is the SLOT, not the candle.** It used to require the latest
+  closed candle to *be* a 4H boundary, which assumed the cron fired near it.
+  GitHub Actions cron is best-effort and ran **one to three hours late**; a run
+  arriving after the next 2H close saw a non-boundary candle, published nothing
+  and reported success. **Two of the first four real slots were lost that way**,
+  silently, because a skip is not an error by design.
+  Publication now asks the database *"has this slot published yet?"*, so a late
+  run publishes its slot using whatever candle is current by then - fresher
+  levels for the same slot, which beats no signal. Still at most 3 per slot.
+* **`signal-publish.yml` runs hourly**, and the endpoint answers the slot
+  question **before** computing. The 23 runs a day that find the slot already
+  done cost one cheap query each instead of ~50s of upstream fetching, which is
+  what makes the frequency affordable - and frequency is what absorbs the delay.
+* The in-process pre-warm scheduler still runs at :02 past each boundary.
   The gate reads the last CLOSED candle, so a job that fires early sees the
   previous bar and publishes nothing — `telegram-alerts.yml` used to fire at
   23:50 UTC precisely to absorb GitHub's delay, and that became a bug.
