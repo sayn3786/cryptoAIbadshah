@@ -1212,32 +1212,64 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
     RS = 2.0     # min 2-pt RSI move between the two pivots
     cands = []
 
+    def _pts(kind: str, i_prev: int, i_curr: int) -> Dict:
+        """
+        The two pivots the divergence is drawn between.
+
+        The detector already locates these to decide the verdict; without them
+        the card can only assert "bullish divergence" and the reader has to take
+        it on trust. Carrying the coordinates lets the UI show the two price
+        pivots and the two RSI pivots sloping opposite ways, which is the whole
+        claim made visible.
+
+        Timestamps come from the candles themselves, so the points land on the
+        same time axis as every other chart.
+        """
+        t_prev = pairs[i_prev][0].get("timestamp")
+        t_curr = pairs[i_curr][0].get("timestamp")
+        if t_prev is None or t_curr is None:
+            # Detection never needed timestamps; only DRAWING does. A candle
+            # feed without them still detects divergence perfectly well, so
+            # return no points rather than refusing to detect — the card then
+            # shows its text and simply has no picture.
+            return None
+        src = lows if kind == "low" else highs
+        return {
+            "kind": kind,
+            "prev": {"timestamp": t_prev, "price": src[i_prev], "rsi": rsi_v[i_prev]},
+            "curr": {"timestamp": t_curr, "price": src[i_curr], "rsi": rsi_v[i_curr]},
+        }
+
     if len(swing_lows) >= 2:
-        _,  p_price, p_rsi = swing_lows[-2]
+        i0, p_price, p_rsi = swing_lows[-2]
         i1, c_price, c_rsi = swing_lows[-1]
         price_ll = (p_price - c_price) / (p_price + 1e-12) > PX   # lower low
         price_hl = (c_price - p_price) / (p_price + 1e-12) > PX   # higher low
         # Regular bullish — price lower low, RSI higher low → reversal UP
         if price_ll and c_rsi - p_rsi > RS:
             cands.append({"type": "bullish", "strength": round(c_rsi - p_rsi, 1), "_idx": i1,
+                "points": _pts("low", i0, i1),
                 "description": f"Bullish RSI divergence — price lower low but RSI rising (+{c_rsi - p_rsi:.1f} pts), classic reversal setup"})
         # Hidden bullish — price higher low, RSI lower low → uptrend CONTINUES
         if price_hl and p_rsi - c_rsi > RS and trend != "down":
             cands.append({"type": "hidden_bullish", "strength": round(p_rsi - c_rsi, 1), "_idx": i1,
+                "points": _pts("low", i0, i1),
                 "description": f"Hidden bullish divergence — price higher low but RSI lower low (−{p_rsi - c_rsi:.1f} pts), uptrend-continuation (buy-the-dip) signal"})
 
     if len(swing_highs) >= 2:
-        _,  p_price, p_rsi = swing_highs[-2]
+        i0, p_price, p_rsi = swing_highs[-2]
         i1, c_price, c_rsi = swing_highs[-1]
         price_hh = (c_price - p_price) / (p_price + 1e-12) > PX   # higher high
         price_lh = (p_price - c_price) / (p_price + 1e-12) > PX   # lower high
         # Regular bearish — price higher high, RSI lower high → reversal DOWN
         if price_hh and p_rsi - c_rsi > RS:
             cands.append({"type": "bearish", "strength": round(p_rsi - c_rsi, 1), "_idx": i1,
+                "points": _pts("high", i0, i1),
                 "description": f"Bearish RSI divergence — price higher high but RSI falling (−{p_rsi - c_rsi:.1f} pts), classic reversal setup"})
         # Hidden bearish — price lower high, RSI higher high → downtrend CONTINUES
         if price_lh and c_rsi - p_rsi > RS and trend != "up":
             cands.append({"type": "hidden_bearish", "strength": round(c_rsi - p_rsi, 1), "_idx": i1,
+                "points": _pts("high", i0, i1),
                 "description": f"Hidden bearish divergence — price lower high but RSI higher high (+{c_rsi - p_rsi:.1f} pts), downtrend-continuation (sell-the-bounce) signal"})
 
     # ── FORMING divergence (unconfirmed) ──────────────────────────────────────
@@ -1268,21 +1300,23 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
                     else f"{left} more closes hold")
 
         if swing_lows:
-            _, p_price, p_rsi = swing_lows[-1]
+            i0, p_price, p_rsi = swing_lows[-1]
             ti = min(tail, key=lambda i: lows[i])
             if (p_price - lows[ti]) / (p_price + 1e-12) > PX and rsi_v[ti] - p_rsi > RS:
                 left = _left(ti)
                 cands.append({"type": "bullish", "forming": True, "_idx": ti,
+                    "points": _pts("low", i0, ti),
                     "strength": round(rsi_v[ti] - p_rsi, 1),
                     "closes_to_confirm": left,
                     "description": (f"⏳ Forming bullish RSI divergence — price lower low but RSI higher "
                                     f"(+{rsi_v[ti] - p_rsi:.1f} pts); unconfirmed until {_wait(left)}")})
         if swing_highs:
-            _, p_price, p_rsi = swing_highs[-1]
+            i0, p_price, p_rsi = swing_highs[-1]
             ti = max(tail, key=lambda i: highs[i])
             if (highs[ti] - p_price) / (p_price + 1e-12) > PX and p_rsi - rsi_v[ti] > RS:
                 left = _left(ti)
                 cands.append({"type": "bearish", "forming": True, "_idx": ti,
+                    "points": _pts("high", i0, ti),
                     "strength": round(p_rsi - rsi_v[ti], 1),
                     "closes_to_confirm": left,
                     "description": (f"⏳ Forming bearish RSI divergence — price higher high but RSI lower "

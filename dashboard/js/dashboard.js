@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '188';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '189';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -339,7 +339,7 @@ function renderAll(a) {
   renderSupertrendCard(a.supertrend);
   renderIchimokuCard(a.ichimoku);
   renderBollingerCard(a.bollinger);
-  renderRsiDivCard(a.rsi_divergence);
+  renderRsiDivCard(a.rsi_divergence, a.candles, a.rsi_series);
   renderVwapCard(a.vwap);
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
@@ -1333,15 +1333,94 @@ function renderBollingerCard(bb) {
     <div class="bb-row"><span class="bb-label">Lower</span><span class="bear">${fmt(bb.lower)}</span></div>`;
 }
 
-function renderRsiDivCard(div) {
+/* ─── Divergence, drawn ───────────────────────────────────────────────────────
+   The card could only ASSERT "bullish divergence — price lower low but RSI
+   rising". Whether that is true has to be taken on trust unless you go and look
+   at a chart yourself, which is the one thing a dashboard should save you.
+
+   Two stacked panels sharing one time axis: price on top, RSI beneath. The two
+   pivots the detector actually used are marked on each, joined by a dashed line.
+   Those two lines sloping OPPOSITE ways is the divergence — nothing else in the
+   picture needs explaining.
+
+   Inline SVG rather than another chart instance: no library, no CDN, and it
+   renders identically at card size, where an axis-and-crosshair chart would be
+   unreadable anyway. */
+const DIV_W = 260, DIV_H = 108, DIV_PAD = 6;
+
+function _divPath(pts, x, y) {
+  return pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+}
+
+function _divScales(vals, top, height) {
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (!(hi > lo)) { hi = lo + 1; lo -= 1; }          // flat series still draws
+  const pad = (hi - lo) * 0.12;
+  lo -= pad; hi += pad;
+  return v => top + height - ((v - lo) / (hi - lo)) * height;
+}
+
+function buildDivergenceSVG(div, candles, rsiSeries) {
+  const p = div?.points;
+  if (!p?.prev || !p?.curr || !candles?.length || !rsiSeries?.length) return '';
+
+  // Window: from a little before the first pivot to the last candle, so the
+  // divergence sits in context rather than filling the frame edge to edge.
+  const t0 = Math.min(p.prev.timestamp, p.curr.timestamp);
+  const span = Math.max(1, (candles[candles.length - 1].timestamp - t0));
+  const start = t0 - span * 0.12;
+
+  const px = candles.filter(c => c.timestamp >= start)
+                    .map(c => ({ t: c.timestamp, v: c.close }));
+  const rs = rsiSeries.filter(r => r.timestamp >= start && r.rsi != null)
+                      .map(r => ({ t: r.timestamp, v: r.rsi }));
+  if (px.length < 2 || rs.length < 2) return '';
+
+  const tMin = start, tMax = candles[candles.length - 1].timestamp;
+  const x = t => DIV_PAD + ((t - tMin) / Math.max(1, tMax - tMin)) * (DIV_W - DIV_PAD * 2);
+
+  // Pivot prices must be inside the y-domain or a marker can fall outside the box.
+  const priceY = _divScales([...px.map(d => d.v), p.prev.price, p.curr.price], 4, 56);
+  const rsiY   = _divScales([...rs.map(d => d.v), p.prev.rsi, p.curr.rsi], 70, 32);
+
+  const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
+  const accent = bull ? '#34d399' : '#f87171';
+  const dash = div.forming ? '3 3' : '4 2';
+
+  const seg = (y1, y2, color) =>
+    `<line x1="${x(p.prev.timestamp).toFixed(1)}" y1="${y1.toFixed(1)}"
+           x2="${x(p.curr.timestamp).toFixed(1)}" y2="${y2.toFixed(1)}"
+           stroke="${color}" stroke-width="1.5" stroke-dasharray="${dash}"/>`;
+  const dot = (t, y, color) =>
+    `<circle cx="${x(t).toFixed(1)}" cy="${y.toFixed(1)}" r="2.6" fill="${color}"/>`;
+
+  return `<svg viewBox="0 0 ${DIV_W} ${DIV_H}" width="100%" height="${DIV_H}"
+       role="img" aria-label="${bull ? 'Bullish' : 'Bearish'} RSI divergence: price and RSI pivots sloping opposite ways">
+    <text x="${DIV_PAD}" y="10" class="rdv-lbl">PRICE</text>
+    <path d="${_divPath(px, x, priceY)}" fill="none" stroke="#64748b" stroke-width="1.2"/>
+    ${seg(priceY(p.prev.price), priceY(p.curr.price), accent)}
+    ${dot(p.prev.timestamp, priceY(p.prev.price), accent)}
+    ${dot(p.curr.timestamp, priceY(p.curr.price), accent)}
+    <line x1="0" y1="64" x2="${DIV_W}" y2="64" stroke="#1e2d44" stroke-width="1"/>
+    <text x="${DIV_PAD}" y="76" class="rdv-lbl">RSI</text>
+    <path d="${_divPath(rs, x, rsiY)}" fill="none" stroke="#f59e0b" stroke-width="1.2"/>
+    ${seg(rsiY(p.prev.rsi), rsiY(p.curr.rsi), accent)}
+    ${dot(p.prev.timestamp, rsiY(p.prev.rsi), accent)}
+    ${dot(p.curr.timestamp, rsiY(p.curr.rsi), accent)}
+  </svg>`;
+}
+
+function renderRsiDivCard(div, candles, rsiSeries) {
   const typeEl = document.getElementById('rsiDivType');
   const descEl = document.getElementById('rsiDivDesc');
   if (!typeEl) return;
+  const chartEl = document.getElementById('rsiDivChart');
   if (!div || !div.type) {
     typeEl.textContent = 'No divergence';
     typeEl.style.color = 'var(--muted)';
     descEl.textContent = 'Price and RSI moving in sync';
     descEl.style.color = 'var(--muted2)';
+    if (chartEl) chartEl.innerHTML = '';    // never leave the last one drawn
     return;
   }
   // Four types: regular bullish/bearish (reversal) + hidden bullish/bearish
@@ -1361,6 +1440,9 @@ function renderRsiDivCard(div) {
   typeEl.style.opacity = div.forming ? '0.85' : '';
   descEl.textContent = div.description || '';
   descEl.style.color = 'var(--muted2)';
+  // Drawn only when the detector handed over its pivots. A card with no picture
+  // is honest; a picture drawn from guessed points would not be.
+  if (chartEl) chartEl.innerHTML = buildDivergenceSVG(div, candles, rsiSeries);
 }
 
 function renderVwapCard(vwap) {
