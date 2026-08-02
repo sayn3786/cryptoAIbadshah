@@ -279,3 +279,122 @@ def test_percentiles_read_as_english_ordinals():
     assert "12th percentile" in vol(12)
     assert "13th percentile" in vol(13)
     assert "21st percentile" in vol(21)
+
+
+# ── Catalysts: the part that actually moves price ───────────────────────────
+#
+# A chart read describes where price has been. A CPI print, an ETF outflow
+# streak, a quarterly expiry or a liquidation cascade decides where it goes
+# next, and any of them can invalidate every indicator in a single candle.
+
+def _catalysts(**over):
+    a = dict(
+        macro={"summary": "Rate-cut odds firming.",
+               "events": [{"label": "US CPI", "imminent": True,
+                           "next_release": "Aug 3", "impact": "bearish"},
+                          {"label": "FOMC", "imminent": False, "days_to_next": 6}]},
+        etf_flows={"trend": "outflow", "today_m": -184, "week_total_m": -612},
+        options_expiry={"next_expiry": {"days_to_expiry": 2, "type": "quarterly"},
+                        "bias": {"max_pain": 62000, "bias": "bearish", "in_window": True}},
+        liquidations={"longs_liquidated": 48_000_000, "shorts_liquidated": 9_000_000},
+        whale_activity=[{"direction": "bearish", "vol_multiple": 4.2}],
+        news={"signal": "bearish", "bullish": 2, "bearish": 7,
+              "articles": [{"title": "SEC delays decision on staking ETFs"}]},
+        upcoming_holidays=[{"name": "US Labor Day"}],
+    )
+    a.update(over)
+    return _post(_analysis(**a))
+
+
+def test_an_imminent_macro_release_leads_the_section():
+    out = _catalysts()
+    assert "What could actually move this" in out
+    assert "lands within a day" in out
+    assert "US CPI" in out
+    assert "position size before it" in out
+
+
+def test_the_week_ahead_calendar_is_included():
+    assert "FOMC in 6 days" in _catalysts()
+
+
+def test_etf_flows_are_reported_with_direction_and_size():
+    out = _catalysts()
+    assert "$184M on the latest day" in out
+    assert "$612M over the week" in out
+
+
+def test_a_near_options_expiry_and_max_pain_are_flagged():
+    out = _catalysts()
+    assert "quarterly options expiry" in out
+    assert "$62,000" in out
+    assert "pulled down toward it" in out
+
+
+def test_a_distant_weekly_expiry_is_not_worth_mentioning():
+    """Weekly expiries are constant background; only a near one is news."""
+    out = _catalysts(options_expiry={"next_expiry": {"days_to_expiry": 6, "type": "weekly"},
+                                     "bias": {"max_pain": 62000}})
+    assert "options expiry" not in out
+
+
+def test_liquidation_skew_is_named():
+    out = _catalysts()
+    assert "Longs have been taking the damage" in out
+    assert "5.3 to 1" in out
+
+
+def test_headlines_are_quoted_with_the_sentiment_split():
+    out = _catalysts()
+    assert "SEC delays decision on staking ETFs" in out
+    assert "2 bullish, 7 bearish" in out
+
+
+def test_a_holiday_warns_about_thin_books():
+    assert "US Labor Day" in _catalysts()
+
+
+# ── The synthesis ───────────────────────────────────────────────────────────
+
+def test_a_backdrop_that_opposes_the_chart_is_called_out_first():
+    """
+    A bullish chart against a wholly bearish backdrop is the most useful thing
+    on the page. Burying it among the bullets would waste it.
+    """
+    out = _catalysts()
+    assert "backdrop disagrees with the chart" in out
+    assert "technical read is bullish" in out
+    assert "leans bearish" in out
+    # It must not overclaim — the setup is not declared wrong.
+    assert "does not make the setup wrong" in out
+
+
+def test_an_agreeing_backdrop_is_also_stated():
+    out = _catalysts(
+        news={"signal": "bullish", "bullish": 8, "bearish": 1,
+              "articles": [{"title": "Spot inflows accelerate"}]},
+        etf_flows={"trend": "inflow", "today_m": 220, "week_total_m": 810},
+        liquidations={"longs_liquidated": 3_000_000, "shorts_liquidated": 40_000_000},
+        macro={"events": [{"label": "US CPI", "imminent": True, "impact": "bullish"}]},
+        options_expiry={"next_expiry": {"days_to_expiry": 2, "type": "quarterly"},
+                        "bias": {"bias": "bullish", "in_window": True, "max_pain": 66000}})
+    assert "backdrop agrees with the chart" in out
+    assert "leans bullish" not in out or "alignment worth waiting for" in out
+
+
+def test_a_balanced_backdrop_claims_neither():
+    out = _catalysts(
+        news={"signal": "bullish", "bullish": 5, "bearish": 5,
+              "articles": [{"title": "Mixed session"}]},
+        etf_flows={"trend": "outflow", "today_m": -10, "week_total_m": -20},
+        liquidations=None, whale_activity=None,
+        macro={"events": []},
+        options_expiry=None)
+    assert "backdrop disagrees" not in out
+    assert "backdrop agrees" not in out
+
+
+def test_no_catalyst_data_means_no_catalyst_section():
+    """Silence, not an empty heading or a reassuring 'nothing scheduled'."""
+    out = _post(_analysis())
+    assert "What could actually move this" not in out

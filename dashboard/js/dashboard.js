@@ -4823,6 +4823,132 @@ function buildSignalPost(a) {
         `so treat the numbers below with more caution than usual._`);
   }
 
+  // ── What could actually move this ────────────────────────────────────────
+  // Deliberately ABOVE the technicals. A chart read describes where price has
+  // been; a scheduled CPI print, an ETF outflow streak, a quarterly options
+  // expiry or a liquidation cascade is what decides where it goes next, and
+  // any of them can invalidate every indicator below in a single candle.
+  // Imminent items lead, because time-to-event is what makes them actionable.
+  const cat = [];
+
+  const macro = a.macro || {};
+  const macroEvents = (macro.events || []);
+  const imminent = macroEvents.filter(e => e && e.imminent);
+  if (imminent.length) {
+    cat.push(`**A scheduled macro release lands within a day** — ` +
+      imminent.slice(0, 3).map(e => `${e.label}${e.next_release ? ` (${e.next_release})` : ''}` +
+        `${e.impact && e.impact !== 'neutral' ? `, read as ${e.impact}` : ''}`).join('; ') +
+      `. Releases this close move crypto even on intraday charts, so position size before it rather than after.`);
+  }
+  const nextUp = macroEvents
+    .filter(e => e && !e.imminent && _pNum(e.days_to_next) != null && e.days_to_next <= 7)
+    .slice(0, 3);
+  if (nextUp.length) {
+    cat.push(`Also on the calendar this week: ` +
+      nextUp.map(e => `${e.label} in ${e.days_to_next} day${e.days_to_next === 1 ? '' : 's'}`).join(', ') + '.');
+  }
+  if (macro.summary) cat.push(`Macro backdrop: ${macro.summary}`);
+
+  const evr = a.event_risk || {};
+  if (evr.label || evr.note) {
+    cat.push(`Event risk: ${evr.label || ''}${evr.label && evr.note ? ' — ' : ''}${evr.note || ''}`.trim());
+  }
+
+  const etf = a.etf_flows || {};
+  if (_pNum(etf.today_m) != null || _pNum(etf.week_total_m) != null) {
+    const day = _pNum(etf.today_m), wk = _pNum(etf.week_total_m);
+    let line = 'Spot ETF flows are ';
+    line += etf.trend === 'inflow' ? '**positive**' : etf.trend === 'outflow' ? '**negative**' : 'mixed';
+    if (day != null) line += ` — ${day >= 0 ? '+' : '−'}$${Math.abs(day).toFixed(0)}M on the latest day`;
+    if (wk != null) line += `, ${wk >= 0 ? '+' : '−'}$${Math.abs(wk).toFixed(0)}M over the week`;
+    line += '. Institutional flow is the slowest-moving and most persistent bid in this market, so a sustained streak matters more than any single candle.';
+    cat.push(line);
+  }
+
+  const opts = a.options_expiry || {};
+  const oNext = opts.next_expiry || {}, oBias = opts.bias || {};
+  if (oNext.days_to_expiry != null) {
+    const d = _pNum(oNext.days_to_expiry);
+    const type = oNext.type || 'weekly';
+    if (type !== 'weekly' || d <= 3) {
+      let line = `A **${type} options expiry** is ${d === 0 ? 'today' : `${d} day${d === 1 ? '' : 's'} away`}`;
+      if (_pNum(oBias.max_pain) != null) line += `, with max pain at ${_pMoney(oBias.max_pain)}`;
+      if (oBias.bias && oBias.bias !== 'neutral' && oBias.in_window) {
+        line += ` — price tends to get pulled ${oBias.bias === 'bullish' ? 'up' : 'down'} toward it into the event`;
+      }
+      cat.push(line + '.');
+    }
+  }
+
+  const liq = a.liquidations || {};
+  const lLong = _pNum(liq.longs_liquidated), lShort = _pNum(liq.shorts_liquidated);
+  if (lLong != null && lShort != null && (lLong + lShort) > 0) {
+    const heavier = lLong > lShort ? 'Longs' : 'Shorts';
+    const ratio = Math.max(lLong, lShort) / Math.max(1, Math.min(lLong, lShort));
+    cat.push(`${heavier} have been taking the damage in recent liquidations` +
+      (ratio >= 2 ? ` by roughly ${ratio.toFixed(1)} to 1` : '') +
+      `. Forced selling is what turns an ordinary move into a cascade, and it is usually where the fastest part of a trend happens.`);
+  }
+
+  const whales = (a.whale_activity || []);
+  if (whales.length) {
+    const w = whales[0] || {};
+    cat.push(`Large-order activity has been detected — most recently ${String(w.direction || 'a large trade').replace(/_/g, ' ')}` +
+      `${_pNum(w.vol_multiple) != null ? ` at ${_pNum(w.vol_multiple).toFixed(1)}x normal volume` : ''}. ` +
+      `Size arriving at a level tells you someone with conviction is defending or attacking it.`);
+  }
+
+  const nws = a.news || {};
+  if ((nws.articles || []).length) {
+    const arts = nws.articles.slice(0, 3).map(n => `“${String(n.title || '').trim()}”`).filter(t => t.length > 2);
+    if (arts.length) {
+      cat.push(`Headlines in the last 48 hours read **${nws.signal || 'neutral'}** ` +
+        `(${nws.bullish || 0} bullish, ${nws.bearish || 0} bearish): ${arts.join('; ')}.`);
+    }
+  }
+
+  const hols = (a.upcoming_holidays || []);
+  if (hols.length) {
+    const h = hols[0] || {};
+    if (h.name) cat.push(`${h.name} is coming up — thinner books around a market holiday exaggerate moves in both directions.`);
+  }
+
+  // Do the catalysts agree with the chart? This is a TALLY of reads the app
+  // already made — news sentiment, macro impact, ETF direction, options
+  // pinning, liquidation skew — not a new opinion, and it never touches the
+  // score. But a technical setup pointing one way while every catalyst points
+  // the other is the single most useful thing on the page, and burying it
+  // among the bullets would waste it.
+  let catBull = 0, catBear = 0;
+  const vote = v => { if (v === 'bullish') catBull++; else if (v === 'bearish') catBear++; };
+  vote(nws.signal);
+  imminent.forEach(e => vote(e && e.impact));
+  if (etf.trend === 'inflow') catBull++; else if (etf.trend === 'outflow') catBear++;
+  if (oBias.in_window) vote(oBias.bias);
+  if (lLong != null && lShort != null && (lLong + lShort) > 0) {
+    if (lLong > lShort * 2) catBear++;
+    else if (lShort > lLong * 2) catBull++;
+  }
+  const catLean = catBull > catBear ? 'bullish' : catBear > catBull ? 'bearish' : null;
+  const chartLean = dir === 'LONG' ? 'bullish' : dir === 'SHORT' ? 'bearish' : null;
+
+  if (cat.length) {
+    section('What could actually move this');
+    if (catLean && chartLean && catLean !== chartLean) {
+      add(`**The backdrop disagrees with the chart.** The technical read is ${chartLean}, but the ` +
+          `news, flow and calendar picture below leans ${catLean} (${Math.max(catBull, catBear)} of ` +
+          `${catBull + catBear} readings). That does not make the setup wrong — it does mean the ` +
+          `easier trade may be waiting, and that a stop here is more likely to be taken by an event ` +
+          `than by the chart.`);
+      para();
+    } else if (catLean && chartLean && catLean === chartLean) {
+      add(`**The backdrop agrees with the chart** — news, flow and calendar all lean ${catLean} ` +
+          `alongside the technical read, which is the alignment worth waiting for.`);
+      para();
+    }
+    cat.forEach(add);
+  }
+
   // ── Momentum and trend ───────────────────────────────────────────────────
   const mom = [];
   const rsiWord = _pRsiWord(a.rsi);
