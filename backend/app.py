@@ -120,10 +120,36 @@ SYMBOLS = {
     "ENJ":    "ENJUSDT",
     "TNSR":   "TNSRUSDT",   # Tensor (Solana NFT marketplace token) — "$TENSOR"
     # Tokenised commodities — low BTC correlation, move on macro/USD/inflation
-    "XAUT":   "XAUTUSDT",   # Tether Gold  (1 troy oz)
     "PAXG":   "PAXGUSDT",   # PAX Gold      (1 troy oz)
-    "GOMINING": "GOMININGUSDT",  # GoMining platform token — KuCoin primary, CoinGecko fallback
+    "GOMINING": "GOMININGUSDT",  # GoMining platform token — KuCoin platform, CoinGecko fallback
 }
+
+# Symbols we no longer analyse or publish, but which still have signals on the
+# books. Dropping a symbol from SYMBOLS alone STRANDS its open trades: the
+# monitor resolves the exchange pair through SYMBOLS, so the fetch raises, the
+# signal is skipped for want of market data, and it sits PENDING forever —
+# never filled, never stopped, never expired, in no statistic, erroring on
+# every run. Keeping the pair here lets the existing trades finish while
+# nothing new is ever generated, because generation iterates SYMBOLS.
+#
+# An entry can be deleted once no signal references it (see the query in
+# DATA_MODEL.md), but there is no cost to leaving one.
+RETIRED_SYMBOLS = {
+    # Removed 2026-08-02: tokenised gold, and PAXG already covers it. The two
+    # track the same troy ounce to within a fraction of a percent, so they were
+    # taking two of the three published slots for one bet.
+    "XAUT": "XAUTUSDT",
+}
+
+
+def _exchange_pair(sym: str):
+    """
+    Exchange pair for a symbol, including retired ones. None if unknown.
+
+    Live paths that must not resurrect a retired symbol use SYMBOLS directly;
+    this is for the paths that serve trades ALREADY on the books.
+    """
+    return SYMBOLS.get(sym) or RETIRED_SYMBOLS.get(sym)
 
 # BTC correlation tier — controls how much the BTC consensus penalty/bonus applies.
 # HIGH (1.0): standard alts that move in lockstep with BTC (ETH, SOL, AVAX, LINK…)
@@ -143,7 +169,7 @@ _BTC_CORR = {
     # TNSR: Solana NFT-marketplace token — high beta to SOL/BTC risk
     "TNSR": 0.8,
     # Tokenised gold — moves on macro/USD/inflation, not BTC cycles
-    "XAUT": 0.1, "PAXG": 0.1,
+    "PAXG": 0.1,
     "GOMINING": 0.5,  # Mining platform token — moderately correlated with BTC mining profitability
 }
 TF_INTERVAL = {
@@ -506,8 +532,16 @@ def _pattern_alert_id(sym: str, tf: str, pat: dict) -> str:
 
 
 def _fetch_closed_spot(sym: str, tf: str):
-    """Just the closed spot candles for a symbol/TF — no heavy analysis."""
-    bs       = SYMBOLS[sym]
+    """
+    Just the closed spot candles for a symbol/TF — no heavy analysis.
+
+    Resolves retired symbols too: this is the monitor's fetcher, and a signal
+    on the books has to be able to finish even after its symbol is dropped.
+    """
+    bs = _exchange_pair(sym)
+    if not bs:
+        raise KeyError(f"no exchange pair for {sym!r} "
+                       f"(not in SYMBOLS or RETIRED_SYMBOLS)")
     interval = TF_INTERVAL.get(tf, "1w")
     limit    = TF_LIMIT.get(tf, 120)
     spot = client.get_spot_klines(bs, interval, limit)
@@ -3564,7 +3598,9 @@ def _tracker_prices(symbols) -> dict:
         return out
 
     def _one(sym):
-        base = SYMBOLS.get(sym)
+        # Retired symbols included: the tracker still shows their open trades,
+        # and a row without live progress is the thing this avoids.
+        base = _exchange_pair(sym)
         if not base:
             return sym, None
         return sym, client.get_current_price(base)
