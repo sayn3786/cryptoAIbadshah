@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '202';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '203';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4759,6 +4759,18 @@ function _pRsiWord(rsi) {
        : 'the middle of its range';
 }
 
+function _pHeadline(title) {
+  // Feeds hand back whole blurbs, already cut off mid-word with an ellipsis.
+  // Quoting that verbatim ends a sentence on "Even...", which reads broken.
+  // Take the first sentence — that is the headline; the rest is body text.
+  let t = String(title || '').replace(/\s+/g, ' ').trim();
+  t = t.replace(/(\u2026|\.\.\.)\s*$/, '').trim();
+  const first = t.match(/^(.{20,}?[.!?])(?:\s|$)/);
+  if (first) t = first[1];
+  if (t.length > 120) t = t.slice(0, 117).replace(/\s+\S*$/, '') + '\u2026';
+  return t.replace(/[\s.,;:]+$/, '');
+}
+
 function _pSeed(a) {
   // Stable per post, different between posts. Keyed on the symbol, timeframe
   // and the candle the read was made on, so re-copying the same analysis gives
@@ -4838,10 +4850,10 @@ function buildSignalPost(a) {
   const conviction = _pConviction(s.strength);
   const open = [];
   open.push(`${tick} on the ${tf} chart${price ? `, trading at ${price}` : ''}.`);
-  let read = `The read is ${lean}`;
-  if (_pNum(s.strength) != null) read += ` — ${s.strength} out of 100`;
-  if (conviction) read += `${_pNum(s.strength) != null ? ', ' : ', which is '}${conviction} conviction`;
-  open.push(read + '.');
+  // The raw score is a diagnostic, not something a reader can act on — and
+  // "0 out of 100, minimal conviction" says the same thing twice, badly. The
+  // conviction word carries it in English.
+  open.push(`The read is ${lean}${conviction ? `, ${conviction} conviction` : ''}.`);
   if (nBull || nBear) {
     // Never name the machine. "The engine counted" tells the reader this was
     // generated, which is the one thing the writing has to avoid.
@@ -4925,7 +4937,7 @@ function buildSignalPost(a) {
         'Liquidations feed on themselves, which is why they rarely stop at fair value.',
       ], 2));
   }
-  const arts = (nws.articles || []).slice(0, 2).map(n => String(n.title || '').trim()).filter(t => t.length > 3);
+  const arts = (nws.articles || []).slice(0, 2).map(n => _pHeadline(n.title)).filter(t => t.length > 3);
   if (arts.length) {
     behind.push(`Headlines over the last two days lean ${nws.signal || 'neutral'}, ${nws.bullish || 0} bullish against ${nws.bearish || 0} bearish, with ${_pList(arts.map(t => `"${t}"`))}.`);
   }
