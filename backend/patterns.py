@@ -2441,12 +2441,65 @@ LIQ_MIN_TOUCHES   = 2       # a pool needs at least two touches to matter
 LIQ_MAX_POOLS     = 8
 
 
+def _pool_sweep(pool: Dict, candles: List[Dict]) -> Dict:
+    """
+    Has price traded through this pool since the pivot that formed it?
+
+    Direction matters, and it is the pool's ORIGIN that decides — not where the
+    level sits now. Stops behind equal highs rest ABOVE them, so only a later
+    high exceeding the level takes them; stops behind equal lows rest BELOW.
+    Price merely reaching a low pool from above is not a sweep, and counting it
+    as one would mark almost every pool swept the moment it formed.
+
+    Only candles strictly AFTER the last forming pivot count. The pivot candle
+    itself made the level; it cannot also have swept it.
+
+    Returns ``{"swept", "swept_ts", "swept_bars_ago"}`` — all None/False when
+    the pool is intact. Never raises: a malformed candle is skipped, because a
+    chart annotation must not be able to break the analysis it decorates.
+    """
+    level = pool.get("price")
+    kind = pool.get("kind")
+    after = pool.get("last_ts")
+    if level is None or after is None or kind not in ("high", "low"):
+        return {"swept": False, "swept_ts": None, "swept_bars_ago": None}
+
+    for i, c in enumerate(candles or []):
+        try:
+            ts = c.get("timestamp")
+            if ts is None or ts <= after:
+                continue
+            if kind == "high":
+                if float(c["high"]) > level:
+                    return {"swept": True, "swept_ts": ts,
+                            "swept_bars_ago": len(candles) - 1 - i}
+            elif float(c["low"]) < level:
+                return {"swept": True, "swept_ts": ts,
+                        "swept_bars_ago": len(candles) - 1 - i}
+        except (TypeError, ValueError, KeyError, AttributeError):
+            continue
+    return {"swept": False, "swept_ts": None, "swept_bars_ago": None}
+
+
 def detect_liquidity_pools(candles: List[Dict], window: int = 3,
                            max_pools: int = LIQ_MAX_POOLS) -> List[Dict]:
     """Cluster swing highs/lows into liquidity pools (resting stops).
 
-    Returns [{price, touches, side, last_ts}] sorted by touch count then
-    recency — `side` is 'above'/'below' relative to the latest close."""
+    Returns [{price, touches, side, kind, last_ts, swept, swept_ts,
+    swept_bars_ago}] sorted by touch count then recency.
+
+    `side` is 'above'/'below' relative to the LATEST CLOSE — it says where the
+    pool sits now, never whether it is intact.
+
+    `swept` says whether price has since traded through it. A pool is resting
+    stop orders; once swept that liquidity has been taken, and the level stops
+    being a magnet. Nothing here removes a swept pool — it stays until the
+    pivots that formed it age out of the window — because where the stops WERE
+    is worth seeing. The flag is what lets a reader tell the two apart.
+
+    REPORTING ONLY. No scoring path reads `swept`; the pools returned, their
+    order and every other field are byte-identical to before it existed. See
+    tests/test_liquidity_pool_sweeps.py."""
     if len(candles) < window * 2 + 3:
         return []
     ph, pl = find_pivots(candles, window=window)
@@ -2469,14 +2522,21 @@ def detect_liquidity_pools(candles: List[Dict], window: int = 3,
         return out
 
     pools = []
-    for group in (_cluster(ph), _cluster(pl)):
+    for kind, group in (("high", _cluster(ph)), ("low", _cluster(pl))):
         for c in group:
             if len(c["prices"]) < LIQ_MIN_TOUCHES:
                 continue
             lvl = sum(c["prices"]) / len(c["prices"])
             pools.append({"price": round(lvl, 8), "touches": len(c["prices"]),
                           "side": "above" if lvl > price else "below",
+                          # Which side the resting stops sit on, fixed at
+                          # formation. `side` moves with price; this does not,
+                          # and a sweep is only meaningful against this.
+                          "kind": kind,
                           "last_ts": c["last_ts"]})
     # strongest (most touched) first, then most recent
     pools.sort(key=lambda p: (p["touches"], p["last_ts"]), reverse=True)
-    return pools[:max_pools]
+    pools = pools[:max_pools]
+    for p in pools:
+        p.update(_pool_sweep(p, candles))
+    return pools
