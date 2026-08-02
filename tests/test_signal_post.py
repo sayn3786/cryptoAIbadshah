@@ -142,7 +142,7 @@ def test_there_are_no_section_headings():
 def test_it_says_which_way_it_leans_and_how_strongly():
     out = _post(_analysis())
     assert "The read is bullish" in out
-    assert "scoring 61.5 out of 100" in out
+    assert "61.5 out of 100" in out
     assert "moderate conviction" in out
 
 
@@ -163,7 +163,7 @@ def test_the_evidence_is_counted_both_ways():
     a["signal"]["bullish_reasons"] = ["one", "two", "three"]
     a["signal"]["bearish_reasons"] = ["against"]
     out = _post(a)
-    assert "3 factors supporting" in out
+    assert "3 factors line up behind a move" in out
     assert "1 against it" in out
 
 
@@ -451,3 +451,40 @@ def test_no_catalyst_data_means_no_catalyst_prose():
     out = _post(_analysis())
     assert "backdrop" not in out.lower()
     assert "ETF flows" not in out
+
+
+def test_it_never_mentions_the_machine_that_wrote_it():
+    """
+    "The engine counted 15 factors supporting a move" announces that this was
+    generated, which is the one thing the writing has to avoid. A person would
+    just say what the balance is.
+    """
+    a = _analysis()
+    a["signal"]["bullish_reasons"] = ["one"] * 15
+    a["signal"]["bearish_reasons"] = ["two"] * 19
+    out = _post(a)
+    for tell in ("engine", "scoring engine", "algorithm", "computed by",
+                 "the model", "this system"):
+        assert tell not in out.lower(), f"{tell!r} gives the game away"
+    assert "15 factors line up behind a move and 19 against it" in out
+
+
+def test_what_is_coming_is_kept_apart_from_what_already_happened():
+    """
+    "Due this week: … Spot ETF flows have been negative" in one paragraph reads
+    as though the flows are also still ahead. They are history.
+    """
+    out = _catalysts()
+    paras = [p for p in out.split("\n\n") if p.strip()]
+    future = [p for p in paras if "due this week" in p.lower() or "lands within a day" in p.lower()]
+    assert future, "the calendar disappeared"
+    for p in future:
+        assert "ETF flows have been" not in p, "past flows sat in the forward-looking paragraph"
+        assert "taking the damage" not in p, "past liquidations sat in the forward-looking paragraph"
+        assert "Headlines over the last" not in p, "past headlines sat in the forward-looking paragraph"
+
+
+def test_the_past_paragraph_exists_when_there_is_past_data():
+    out = _catalysts()
+    paras = [p for p in out.split("\n\n") if p.strip()]
+    assert any("ETF flows have been" in p for p in paras)

@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '200';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '201';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4811,11 +4811,13 @@ function buildSignalPost(a) {
   const open = [];
   open.push(`${tick} on the ${tf} chart${price ? `, trading at ${price}` : ''}.`);
   let read = `The read is ${lean}`;
-  if (_pNum(s.strength) != null) read += `, scoring ${s.strength} out of 100`;
-  if (conviction) read += `, which is ${conviction} conviction`;
+  if (_pNum(s.strength) != null) read += ` — ${s.strength} out of 100`;
+  if (conviction) read += `${_pNum(s.strength) != null ? ', ' : ', which is '}${conviction} conviction`;
   open.push(read + '.');
   if (nBull || nBear) {
-    open.push(`The engine counted ${nBull} factor${nBull === 1 ? '' : 's'} supporting a move and ${nBear} against it` +
+    // Never name the machine. "The engine counted" tells the reader this was
+    // generated, which is the one thing the writing has to avoid.
+    open.push(`${nBull} factor${nBull === 1 ? '' : 's'} line${nBull === 1 ? 's' : ''} up behind a move and ${nBear} against it` +
       (dir === 'NEUTRAL' ? ', so neither side wins and there is nothing here worth forcing.'
        : nBear >= nBull ? ', so this is a lean rather than a conviction call.' : '.'));
   }
@@ -4853,45 +4855,46 @@ function buildSignalPost(a) {
   const lLong = _pNum(liq.longs_liquidated), lShort = _pNum(liq.shorts_liquidated);
   const nws = a.news || {};
 
-  const cat = [];
+  const ahead = [], behind = [];
   if (imminent.length) {
-    cat.push(`A scheduled release lands within a day — ${_pList(imminent.slice(0, 3).map(e => e.label))}` +
+    ahead.push(`A scheduled release lands within a day — ${_pList(imminent.slice(0, 3).map(e => e.label))}` +
       `. That close to the print, it moves crypto regardless of what the chart says, so size before it rather than after.`);
   }
   if (soon.length) {
-    cat.push(`${imminent.length ? 'Also due' : 'Due'} this week: ` +
+    ahead.push(`${imminent.length ? 'Also due' : 'Due'} this week: ` +
       `${_pList(soon.map(e => `${e.label} in ${e.days_to_next} day${e.days_to_next === 1 ? '' : 's'}`))}.`);
   }
   // macro.summary is not always a string — a raw object here printed
   // "[object Object]" into a published post.
-  if (typeof macro.summary === 'string' && macro.summary.trim()) cat.push(macro.summary.trim());
+  if (typeof macro.summary === 'string' && macro.summary.trim()) behind.push(macro.summary.trim());
 
   const day = _pNum(etf.today_m), wk = _pNum(etf.week_total_m);
   if (day != null || wk != null) {
     const amt = (v) => `$${Math.abs(v).toFixed(0)}M ${v >= 0 ? 'in' : 'out'}`;
-    cat.push(`Spot ETF flows have been ${etf.trend === 'inflow' ? 'positive' : etf.trend === 'outflow' ? 'negative' : 'mixed'}` +
+    behind.push(`Spot ETF flows have been ${etf.trend === 'inflow' ? 'positive' : etf.trend === 'outflow' ? 'negative' : 'mixed'}` +
       `${day != null ? `, ${amt(day)} on the latest day` : ''}${wk != null ? ` and ${amt(wk)} across the week` : ''}. ` +
       `Institutional flow is the slowest and most persistent bid in this market, so a streak matters more than any single candle.`);
   }
   const dte = _pNum(oNext.days_to_expiry), etype = oNext.type || 'weekly';
   if (dte != null && (etype !== 'weekly' || dte <= 3)) {
-    cat.push(`A ${etype} options expiry is ${dte === 0 ? 'today' : `${dte} day${dte === 1 ? '' : 's'} out`}` +
+    ahead.push(`A ${etype} options expiry is ${dte === 0 ? 'today' : `${dte} day${dte === 1 ? '' : 's'} out`}` +
       `${_pNum(oBias.max_pain) != null ? `, with max pain at ${_pMoney(oBias.max_pain)}` : ''}` +
       `${oBias.in_window && oBias.bias && oBias.bias !== 'neutral' ? `, and price tends to get dragged ${oBias.bias === 'bullish' ? 'up' : 'down'} toward it into the event` : ''}.`);
   }
   if (lLong != null && lShort != null && (lLong + lShort) > 0) {
     const heavier = lLong > lShort ? 'Longs' : 'Shorts';
     const ratio = Math.max(lLong, lShort) / Math.max(1, Math.min(lLong, lShort));
-    cat.push(`${heavier} have been taking the damage in recent liquidations${ratio >= 2 ? `, by roughly ${ratio.toFixed(1)} to one` : ''}. ` +
+    behind.push(`${heavier} have been taking the damage in recent liquidations${ratio >= 2 ? `, by roughly ${ratio.toFixed(1)} to one` : ''}. ` +
       `Forced selling is what turns an ordinary move into a cascade.`);
   }
   const arts = (nws.articles || []).slice(0, 2).map(n => String(n.title || '').trim()).filter(t => t.length > 3);
   if (arts.length) {
-    cat.push(`Headlines over the last two days lean ${nws.signal || 'neutral'}, ${nws.bullish || 0} bullish against ${nws.bearish || 0} bearish, with ${_pList(arts.map(t => `"${t}"`))}.`);
+    behind.push(`Headlines over the last two days lean ${nws.signal || 'neutral'}, ${nws.bullish || 0} bullish against ${nws.bearish || 0} bearish, with ${_pList(arts.map(t => `"${t}"`))}.`);
   }
   const hol = (a.upcoming_holidays || [])[0];
-  if (hol && hol.name) cat.push(`${hol.name} is coming up, and thinner books around a holiday exaggerate moves both ways.`);
+  if (hol && hol.name) ahead.push(`${hol.name} is coming up, and thinner books around a holiday exaggerate moves both ways.`);
 
+  const cat = ahead.concat(behind);
   if (cat.length) {
     // Does the backdrop agree with the chart? A tally of reads the app already
     // made — never a new opinion, and it touches no score.
@@ -4914,8 +4917,13 @@ function buildSignalPost(a) {
     }
     // No lead-in when there is no verdict to give — "Worth knowing:" followed
     // by "Due this week:" is two throat-clears before a single fact.
-    push(head.concat(cat.slice(0, 2)));
-    if (cat.length > 2) push(cat.slice(2));
+    //
+    // What is still to come and what has already happened get their own
+    // paragraphs. Sharing one made "Due this week: … Spot ETF flows have been
+    // negative" read as though the flows were also ahead of us.
+    const first = ahead.length ? ahead : behind;
+    push(head.concat(first));
+    if (ahead.length && behind.length) push(behind);
   }
 
   // ── The chart ────────────────────────────────────────────────────────────
