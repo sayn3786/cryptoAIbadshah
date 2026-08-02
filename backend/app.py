@@ -2685,13 +2685,22 @@ def _compute_recommendations() -> dict:
         # Only the PUBLISHED symbols. Logging all 32 on every 4H bar would be
         # roughly a hundred rows a bar for symbols nobody acted on; these three
         # are the ones a postmortem will actually ask about.
+        #
+        # Across every timeframe already in hand, though. 1H and 2H are fetched
+        # for all symbols and 4H for anything that survived the gates, so a
+        # published symbol has all three sitting in `raw` — logging them costs
+        # no extra request. It also makes "which timeframe do flags fail on
+        # most" answerable, which a single-timeframe log cannot be.
         try:
             import pattern_store as _pstore
             _pat_rows = []
             for _r in intraday_recs:
-                _an = (raw.get(_r["symbol"], {}).get("2H", {}) or {}).get("analysis") or {}
-                _pat_rows += _pstore.build_events(
-                    _r["symbol"], "2H", _close_t, _observed_patterns(_an))
+                for _tf in ("1H", "2H", "4H"):
+                    _an = (raw.get(_r["symbol"], {}).get(_tf, {}) or {}).get("analysis") or {}
+                    if not _an:
+                        continue          # 4H is absent for anything gated out
+                    _pat_rows += _pstore.build_events(
+                        _r["symbol"], _tf, _close_t, _observed_patterns(_an))
             if _pat_rows:
                 _pat_out = _pstore.record_events(_pat_rows)
                 _persist["patterns"] = _pat_out
@@ -3745,6 +3754,39 @@ def api_pattern_history():
                     "environment": _deploy_env(),
                     "kinds": list(_pstore.PATTERN_KINDS),
                     "statuses": list(_pstore.OBSERVABLE_STATUSES)})
+
+
+@app.get("/api/patterns/stats")
+def api_pattern_stats():
+    """
+    How patterns worked out, grouped by timeframe and pattern kind.
+
+    Answers "how many flags on 1H were invalidated versus confirmed" from the
+    log rather than from memory. Counts DISTINCT pattern identities, not rows —
+    a pattern that stays confirmed for six bars logs six observations, and
+    counting those would say six confirmations about one pattern.
+
+    Still a LOG. Nothing in the scoring path reads it, so a lopsided
+    invalidation rate can inform a decision but can never move a signal on its
+    own — the same rule that keeps postmortem data out of live parameters.
+
+    ?days=N narrows or widens the window (default 30). A shorter window is a
+    truer count, a longer one a bigger sample; see pattern_store.stats.
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    try:
+        import pattern_store as _pstore
+        out = _pstore.stats(
+            days=_int_arg("days", 30, 1, 365),
+            symbol=request.args.get("symbol"),
+            environment=request.args.get("environment") or _deploy_env(),
+        )
+    except Exception as exc:
+        return _db_error_response(exc)
+    out["environment"] = _deploy_env()
+    return jsonify(out)
 
 
 @app.post("/api/signals/monitor")
