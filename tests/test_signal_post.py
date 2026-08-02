@@ -35,7 +35,7 @@ pytestmark = pytest.mark.skipif(
     not os.path.exists(NODE), reason="node not available — JS behaviour tests skipped")
 
 FUNCS = ("_cleanFactor", "_pNum", "_pMoney", "_pPct", "_pOrdinal", "_pConviction",
-         "_pRsiWord", "_pList", "_pSeed", "_pPick", "buildSignalPost")
+         "_pRsiWord", "_pList", "_pHeadline", "_pSeed", "_pPick", "buildSignalPost")
 
 _SRC = None
 
@@ -142,7 +142,6 @@ def test_there_are_no_section_headings():
 def test_it_says_which_way_it_leans_and_how_strongly():
     out = _post(_analysis())
     assert "The read is bullish" in out
-    assert "61.5 out of 100" in out
     assert "moderate conviction" in out
 
 
@@ -590,3 +589,46 @@ def test_the_rotation_is_roughly_even_over_time():
         seen[_invalidation_para(out)] += 1
     assert len(seen) >= 3, f"only {len(seen)} phrasings across 24 candles"
     assert max(seen.values()) <= 12, f"one variant dominated: {seen.most_common(1)}"
+
+
+def test_the_raw_score_is_not_published():
+    """
+    "The read is neutral — 0 out of 100, minimal conviction" appeared in a real
+    post. The number is a diagnostic a reader cannot act on, and it says the
+    same thing as the conviction word, badly.
+    """
+    for strength, word in ((0, "minimal"), (35, "low"), (61.5, "moderate"), (92, "high")):
+        a = _analysis()
+        a["signal"]["strength"] = strength
+        out = _post(a)
+        assert "out of 100" not in out, out.split(".")[0]
+        assert "/100" not in out
+        assert f"{word} conviction" in out, f"strength {strength} lost its conviction word"
+
+
+def test_a_truncated_headline_is_not_quoted_mid_word():
+    """
+    Feeds hand back whole blurbs, already cut off with an ellipsis. Quoting one
+    verbatim ended a post with: The company now holds 4,261 BTC. Even...".
+    """
+    out = _catalysts(news={"signal": "neutral", "bullish": 6, "bearish": 5, "articles": [
+        {"title": "Trump Media has sold another 2,628 BTC. That brings its total "
+                  "Bitcoin sales to 7,281 BTC over the past seven months. The company "
+                  "now holds 4,261 BTC. Even…"}]})
+    assert "Even" not in out
+    assert '"Trump Media has sold another 2,628 BTC"' in out
+
+
+def test_a_short_clean_headline_is_left_alone():
+    out = _catalysts(news={"signal": "bearish", "bullish": 1, "bearish": 4, "articles": [
+        {"title": "SEC delays decision on staking ETFs"}]})
+    assert '"SEC delays decision on staking ETFs"' in out
+
+
+def test_a_very_long_single_sentence_headline_is_cut_at_a_word():
+    long_title = "Bitcoin " + "very " * 40 + "long headline"
+    out = _catalysts(news={"signal": "neutral", "bullish": 1, "bearish": 1,
+                           "articles": [{"title": long_title}]})
+    quoted = out.split('with "')[1].split('"')[0]
+    assert len(quoted) <= 121
+    assert not quoted.endswith(" "), "cut mid-space"
