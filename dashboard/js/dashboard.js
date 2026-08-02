@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '199';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '200';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4720,7 +4720,12 @@ function _pMoney(v) {
   if (n == null) return null;
   // Sub-dollar altcoins need the decimals a large cap does not.
   const dp = Math.abs(n) >= 100 ? 2 : Math.abs(n) >= 1 ? 4 : 8;
-  return '$' + n.toLocaleString(undefined, { maximumFractionDigits: dp });
+  // A published price with one decimal ("$63,266.5") reads like a typo, but so
+  // does "$63,400.00" for a round number. Pad to two only when there are
+  // actually decimals to show.
+  const pad = (Math.abs(n) >= 100 && n % 1 !== 0) ? 2 : 0;
+  return '$' + n.toLocaleString(undefined,
+    { maximumFractionDigits: dp, minimumFractionDigits: pad });
 }
 
 function _pPct(v, dp = 2) {
@@ -4754,349 +4759,289 @@ function _pRsiWord(rsi) {
        : 'the middle of its range';
 }
 
+function _pList(items, sep) {
+  const a = (items || []).filter(Boolean);
+  if (!a.length) return '';
+  if (a.length === 1) return a[0];
+  // Items that already contain commas need a stronger separator, or the list
+  // and the item run together into one unreadable clause.
+  const s = sep || (a.some(t => String(t).includes(',')) ? '; ' : ', ');
+  return a.slice(0, -1).join(s) + (s === '; ' ? '; and ' : ' and ') + a[a.length - 1];
+}
+
+// Engine diagnostics that explain HOW the score was reached. Useful in the
+// dashboard, meaningless in a post — "raw trend score 40 capped at 35" tells a
+// reader nothing about the market.
+const _POST_INTERNAL = /capped at|triple-count|raw trend score|amplifier|weighting|score cap/i;
+
 function buildSignalPost(a) {
   a = a || {};
   const s = a.signal;
   if (!s) return '';
 
   const sym = String(a.symbol || '').toUpperCase();
-  const tf  = a.timeframe || '';
+  const tick = sym ? '$' + sym : 'this token';
+  const tf = a.timeframe || '';
   const dir = String(s.direction || 'NEUTRAL').toUpperCase();
-  const lean = dir === 'LONG' ? 'Bullish' : dir === 'SHORT' ? 'Bearish' : 'Neutral';
-  const bull = (s.bullish_reasons || []).map(_cleanFactor).filter(Boolean);
-  const bear = (s.bearish_reasons || []).map(_cleanFactor).filter(Boolean);
+  const lean = dir === 'LONG' ? 'bullish' : dir === 'SHORT' ? 'bearish' : 'neutral';
 
-  const L = [];
-  const add = (line) => { if (line) L.push(line); };
-  const para = () => { if (L.length && L[L.length - 1] !== '') L.push(''); };
-  const section = (title) => { para(); L.push(`## ${title}`); L.push(''); };
+  const reasons = (list) => (list || [])
+    .map(_cleanFactor).filter(Boolean)
+    .filter(r => !_POST_INTERNAL.test(r))
+    // Lowercasing the first letter reads naturally mid-sentence, but "RSI"
+    // must not become "rSI" — leave anything that starts with an acronym or a
+    // proper noun alone.
+    .map(r => r.replace(/\.$/, ''))
+    .map(r => /^[A-Z]{2,}|^[A-Z][a-z]+\s[A-Z]/.test(r) ? r : r.replace(/^./, c => c.toLowerCase()))
+    .filter((r, i, all) => all.indexOf(r) === i);
+  const bull = reasons(s.bullish_reasons);
+  const bear = reasons(s.bearish_reasons);
+  const nBull = (s.bullish_reasons || []).length;
+  const nBear = (s.bearish_reasons || []).length;
 
-  // ── Headline ─────────────────────────────────────────────────────────────
-  L.push(`# ${sym}/USDT — ${lean.toLowerCase() === 'neutral' ? 'no clear edge' : lean + ' setup'} on the ${tf} chart`);
-  L.push('');
+  const P = [];                       // paragraphs, plain prose, no markup
+  const push = (parts) => {
+    const t = (Array.isArray(parts) ? parts : [parts]).filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
+    if (t) P.push(t);
+  };
+
+  // ── Opening: the lean, in the first sentence ─────────────────────────────
   const price = _pMoney(a.live_price != null ? a.live_price : a.signal_price);
-  add(`_${sym} at ${price || 'an unquoted price'} · ${tf} timeframe · signal computed on the last closed candle._`);
-
-  // ── The lean — the question the whole piece answers ──────────────────────
-  section('Where this is leaning');
   const conviction = _pConviction(s.strength);
-  const strengthTxt = _pNum(s.strength) != null ? `${s.strength}/100` : null;
-  let verdict = `**The read is ${lean.toLowerCase()}**`;
-  if (strengthTxt) verdict += `, scoring ${strengthTxt}`;
-  if (s.tier) verdict += ` and rated tier ${s.tier}`;
-  verdict += conviction ? `, which is ${conviction} conviction.` : '.';
-  add(verdict);
-
-  if (bull.length || bear.length) {
-    add(`The scoring engine found **${bull.length} factor${bull.length === 1 ? '' : 's'} supporting** the move and ` +
-        `**${bear.length} opposing** it.` +
-        (dir === 'NEUTRAL'
-          ? ' Neither side wins clearly, which is why no trade is being suggested.'
-          : bear.length >= bull.length
-            ? ' The opposing side is not small, so this is a lean rather than a conviction call.'
-            : ''));
+  const open = [];
+  open.push(`${tick} on the ${tf} chart${price ? `, trading at ${price}` : ''}.`);
+  let read = `The read is ${lean}`;
+  if (_pNum(s.strength) != null) read += `, scoring ${s.strength} out of 100`;
+  if (conviction) read += `, which is ${conviction} conviction`;
+  open.push(read + '.');
+  if (nBull || nBear) {
+    open.push(`The engine counted ${nBull} factor${nBull === 1 ? '' : 's'} supporting a move and ${nBear} against it` +
+      (dir === 'NEUTRAL' ? ', so neither side wins and there is nothing here worth forcing.'
+       : nBear >= nBull ? ', so this is a lean rather than a conviction call.' : '.'));
   }
-  if (s.size_guide) add(`Position guidance: ${s.size_guide}.`);
-
   const htf = a.htf_confluence;
   if (htf && htf.deps && Object.keys(htf.deps).length) {
-    const tfs = Object.entries(htf.deps).map(([k, v]) => `${k} ${String(v).toLowerCase()}`).join(', ');
-    add(htf.confirmed
-      ? `Higher timeframes agree (${tfs}), which is the confirmation this setup wants.`
-      : htf.warning
-        ? `Higher timeframes do not agree (${tfs}) — that is a reason to be smaller or to wait.`
-        : `Higher-timeframe read: ${tfs}.`);
+    const tfs = _pList(Object.entries(htf.deps).map(([k, v]) => `${k} ${String(v).toLowerCase()}`));
+    open.push(htf.confirmed ? `Higher timeframes agree, with ${tfs}.`
+      : htf.warning ? `Higher timeframes are not helping — ${tfs}.`
+      : `Higher up, ${tfs}.`);
   }
-
   const ctx = a.btc_context;
   if (ctx && ctx.direction && ctx.direction !== 'NEUTRAL' && sym !== 'BTC') {
     const corr = _pNum(ctx.corr_factor);
-    const corrTxt = corr == null ? '' : ` This token tracks BTC about ${Math.round(corr * 100)}% of the way.`;
-    add(ctx.aligned
-      ? `Bitcoin is pointing the same way (${ctx.direction}), which supports the case.${corrTxt}`
-      : `Bitcoin is pointing the other way (${ctx.direction}) — the main risk to this read.${corrTxt}`);
+    open.push(ctx.aligned
+      ? `Bitcoin is pointing the same way, which helps${corr != null ? ` — ${tick} tracks it about ${Math.round(corr * 100)}% of the time` : ''}.`
+      : `Bitcoin is pointing the other way, which is the main risk here${corr != null ? `, and ${tick} tracks it about ${Math.round(corr * 100)}% of the time` : ''}.`);
   }
-
-  if (a.data_quality && a.data_quality !== 'clean') {
-    add(`_Caveat: the underlying data is flagged **${a.data_quality}**` +
-        `${(a.data_quality_reasons || []).length ? ` (${(a.data_quality_reasons || []).join('; ')})` : ''}, ` +
-        `so treat the numbers below with more caution than usual._`);
+  // Only degraded or invalid data is worth warning about. "good" and "clean"
+  // are the healthy states, and warning on them made every post cry wolf.
+  if (a.data_quality === 'degraded' || a.data_quality === 'invalid') {
+    const why = (a.data_quality_reasons || []).filter(r => typeof r === 'string');
+    open.push(`One caveat: the underlying data is ${a.data_quality}${why.length ? ` (${_pList(why)})` : ''}, so take the numbers below with more salt than usual.`);
   }
+  push(open);
 
-  // ── What could actually move this ────────────────────────────────────────
-  // Deliberately ABOVE the technicals. A chart read describes where price has
-  // been; a scheduled CPI print, an ETF outflow streak, a quarterly options
-  // expiry or a liquidation cascade is what decides where it goes next, and
-  // any of them can invalidate every indicator below in a single candle.
-  // Imminent items lead, because time-to-event is what makes them actionable.
-  const cat = [];
-
+  // ── Catalysts, before the chart ──────────────────────────────────────────
   const macro = a.macro || {};
   const macroEvents = (macro.events || []);
   const imminent = macroEvents.filter(e => e && e.imminent);
-  if (imminent.length) {
-    cat.push(`**A scheduled macro release lands within a day** — ` +
-      imminent.slice(0, 3).map(e => `${e.label}${e.next_release ? ` (${e.next_release})` : ''}` +
-        `${e.impact && e.impact !== 'neutral' ? `, read as ${e.impact}` : ''}`).join('; ') +
-      `. Releases this close move crypto even on intraday charts, so position size before it rather than after.`);
-  }
-  const nextUp = macroEvents
-    .filter(e => e && !e.imminent && _pNum(e.days_to_next) != null && e.days_to_next <= 7)
-    .slice(0, 3);
-  if (nextUp.length) {
-    cat.push(`Also on the calendar this week: ` +
-      nextUp.map(e => `${e.label} in ${e.days_to_next} day${e.days_to_next === 1 ? '' : 's'}`).join(', ') + '.');
-  }
-  if (macro.summary) cat.push(`Macro backdrop: ${macro.summary}`);
-
-  const evr = a.event_risk || {};
-  if (evr.label || evr.note) {
-    cat.push(`Event risk: ${evr.label || ''}${evr.label && evr.note ? ' — ' : ''}${evr.note || ''}`.trim());
-  }
-
+  const soon = macroEvents.filter(e => e && !e.imminent && _pNum(e.days_to_next) != null && e.days_to_next <= 7).slice(0, 3);
   const etf = a.etf_flows || {};
-  if (_pNum(etf.today_m) != null || _pNum(etf.week_total_m) != null) {
-    const day = _pNum(etf.today_m), wk = _pNum(etf.week_total_m);
-    let line = 'Spot ETF flows are ';
-    line += etf.trend === 'inflow' ? '**positive**' : etf.trend === 'outflow' ? '**negative**' : 'mixed';
-    if (day != null) line += ` — ${day >= 0 ? '+' : '−'}$${Math.abs(day).toFixed(0)}M on the latest day`;
-    if (wk != null) line += `, ${wk >= 0 ? '+' : '−'}$${Math.abs(wk).toFixed(0)}M over the week`;
-    line += '. Institutional flow is the slowest-moving and most persistent bid in this market, so a sustained streak matters more than any single candle.';
-    cat.push(line);
-  }
-
   const opts = a.options_expiry || {};
   const oNext = opts.next_expiry || {}, oBias = opts.bias || {};
-  if (oNext.days_to_expiry != null) {
-    const d = _pNum(oNext.days_to_expiry);
-    const type = oNext.type || 'weekly';
-    if (type !== 'weekly' || d <= 3) {
-      let line = `A **${type} options expiry** is ${d === 0 ? 'today' : `${d} day${d === 1 ? '' : 's'} away`}`;
-      if (_pNum(oBias.max_pain) != null) line += `, with max pain at ${_pMoney(oBias.max_pain)}`;
-      if (oBias.bias && oBias.bias !== 'neutral' && oBias.in_window) {
-        line += ` — price tends to get pulled ${oBias.bias === 'bullish' ? 'up' : 'down'} toward it into the event`;
-      }
-      cat.push(line + '.');
-    }
-  }
-
   const liq = a.liquidations || {};
   const lLong = _pNum(liq.longs_liquidated), lShort = _pNum(liq.shorts_liquidated);
+  const nws = a.news || {};
+
+  const cat = [];
+  if (imminent.length) {
+    cat.push(`A scheduled release lands within a day — ${_pList(imminent.slice(0, 3).map(e => e.label))}` +
+      `. That close to the print, it moves crypto regardless of what the chart says, so size before it rather than after.`);
+  }
+  if (soon.length) {
+    cat.push(`${imminent.length ? 'Also due' : 'Due'} this week: ` +
+      `${_pList(soon.map(e => `${e.label} in ${e.days_to_next} day${e.days_to_next === 1 ? '' : 's'}`))}.`);
+  }
+  // macro.summary is not always a string — a raw object here printed
+  // "[object Object]" into a published post.
+  if (typeof macro.summary === 'string' && macro.summary.trim()) cat.push(macro.summary.trim());
+
+  const day = _pNum(etf.today_m), wk = _pNum(etf.week_total_m);
+  if (day != null || wk != null) {
+    const amt = (v) => `$${Math.abs(v).toFixed(0)}M ${v >= 0 ? 'in' : 'out'}`;
+    cat.push(`Spot ETF flows have been ${etf.trend === 'inflow' ? 'positive' : etf.trend === 'outflow' ? 'negative' : 'mixed'}` +
+      `${day != null ? `, ${amt(day)} on the latest day` : ''}${wk != null ? ` and ${amt(wk)} across the week` : ''}. ` +
+      `Institutional flow is the slowest and most persistent bid in this market, so a streak matters more than any single candle.`);
+  }
+  const dte = _pNum(oNext.days_to_expiry), etype = oNext.type || 'weekly';
+  if (dte != null && (etype !== 'weekly' || dte <= 3)) {
+    cat.push(`A ${etype} options expiry is ${dte === 0 ? 'today' : `${dte} day${dte === 1 ? '' : 's'} out`}` +
+      `${_pNum(oBias.max_pain) != null ? `, with max pain at ${_pMoney(oBias.max_pain)}` : ''}` +
+      `${oBias.in_window && oBias.bias && oBias.bias !== 'neutral' ? `, and price tends to get dragged ${oBias.bias === 'bullish' ? 'up' : 'down'} toward it into the event` : ''}.`);
+  }
   if (lLong != null && lShort != null && (lLong + lShort) > 0) {
     const heavier = lLong > lShort ? 'Longs' : 'Shorts';
     const ratio = Math.max(lLong, lShort) / Math.max(1, Math.min(lLong, lShort));
-    cat.push(`${heavier} have been taking the damage in recent liquidations` +
-      (ratio >= 2 ? ` by roughly ${ratio.toFixed(1)} to 1` : '') +
-      `. Forced selling is what turns an ordinary move into a cascade, and it is usually where the fastest part of a trend happens.`);
+    cat.push(`${heavier} have been taking the damage in recent liquidations${ratio >= 2 ? `, by roughly ${ratio.toFixed(1)} to one` : ''}. ` +
+      `Forced selling is what turns an ordinary move into a cascade.`);
   }
-
-  const whales = (a.whale_activity || []);
-  if (whales.length) {
-    const w = whales[0] || {};
-    cat.push(`Large-order activity has been detected — most recently ${String(w.direction || 'a large trade').replace(/_/g, ' ')}` +
-      `${_pNum(w.vol_multiple) != null ? ` at ${_pNum(w.vol_multiple).toFixed(1)}x normal volume` : ''}. ` +
-      `Size arriving at a level tells you someone with conviction is defending or attacking it.`);
+  const arts = (nws.articles || []).slice(0, 2).map(n => String(n.title || '').trim()).filter(t => t.length > 3);
+  if (arts.length) {
+    cat.push(`Headlines over the last two days lean ${nws.signal || 'neutral'}, ${nws.bullish || 0} bullish against ${nws.bearish || 0} bearish, with ${_pList(arts.map(t => `"${t}"`))}.`);
   }
-
-  const nws = a.news || {};
-  if ((nws.articles || []).length) {
-    const arts = nws.articles.slice(0, 3).map(n => `“${String(n.title || '').trim()}”`).filter(t => t.length > 2);
-    if (arts.length) {
-      cat.push(`Headlines in the last 48 hours read **${nws.signal || 'neutral'}** ` +
-        `(${nws.bullish || 0} bullish, ${nws.bearish || 0} bearish): ${arts.join('; ')}.`);
-    }
-  }
-
-  const hols = (a.upcoming_holidays || []);
-  if (hols.length) {
-    const h = hols[0] || {};
-    if (h.name) cat.push(`${h.name} is coming up — thinner books around a market holiday exaggerate moves in both directions.`);
-  }
-
-  // Do the catalysts agree with the chart? This is a TALLY of reads the app
-  // already made — news sentiment, macro impact, ETF direction, options
-  // pinning, liquidation skew — not a new opinion, and it never touches the
-  // score. But a technical setup pointing one way while every catalyst points
-  // the other is the single most useful thing on the page, and burying it
-  // among the bullets would waste it.
-  let catBull = 0, catBear = 0;
-  const vote = v => { if (v === 'bullish') catBull++; else if (v === 'bearish') catBear++; };
-  vote(nws.signal);
-  imminent.forEach(e => vote(e && e.impact));
-  if (etf.trend === 'inflow') catBull++; else if (etf.trend === 'outflow') catBear++;
-  if (oBias.in_window) vote(oBias.bias);
-  if (lLong != null && lShort != null && (lLong + lShort) > 0) {
-    if (lLong > lShort * 2) catBear++;
-    else if (lShort > lLong * 2) catBull++;
-  }
-  const catLean = catBull > catBear ? 'bullish' : catBear > catBull ? 'bearish' : null;
-  const chartLean = dir === 'LONG' ? 'bullish' : dir === 'SHORT' ? 'bearish' : null;
+  const hol = (a.upcoming_holidays || [])[0];
+  if (hol && hol.name) cat.push(`${hol.name} is coming up, and thinner books around a holiday exaggerate moves both ways.`);
 
   if (cat.length) {
-    section('What could actually move this');
-    if (catLean && chartLean && catLean !== chartLean) {
-      add(`**The backdrop disagrees with the chart.** The technical read is ${chartLean}, but the ` +
-          `news, flow and calendar picture below leans ${catLean} (${Math.max(catBull, catBear)} of ` +
-          `${catBull + catBear} readings). That does not make the setup wrong — it does mean the ` +
-          `easier trade may be waiting, and that a stop here is more likely to be taken by an event ` +
-          `than by the chart.`);
-      para();
-    } else if (catLean && chartLean && catLean === chartLean) {
-      add(`**The backdrop agrees with the chart** — news, flow and calendar all lean ${catLean} ` +
-          `alongside the technical read, which is the alignment worth waiting for.`);
-      para();
+    // Does the backdrop agree with the chart? A tally of reads the app already
+    // made — never a new opinion, and it touches no score.
+    let cb = 0, cs2 = 0;
+    const vote = v => { if (v === 'bullish') cb++; else if (v === 'bearish') cs2++; };
+    vote(nws.signal);
+    imminent.forEach(e => vote(e && e.impact));
+    if (etf.trend === 'inflow') cb++; else if (etf.trend === 'outflow') cs2++;
+    if (oBias.in_window) vote(oBias.bias);
+    if (lLong != null && lShort != null && (lLong + lShort) > 0) {
+      if (lLong > lShort * 2) cs2++; else if (lShort > lLong * 2) cb++;
     }
-    cat.forEach(add);
+    const catLean = cb > cs2 ? 'bullish' : cs2 > cb ? 'bearish' : null;
+    const head = [];
+    if (catLean && lean !== 'neutral' && catLean !== lean) {
+      head.push(`Before the chart, the backdrop. It disagrees: the technical read is ${lean} but the news, flow and calendar picture leans ${catLean}. ` +
+        `That does not make the setup wrong, but a stop here is more likely to be taken out by an event than by price action.`);
+    } else if (catLean && lean !== 'neutral' && catLean === lean) {
+      head.push(`The backdrop agrees with the chart — news, flow and calendar all lean ${catLean} alongside it, which is the alignment worth waiting for.`);
+    }
+    // No lead-in when there is no verdict to give — "Worth knowing:" followed
+    // by "Due this week:" is two throat-clears before a single fact.
+    push(head.concat(cat.slice(0, 2)));
+    if (cat.length > 2) push(cat.slice(2));
   }
 
-  // ── Momentum and trend ───────────────────────────────────────────────────
+  // ── The chart ────────────────────────────────────────────────────────────
   const mom = [];
   const rsiWord = _pRsiWord(a.rsi);
-  if (rsiWord) mom.push(`RSI sits at ${_pNum(a.rsi).toFixed(1)}, in ${rsiWord}` +
-    (_pNum(a.rsi_slope) != null ? ` and ${_pNum(a.rsi_slope) >= 0 ? 'rising' : 'falling'}` : '') + '.');
-  const macd = a.macd || {};
-  if (macd.trend || macd.cross) {
-    mom.push(`MACD is ${macd.trend || 'in play'}${macd.cross ? ` with a ${macd.cross} cross` : ''}` +
-      (_pNum(macd.histogram) != null ? `, histogram ${_pNum(macd.histogram).toFixed(4)}` : '') + '.');
+  if (rsiWord) {
+    mom.push(`RSI is at ${_pNum(a.rsi).toFixed(1)}` +
+      `${_pNum(a.rsi_slope) != null ? ` and ${_pNum(a.rsi_slope) >= 0 ? 'rising' : 'falling'}` : ''}, in ${rsiWord}.`);
   }
-  const st = a.supertrend || {};
-  if (st.direction) mom.push(`SuperTrend is ${st.direction}${_pMoney(st.value) ? ` with its line at ${_pMoney(st.value)}` : ''}.`);
-  const ema = a.ema_trend || {};
-  if (_pMoney(ema.ema50) && _pMoney(ema.ema200)) {
-    mom.push(`The 50 EMA is at ${_pMoney(ema.ema50)} and the 200 at ${_pMoney(ema.ema200)}.`);
+  const macd = a.macd || {}, st = a.supertrend || {};
+  if (macd.trend && st.direction && macd.trend !== st.direction) {
+    mom.push(`MACD reads ${macd.trend} while SuperTrend is still ${st.direction}${_pMoney(st.value) ? `, its line at ${_pMoney(st.value)}` : ''} — the two disagree, which is what an early turn tends to look like.`);
+  } else {
+    if (macd.trend) mom.push(`MACD is ${macd.trend}${macd.cross ? ` on a ${macd.cross} cross` : ''}.`);
+    if (st.direction) mom.push(`SuperTrend is ${st.direction}${_pMoney(st.value) ? `, its line at ${_pMoney(st.value)}` : ''}.`);
   }
-  const stoch = a.stoch_rsi || {};
-  if (_pNum(stoch.k) != null) mom.push(`Stochastic RSI reads ${_pNum(stoch.k).toFixed(1)}.`);
+  const stoch = _pNum((a.stoch_rsi || {}).k);
+  if (stoch != null) mom.push(`Stochastic RSI reads ${stoch.toFixed(1)}.`);
   const vr = a.vol_regime || {};
   if (vr.zone) {
-    // The note restates the zone before giving its advice ("Volatility above
-    // normal — size with care"). Keep only the advice; the sentence has
-    // already said what the zone is, and repeating it reads like padding.
     const advice = String(vr.note || '').split(/\s+[—–]\s+/)[1];
-    mom.push(`Volatility is **${vr.zone}**` +
-      `${_pOrdinal(vr.percentile) ? ` (${_pOrdinal(vr.percentile)} percentile for this token)` : ''}` +
+    mom.push(`Volatility is ${vr.zone}${_pOrdinal(vr.percentile) ? `, ${_pOrdinal(vr.percentile)} percentile for ${tick}` : ''}` +
       `${advice ? ` — ${advice.charAt(0).toLowerCase()}${advice.slice(1)}` : ''}.`);
   }
-  if (mom.length) { section('Momentum and trend'); mom.forEach(add); }
+  push(mom);
 
-  // ── Divergence ───────────────────────────────────────────────────────────
   const div = a.rsi_divergence || {};
   if (div.type) {
-    section('Divergence');
     const age = _pNum(div.age_candles);
-    add(`A **${String(div.type).replace('_', ' ')} RSI divergence** is present` +
-        (div.status ? `, currently ${div.status}` : '') +
-        (age != null ? `, ${age === 0 ? 'formed on the last close' : `${age} candle${age === 1 ? '' : 's'} old`}` : '') + '.');
+    const d = [`There is a ${String(div.type).replace(/_/g, ' ')} RSI divergence on the chart` +
+      `${div.status === 'confirmed' ? ', confirmed' : div.status === 'forming' ? ', still forming' : div.status === 'expired' ? ', though it has aged out of its window' : ''}` +
+      `${age != null ? (age === 0 ? ' on the last close' : ` and ${age} candle${age === 1 ? '' : 's'} old`) : ''}.`];
     if (div.status === 'forming' && _pNum(div.closes_to_confirm) != null) {
-      add(`It is not confirmed yet — ${div.closes_to_confirm} more close${div.closes_to_confirm === 1 ? '' : 's'} are needed before it counts.`);
+      d.push(`It needs ${div.closes_to_confirm} more close${div.closes_to_confirm === 1 ? '' : 's'} before it counts for anything.`);
+    } else if (_pNum(div.freshness) != null && div.freshness < 1) {
+      d.push(`Its weight in the score is discounted to ${Math.round(div.freshness * 100)}% because of that age.`);
     }
-    if (div.status === 'expired') {
-      add('It has aged past its window, so it is shown for context rather than treated as live.');
-    }
-    if (_pNum(div.freshness) != null && div.freshness < 1) {
-      add(`Its weight in the score is discounted to ${Math.round(div.freshness * 100)}% because of that age.`);
-    }
+    push(d);
   }
 
-  // ── Structure ────────────────────────────────────────────────────────────
-  const struct = [];
+  const str = [];
   const sr = a.sr_zones || {};
-  if (_pMoney((sr.support || {}).price)) struct.push(`Support sits at ${_pMoney(sr.support.price)}.`);
-  if (_pMoney((sr.resistance || {}).price)) struct.push(`Resistance sits at ${_pMoney(sr.resistance.price)}.`);
+  const sup = _pMoney((sr.support || {}).price), res = _pMoney((sr.resistance || {}).price);
+  if (sup && res) str.push(`Support sits at ${sup} and resistance at ${res}.`);
+  else if (sup) str.push(`Support sits at ${sup}.`);
+  else if (res) str.push(`Resistance sits at ${res}.`);
   const bos = a.bos_streak || {};
-  if (bos.direction && bos.count) {
-    struct.push(`Structure has broken ${bos.direction === 'bullish' ? 'up' : 'down'} ${bos.count} time${bos.count === 1 ? '' : 's'} in a row.`);
+  const bn = _pNum(bos.count);
+  if (bos.direction && bn) {
+    str.push(`Structure has broken ${bos.direction === 'bullish' ? 'up' : 'down'} ` +
+      `${bn === 1 ? 'once.' : bn === 2 ? 'twice in a row.' : `${bn} times in a row.`}`);
   }
-  if (a.choch && a.choch.type) struct.push(`A change of character (${a.choch.type}) has been registered.`);
   const pools = (a.liquidity_pools || []);
-  const livePools = pools.filter(p => !p.swept);
-  const sweptPools = pools.filter(p => p.swept);
+  const livePools = pools.filter(p => !p.swept), swept = pools.filter(p => p.swept);
   if (livePools.length) {
-    struct.push(`Untouched liquidity — resting stops price tends to reach for — sits at ` +
-      livePools.slice(0, 3).map(p => `${_pMoney(p.price)} (${p.touches}x)`).join(', ') + '.');
+    str.push(`Untouched liquidity — the resting stops price tends to reach for — sits at ${_pList(livePools.slice(0, 3).map(p => _pMoney(p.price)))}.`);
   }
-  if (sweptPools.length) {
-    struct.push(`${sweptPools.length} pool${sweptPools.length === 1 ? ' has' : 's have'} already been swept, so that liquidity is spent.`);
-  }
-  if (struct.length) { section('Market structure'); struct.forEach(add); }
-
-  // ── Patterns ─────────────────────────────────────────────────────────────
+  if (swept.length) str.push(`Another ${swept.length} pool${swept.length === 1 ? ' has' : 's have'} already been swept, so that liquidity is spent.`);
   const pats = [];
-  const named = (arr, what) => (arr || []).slice(0, 3).forEach(p => {
-    const label = p.label || p.type || what;
-    const state = p.status || (p.confirmed ? 'confirmed' : 'forming');
-    pats.push(`${label} — ${state}${_pMoney(p.target) ? `, measured target ${_pMoney(p.target)}` : ''}.`);
+  [].concat(a.flags || [], a.reversal_patterns || [], a.triangle_patterns || []).slice(0, 3).forEach(p => {
+    if (!p) return;
+    const label = p.label || p.type;
+    const confirmed = p.status === 'confirmed' || p.confirmed;
+    if (!label) return;
+    // A measured target only means something once the pattern has confirmed.
+    pats.push(`${label.toLowerCase()} (${confirmed ? 'confirmed' : p.status || 'forming'}` +
+      `${confirmed && _pMoney(p.target) ? `, target ${_pMoney(p.target)}` : ''})`);
   });
-  named(a.flags, 'Flag');
-  named(a.reversal_patterns, 'Reversal pattern');
-  named(a.triangle_patterns, 'Triangle/wedge');
-  if (a.engulfing && a.engulfing.direction) {
-    pats.push(`A ${a.engulfing.direction} engulfing candle has printed.`);
-  }
-  if (pats.length) { section('Patterns on the chart'); pats.forEach(add); }
+  if (pats.length) str.push(`On patterns: ${_pList(pats)}.`);
+  push(str);
 
-  // ── Derivatives and flow ─────────────────────────────────────────────────
+  // ── Flow ─────────────────────────────────────────────────────────────────
   const flow = [];
-  const fund = a.funding_rate || {};
-  if (_pNum(fund.current) != null) {
-    const f = _pNum(fund.current);
-    flow.push(`Funding is ${f.toFixed(4)}% — ${f > 0.02 ? 'longs are paying, which is a crowded-long warning'
-      : f < -0.01 ? 'shorts are paying, which often precedes a squeeze up' : 'close to neutral'}.`);
+  const f = _pNum((a.funding_rate || {}).current);
+  if (f != null) {
+    flow.push(`Funding is at ${f.toFixed(4)}%, ${f > 0.02 ? 'so longs are paying and the trade is getting crowded'
+      : f < -0.01 ? 'so shorts are paying, which often precedes a squeeze higher' : 'near enough to neutral'}.`);
   }
-  const oi = a.open_interest || {};
-  if (_pNum(oi.change_pct) != null) flow.push(`Open interest has moved ${_pPct(oi.change_pct)} recently.`);
-  const ls = a.long_short || {};
-  if (_pNum(ls.long_pct) != null) flow.push(`Positioning is ${_pNum(ls.long_pct).toFixed(1)}% long.`);
-  if ((a.spot_cvd || {}).trend) flow.push(`Spot CVD is ${a.spot_cvd.trend} — spot buyers are ${a.spot_cvd.trend === 'rising' ? 'in control' : 'not leading'}.`);
-  if ((a.futures_cvd || {}).trend) flow.push(`Futures CVD is ${a.futures_cvd.trend}.`);
-  if ((a.vol_signal || {}).signal) flow.push(`Volume is reading ${a.vol_signal.signal}${_pNum(a.vol_signal.ratio) != null ? ` at ${_pNum(a.vol_signal.ratio).toFixed(2)}x its average` : ''}.`);
-  if (flow.length) { section('Derivatives and flow'); flow.forEach(add); }
+  const oiChg = _pNum((a.open_interest || {}).change_pct);
+  if (oiChg != null) flow.push(`Open interest has moved ${_pPct(oiChg)}.`);
+  const lp = _pNum((a.long_short || {}).long_pct);
+  if (lp != null) flow.push(`Positioning is ${lp.toFixed(1)}% long.`);
+  const scvd = (a.spot_cvd || {}).trend, fcvd = (a.futures_cvd || {}).trend;
+  if (scvd && fcvd && scvd !== fcvd) flow.push(`Spot CVD is ${scvd} while futures CVD is ${fcvd} — spot and leverage are pulling against each other.`);
+  else if (scvd) flow.push(`Spot CVD is ${scvd}.`);
+  const vs = a.vol_signal || {};
+  if (vs.signal) flow.push(`Volume is ${vs.signal}${_pNum(vs.ratio) != null ? ` at ${_pNum(vs.ratio).toFixed(2)} times its average` : ''}.`);
+  const fg = _pNum((a.fear_greed || {}).value);
+  if (fg != null) flow.push(`Fear and Greed sits at ${fg}${(a.fear_greed || {}).label ? `, ${String(a.fear_greed.label).toLowerCase()}` : ''}.`);
+  push(flow);
 
-  // ── Sentiment ────────────────────────────────────────────────────────────
-  const fg = a.fear_greed || {};
-  if (_pNum(fg.value) != null) {
-    section('Sentiment');
-    add(`The Fear & Greed index is at ${fg.value}${fg.label ? ` (${fg.label})` : ''}.`);
-  }
-
-  // ── The evidence, in the engine's own words ──────────────────────────────
-  if (bull.length) {
-    section(dir === 'SHORT' ? 'The case against this trade' : 'The case for');
-    bull.forEach(r => add(`- ${r}`));
-  }
-  if (bear.length) {
-    section(dir === 'SHORT' ? 'What is driving it lower' : 'The case against');
-    bear.forEach(r => add(`- ${r}`));
-  }
+  // ── The evidence, trimmed to what a reader can hold ──────────────────────
+  const ev = [];
+  if (bull.length) ev.push(`Supporting the case: ${_pList(bull.slice(0, 3), '; ')}.`);
+  if (bear.length) ev.push(`Against it: ${_pList(bear.slice(0, 3), '; ')}.`);
+  push(ev);
 
   // ── The plan ─────────────────────────────────────────────────────────────
   if (dir !== 'NEUTRAL' && (_pNum(s.entry) != null || (s.tp_targets || []).length)) {
-    section('The trade plan');
-    if (_pMoney(s.entry)) add(`- **Entry:** ${_pMoney(s.entry)}`);
-    if (_pMoney(s.sl)) add(`- **Stop loss:** ${_pMoney(s.sl)}${_pNum(s.sl_pct) != null ? ` (${Math.abs(_pNum(s.sl_pct)).toFixed(2)}% risk)` : ''}`);
-    (s.tp_targets || []).forEach((tp, i) => {
-      const pct = (s.tp_pcts || [])[i];
-      const share = [50, 30, 20][i];
-      add(`- **Target ${i + 1}:** ${_pMoney(tp)}${_pNum(pct) != null ? ` (${_pPct(pct)})` : ''}` +
-          `${share ? ` — close ${share}% of the position here` : ''}`);
-    });
-    if (_pNum(s.rr_ratio) != null) add(`- **Reward to risk:** ${s.rr_ratio}:1`);
-    if (s.leverage) add(`- **Suggested leverage:** ${s.leverage}`);
-    para();
-    add('Once the first target is hit, move the stop to entry — the position is then risk-free and the rest can run.');
-  }
-
-  // ── Invalidation ─────────────────────────────────────────────────────────
-  if (dir !== 'NEUTRAL' && _pMoney(s.sl)) {
-    section('What would invalidate this');
-    add(`A close beyond ${_pMoney(s.sl)} breaks the idea. At that point the setup is wrong, not early — the ` +
+    const plan = [];
+    const entry = _pMoney(s.entry), stop = _pMoney(s.sl);
+    if (entry && stop) {
+      plan.push(`The plan is to enter around ${entry} with the stop at ${stop}` +
+        `${_pNum(s.sl_pct) != null ? `, risking ${Math.abs(_pNum(s.sl_pct)).toFixed(2)}%` : ''}.`);
+    } else if (entry) plan.push(`Entry is around ${entry}.`);
+    const tps = (s.tp_targets || []);
+    if (tps.length) {
+      const shares = [50, 30, 20];
+      const legs = tps.map((tp, i) => {
+        const pct = _pNum((s.tp_pcts || [])[i]);
+        return `${_pMoney(tp)}${pct != null ? ` (${_pPct(pct)})` : ''}${shares[i] ? ` for ${shares[i]}% of the position` : ''}`;
+      });
+      plan.push(`Targets are ${_pList(legs)}.`);
+    }
+    if (_pNum(s.rr_ratio) != null) plan.push(`That is ${s.rr_ratio} to one on reward against risk.`);
+    if (s.leverage) plan.push(`Suggested leverage ${s.leverage}.`);
+    plan.push(`Once the first target fills, the stop moves to entry and the rest of the trade is free.`);
+    push(plan);
+    if (stop) {
+      push(`A close beyond ${stop} breaks the idea. At that point it is wrong rather than early, because the ` +
         `${dir === 'LONG' ? 'higher low' : 'lower high'} the whole case rests on no longer exists.`);
+    }
   }
 
-  para();
-  L.push('---');
-  L.push('_Not financial advice. This is a read of the chart at a moment in time, and it can be wrong. Do your own research and size positions so that being wrong is survivable._');
-  return L.join('\n');
+  push('Not financial advice. This is one read of the chart at one moment, and it can be wrong — do your own research and size it so that being wrong is survivable.');
+  return P.join('\n\n');
 }
 
 async function copySignalPost() {
