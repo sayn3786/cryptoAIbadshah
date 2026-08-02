@@ -605,6 +605,38 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
                             "break_ts": r.get("break_ts")})
     except Exception:
         pass
+    # RSI divergence — price and momentum disagreeing. Not a breakout, so it
+    # carries no level, direction of break or target; leaving those unset stops
+    # every renderer claiming a break that never happened.
+    #
+    # Gated on the detector's OWN lifecycle (status == "confirmed", so never a
+    # provisional second pivot and never an expired one) AND on the same
+    # freshness window every other alert here uses. The stricter of the two
+    # wins, which is the point: an alert is about something that just happened.
+    try:
+        div = detect_rsi_divergence(
+            closed, calculate_rsi_series([c.get("close") for c in closed]))
+        curr = ((div.get("points") or {}).get("curr") or {})
+        curr_ts = curr.get("timestamp")
+        # No timestamp means no stable id, and an alert that cannot be deduped
+        # would re-fire on every scan. Skip rather than spam.
+        if (div.get("status") == "confirmed" and not div.get("forming")
+                and curr_ts is not None and _fresh(curr_ts)):
+            kind_s = str(div.get("type") or "")
+            bullish = kind_s.endswith("bullish")
+            hidden = kind_s.startswith("hidden")
+            out.append({
+                "kind": "divergence", "type": div.get("type"),
+                "label": (f"{'Hidden ' if hidden else ''}"
+                          f"{'Bullish' if bullish else 'Bearish'} RSI Divergence"),
+                "direction": "bullish" if bullish else "bearish",
+                "break_dir": None, "level": None, "target": None,
+                "break_ts": curr_ts,
+                "rsi_gap": div.get("strength"),
+                "age_candles": div.get("age_candles"),
+            })
+    except Exception:
+        pass
     try:
         for t in detect_triangles_wedges(closed, tf):
             if t.get("status") == "failed" and _fresh(t.get("failed_ts")):
