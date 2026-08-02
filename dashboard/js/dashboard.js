@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '201';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '202';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4759,6 +4759,31 @@ function _pRsiWord(rsi) {
        : 'the middle of its range';
 }
 
+function _pSeed(a) {
+  // Stable per post, different between posts. Keyed on the symbol, timeframe
+  // and the candle the read was made on, so re-copying the same analysis gives
+  // the same words (nothing shifts under the reader) while tomorrow's post on
+  // the same symbol reads differently.
+  const key = `${(a || {}).symbol || ''}|${(a || {}).timeframe || ''}|` +
+              `${(a || {}).signal_candle_closed_at || (a || {}).generated_at || ''}`;
+  let h = 5381;
+  for (let i = 0; i < key.length; i++) h = ((h * 33) ^ key.charCodeAt(i)) >>> 0;
+  // Consecutive candle timestamps differ in only a few low bits, and djb2
+  // modulo a small variant count inherits that: one phrasing was winning 11
+  // times in 20. The murmur3 finaliser spreads those bits across the word.
+  h ^= h >>> 16; h = Math.imul(h, 2246822507) >>> 0;
+  h ^= h >>> 13; h = Math.imul(h, 3266489909) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+function _pPick(variants, seed, salt) {
+  const v = variants || [];
+  if (!v.length) return '';
+  // A different salt per clause, or every line in a post would rotate together
+  // and the whole thing would still read as one template.
+  return v[((seed >>> 0) + (salt || 0) * 2654435761) % v.length];
+}
+
 function _pList(items, sep) {
   const a = (items || []).filter(Boolean);
   if (!a.length) return '';
@@ -4798,6 +4823,9 @@ function buildSignalPost(a) {
   const bear = reasons(s.bearish_reasons);
   const nBull = (s.bullish_reasons || []).length;
   const nBear = (s.bearish_reasons || []).length;
+
+  const seed = _pSeed(a);
+  const pick = (variants, salt) => _pPick(variants, seed, salt);
 
   const P = [];                       // paragraphs, plain prose, no markup
   const push = (parts) => {
@@ -4873,7 +4901,12 @@ function buildSignalPost(a) {
     const amt = (v) => `$${Math.abs(v).toFixed(0)}M ${v >= 0 ? 'in' : 'out'}`;
     behind.push(`Spot ETF flows have been ${etf.trend === 'inflow' ? 'positive' : etf.trend === 'outflow' ? 'negative' : 'mixed'}` +
       `${day != null ? `, ${amt(day)} on the latest day` : ''}${wk != null ? ` and ${amt(wk)} across the week` : ''}. ` +
-      `Institutional flow is the slowest and most persistent bid in this market, so a streak matters more than any single candle.`);
+      pick([
+        'Institutional money is the most patient bid in this market, so a run of it says more than any single session.',
+        'That kind of money moves in weeks rather than candles, which is why the streak matters more than the day.',
+        'ETF flow is slow to turn, so the direction of the run counts for more than any one print.',
+        'Flows like that tend to persist, and persistence is what separates a drift from a trend.',
+      ], 1));
   }
   const dte = _pNum(oNext.days_to_expiry), etype = oNext.type || 'weekly';
   if (dte != null && (etype !== 'weekly' || dte <= 3)) {
@@ -4885,7 +4918,12 @@ function buildSignalPost(a) {
     const heavier = lLong > lShort ? 'Longs' : 'Shorts';
     const ratio = Math.max(lLong, lShort) / Math.max(1, Math.min(lLong, lShort));
     behind.push(`${heavier} have been taking the damage in recent liquidations${ratio >= 2 ? `, by roughly ${ratio.toFixed(1)} to one` : ''}. ` +
-      `Forced selling is what turns an ordinary move into a cascade.`);
+      pick([
+        'Forced selling is what turns an ordinary move into a cascade.',
+        'Once positions start being closed for you, moves stop being orderly.',
+        'That is usually where the quickest part of a move comes from.',
+        'Liquidations feed on themselves, which is why they rarely stop at fair value.',
+      ], 2));
   }
   const arts = (nws.articles || []).slice(0, 2).map(n => String(n.title || '').trim()).filter(t => t.length > 3);
   if (arts.length) {
@@ -4935,7 +4973,13 @@ function buildSignalPost(a) {
   }
   const macd = a.macd || {}, st = a.supertrend || {};
   if (macd.trend && st.direction && macd.trend !== st.direction) {
-    mom.push(`MACD reads ${macd.trend} while SuperTrend is still ${st.direction}${_pMoney(st.value) ? `, its line at ${_pMoney(st.value)}` : ''} — the two disagree, which is what an early turn tends to look like.`);
+    mom.push(`MACD reads ${macd.trend} while SuperTrend is still ${st.direction}${_pMoney(st.value) ? `, its line at ${_pMoney(st.value)}` : ''} — ` +
+      pick([
+        'the two disagree, which is what an early turn tends to look like.',
+        'momentum and trend are not on the same page yet.',
+        'one has turned and the other has not, which is the usual shape of a transition.',
+        'a split like that resolves one way or the other, rarely by staying split.',
+      ], 3));
   } else {
     if (macd.trend) mom.push(`MACD is ${macd.trend}${macd.cross ? ` on a ${macd.cross} cross` : ''}.`);
     if (st.direction) mom.push(`SuperTrend is ${st.direction}${_pMoney(st.value) ? `, its line at ${_pMoney(st.value)}` : ''}.`);
@@ -4979,7 +5023,12 @@ function buildSignalPost(a) {
   const pools = (a.liquidity_pools || []);
   const livePools = pools.filter(p => !p.swept), swept = pools.filter(p => p.swept);
   if (livePools.length) {
-    str.push(`Untouched liquidity — the resting stops price tends to reach for — sits at ${_pList(livePools.slice(0, 3).map(p => _pMoney(p.price)))}.`);
+    str.push(`Untouched liquidity — ` + pick([
+      'the resting stops price tends to reach for',
+      'stops that have not been taken yet',
+      'the orders still sitting there waiting',
+      'where the unfilled stops are stacked',
+    ], 4) + ` — sits at ${_pList(livePools.slice(0, 3).map(p => _pMoney(p.price)))}.`);
   }
   if (swept.length) str.push(`Another ${swept.length} pool${swept.length === 1 ? ' has' : 's have'} already been swept, so that liquidity is spent.`);
   const pats = [];
@@ -5040,11 +5089,21 @@ function buildSignalPost(a) {
     }
     if (_pNum(s.rr_ratio) != null) plan.push(`That is ${s.rr_ratio} to one on reward against risk.`);
     if (s.leverage) plan.push(`Suggested leverage ${s.leverage}.`);
-    plan.push(`Once the first target fills, the stop moves to entry and the rest of the trade is free.`);
+    plan.push(pick([
+      'Once the first target fills, the stop moves to entry and the remainder rides risk-free.',
+      'First target filled, stop to entry — from there the position is playing with house money.',
+      'After the first target is banked the stop comes up to entry, so the rest costs nothing to hold.',
+      'The moment the first target hits, move the stop to entry; the remainder is then free to run.',
+    ], 5));
     push(plan);
     if (stop) {
-      push(`A close beyond ${stop} breaks the idea. At that point it is wrong rather than early, because the ` +
-        `${dir === 'LONG' ? 'higher low' : 'lower high'} the whole case rests on no longer exists.`);
+      const pivot = dir === 'LONG' ? 'higher low' : 'lower high';
+      push(pick([
+        `A close beyond ${stop} breaks the idea. At that point it is wrong rather than early, because the ${pivot} the whole case rests on no longer exists.`,
+        `Below ${stop} on a close, the setup is simply invalid — the ${pivot} it depends on has gone.`,
+        `${stop} is the line. Close through it and there is nothing left to be patient about; the ${pivot} the case was built on is broken.`,
+        `If price closes beyond ${stop}, walk away. The ${pivot} underneath this read would no longer exist, and waiting would just be hope.`,
+      ], 6));
     }
   }
 
