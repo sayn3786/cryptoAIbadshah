@@ -30,7 +30,7 @@ from gomining_token import get_gomining_tokenomics
 from bittensor_eco import get_tao_ecosystem
 from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
                          fetch_aggregated_futures_cvd)
-from indicators import (calculate_rsi_series, calculate_cvd, detect_fvg,
+from indicators import (calculate_rsi_series, calculate_cvd, calculate_obv, detect_fvg,
     find_volume_spikes, detect_engulfing, detect_cvd_divergence,
     calculate_macd, calculate_ema_trend, detect_whale_activity,
     calculate_supertrend, calculate_ichimoku,
@@ -1339,6 +1339,12 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "futures_available": futures_real,
         "coinglass_enabled": cg_client.enabled,
         "cvd_divergence":    detect_cvd_divergence(spot_cvd, fut_cvd, spot),
+        # On-Balance Volume. REPORTING ONLY — generate_signal never reads it.
+        # CVD already answers the same question with real taker buy/sell volume
+        # rather than OBV's assumption that a candle closing +0.01% was 100%
+        # buying, so scoring both would count the same volume twice. This is
+        # here because a lot of chart commentary is written in OBV's language.
+        "obv":               calculate_obv(spot),
         "macd":          macd,
         "ema_trend":     ema_trend,
         "ema_lines":     ema_lines,

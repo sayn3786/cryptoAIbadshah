@@ -409,6 +409,16 @@
         </div>
         <div id="futCvdChart" class="mini-chart-container"></div>
       </div>
+      <div class="card cvd-card" id="obvCard" style="display:none">
+        <div class="cvd-header">
+          <h3 class="card-title">OBV</h3>
+          <span class="cvd-source-label" title="On-Balance Volume: adds a candle's whole volume when it closes up, subtracts it when it closes down. Direction and divergence from price are what matter — the absolute number does not. Reporting only: it is not part of the signal score, because CVD already measures buying pressure from real taker volume.">Reporting only</span>
+        </div>
+        <div class="cvd-current">
+          <span id="obvTrend">—</span>
+        </div>
+        <div id="obvLabel" class="cvd-trend"></div>
+      </div>
     </div>
     <div id="cvdDivBanner" class="cvd-div-banner" style="display:none"></div>
   </section>
@@ -818,7 +828,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="/dashboard/js/dashboard.js?v=203"></script>
+<script src="/dashboard/js/dashboard.js?v=204"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.

@@ -234,6 +234,107 @@ def calculate_cvd(candles: List[Dict], label: str = "spot") -> Dict:
             "series": series[-30:], "label": label, "unit": "base"}
 
 
+def calculate_obv(candles: List[Dict], pivot_window: int = 3) -> Dict:
+    """
+    On-Balance Volume — a running total that adds a candle's whole volume when
+    it closes up and subtracts it when it closes down.
+
+    REPORTING ONLY. Nothing in generate_signal reads this, deliberately: the
+    project already computes CVD, which answers the same question with real
+    taker buy/sell volume instead of OBV's all-or-nothing assumption that a
+    candle closing +0.01% was 100% buying. Feeding both into the score would
+    count the same volume twice — the exact failure the trend cap exists to
+    prevent. OBV is here because it is the language a lot of chart commentary
+    is written in, so the app can speak to a claim like "OBV broke out".
+
+    The absolute figure is meaningless — it depends on where the series began —
+    so only direction and divergence from price are reported.
+
+    Returns {value, trend, change_pct, divergence, label} or an empty read when
+    there is not enough data. `divergence` is "bullish" when price made a lower
+    low while OBV made a higher one (volume quietly accumulating under a
+    falling price), "bearish" for the mirror image, otherwise None.
+    """
+    empty = {"value": None, "trend": None, "change_pct": None,
+             "divergence": None, "label": None}
+    if not candles or len(candles) < pivot_window * 2 + 6:
+        return empty
+
+    obv, series = 0.0, []
+    prev_close = None
+    for c in candles:
+        close = c.get("close")
+        vol = c.get("volume") or 0.0
+        if close is None:
+            series.append(obv)
+            continue
+        if prev_close is not None:
+            if close > prev_close:
+                obv += vol
+            elif close < prev_close:
+                obv -= vol
+            # An unchanged close adds nothing — that is the whole rule.
+        prev_close = close
+        series.append(obv)
+
+    if len(series) < 10:
+        return empty
+
+    # Direction over the recent window, scaled by the swing in the series so a
+    # big absolute move on a quiet token is not read as a trend.
+    look = min(14, len(series) - 1)
+    recent = series[-look:]
+    span = max(recent) - min(recent)
+    delta = series[-1] - series[-look]
+    if span <= 0:
+        trend = "flat"
+    elif delta / span > 0.25:
+        trend = "rising"
+    elif delta / span < -0.25:
+        trend = "falling"
+    else:
+        trend = "flat"
+
+    # Divergence: compare the last two price swings with OBV at the same bars.
+    divergence = None
+    closes = [c.get("close") for c in candles]
+    lows, highs = [], []
+    for i in range(pivot_window, len(closes) - pivot_window):
+        window = closes[i - pivot_window:i + pivot_window + 1]
+        if None in window:
+            continue
+        if closes[i] == min(window):
+            lows.append(i)
+        if closes[i] == max(window):
+            highs.append(i)
+
+    def _pair(idx):
+        return (idx[-2], idx[-1]) if len(idx) >= 2 else None
+
+    lo = _pair(lows)
+    if lo and closes[lo[1]] < closes[lo[0]] and series[lo[1]] > series[lo[0]]:
+        divergence = "bullish"
+    hi = _pair(highs)
+    if hi and closes[hi[1]] > closes[hi[0]] and series[hi[1]] < series[hi[0]]:
+        # A bearish reading on a more recent swing wins.
+        if divergence is None or (hi[1] > (lo[1] if lo else -1)):
+            divergence = "bearish"
+
+    label = {
+        "rising": "Volume flowing in",
+        "falling": "Volume flowing out",
+        "flat": "Volume balanced",
+    }.get(trend)
+    if divergence == "bullish":
+        label = "Price lower, volume higher — accumulation"
+    elif divergence == "bearish":
+        label = "Price higher, volume lower — distribution"
+
+    return {"value": round(series[-1], 2), "trend": trend,
+            "change_pct": round(delta / span * 100, 1) if span > 0 else None,
+            "divergence": divergence, "label": label}
+
+
 def detect_cvd_divergence(spot_cvd: Dict, fut_cvd: Dict, candles: List[Dict]) -> Dict:
     """
     Compare price direction vs spot/futures CVD trend to detect who is actually

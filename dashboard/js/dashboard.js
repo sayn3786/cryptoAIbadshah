@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '203';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '204';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -368,6 +368,7 @@ function renderAll(a) {
   renderRSIChart(a.rsi_series);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
+  renderOBV(a.obv);
   renderFVGTable(a.fvgs);
   renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
   renderStructurePanel(a.structure_panel);
@@ -1133,6 +1134,23 @@ function renderCVDCharts(spot, fut, futuresAvailable) {
     renderCVDPanel('fut', fut, S.futCvdSeries, 'futCvdVal', 'futCvdTrend', false);
     _setFutCvdEmpty(false);
   }
+}
+
+function renderOBV(o) {
+  const card = document.getElementById('obvCard');
+  if (!card) return;
+  // No reading is not a zero reading. A card showing "flat" when OBV could not
+  // be computed would be an assertion nobody made.
+  if (!o || !o.trend) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  const arrow = o.trend === 'rising' ? '▲' : o.trend === 'falling' ? '▼' : '—';
+  const cls = o.divergence === 'bullish' ? 'bull'
+            : o.divergence === 'bearish' ? 'bear'
+            : o.trend === 'rising' ? 'bull' : o.trend === 'falling' ? 'bear' : '';
+  const t = document.getElementById('obvTrend');
+  if (t) { t.textContent = `${arrow} ${o.trend}`; t.className = cls; }
+  const l = document.getElementById('obvLabel');
+  if (l) { l.textContent = o.label || ''; l.className = `cvd-trend ${cls}`; }
 }
 
 function renderCVDDivergence(div) {
@@ -4995,6 +5013,14 @@ function buildSignalPost(a) {
   } else {
     if (macd.trend) mom.push(`MACD is ${macd.trend}${macd.cross ? ` on a ${macd.cross} cross` : ''}.`);
     if (st.direction) mom.push(`SuperTrend is ${st.direction}${_pMoney(st.value) ? `, its line at ${_pMoney(st.value)}` : ''}.`);
+  }
+  const obv = a.obv || {};
+  if (obv.divergence) {
+    mom.push(obv.divergence === 'bullish'
+      ? 'On-balance volume is climbing while price makes lower lows, which is what quiet accumulation looks like.'
+      : 'On-balance volume is falling while price makes higher highs, which is what distribution into strength looks like.');
+  } else if (obv.trend && obv.trend !== 'flat') {
+    mom.push(`On-balance volume is ${obv.trend}, so volume is ${obv.trend === 'rising' ? 'backing' : 'leaking out of'} the move.`);
   }
   const stoch = _pNum((a.stoch_rsi || {}).k);
   if (stoch != null) mom.push(`Stochastic RSI reads ${stoch.toFixed(1)}.`);
