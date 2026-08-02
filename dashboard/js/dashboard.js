@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '197';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '198';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3172,6 +3172,46 @@ function _regimeSegmentsAndFlips(stSeries) {
 // Dedicated market-structure chart: candles + session boxes + liquidity pools +
 // structure high/low + CHoCH/BOS markers. Kept SEPARATE from the main chart so
 // these structural levels are readable instead of buried under 18 overlays.
+// Which liquidity pools belong on the chart. Pure — candles and pools in,
+// pools out, in draw order. Tested in tests/test_liquidity_pool_display.py.
+//
+// LIVE pools are never filtered. An untouched pool is a target no matter how
+// far away it sits, and the distant one is often the whole point: a chart whose
+// only live pool is 23% overhead is telling you the nearby liquidity is gone.
+//
+// SWEPT pools are spent — the stops there have been taken — and left unchecked
+// they pile up until their forming pivots age out, which buries the live ones.
+// What decides whether one still matters is DISTANCE, not age. A level swept
+// thirty bars ago half a percent away still gets traded against; one swept two
+// bars ago twenty percent away is noise. A flat "hide after N candles" rule
+// filters on the wrong variable: on a real BTC chart it would have kept a level
+// 25% away while being just as likely to drop the useful cluster 2% overhead.
+//
+// So a swept pool is drawn only if it is still inside the current structure
+// range, and then only the nearest few.
+const SWEPT_POOL_MAX = 3;
+const STRUCTURE_WINDOW = 30;
+
+function _visiblePools(pools, rows, max) {
+  const all = pools || [];
+  const live = all.filter(p => !p.swept);
+  const swept = all.filter(p => p.swept);
+  if (!swept.length) return live;
+
+  const win = (rows || []).slice(-STRUCTURE_WINDOW);
+  if (!win.length) return live;          // no candles to judge against
+  const hi = Math.max(...win.map(c => +c.high));
+  const lo = Math.min(...win.map(c => +c.low));
+  const last = +win[win.length - 1].close;
+
+  const near = swept
+    .filter(p => +p.price <= hi && +p.price >= lo)
+    .sort((x, y) => Math.abs(+x.price - last) - Math.abs(+y.price - last))
+    .slice(0, max == null ? SWEPT_POOL_MAX : max);
+
+  return [...live, ...near];
+}
+
 function renderStructureChart(a) {
   const el = document.getElementById('structureChart');
   if (!el) return;
@@ -3231,7 +3271,9 @@ function renderStructureChart(a) {
     // stops were is worth seeing — but drawn identically to a live pool it
     // reads as a target that is still ahead, which is the opposite of true.
     // Greyed and labelled, same treatment as a broken trendline below.
-    pools.forEach(pl => {
+    //
+    // Which swept levels are worth drawing is _visiblePools' problem.
+    _visiblePools(pools, rows).forEach(pl => {
       const strong = (pl.touches || 0) >= 3;
       const swept  = !!pl.swept;
       cs.createPriceLine({
