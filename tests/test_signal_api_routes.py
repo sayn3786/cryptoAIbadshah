@@ -288,15 +288,28 @@ def test_the_table_does_not_wait_forever_for_live_prices(client, fake, monkeypat
     import time as _time
     monkeypatch.setenv("TRACKER_PRICE_BUDGET_S", "0.2")
 
-    def slow(sym, tf, *a, **k):
-        _time.sleep(5)
-        return {"live_price": 101.0}
+    # Patch the ticker call, NOT get_analysis. _tracker_prices stopped going
+    # through get_analysis when it was rewritten to peek the cache and then
+    # make one cheap ticker call per symbol; patching the old entry point left
+    # the real call in place, so this test reached Binance for real and only
+    # passed on a machine with no route to it.
+    calls = []
 
-    monkeypatch.setattr(appmod, "get_analysis", slow)
+    def slow(_symbol):
+        calls.append(_symbol)
+        _time.sleep(5)
+        return 101.0
+
+    monkeypatch.setattr(appmod.client, "get_current_price", slow)
     started = _time.time()
     body = client.get("/api/signals/tracker").get_json()
     elapsed = _time.time() - started
 
+    # Without this the test is vacuous: on a machine with no route to the
+    # provider every price comes back None anyway, so the assertions below hold
+    # whether or not the stall was ever injected. That is exactly how these two
+    # tests went green locally and red in CI for 31 consecutive runs.
+    assert calls, "the stalled provider was never called — the test proves nothing"
     assert elapsed < 3, f"the request waited {elapsed:.1f}s on a stalled provider"
     assert body["live"][0]["live_price"] is None
     assert body["live"][0]["symbol"] == "BTC", "the row is still served"
@@ -305,10 +318,15 @@ def test_the_table_does_not_wait_forever_for_live_prices(client, fake, monkeypat
 def test_tracker_survives_a_price_lookup_failure(client, fake, monkeypatch):
     # Market data being down must not take the tracker down with it — the rows
     # still render, just without live progress.
+    calls = []
+
     def boom(*a, **k):
+        calls.append(a)
         raise RuntimeError("binance unreachable")
-    monkeypatch.setattr(appmod, "get_analysis", boom)
+    # Same as above: the ticker call is what pricing actually goes through.
+    monkeypatch.setattr(appmod.client, "get_current_price", boom)
     body = client.get("/api/signals/tracker").get_json()
+    assert calls, "the failing provider was never called — the test proves nothing"
     assert body["live"][0]["live_price"] is None
     assert body["live"][0]["move_pct"] is None
 
