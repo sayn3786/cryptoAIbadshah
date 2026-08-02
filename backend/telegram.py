@@ -161,6 +161,22 @@ def build_pattern_alert_message(alerts: List[Dict], date_label: str = "") -> str
             lines.append(f"   {why}{lvl_s}")
             lines.append("")
             continue
+        # A divergence is not a breakout — there is no level broken and no
+        # measured target. The generic line below would say "Broke • " and
+        # invent a certainty the signal does not have.
+        if a.get("kind") == "divergence":
+            gap = a.get("rsi_gap")
+            gap_s = f" by {abs(gap):.1f} RSI pts" if isinstance(gap, (int, float)) else ""
+            age = a.get("age_candles")
+            age_s = ("on the last close" if not age
+                     else f"{age} candle{'s' if age != 1 else ''} ago")
+            lines.append(
+                f"{_pat_dot(a.get('direction'))} *{a.get('symbol')}/USDT "
+                f"{a.get('timeframe')}* — {a.get('label')}")
+            lines.append(f"   Price and momentum disagree{gap_s}  ·  {age_s}")
+            lines.append("")
+            continue
+
         tgt = a.get("target")
         tgt_s = f"  ·  🎯 {_fmt_price(tgt)}" if tgt is not None else ""
         lines.append(

@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '196';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '197';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -5037,8 +5037,11 @@ let   _patternAlerts   = [];    // confirmed chart patterns (Double Top/Bottom, 
 // Stable per-confirmation id for client-side "seen" tracking (in the shared
 // strength-seen store, same as whale alerts).
 function _patternSeenId(a) {
-  // include the event so a later FAILURE of the same pattern is its own alert
-  return `pattern_${a.symbol}_${a.timeframe}_${a.type || a.kind}_${a.event || 'confirmed'}_${a.break_ts}`;
+  // include the event so a later FAILURE of the same pattern is its own alert.
+  // `kind` is explicit rather than a fallback for `type`: divergences carry a
+  // type of 'bullish'/'bearish', which is not distinctive enough on its own to
+  // stay clear of a flag's slope. Mirrors the backend's _pattern_alert_id.
+  return `pattern_${a.symbol}_${a.timeframe}_${a.kind}_${a.type || ''}_${a.event || 'confirmed'}_${a.break_ts}`;
 }
 
 // Single source of truth for the bell badge: total UNSEEN across every alert type.
@@ -5181,19 +5184,32 @@ function _renderNotifList() {
 
   _patternAlerts.forEach(a => {
     const failed = a.event === 'failed';
+    // A divergence is momentum disagreeing with price, NOT a level breaking.
+    // It has no break direction, level or target, so it needs its own copy —
+    // the breakout wording below would claim something that never happened.
+    const isDiv = a.kind === 'divergence';
     const dir   = a.direction;
     const cls   = failed ? 'bear' : dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
-    const icon  = failed ? '❌' : dir === 'bullish' ? '🟢' : dir === 'bearish' ? '🔴' : '⚪';
+    const icon  = failed ? '❌' : isDiv ? '🔀'
+                : dir === 'bullish' ? '🟢' : dir === 'bearish' ? '🔴' : '⚪';
     const arrow = a.break_dir === 'up' ? '↑' : a.break_dir === 'down' ? '↓' : '•';
     const tgt   = a.target != null ? ` · 🎯 ${fmtPrice(a.target)}` : '';
     const isNew = !strengthSeen[_patternSeenId(a)];
+    const age   = a.age_candles;
+    const gap   = (typeof a.rsi_gap === 'number') ? ` · ${Math.abs(a.rsi_gap).toFixed(1)} RSI pts` : '';
     const sub   = failed
       ? `${a.timeframe} · pattern FAILED${a.level != null ? ` @ ${fmtPrice(a.level)}` : ''}`
-      : `${a.timeframe} confirmed · broke ${arrow}${tgt}`;
+      : isDiv
+        ? `${a.timeframe} confirmed${gap} · ${!age ? 'last close' : `${age} candle${age === 1 ? '' : 's'} ago`}`
+        : `${a.timeframe} confirmed · broke ${arrow}${tgt}`;
     const msg   = failed
       ? (a.retest === 'retest_failed'
           ? 'Retest failed — broke back through the level'
           : (a.reason || 'Breakout failed'))
+      : isDiv
+        ? (dir === 'bullish'
+            ? 'Price made a lower low, momentum did not — possible reversal up'
+            : 'Price made a higher high, momentum did not — possible reversal down')
       : dir === 'bullish' ? 'Confirmed bullish break'
       : dir === 'bearish' ? 'Confirmed bearish break' : 'Breakout confirmed';
     items.push({ ts: a.break_ts || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
