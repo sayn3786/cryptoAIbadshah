@@ -245,3 +245,111 @@ def test_the_snapshot_is_still_small_enough_for_the_free_tier():
     snap = build_snapshot(_analysis(), _confluence_signal())
     size = len(json.dumps(snap, default=str))
     assert size < 16_384, f"snapshot grew to {size} bytes"
+
+
+# ── Postmortem features: why did THIS one stop out? ─────────────────────────
+#
+# Everything below exists so a losing trade can be explained later. None of it
+# can be reconstructed after the fact: the candles that carried the divergence
+# age out of the lookback window, and the BTC read that discounted the score is
+# recomputed from data that has since moved. Not recorded at decision time
+# means not knowable, ever — the same reason pattern_events has no backfill.
+
+def _postmortem_analysis(**over):
+    a = _analysis()
+    a["rsi_divergence"] = {
+        "type": "bearish", "strength": 8.0, "status": "confirmed",
+        "age_candles": 4, "fresh_bars": 5, "freshness": 1.0, "forming": False,
+    }
+    a["reversal_patterns"] = [{"type": "bearish_engulfing", "status": "confirmed"}]
+    a["triangle_patterns"] = [{"type": "rising_wedge", "status": "forming"}]
+    a.update(over)
+    return a
+
+
+def _mtf_signal(**over):
+    s = _signal()
+    s.update({"h1_strength": 72.0, "h2_strength": 44.0,
+              "btc_consensus": "BEARISH", "btc_aligned": False,
+              "btc_conflict": True, "btc_adj": -8.0})
+    s.update(over)
+    return s
+
+
+def test_a_divergence_is_recorded_with_its_age():
+    """
+    Type alone would make every divergence look equally strong in hindsight.
+    `freshness` is the multiplier the strategy actually applied, so without it
+    a postmortem cannot tell a fresh signal from a nearly-expired one.
+    """
+    iv = build_snapshot(_postmortem_analysis(), _signal())["indicator_values"]
+    assert iv["rsi_divergence_type"] == "bearish"
+    assert iv["rsi_divergence_status"] == "confirmed"
+    assert iv["rsi_divergence_age_candles"] == 4
+    assert iv["rsi_divergence_freshness"] == 1.0
+    assert iv["rsi_divergence_forming"] is False
+
+
+def test_no_divergence_is_null_not_zero():
+    """
+    A zero-strength divergence and no divergence are different claims, and a
+    model trained on the first when the truth was the second learns a level
+    that was never there.
+    """
+    iv = build_snapshot(_analysis(), _signal())["indicator_values"]
+    assert iv["rsi_divergence_type"] is None
+    assert iv["rsi_divergence_strength"] is None
+    assert iv["rsi_divergence_freshness"] is None
+    assert iv["rsi_divergence_forming"] is None
+
+
+def test_the_timeframe_split_survives_the_average():
+    """
+    Since v44 the published strength is the mean of 1H and 2H. 70/30 and 50/50
+    both publish as 50 — and only one of them looks like chasing a 1H move.
+    """
+    iv = build_snapshot(_analysis(), _mtf_signal())["indicator_values"]
+    assert iv["h1_strength"] == 72.0
+    assert iv["h2_strength"] == 44.0
+    assert iv["tf_strength_spread"] == 28.0
+
+
+def test_the_spread_is_null_when_either_leg_is_missing():
+    iv = build_snapshot(_analysis(), _signal(h1_strength=60.0))["indicator_values"]
+    assert iv["tf_strength_spread"] is None
+
+
+def test_what_btc_was_doing_is_recorded_not_just_how_much_it_counts():
+    """
+    btc_correlation says how much BTC SHOULD matter for this symbol. It never
+    says what BTC did. An alt stopping out while BTC rolled over is a different
+    failure from one stopping out with BTC aligned.
+    """
+    mc = build_snapshot(_analysis(), _mtf_signal())["market_context"]
+    assert mc["btc_consensus"] == "BEARISH"
+    assert mc["btc_conflict"] is True
+    assert mc["btc_aligned"] is False
+    assert mc["btc_adjustment"] == -8.0
+
+
+def test_every_pattern_is_kept_not_only_the_first():
+    """flags[0] was the only one recorded; the one that mattered often is not."""
+    iv = build_snapshot(_postmortem_analysis(), _signal())["indicator_values"]
+    assert {"type": "rising_wedge", "status": "forming"} in iv["triangle_patterns_seen"]
+    assert {"type": "bearish_engulfing", "status": "confirmed"} in iv["reversal_patterns_seen"]
+    assert iv["flags_seen"][0]["type"] == "bullish_flag"
+
+
+def test_the_pattern_lists_are_bounded():
+    """A snapshot must stay small however many patterns a symbol carries."""
+    many = [{"type": f"p{i}", "status": "forming"} for i in range(50)]
+    iv = build_snapshot(_postmortem_analysis(reversal_patterns=many),
+                        _signal())["indicator_values"]
+    assert len(iv["reversal_patterns_seen"]) <= 5
+
+
+def test_the_widened_snapshot_is_still_small_enough():
+    import json
+    snap = build_snapshot(_postmortem_analysis(), _mtf_signal())
+    size = len(json.dumps(snap, default=str))
+    assert size < 16_384, f"snapshot grew to {size} bytes"

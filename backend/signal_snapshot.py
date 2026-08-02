@@ -80,6 +80,55 @@ def _num(value: Any) -> Optional[float]:
         return None
 
 
+_MAX_PATTERNS = 5
+
+
+def _kinds(items: Any) -> list:
+    """
+    Bounded [{type, status}] for a pattern list.
+
+    Counts alone cannot answer "was the trade taken against a confirmed
+    reversal?" — that needs the type and where it was in its lifecycle. Capped
+    because a snapshot must stay small; five is more than any symbol shows.
+    """
+    out = []
+    for item in (items if isinstance(items, list) else [])[:_MAX_PATTERNS]:
+        if not isinstance(item, dict):
+            continue
+        out.append({"type": item.get("type") or item.get("kind"),
+                    "status": item.get("status")})
+    return out
+
+
+def _divergence_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    RSI divergence AND where it was in its life.
+
+    A divergence is not a fact, it is a fact with an age: the same reading
+    scores differently at one bar old and at nine, and `freshness` is the
+    multiplier the strategy actually applied. Recording the type without the
+    lifecycle would make every divergence look equally strong in hindsight,
+    which is precisely the question a postmortem needs to separate.
+
+    All-None when there was no divergence. Absence is recorded as NULL rather
+    than as a zero-strength divergence, which would be a different claim.
+    """
+    d = analysis.get("rsi_divergence")
+    if not isinstance(d, dict):
+        d = {}
+    forming = d.get("forming")
+    return {
+        "rsi_divergence_type": d.get("type"),
+        "rsi_divergence_strength": _num(d.get("strength")),
+        "rsi_divergence_status": d.get("status"),
+        "rsi_divergence_age_candles": d.get("age_candles"),
+        "rsi_divergence_fresh_bars": d.get("fresh_bars"),
+        "rsi_divergence_freshness": _num(d.get("freshness")),
+        # Provisional second pivot — the divergence was not confirmed yet.
+        "rsi_divergence_forming": None if forming is None else bool(forming),
+    }
+
+
 def _pattern_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
     """Flag / breakout measurements — the things a postmortem asks about."""
     flags = analysis.get("flags") or []
@@ -98,6 +147,12 @@ def _pattern_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
         "reversal_pattern_count": len(analysis.get("reversal_patterns") or []),
         "triangle_pattern_count": len(analysis.get("triangle_patterns") or []),
         "flag_diagnostics": redact(analysis.get("flag_diagnostics")),
+        # Only flags[0] was recorded above. A symbol commonly carries several
+        # patterns and the one that mattered is often not the first, so keep
+        # the whole (bounded) set with its lifecycle state.
+        "flags_seen": _kinds(flags),
+        "reversal_patterns_seen": _kinds(analysis.get("reversal_patterns")),
+        "triangle_patterns_seen": _kinds(analysis.get("triangle_patterns")),
     }
 
 
@@ -237,6 +292,9 @@ def build_snapshot(analysis: Dict[str, Any],
         # Patterns / breakout confirmation
         **_pattern_summary(analysis),
 
+        # Divergence, with its age — see _divergence_summary.
+        **_divergence_summary(analysis),
+
         # Market-structure confluence. These are the whole point of a postmortem
         # on a losing trade: they record whether the strategy KNEW about a
         # stop-run risk, a chase, or stale structure at decision time — and how
@@ -254,6 +312,17 @@ def build_snapshot(analysis: Dict[str, Any],
         # The decision itself
         "signal_score": _num(signal.get("score")),
         "signal_strength": _num(signal.get("strength")),
+        # Since v44 the published strength is the AVERAGE of the 1H and 2H
+        # readings, and an average hides its own disagreement: 70/30 and 50/50
+        # both publish as 50. The spread is the feature — a signal strong on 1H
+        # and weak on 2H is a different animal from one strong on both, and
+        # only one of those looks like chasing.
+        "h1_strength": _num(signal.get("h1_strength")),
+        "h2_strength": _num(signal.get("h2_strength")),
+        "tf_strength_spread": (
+            None if signal.get("h1_strength") is None or signal.get("h2_strength") is None
+            else round(_num(signal.get("h1_strength")) - _num(signal.get("h2_strength")), 4)
+        ),
         "signal_tier": signal.get("tier"),
         "risk_reward_ratio": _num(signal.get("rr_ratio")),
         "stop_loss_pct": _num(signal.get("sl_pct")),
@@ -275,6 +344,17 @@ def build_snapshot(analysis: Dict[str, Any],
         "open_interest": _num(oi.get("value") if isinstance(oi, dict) else None),
         "fear_greed": redact(analysis.get("fear_greed")),
         "btc_correlation": None,                  # filled by the caller
+        # What BTC was doing when the alt trade was taken, and what the
+        # strategy did about it. An alt stopping out while BTC rolled over is
+        # not the same failure as one stopping out with BTC aligned, and
+        # without these the snapshot cannot tell them apart — the correlation
+        # FACTOR alone says how much BTC should matter, never what it did.
+        "btc_consensus": signal.get("btc_consensus"),
+        "btc_aligned": (None if signal.get("btc_aligned") is None
+                        else bool(signal.get("btc_aligned"))),
+        "btc_conflict": (None if signal.get("btc_conflict") is None
+                         else bool(signal.get("btc_conflict"))),
+        "btc_adjustment": _num(signal.get("btc_adj")),
         "exhaustion_flag": bool(signal.get("exhaustion_flag")),
         "reversal_count": signal.get("reversal_count"),
         "reversal_radar": redact(signal.get("reversal_radar")),
