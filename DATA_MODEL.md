@@ -136,7 +136,7 @@ the P/L.
 | `target_price` | `numeric(30,12)` | no | The level. |
 | `hit_at` | `timestamptz` | yes | When it was reached. NULL = still ahead. |
 | `hit_price` | `numeric(30,12)` | yes | Price recorded at the hit. Can differ from `target_price` on a gap. |
-| `exit_fraction` | `numeric(9,6)` | yes | Share of the position this rung takes (0–1). NULL = split evenly across the ladder. |
+| `exit_fraction` | `numeric(9,6)` | yes | Share of the position this rung takes (0–1). Written from `signal_store.SCALE_OUT_SHARES` — 0.5 / 0.3 / 0.2 on the standard three-rung ladder, which is what the dashboard tells the reader to sell. NULL = no published plan for that ladder length, split evenly. Rows written before this was recorded are NULL and stay NULL. |
 | `created_at` | `timestamptz` | no | |
 
 ### 3.3 `signal_indicator_snapshots` — what the strategy saw

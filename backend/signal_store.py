@@ -32,7 +32,8 @@ __all__ = [
     "SignalValidationError", "InvalidTransition",
     "STATUSES", "TERMINAL_STATUSES", "EVENT_TYPES", "ALLOWED_TRANSITIONS",
     "validate_price_structure", "assert_transition", "make_idempotency_key",
-    "has_environment_column", "reset_capabilities",
+    "has_environment_column", "has_exit_fraction_column", "reset_capabilities",
+    "SCALE_OUT_SHARES", "ladder_shares",
     "create_signal", "get_signal", "list_active_signals", "list_signals",
     "attach_targets", "record_entry_fill", "record_excursion",
     "record_stop_move", "weighted_return", "WORKING_STATUSES",
@@ -144,6 +145,39 @@ def _utc(value: Any, field: str) -> datetime:
             f"{field} is naive; supply an aware UTC datetime or epoch milliseconds"
         )
     return value.astimezone(timezone.utc)
+
+
+# The published scale-out plan. The dashboard has always told the reader
+# "TP1 — sell 50%, TP2 — sell 30%, TP3 — sell 20%", but nothing wrote those
+# shares down, so signal_targets.exit_fraction was NULL on every row and the
+# realised return fell back to an even split across the ladder. A trade that
+# banked TP1 and reversed was therefore scored as if only a third had been
+# taken off, when the advice given was half.
+#
+# Keyed by ladder length so the shares can only ever apply to the ladder they
+# were written for. Any other length falls through to NULL — an even split,
+# the documented default — rather than to a guess.
+SCALE_OUT_SHARES: Dict[int, tuple] = {
+    3: (Decimal("0.5"), Decimal("0.3"), Decimal("0.2")),
+}
+
+
+def ladder_shares(count: int) -> Optional[tuple]:
+    """
+    Position shares for a ladder of ``count`` targets, or None when there is no
+    published plan for that length. Pure.
+
+    None means "no opinion", which the reader turns into an even split. It does
+    NOT mean zero.
+    """
+    shares = SCALE_OUT_SHARES.get(int(count or 0))
+    if shares is None:
+        return None
+    # A ladder that does not close the position is a bug in the table above,
+    # not something to persist: the remainder rides to the final exit silently.
+    if sum(shares) != Decimal(1):
+        return None
+    return shares
 
 
 def weighted_return(direction: str, entry: Any,
@@ -290,13 +324,15 @@ def _sql(text_: str):
 
 _ENV_COLUMN: Optional[bool] = None
 _FILL_COLUMNS: Optional[bool] = None
+_EXIT_FRACTION_COLUMN: Optional[bool] = None
 
 
 def reset_capabilities() -> None:
     """Forget probed schema capabilities. Used by tests and after a migration."""
-    global _ENV_COLUMN, _FILL_COLUMNS
+    global _ENV_COLUMN, _FILL_COLUMNS, _EXIT_FRACTION_COLUMN
     _ENV_COLUMN = None
     _FILL_COLUMNS = None
+    _EXIT_FRACTION_COLUMN = None
 
 
 def has_environment_column(session) -> bool:
@@ -344,6 +380,29 @@ def has_entry_fill_columns(session) -> bool:
         except Exception:
             _FILL_COLUMNS = False
     return _FILL_COLUMNS
+
+
+def has_exit_fraction_column(session) -> bool:
+    """
+    True when signal_targets.exit_fraction exists (migration 004).
+
+    Same deploy-before-migrate contract as the probes above: without the column
+    the ladder shares are simply not written, and the reader falls back to an
+    even split exactly as it did before.
+    """
+    global _EXIT_FRACTION_COLUMN
+    if _EXIT_FRACTION_COLUMN is None:
+        try:
+            _EXIT_FRACTION_COLUMN = bool(session.execute(_sql("""
+                SELECT count(*) > 0
+                FROM   pg_attribute
+                WHERE  attrelid = to_regclass('signal_targets')
+                  AND  attname  = 'exit_fraction'
+                  AND  NOT attisdropped
+            """)).scalar())
+        except Exception:
+            _EXIT_FRACTION_COLUMN = False
+    return _EXIT_FRACTION_COLUMN
 
 
 def _row_to_dict(row) -> Dict[str, Any]:
@@ -509,11 +568,20 @@ def create_signal(*,
 
         signal_id = inserted[0]
 
+        # Record the shares the reader was actually shown (50/30/20 on the
+        # standard three-rung ladder). Before this they were never written, so
+        # a banked TP1 was scored as a third of the position instead of half.
+        shares = ladder_shares(len(tps)) if has_exit_fraction_column(s) else None
         for n, price in enumerate(tps, start=1):
             s.execute(_sql("""
+                INSERT INTO signal_targets
+                       (signal_id, target_number, target_price, exit_fraction)
+                VALUES (:sid, :n, :price, :frac)
+            """ if shares else """
                 INSERT INTO signal_targets (signal_id, target_number, target_price)
                 VALUES (:sid, :n, :price)
-            """), {"sid": str(signal_id), "n": n, "price": price})
+            """), {"sid": str(signal_id), "n": n, "price": price,
+                   **({"frac": shares[n - 1]} if shares else {})})
 
         s.execute(_sql("""
             INSERT INTO signal_indicator_snapshots
@@ -1314,9 +1382,12 @@ def list_postmortems(*, outcome: Optional[str] = None,
             ORDER BY p.created_at DESC LIMIT :limit OFFSET :offset
         """), params).all()
         items = [_row_to_dict(r) for r in rows]
+        # The count always runs here (unlike list_signals, which can skip it),
+        # so it is always reported. Guarding on a `with_total` flag this
+        # function never had raised NameError and 500'd /api/postmortems.
         return {"items": items, "limit": limit, "offset": offset,
-                "total": int(total) if with_total else None,
-                "has_more": (offset + len(items) < int(total)) if with_total else None}
+                "total": int(total),
+                "has_more": offset + len(items) < int(total)}
 
     if session is not None:
         return _work(session)
