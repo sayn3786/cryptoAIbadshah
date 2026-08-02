@@ -35,7 +35,7 @@ pytestmark = pytest.mark.skipif(
     not os.path.exists(NODE), reason="node not available — JS behaviour tests skipped")
 
 FUNCS = ("_cleanFactor", "_pNum", "_pMoney", "_pPct", "_pOrdinal", "_pConviction",
-         "_pRsiWord", "_pList", "buildSignalPost")
+         "_pRsiWord", "_pList", "_pSeed", "_pPick", "buildSignalPost")
 
 _SRC = None
 
@@ -142,7 +142,7 @@ def test_there_are_no_section_headings():
 def test_it_says_which_way_it_leans_and_how_strongly():
     out = _post(_analysis())
     assert "The read is bullish" in out
-    assert "scoring 61.5 out of 100" in out
+    assert "61.5 out of 100" in out
     assert "moderate conviction" in out
 
 
@@ -163,7 +163,7 @@ def test_the_evidence_is_counted_both_ways():
     a["signal"]["bullish_reasons"] = ["one", "two", "three"]
     a["signal"]["bearish_reasons"] = ["against"]
     out = _post(a)
-    assert "3 factors supporting" in out
+    assert "3 factors line up behind a move" in out
     assert "1 against it" in out
 
 
@@ -285,9 +285,13 @@ def test_missing_price_does_not_produce_a_fake_one():
 # ── The richer material, when it exists ─────────────────────────────────────
 
 def test_a_disagreement_between_macd_and_supertrend_is_named():
+    """The wording rotates; the point it makes must not."""
     out = _post(_analysis(macd={"trend": "bullish", "cross": "bullish"},
                           supertrend={"direction": "bearish", "value": 83797.49}))
-    assert "the two disagree" in out
+    assert "MACD reads bullish while SuperTrend is still bearish" in out
+    assert any(v in out for v in ("the two disagree", "not on the same page",
+                                  "one has turned and the other has not",
+                                  "resolves one way or the other")), out
 
 
 def test_a_divergence_is_reported_with_its_age_and_discount():
@@ -335,7 +339,8 @@ def test_the_plan_reads_as_a_sentence_and_carries_the_scale_out():
     assert "for 50% of the position" in out
     assert "for 30% of the position" in out
     assert "for 20% of the position" in out
-    assert "the stop moves to entry" in out
+    assert any(v in out for v in ("stop moves to entry", "stop to entry",
+                                  "stop comes up to entry", "move the stop to entry")), out
 
 
 def test_risk_is_stated_as_a_magnitude():
@@ -343,9 +348,15 @@ def test_risk_is_stated_as_a_magnitude():
 
 
 def test_invalidation_is_explicit():
+    """
+    However it is phrased, the post must name the level and say the read is
+    finished below it — not merely early.
+    """
     out = _post(_analysis())
-    assert "breaks the idea" in out
-    assert "wrong rather than early" in out
+    assert "$62,000" in out
+    assert any(v in out for v in ("breaks the idea", "simply invalid",
+                                  "is the line", "walk away")), out
+    assert "higher low" in out, "it has to say what actually breaks"
 
 
 def test_a_neutral_read_gets_no_trade_plan():
@@ -451,3 +462,131 @@ def test_no_catalyst_data_means_no_catalyst_prose():
     out = _post(_analysis())
     assert "backdrop" not in out.lower()
     assert "ETF flows" not in out
+
+
+def test_it_never_mentions_the_machine_that_wrote_it():
+    """
+    "The engine counted 15 factors supporting a move" announces that this was
+    generated, which is the one thing the writing has to avoid. A person would
+    just say what the balance is.
+    """
+    a = _analysis()
+    a["signal"]["bullish_reasons"] = ["one"] * 15
+    a["signal"]["bearish_reasons"] = ["two"] * 19
+    out = _post(a)
+    for tell in ("engine", "scoring engine", "algorithm", "computed by",
+                 "the model", "this system"):
+        assert tell not in out.lower(), f"{tell!r} gives the game away"
+    assert "15 factors line up behind a move and 19 against it" in out
+
+
+def test_what_is_coming_is_kept_apart_from_what_already_happened():
+    """
+    "Due this week: … Spot ETF flows have been negative" in one paragraph reads
+    as though the flows are also still ahead. They are history.
+    """
+    out = _catalysts()
+    paras = [p for p in out.split("\n\n") if p.strip()]
+    future = [p for p in paras if "due this week" in p.lower() or "lands within a day" in p.lower()]
+    assert future, "the calendar disappeared"
+    for p in future:
+        assert "ETF flows have been" not in p, "past flows sat in the forward-looking paragraph"
+        assert "taking the damage" not in p, "past liquidations sat in the forward-looking paragraph"
+        assert "Headlines over the last" not in p, "past headlines sat in the forward-looking paragraph"
+
+
+def test_the_past_paragraph_exists_when_there_is_past_data():
+    out = _catalysts()
+    paras = [p for p in out.split("\n\n") if p.strip()]
+    assert any("ETF flows have been" in p for p in paras)
+
+
+# ── Variation ───────────────────────────────────────────────────────────────
+#
+# The explainer clauses were identical in every post. Good once, formulaic by
+# the third, and a tell that one template produced all of them. They rotate now,
+# deterministically: the same read always yields the same words, so nothing
+# shifts under a reader who re-copies, while the next post reads differently.
+
+def _clause(out, needle):
+    for sent in out.replace("\n", " ").split(". "):
+        if needle in sent:
+            return sent
+    return ""
+
+
+def test_the_same_read_always_produces_the_same_words():
+    """Re-copying must not reshuffle the prose under the reader."""
+    a = _analysis(signal_candle_closed_at=1767268800000)
+    assert _post(a) == _post(a)
+
+
+def test_different_reads_get_different_phrasing():
+    """
+    Across symbols the stock clauses must actually rotate. One variant winning
+    everywhere would mean the rotation is broken and the text is still a
+    template.
+    """
+    seen = set()
+    for sym in ("BTC", "ETH", "SOL", "XRP", "ADA", "LINK", "AVAX", "INJ"):
+        out = _post(_analysis(symbol=sym, liquidations={"longs_liquidated": 40_000_000,
+                                                        "shorts_liquidated": 5_000_000}))
+        seen.add(_clause(out, "cascade") or _clause(out, "closed for you")
+                 or _clause(out, "quickest part") or _clause(out, "feed on themselves"))
+    assert len(seen) >= 2, f"the liquidation gloss never varied: {seen}"
+
+
+def _invalidation_para(out):
+    """The invalidation paragraph is the one naming the stop that is not the plan."""
+    for para in out.split("\n\n"):
+        if "$62,000" in para and not para.startswith("The plan"):
+            return para
+    return ""
+
+
+def test_the_invalidation_line_varies_too():
+    seen = {_invalidation_para(_post(_analysis(symbol=sym)))
+            for sym in ("BTC", "ETH", "SOL", "XRP", "ADA", "LINK", "AVAX", "INJ")}
+    assert all(seen), "the invalidation paragraph went missing"
+    assert len(seen) >= 2, f"the invalidation line never varied: {seen}"
+
+
+def test_the_breakeven_advice_varies_but_always_says_the_same_thing():
+    for sym in ("BTC", "ETH", "SOL", "XRP", "ADA", "LINK"):
+        out = _post(_analysis(symbol=sym))
+        assert ("stop moves to entry" in out or "stop to entry" in out
+                or "stop comes up to entry" in out or "move the stop to entry" in out), out
+
+
+def test_every_variant_stays_free_of_markup_and_ends_cleanly():
+    """A variant added later must not smuggle in an asterisk or a stray fragment."""
+    for sym in ("BTC", "ETH", "SOL", "XRP", "ADA", "LINK", "AVAX", "INJ", "QNT", "FET"):
+        out = _catalysts(symbol=sym)
+        for m in MARKUP:
+            assert m not in out, f"{m!r} in the {sym} post"
+        assert out.rstrip().endswith("survivable."), out[-80:]
+        assert " ." not in out and "  " not in out, "spacing broke in a variant"
+
+
+def test_the_lean_sentence_never_varies():
+    """
+    The verdict is the one line a reader must be able to find. Rotating it
+    would buy nothing and cost clarity.
+    """
+    for sym in ("BTC", "ETH", "SOL", "XRP", "ADA"):
+        assert "The read is bullish" in _post(_analysis(symbol=sym))
+
+
+def test_the_rotation_is_roughly_even_over_time():
+    """
+    Consecutive candle timestamps differ in only a few low bits. A weak hash
+    inherits that: one phrasing was winning 11 times in 20, which defeats the
+    point of having variants at all.
+    """
+    from collections import Counter
+    seen = Counter()
+    for i in range(24):
+        out = _post(_analysis(signal_candle_closed_at=1767268800000 + i * 86400000))
+        seen[_invalidation_para(out)] += 1
+    assert len(seen) >= 3, f"only {len(seen)} phrasings across 24 candles"
+    assert max(seen.values()) <= 12, f"one variant dominated: {seen.most_common(1)}"
