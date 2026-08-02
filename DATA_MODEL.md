@@ -3,7 +3,7 @@
 How a recommendation becomes a stored trade, what every column means, and how to
 query it.
 
-Everything here is generated from the live schema (migrations `001`–`005`) and
+Everything here is generated from the live schema (migrations `001`–`006`) and
 the code that writes it. Where a column exists but nothing writes it yet, this
 says so.
 
@@ -136,7 +136,7 @@ the P/L.
 | `target_price` | `numeric(30,12)` | no | The level. |
 | `hit_at` | `timestamptz` | yes | When it was reached. NULL = still ahead. |
 | `hit_price` | `numeric(30,12)` | yes | Price recorded at the hit. Can differ from `target_price` on a gap. |
-| `exit_fraction` | `numeric(9,6)` | yes | Share of the position this rung takes (0–1). Written from `signal_store.SCALE_OUT_SHARES` — 0.5 / 0.3 / 0.2 on the standard three-rung ladder, which is what the dashboard tells the reader to sell. NULL = no published plan for that ladder length, split evenly. Rows written before this was recorded are NULL and stay NULL. |
+| `exit_fraction` | `numeric(9,6)` | yes | Share of the position this rung takes (0–1). Written from `signal_store.SCALE_OUT_SHARES` — 0.5 / 0.3 / 0.2 on the standard three-rung ladder, which is what the dashboard tells the reader to sell. NULL = no published plan for that ladder length, split evenly. Rows written before 2026-08-02 were NULL; migration `006` fills them in and rescores the closed trades, so the whole history is now on one convention. |
 | `created_at` | `timestamptz` | no | |
 
 ### 3.3 `signal_indicator_snapshots` — what the strategy saw
@@ -261,7 +261,7 @@ via `POST /api/signals/<id>/postmortem`. The live MFE/MAE figures are on
 ### 3.6 `schema_migrations`
 
 `version` (PK), `description`, `applied_at`. Written only by
-`database/migrate.py`. Current: `001`, `002`, `003`, `004`.
+`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`.
 
 ---
 
@@ -448,7 +448,7 @@ SELECT environment, count(*), max(generated_at) FROM signals GROUP BY environmen
 | `backend/signal_monitor.py` | `evaluate` (pure: candles in, actions out) + `run_monitor`. |
 | `backend/signal_tracker.py` | View model. Pure: rows in, table out. |
 | `backend/deploy_context.py` | Which deployment am I. |
-| `database/migrations/` | `001`–`004`, plus review-only rollbacks. |
+| `database/migrations/` | `001`–`006`, plus review-only rollbacks. |
 | `database/migrate.py` | Explicit CLI runner. Never automatic. |
 
 **Deploy order for a migration: deploy the code first, then migrate.** Every
