@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '195';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '196';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3226,13 +3226,23 @@ function renderStructureChart(a) {
   if (pools.length) {
     // The whole ladder of resting-stop levels. Weight tracks touch count, so the
     // most-defended pools read strongest and weaker ones stay faint.
+    // A SWEPT pool is spent liquidity: price already traded through it and
+    // took the stops resting there. It stays on the chart because where the
+    // stops were is worth seeing — but drawn identically to a live pool it
+    // reads as a target that is still ahead, which is the opposite of true.
+    // Greyed and labelled, same treatment as a broken trendline below.
     pools.forEach(pl => {
       const strong = (pl.touches || 0) >= 3;
+      const swept  = !!pl.swept;
       cs.createPriceLine({
-        price: +pl.price, color: strong ? '#eab308' : '#eab30877',
-        lineWidth: strong ? 2 : 1, lineStyle: strong ? 0 : 2,
+        price: +pl.price,
+        color: swept ? '#94a3b8aa' : (strong ? '#eab308' : '#eab30877'),
+        lineWidth: swept ? 1 : (strong ? 2 : 1),
+        lineStyle: swept ? 2 : (strong ? 0 : 2),
         axisLabelVisible: true,
-        title: `Liq ${pl.side === 'above' ? '↑' : '↓'} (${pl.touches}x)` });
+        title: swept
+          ? `Liq swept (${pl.touches}x)`
+          : `Liq ${pl.side === 'above' ? '↑' : '↓'} (${pl.touches}x)` });
     });
   } else {
     const eq = a.equal_levels || {};
