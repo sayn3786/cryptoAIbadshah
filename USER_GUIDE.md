@@ -71,7 +71,7 @@ Step 4: Signal Output
 ## 3. Getting Around the Dashboard
 
 ### Top Bar
-- **Asset tabs** — click BTC, ETH, SOL, etc. to switch coins (30 coins, sorted by live market cap — includes TAO, GOMINING, ICP, ENJ, TNSR, tokenised gold XAUT/PAXG)
+- **Asset tabs** — click BTC, ETH, SOL, etc. to switch coins (31 coins, sorted by live market cap — includes TAO, GOMINING, ICP, ENJ, TNSR, and tokenised gold PAXG)
 - **Timeframe tabs** — 1H, 2H, 4H, 8H, 12H, 1D, 1W, 2W, 3W, 1M
 - **⟳ Refresh button** — get the latest data
 - **🔔 Bell icon** — alerts for weekly engulfing candle patterns
