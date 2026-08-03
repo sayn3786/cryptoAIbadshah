@@ -88,7 +88,11 @@ def test_scan_confirmed_patterns_parallel_and_claims(monkeypatch):
     # KV-claimed confirmations (exact-once). Mock the fetch + claim (no network).
     pytest.importorskip("flask")
     import app
+    # SCAN_SYMBOLS, not SYMBOLS: the browsable list is 50 while the scanned one
+    # is deliberately 31, because every scanned symbol costs fetches on a path
+    # already close to its timeout. See tests/test_symbol_scope.py.
     monkeypatch.setattr(app, "SYMBOLS", {"BTC": "BTCUSDT", "ETH": "ETHUSDT"})
+    monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC", "ETH"))
     monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
     monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT + [97, 93, 89, 87]))
     claimed = set()

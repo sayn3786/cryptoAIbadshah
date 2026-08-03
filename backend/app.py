@@ -122,7 +122,52 @@ SYMBOLS = {
     # Tokenised commodities — low BTC correlation, move on macro/USD/inflation
     "PAXG":   "PAXGUSDT",   # PAX Gold      (1 troy oz)
     "GOMINING": "GOMININGUSDT",  # GoMining platform token — KuCoin platform, CoinGecko fallback
+
+    # ── Browsable only — see SCAN_SYMBOLS ────────────────────────────────────
+    # Analysable, chartable and available as asset tabs, but deliberately NOT
+    # scanned for recommendations or alerts. Adding them to the scan would take
+    # the publish path from 62 parallel fetches to 100, and it already runs at
+    # 52-54s against a 60s ceiling that cannot be raised on this plan. A
+    # timed-out publish records nothing, which is a worse outcome than a
+    # shorter candidate list.
+    "LTC":  "LTCUSDT",
+    "BCH":  "BCHUSDT",
+    "ETC":  "ETCUSDT",
+    "UNI":  "UNIUSDT",
+    "NEAR": "NEARUSDT",
+    "FIL":  "FILUSDT",
+    "OP":   "OPUSDT",
+    "STX":  "STXUSDT",
+    "GRT":  "GRTUSDT",
+    "CRV":  "CRVUSDT",
+    "LDO":  "LDOUSDT",
+    "APE":  "APEUSDT",
+    "MANA": "MANAUSDT",
+    "AXS":  "AXSUSDT",
+    "BAT":  "BATUSDT",
+    "MINA": "MINAUSDT",
+    "HNT":  "HNTUSDT",
+    "ZEN":  "ZENUSDT",
+    "WLFI": "WLFIUSDT",
 }
+
+# The symbols a RECOMMENDATION may be published for, and the ones the alert
+# scans sweep. A strict subset of SYMBOLS.
+#
+# SYMBOLS answers "can I look at this coin"; SCAN_SYMBOLS answers "will the app
+# go looking at it on a timer". Splitting them is what lets the browsable list
+# grow without touching the publish budget: every symbol here costs two
+# analyses on the 4H publish path (1H and 2H, plus 4H if it survives the
+# gates), and four more on every in-app bell refresh.
+#
+# Anything added here changes what can be traded, so it is also a strategy
+# change — see the freeze note in README.
+SCAN_SYMBOLS = (
+    "BTC", "ETH", "LINK", "SUI", "TAO", "HYPE", "KAS", "ALGO", "XMR", "XRP",
+    "GRAM", "SOL", "ONDO", "AAVE", "RENDER", "BNB", "BLUR", "ZEC", "TRX",
+    "ADA", "XLM", "AVAX", "HBAR", "QNT", "INJ", "FET", "ICP", "ENJ", "TNSR",
+    "PAXG", "GOMINING",
+)
 
 # Symbols we no longer analyse or publish, but which still have signals on the
 # books. Dropping a symbol from SYMBOLS alone STRANDS its open trades: the
@@ -661,7 +706,7 @@ def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
     run in PARALLEL over (symbol, timeframe) pairs so the scan stays well within
     the serverless timeout; KV claims run sequentially afterwards (fast + keeps
     the exact-once writes single-threaded)."""
-    symbols = symbols or list(SYMBOLS.keys())
+    symbols = symbols or list(SCAN_SYMBOLS)
     tfs     = tfs or PATTERN_ALERT_TFS
 
     def _scan(pair):
@@ -1927,7 +1972,7 @@ def api_backtest(symbol):
 def api_dashboard():
     results = {}
     with ThreadPoolExecutor(max_workers=6) as ex:
-        futures = {ex.submit(build_analysis, sym, "1D"): sym for sym in SYMBOLS}
+        futures = {ex.submit(build_analysis, sym, "1D"): sym for sym in SCAN_SYMBOLS}
         for future in as_completed(futures):
             sym = futures[future]
             try:
@@ -2305,7 +2350,7 @@ def _compute_recommendations() -> dict:
     SGT = timezone(timedelta(hours=8))
     now_sgt = now.astimezone(SGT)
 
-    all_syms = list(SYMBOLS)
+    all_syms = list(SCAN_SYMBOLS)      # publish candidates only — see SCAN_SYMBOLS
     raw: dict = {}
 
     def _fetch_tfs(pairs):
@@ -3300,7 +3345,7 @@ def api_engulf_alerts():
             return []
 
     with ThreadPoolExecutor(max_workers=8) as ex:
-        for res in ex.map(_scan, SYMBOLS.keys()):
+        for res in ex.map(_scan, SCAN_SYMBOLS):
             alerts.extend(res)
 
     # Most recent first
@@ -3341,7 +3386,7 @@ def api_pattern_alerts():
         return [{"symbol": sym, "timeframe": tf, "detected_at": scan_fmt, **pat}
                 for pat in _confirmed_patterns_for(closed, tf)]
 
-    pairs = [(sym, tf) for sym in SYMBOLS.keys() for tf in PATTERN_BELL_TFS]
+    pairs = [(sym, tf) for sym in SCAN_SYMBOLS for tf in PATTERN_BELL_TFS]
     alerts: list = []
     with ThreadPoolExecutor(max_workers=12) as ex:
         for res in ex.map(_scan, pairs):
@@ -3386,7 +3431,7 @@ def api_whale_alerts():
             return []
 
     with ThreadPoolExecutor(max_workers=8) as ex:
-        for res in ex.map(_scan, SYMBOLS.keys()):
+        for res in ex.map(_scan, SCAN_SYMBOLS):
             alerts.extend(res)
 
     alerts.sort(key=lambda x: x["candles_ago"])
