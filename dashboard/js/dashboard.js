@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '205';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '206';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3687,6 +3687,13 @@ function renderTriangles(patterns, candles) {
       ? `❌ ${isVoid ? 'INVALIDATED' : 'FAILED'}${t.failure_reason ? ` — ${t.failure_reason}` : ''}${_failedWhen(t.failed_ts)}`
       : t.confirmed
         ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}${_volTag(t.breakout_volume)}${_retestTag(t.retest)}`
+        // A single close through the WRONG rail that was reclaimed is a spring
+        // (below support) or an upthrust (above resistance) — a stop-run, and
+        // classically a point FOR the pattern rather than against it.
+        : t.sweep
+          ? `⚡ ${t.sweep.type === 'spring' ? 'SPRING' : 'UPTHRUST'} — price swept ` +
+            `${t.sweep.type === 'spring' ? 'below' : 'above'} ${p(t.sweep.level)} and reclaimed it; ` +
+            `the rail held and stops went with it`
         : dir === 'neutral'
           ? '⏳ forming — awaiting a break either way'
           : `⏳ forming — awaiting a ${dir === 'bullish' ? 'break above' : 'break below'} the rail`;
@@ -3697,6 +3704,7 @@ function renderTriangles(patterns, candles) {
         <span class="flag-tf">${t.timeframe}</span>
         ${isFailed ? `<span class="flag-failed-badge">✕ ${isVoid ? 'Invalidated' : 'Failed'}</span>`
           : t.confirmed ? `<span class="flag-confirmed">${t.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>`
+          : t.sweep ? `<span class="flag-confirmed">⚡ ${t.sweep.type === 'spring' ? 'Spring' : 'Upthrust'}</span>`
                         : '<span class="flag-active">Forming</span>'}
       </div>
       <div class="flag-stats">

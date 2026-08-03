@@ -45,6 +45,13 @@ RETEST_BAND_PCT = 0.015   # within 1.5% of the level = "at the level"
 # card with an old post-mortem.
 FAILURE_SHOW_BARS = 3
 
+# Closes required beyond the WRONG rail before a directional pattern is given
+# up on. Edwards & Magee's two-day rule, which is the classical filter that
+# survives a change of timeframe — unlike their 3% penetration filter, which was
+# written for daily bars on mid-century equities. One close that is reclaimed is
+# a stop-run, not a break.
+WRONG_WAY_CONFIRM_BARS = 2
+
 
 def _failure_is_fresh(candles: List[Dict], failed_ts, max_bars: int = FAILURE_SHOW_BARS) -> bool:
     """True when `failed_ts` is within `max_bars` CLOSED candles of the latest."""
@@ -1949,29 +1956,63 @@ def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
         if c["close"] < lo_lvl:
             status, confirmed, brk_dir, break_ts, bo_i = "confirmed", True, "down", c["timestamp"], i; break
 
-    # For a directional pattern, a break the WRONG way invalidates it; symmetrical
-    # takes whichever side broke.
-    # A directional pattern broken the WRONG way is INVALIDATED, not deleted.
+    # ── A break the WRONG way: confirm it before believing it ────────────────
     #
-    # This used to `return None`, so an ascending wedge whose price closed
-    # through the lower rail simply vanished from the UI on the next refresh —
-    # with no card, no status and no trace that it had ever been there. That is
-    # the failure most worth seeing: it is the one that would have cost money,
-    # and it disappeared faster than the failures that are kept.
+    # One close through the wrong rail is not a break. Edwards & Magee's
+    # two-day rule is the oldest answer to this and the one that transfers
+    # across timeframes without tuning: price must close beyond the line on TWO
+    # CONSECUTIVE bars before the pattern is given up on. Their other filter, a
+    # 3% penetration, is deliberately NOT copied — it was written for daily bars
+    # on mid-century equities and is meaningless on a 4H altcoin candle.
     #
-    # It is recorded the same way a failed breakout is: `confirmed` cleared so
-    # scoring and alerts skip it (both gate on `confirmed`), visible for
-    # FAILURE_SHOW_BARS closes, then gone.
+    # A single close that is then reclaimed is a SPRING (below support) or an
+    # UPTHRUST (above resistance) in Wyckoff's vocabulary: a stop-run, and
+    # usually a point FOR the pattern rather than against it. It used to be
+    # treated as terminal, and before that the whole pattern was deleted.
+    #
+    # Neither state is tradeable here — `confirmed` stays cleared, so scoring
+    # and alerts (which both gate on it) ignore all of this.
     expected_up = direction == "bullish"
     invalidated_ts = invalidation_reason = None
+    sweep = None
     if confirmed and direction != "neutral" and (brk_dir == "up") != expected_up:
-        if not _failure_is_fresh(candles, break_ts):
-            return None                               # long gone — disappear entirely
-        invalidated_ts = break_ts
-        invalidation_reason = ("closed below the lower rail" if brk_dir == "down"
-                               else "closed above the upper rail")
-        confirmed, status = False, "invalidated"
-        bo_i = None                                   # nothing to retest or give back
+        wrong_i = bo_i
+        # The breaking bar IS the first close beyond the rail, so only
+        # WRONG_WAY_CONFIRM_BARS - 1 further closes are needed to confirm it.
+        need = max(0, WRONG_WAY_CONFIRM_BARS - 1)
+        after = candles[wrong_i + 1:]
+        reclaimed = None
+        for k, c in enumerate(after[:need]):
+            i = wrong_i + 1 + k
+            back_inside = (c["close"] > lower(i) if brk_dir == "down"
+                           else c["close"] < upper(i))
+            if back_inside:
+                reclaimed = c["timestamp"]
+                break
+
+        if reclaimed is not None:
+            # Reclaimed inside the window: the rail held, and the wick that
+            # poked through took liquidity with it.
+            if not _failure_is_fresh(candles, reclaimed):
+                sweep = None                          # old news — back to normal
+            else:
+                sweep = {"type": "spring" if brk_dir == "down" else "upthrust",
+                         "swept_ts": break_ts, "reclaimed_ts": reclaimed,
+                         "level": lower(wrong_i) if brk_dir == "down" else upper(wrong_i)}
+            confirmed, status, brk_dir, break_ts, bo_i = False, "forming", None, None, None
+        elif len(after) < need:
+            # Not enough closes yet to judge. Reporting a break here and
+            # withdrawing it next bar is worse than saying nothing.
+            confirmed, status, brk_dir, break_ts, bo_i = False, "forming", None, None, None
+        else:
+            if not _failure_is_fresh(candles, break_ts):
+                return None                           # long gone — disappear entirely
+            invalidated_ts = break_ts
+            invalidation_reason = (
+                "closed below the lower rail on two consecutive bars" if brk_dir == "down"
+                else "closed above the upper rail on two consecutive bars")
+            confirmed, status = False, "invalidated"
+            bo_i = None                               # nothing to retest or give back
     if direction == "neutral" and confirmed:
         direction = "bullish" if brk_dir == "up" else "bearish"
 
@@ -2053,6 +2094,7 @@ def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
         failed_ts, failure_reason = invalidated_ts, invalidation_reason
 
     return {
+        "sweep":      sweep,          # spring / upthrust, or None
         "type":       kind, "label": label, "direction": direction,
         "timeframe":  tf_label, "tf_weight": tf_weight,
         "upper_now":  round(upper(last_i), 8),
