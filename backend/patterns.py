@@ -1879,10 +1879,52 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
         if current and not any(_same_structure(current, p) for p in out):
             out.append(current)
 
-    # Resolved/confirmed first, then whatever is still forming.
-    _rank = {"failed": 0, "invalidated": 0, "confirmed": 0, "forming": 1}
+    # Two confirmed fits disagreeing about direction is an ambiguous chart, not
+    # two signals — see _mark_conflicts.
+    out = _mark_conflicts(out)
+
+    # Resolved first, then whatever is still forming. An ambiguity ranks with
+    # the resolved ones: "this chart is unreadable right now" is the urgent card.
+    _rank = {"failed": 0, "invalidated": 0, "conflicted": 0, "confirmed": 0, "forming": 1}
     out.sort(key=lambda p: _rank.get(p["status"], 1))
     return out[:TW_MAX_RETURNED]
+
+
+def _mark_conflicts(pats: List[Dict]) -> List[Dict]:
+    """
+    Two confirmed structures on the same candles pointing opposite ways is not
+    two signals — it is an ambiguous chart.
+
+    detect_triangles_wedges deliberately returns two fits of the same pivots:
+    the peeled one (breakout pivots removed) and the unpeeled one. That exists
+    so a resolved structure and the one forming in its place are both visible.
+    But `_same_structure` only dedupes when the TYPE matches, so a descending
+    triangle and a falling wedge fitted to the same swings could both come back
+    CONFIRMED — one having broken down, the other up. Seen live on 1H: target
+    $183.64 and target $195.71 on the same candles, both marked confirmed.
+
+    Both are cleared rather than picking a winner. Choosing between them would
+    need a strength heuristic invented with no evidence behind it, and the
+    honest reading of two opposite confirmations is that the structure has not
+    resolved. `confirmed` is what scoring and alerts gate on, so clearing it
+    means an ambiguous chart contributes nothing instead of contributing both
+    sides of a contradiction.
+
+    The patterns stay VISIBLE with status 'conflicted' and a `conflict` field
+    naming the other side, because "the chart is telling two stories" is a real
+    thing for a reader to know — arguably more useful than either story alone.
+    """
+    conf = [p for p in pats
+            if p.get("confirmed") and p.get("direction") in ("bullish", "bearish")]
+    if len({p["direction"] for p in conf}) < 2:
+        return pats
+    for p in conf:
+        other = next(q for q in conf if q["direction"] != p["direction"])
+        p["conflict"] = {"type": other.get("type"), "label": other.get("label"),
+                         "direction": other.get("direction"),
+                         "breakout_dir": other.get("breakout_dir")}
+        p["confirmed"], p["status"] = False, "conflicted"
+    return pats
 
 
 def _same_structure(a: Dict, b: Dict) -> bool:
@@ -2095,6 +2137,7 @@ def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
 
     return {
         "sweep":      sweep,          # spring / upthrust, or None
+        "conflict":   None,           # set by _mark_conflicts when two fits disagree
         "type":       kind, "label": label, "direction": direction,
         "timeframe":  tf_label, "tf_weight": tf_weight,
         "upper_now":  round(upper(last_i), 8),

@@ -38,7 +38,11 @@ __all__ = [
 PATTERN_KINDS = ("rsi_divergence", "choch", "liquidity_grab", "engulfing",
                  "flag", "triangle", "acc_eql_fvg")
 
-OBSERVABLE_STATUSES = ("forming", "confirmed", "expired", "invalidated")
+OBSERVABLE_STATUSES = ("forming", "confirmed", "expired", "invalidated",
+                       # Two fits of the same candles confirmed in opposite
+                       # directions. Worth counting: it measures how often the
+                       # detector produces an unreadable chart.
+                       "conflicted")
 
 # Detectors do not all use the same word for the same lifecycle state. Flags say
 # "failed" when a breakout gives back its level; the lifecycle module says

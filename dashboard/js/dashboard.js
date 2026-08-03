@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '206';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '207';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3682,8 +3682,16 @@ function renderTriangles(patterns, candles) {
     // direction it was drawn for. Same treatment as a failed breakout, because
     // both are "this is over"; only the wording differs.
     const isVoid   = t.status === 'invalidated';
-    const isFailed = t.status === 'failed' || isVoid;
-    const statusTxt = isFailed
+    // Two fits of the same candles confirmed in opposite directions. Showing
+    // both as confident contradictions is worse than saying the chart is
+    // unreadable, which is itself a tradeable fact — stand aside.
+    const isClash  = t.status === 'conflicted';
+    const isFailed = t.status === 'failed' || isVoid || isClash;
+    const statusTxt = isClash
+      ? `⚠️ AMBIGUOUS — a ${t.conflict?.label || 'competing structure'} on the same candles ` +
+        `broke ${t.conflict?.breakout_dir === 'up' ? 'up' : 'down'}. The structure has not ` +
+        `resolved, so this is not a signal either way`
+      : isFailed
       ? `❌ ${isVoid ? 'INVALIDATED' : 'FAILED'}${t.failure_reason ? ` — ${t.failure_reason}` : ''}${_failedWhen(t.failed_ts)}`
       : t.confirmed
         ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}${_volTag(t.breakout_volume)}${_retestTag(t.retest)}`
@@ -3697,12 +3705,14 @@ function renderTriangles(patterns, candles) {
         : dir === 'neutral'
           ? '⏳ forming — awaiting a break either way'
           : `⏳ forming — awaiting a ${dir === 'bullish' ? 'break above' : 'break below'} the rail`;
+    // No target on an ambiguous or ended structure — a measured move nobody
+    // should act on reads as a price forecast.
     const tgt = (t.target != null && !isFailed) ? `Target: <span>$${p(t.target)}</span> &nbsp;·&nbsp; ` : '';
     return `<div class="flag-item ${isFailed ? 'pattern-failed' : cls}">
       <div class="flag-top">
         <span class="flag-name ${isFailed ? '' : cls}">${icon} ${t.label}</span>
         <span class="flag-tf">${t.timeframe}</span>
-        ${isFailed ? `<span class="flag-failed-badge">✕ ${isVoid ? 'Invalidated' : 'Failed'}</span>`
+        ${isFailed ? `<span class="flag-failed-badge">${isClash ? '⚠ Ambiguous' : `✕ ${isVoid ? 'Invalidated' : 'Failed'}`}</span>`
           : t.confirmed ? `<span class="flag-confirmed">${t.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>`
           : t.sweep ? `<span class="flag-confirmed">⚡ ${t.sweep.type === 'spring' ? 'Spring' : 'Upthrust'}</span>`
                         : '<span class="flag-active">Forming</span>'}
