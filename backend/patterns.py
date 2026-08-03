@@ -1873,7 +1873,7 @@ def detect_triangles_wedges(candles: List[Dict], tf_label: str, tf_weight: float
             out.append(current)
 
     # Resolved/confirmed first, then whatever is still forming.
-    _rank = {"failed": 0, "confirmed": 0, "forming": 1}
+    _rank = {"failed": 0, "invalidated": 0, "confirmed": 0, "forming": 1}
     out.sort(key=lambda p: _rank.get(p["status"], 1))
     return out[:TW_MAX_RETURNED]
 
@@ -1951,9 +1951,27 @@ def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
 
     # For a directional pattern, a break the WRONG way invalidates it; symmetrical
     # takes whichever side broke.
+    # A directional pattern broken the WRONG way is INVALIDATED, not deleted.
+    #
+    # This used to `return None`, so an ascending wedge whose price closed
+    # through the lower rail simply vanished from the UI on the next refresh —
+    # with no card, no status and no trace that it had ever been there. That is
+    # the failure most worth seeing: it is the one that would have cost money,
+    # and it disappeared faster than the failures that are kept.
+    #
+    # It is recorded the same way a failed breakout is: `confirmed` cleared so
+    # scoring and alerts skip it (both gate on `confirmed`), visible for
+    # FAILURE_SHOW_BARS closes, then gone.
     expected_up = direction == "bullish"
+    invalidated_ts = invalidation_reason = None
     if confirmed and direction != "neutral" and (brk_dir == "up") != expected_up:
-        return None                                   # broke against the pattern → drop
+        if not _failure_is_fresh(candles, break_ts):
+            return None                               # long gone — disappear entirely
+        invalidated_ts = break_ts
+        invalidation_reason = ("closed below the lower rail" if brk_dir == "down"
+                               else "closed above the upper rail")
+        confirmed, status = False, "invalidated"
+        bo_i = None                                   # nothing to retest or give back
     if direction == "neutral" and confirmed:
         direction = "bullish" if brk_dir == "up" else "bearish"
 
@@ -2029,6 +2047,10 @@ def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
         status, confirmed = "failed", False
         if (_retest or {}).get("status") == "retest_failed":
             failure_reason = "retest failed — broke back through the level"
+    elif invalidated_ts is not None:
+        # Reported through the same fields the card already reads, so an
+        # invalidation renders without a second code path.
+        failed_ts, failure_reason = invalidated_ts, invalidation_reason
 
     return {
         "type":       kind, "label": label, "direction": direction,

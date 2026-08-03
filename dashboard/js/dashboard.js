@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '204';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '205';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3678,9 +3678,13 @@ function renderTriangles(patterns, candles) {
     const dir  = t.direction;                         // bullish | bearish | neutral
     const cls  = dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
     const icon = dir === 'bullish' ? '▲' : dir === 'bearish' ? '▼' : '◆';
-    const isFailed = t.status === 'failed';
+    // A wedge broken the wrong way is INVALIDATED — it never confirmed in the
+    // direction it was drawn for. Same treatment as a failed breakout, because
+    // both are "this is over"; only the wording differs.
+    const isVoid   = t.status === 'invalidated';
+    const isFailed = t.status === 'failed' || isVoid;
     const statusTxt = isFailed
-      ? `❌ FAILED${t.failure_reason ? ` — ${t.failure_reason}` : ''}${_failedWhen(t.failed_ts)}`
+      ? `❌ ${isVoid ? 'INVALIDATED' : 'FAILED'}${t.failure_reason ? ` — ${t.failure_reason}` : ''}${_failedWhen(t.failed_ts)}`
       : t.confirmed
         ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}${_volTag(t.breakout_volume)}${_retestTag(t.retest)}`
         : dir === 'neutral'
@@ -3691,7 +3695,7 @@ function renderTriangles(patterns, candles) {
       <div class="flag-top">
         <span class="flag-name ${isFailed ? '' : cls}">${icon} ${t.label}</span>
         <span class="flag-tf">${t.timeframe}</span>
-        ${isFailed ? '<span class="flag-failed-badge">✕ Failed</span>'
+        ${isFailed ? `<span class="flag-failed-badge">✕ ${isVoid ? 'Invalidated' : 'Failed'}</span>`
           : t.confirmed ? `<span class="flag-confirmed">${t.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>`
                         : '<span class="flag-active">Forming</span>'}
       </div>
