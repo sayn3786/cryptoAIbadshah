@@ -70,10 +70,25 @@ def test_falling_wedge_bullish():
     assert f and f["type"] == "falling_wedge" and f["direction"] == "bullish"
 
 
-def test_wrong_way_break_drops_directional_pattern():
-    # An ascending triangle (bullish) that breaks DOWN through support is dropped.
+def test_wrong_way_break_invalidates_rather_than_deleting():
+    # An ascending triangle (bullish) that breaks DOWN through support used to
+    # be dropped on the spot — the card vanished mid-session with no trace it
+    # had existed, which is the one failure most worth seeing. It is now kept
+    # like any other ended pattern: `confirmed` cleared so scoring and alerts
+    # skip it, visible for FAILURE_SHOW_BARS closes, then gone.
     f = _one(_zigzag([90, 100, 92, 100, 94, 100, 96, 100, 98], tail=[95, 90, 86]))
-    assert f is None or f["type"] != "ascending_triangle"
+    if f is None:
+        return                      # geometry rejected it outright — fine
+    assert f["status"] == "invalidated"
+    assert f["confirmed"] is False, "an invalidated pattern must not read as tradeable"
+    assert f["failed_ts"] is not None and f["failure_reason"]
+
+
+def test_a_long_dead_wrong_way_break_still_disappears():
+    # Visible for three closes, not forever.
+    f = _one(_zigzag([90, 100, 92, 100, 94, 100, 96, 100, 98],
+                     tail=[95, 90, 86, 85, 84, 83, 82, 81]))
+    assert f is None or f["status"] != "invalidated"
 
 
 def test_wedge_breakout_retest_stays_confirmed():
