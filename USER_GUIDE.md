@@ -71,7 +71,7 @@ Step 4: Signal Output
 ## 3. Getting Around the Dashboard
 
 ### Top Bar
-- **Asset tabs** — click BTC, ETH, SOL, etc. to switch coins (31 coins, sorted by live market cap — includes TAO, GOMINING, ICP, ENJ, TNSR, and tokenised gold PAXG)
+- **Asset tabs** — click BTC, ETH, SOL, etc. to switch coins (50 coins, sorted by live market cap). All 50 are fully analysable and chartable. The **recommendation engine scans 31 of them** — the extra majors and mid-caps (LTC, BCH, ETC, UNI, NEAR, FIL, OP, STX, GRT, CRV, LDO, APE, MANA, AXS, BAT, MINA, HNT, ZEN, WLFI) are there to browse, not to be published as trades. That split exists because every scanned coin costs fetches on a publish path already close to its 60-second ceiling.
 - **Timeframe tabs** — 1H, 2H, 4H, 8H, 12H, 1D, 1W, 2W, 3W, 1M
 - **⟳ Refresh button** — get the latest data
 - **🔔 Bell icon** — alerts for weekly engulfing candle patterns

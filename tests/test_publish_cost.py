@@ -1,4 +1,10 @@
 """
+NOTE: these count against SCAN_SYMBOLS, not SYMBOLS. The two used to be the
+same list. They were split when the browsable set grew to 50 while the
+recommendation scan deliberately stayed at 31 — the publish runs at 52-54s of
+a hard 60s ceiling, and scanning every browsable symbol would have taken it
+from 62 parallel fetches to 100. See tests/test_symbol_scope.py.
+
 Fitting the publish compute inside a hard 60-second ceiling.
 
 `/api/cron/daily` has been killed at 61s with `FUNCTION_INVOCATION_TIMEOUT`, and
@@ -91,23 +97,23 @@ def _run(counted):
 
 def test_4h_is_skipped_for_symbols_that_fail_the_gates(counted):
     calls, directions = counted
-    syms = [s for s in appmod.SYMBOLS if s != "BTC"]
+    syms = [s for s in appmod.SCAN_SYMBOLS if s != "BTC"]
     passing = set(syms[:5])
     for s in syms:
         directions[s] = "LONG" if s in passing else "NEUTRAL"
     by_tf, fetched_4h = _run(counted)
 
-    assert by_tf["1H"] == len(appmod.SYMBOLS), "1H is still needed everywhere"
-    assert by_tf["2H"] == len(appmod.SYMBOLS)
+    assert by_tf["1H"] == len(appmod.SCAN_SYMBOLS), "1H is still needed everywhere"
+    assert by_tf["2H"] == len(appmod.SCAN_SYMBOLS)
     assert fetched_4h == passing, "4H must be fetched for exactly the survivors"
-    assert by_tf["4H"] < len(appmod.SYMBOLS), "no saving at all"
+    assert by_tf["4H"] < len(appmod.SCAN_SYMBOLS), "no saving at all"
 
 
 def test_every_candidate_still_gets_its_4h_reading(counted):
     # The correctness risk of the whole change: a symbol reaching the candidate
     # loop with no 4H data would be scored as though 4H were neutral.
     calls, directions = counted
-    syms = [s for s in appmod.SYMBOLS if s != "BTC"]
+    syms = [s for s in appmod.SCAN_SYMBOLS if s != "BTC"]
     for i, s in enumerate(syms):
         directions[s] = "LONG" if i % 3 else "NEUTRAL"
     _, fetched_4h = _run(counted)
@@ -123,7 +129,7 @@ def test_every_candidate_still_gets_its_4h_reading(counted):
 
 def test_nothing_passing_means_no_4h_work_at_all(counted):
     calls, directions = counted
-    for s in appmod.SYMBOLS:
+    for s in appmod.SCAN_SYMBOLS:
         directions[s] = "NEUTRAL"
     by_tf, _ = _run(counted)
     assert by_tf["4H"] == 0
@@ -132,17 +138,17 @@ def test_nothing_passing_means_no_4h_work_at_all(counted):
 def test_everything_passing_costs_what_it_always_did(counted):
     # The cut must never make the WORST case worse than before.
     calls, directions = counted
-    for s in appmod.SYMBOLS:
+    for s in appmod.SCAN_SYMBOLS:
         directions[s] = "LONG"
     by_tf, _ = _run(counted)
-    assert by_tf["4H"] == len(appmod.SYMBOLS) - 1, "BTC is not a candidate"
-    assert sum(by_tf.values()) <= len(appmod.SYMBOLS) * 3
+    assert by_tf["4H"] == len(appmod.SCAN_SYMBOLS) - 1, "BTC is not a candidate"
+    assert sum(by_tf.values()) <= len(appmod.SCAN_SYMBOLS) * 3
 
 
 def test_btc_never_needs_a_4h_analysis(counted):
     # BTC is skipped by the candidate loop, so its 4H reading is never read.
     calls, directions = counted
-    for s in appmod.SYMBOLS:
+    for s in appmod.SCAN_SYMBOLS:
         directions[s] = "LONG"
     _, fetched_4h = _run(counted)
     assert "BTC" not in fetched_4h
