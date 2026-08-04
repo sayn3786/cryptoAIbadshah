@@ -360,11 +360,34 @@ def detect_flags(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 else:
                     break
             fl = len(flag)                       # consolidation_bars
-            # Did growth stop because it hit the length cap while MORE in-channel
-            # candles remained? Then the consolidation is genuinely longer than a
-            # flag should be — a downtrend/channel, not a pause. Tag it so the
-            # diagnostic can say so (the capped window is still evaluated below).
-            capped_at_max = (fl >= MAX_CONSOLIDATION_BARS and k < len(remaining))
+            # If the NEXT candle after the maximum is still inside the projected
+            # channel, the real consolidation is overlong. Do not silently cap it
+            # at 15 and reinterpret bars 16/17 as post-pattern candles: that makes
+            # a long channel masquerade as a textbook short flag. A candle that is
+            # already outside remains eligible as the breakout after exactly 15.
+            capped_at_max = False
+            if fl >= MAX_CONSOLIDATION_BARS and k < len(remaining):
+                nxt = remaining[k]
+                m = len(flag)
+                ch = [c["high"] for c in flag]
+                cl_ = [c["low"] for c in flag]
+                hs = _line_slope(ch)
+                ls = _line_slope(cl_)
+                mid = (fh + fl_) / 2.0
+                msp = ((hs + ls) / 2.0) / mid * 100.0 if mid > 0 else 0.0
+                if abs(msp) <= NEUTRAL_SLOPE_PCT:
+                    up_b, lo_b = fh, fl_
+                else:
+                    xr = (m - 1) / 2.0
+                    up_b = max(sum(ch) / m + hs * (m - xr), fl_)
+                    lo_b = min(sum(cl_) / m + ls * (m - xr), fh)
+                capped_at_max = lo_b <= nxt["close"] <= up_b
+            if capped_at_max:
+                _reject(4, "consolidation_too_long", is_bull,
+                        consolidation_bars=fl, capped_at_max=True,
+                        max_bars=MAX_CONSOLIDATION_BARS,
+                        flag_high=round(fh, 8), flag_low=round(fl_, 8))
+                continue
 
             # ── Retrace of the pole ──────────────────────────────────────────
             if is_bull:
@@ -821,43 +844,21 @@ def analyze_elliott_wave(
 
     recent = all_pivots[-12:]
     prices = [p["price"] for p in recent]
-    trend  = "bullish" if prices[-1] > prices[0] else "bearish"
+    trend = ("bullish" if prices[-1] > prices[0]
+             else "bearish" if prices[-1] < prices[0] else "neutral")
 
-    swings = sum(
-        1 for i in range(1, len(recent))
-        if recent[i]["type"] != recent[i - 1]["type"]
-    )
-
-    _wave_labels = {
-        1: ("Wave 1", "Impulse start — early entry for smart money"),
-        2: ("Wave 2", "Corrective pullback — watch for reversal"),
-        3: ("Wave 3", "Strongest impulse — ideal trend-following entry"),
-        4: ("Wave 4", "Consolidation — prepare for Wave 5"),
-        5: ("Wave 5", "Final push — consider taking profits"),
-        6: ("Wave A", "Correction starts — reduce longs"),
-        7: ("Wave B", "Dead-cat bounce — potential short entry"),
-        8: ("Wave C", "Final corrective leg — accumulation zone"),
-    }
-
-    pos = (swings % 8) + 1
-    label, desc = _wave_labels.get(pos, ("Unknown", "Unclear wave structure"))
-
-    bullish_waves = {1, 3, 5, 7} if trend == "bullish" else {2, 4, 6, 8}
-    bias = "bullish" if pos in bullish_waves else "bearish"
-
-    current_price = candles[-1]["close"] if candles else prices[-1]
+    # Elliott labels cannot be inferred from the number of alternating pivots.
+    # The old implementation used ``swing_count % 8`` and therefore assigned a
+    # tradeable Wave 1..5/A..C label to every sufficiently long oscillating
+    # series, even when none of Elliott's price rules held. Keep the pivots for
+    # the chart, but expose an explicitly UNCONFIRMED, neutral interpretation.
+    # A future implementation may set a directional bias only after validating
+    # a complete impulse/correction sequence (including invalidation rules).
+    pos = None
+    label = "Unconfirmed wave structure"
+    desc = "Pivot sequence shown for context; no validated Elliott count."
+    bias = "neutral"
     targets = []
-    if len(prices) >= 2:
-        last_swing = min(abs(prices[-1] - prices[-2]), current_price * 0.25)
-        for m in [0.618, 1.000, 1.618]:
-            if bias == "bullish":
-                t = round(current_price + last_swing * m, 6)
-                if t > current_price:
-                    targets.append(t)
-            else:
-                t = round(max(current_price * 0.001, current_price - last_swing * m), 6)
-                if t < current_price:
-                    targets.append(t)
 
     # Expose the last 10 pivots (with timestamps) so the frontend can
     # draw numbered wave markers on the candlestick chart.
@@ -929,27 +930,42 @@ def detect_choch(candles: List[Dict], window: int = 3) -> Dict:
     current = candles[-1]
     cur_close = current["close"]
 
-    # Need at least 2 pivot highs and 2 pivot lows to establish trend
+    # Need BOTH sides of structure to establish trend. Rising lows alone can be
+    # an ascending triangle/range, and falling highs alone can be a contracting
+    # range; neither proves the HH+HL / LL+LH regime documented above.
+    if len(ph) < 2 or len(pl) < 2:
+        return {"signal": "none"}
+
+    last_high, prev_high = ph[-1], ph[-2]
+    last_low, prev_low = pl[-1], pl[-2]
+
+    # The event is the newest closed candle's break. Keep the age of the level as
+    # separate context; using it as event freshness incorrectly weakened a CHoCH
+    # merely because the legitimate swing level took time to break.
+    event_age = 0
+
     # Bearish CHoCH: was uptrend (HH, HL) → price breaks below last swing low
     # Evaluate both; in the rare structure where last_high < last_low a single
     # close can satisfy both — report the break of the more RECENT pivot rather
     # than always preferring bearish by check order.
     bear_choch = bull_choch = None
-    if len(pl) >= 2:
-        last_low, prev_low = pl[-1], pl[-2]
-        if last_low["price"] > prev_low["price"] and cur_close < last_low["price"]:
+    if (last_high["price"] > prev_high["price"]
+            and last_low["price"] > prev_low["price"]):
+        if cur_close < last_low["price"]:
             bear_choch = {
                 "signal": "bearish", "level": round(last_low["price"], 8),
-                "candles_ago": len(candles) - 1 - last_low["index"],
+                "candles_ago": event_age,
+                "level_age_candles": len(candles) - 1 - last_low["index"],
                 "_idx": last_low["index"],
                 "label": f"Broke below swing low ${last_low['price']:,.4f}",
             }
-    if len(ph) >= 2:
-        last_high, prev_high = ph[-1], ph[-2]
-        if last_high["price"] < prev_high["price"] and cur_close > last_high["price"]:
+    if (last_high["price"] < prev_high["price"]
+            and last_low["price"] < prev_low["price"]):
+        if cur_close > last_high["price"]:
             bull_choch = {
                 "signal": "bullish", "level": round(last_high["price"], 8),
-                "candles_ago": len(candles) - 1 - last_high["index"],
+                "candles_ago": event_age,
+                "level_age_candles": len(candles) - 1 - last_high["index"],
                 "_idx": last_high["index"],
                 "label": f"Broke above swing high ${last_high['price']:,.4f}",
             }
@@ -1066,16 +1082,56 @@ def detect_equal_levels(candles: List[Dict], window: int = 25,
     recent = closed[-window:]
     n = len(recent)
 
-    def _cluster(prices: list, is_high: bool) -> Optional[Dict]:
+    # Equal levels are repeated SWING tests, not one touch for every candle that
+    # happens to share a high/low inside a flat range. Locate local extrema first,
+    # while allowing the newest closed candle as a provisional edge swing so a
+    # fresh retest is visible immediately. A strict comparison with at least one
+    # neighbour prevents a perfectly flat plateau becoming N independent touches.
+    # One bar on each side is enough to establish a distinct test here; wider
+    # structure strength is handled by find_pivots in the liquidity-pool ladder.
+    # This detector intentionally remains responsive to a W-shaped retest whose
+    # two highs/lows are separated by a single intervening candle.
+    pivot_span = 1
+
+    def _swings(key: str, is_high: bool) -> list:
+        vals = [c.get(key) for c in recent]
+        raw = []
+        for i, p in enumerate(vals):
+            if p is None or i == 0:
+                continue
+            neighbours = (vals[max(0, i - pivot_span):i]
+                          + vals[i + 1:min(n, i + pivot_span + 1)])
+            neighbours = [q for q in neighbours if q is not None]
+            if not neighbours:
+                continue
+            bounds = (all(p >= q for q in neighbours) if is_high
+                      else all(p <= q for q in neighbours))
+            strict = (any(p > q for q in neighbours) if is_high
+                      else any(p < q for q in neighbours))
+            if bounds and strict:
+                raw.append((i, p))
+
+        # Adjacent extrema describe one plateau/test of a zone. Keep its
+        # most extreme (then freshest) point instead of multiplying touches.
+        swings = []
+        for i, p in raw:
+            if swings and i - swings[-1][0] == 1:
+                _, pp = swings[-1]
+                replace = p > pp if is_high else p < pp
+                if replace or p == pp:
+                    swings[-1] = (i, p)
+            else:
+                swings.append((i, p))
+        return swings
+
+    def _cluster(swings: list, is_high: bool) -> Optional[Dict]:
         best = None
         best_count = 1
         best_last_touch_idx = -1
-        for i, p in enumerate(prices):
-            if p is None:
-                continue
-            cluster = [j for j, q in enumerate(prices) if q is not None
-                       and abs(q - p) / p <= tolerance]
-            last_touch_idx = max(cluster) if cluster else -1
+        for _, p in swings:
+            cluster = [(j, q) for j, q in swings
+                       if abs(q - p) / (p or 1) <= tolerance]
+            last_touch_idx = max((j for j, _ in cluster), default=-1)
             # Prefer more touches; for equal-sized liquidity pools, prefer the
             # freshest one so stale levels cannot mask a recent actionable pool.
             if (len(cluster) >= 2 and
@@ -1083,7 +1139,7 @@ def detect_equal_levels(candles: List[Dict], window: int = 25,
                     (best_count, best_last_touch_idx)):
                 best_count = len(cluster)
                 best_last_touch_idx = last_touch_idx
-                cluster_prices = [prices[j] for j in cluster]
+                cluster_prices = [q for _, q in cluster]
                 ref_price = max(cluster_prices) if is_high else min(cluster_prices)
                 # candles_ago = distance from the MOST RECENT touch to live candle
                 candles_ago = (n - 1) - last_touch_idx
@@ -1094,12 +1150,9 @@ def detect_equal_levels(candles: List[Dict], window: int = 25,
                 }
         return best
 
-    highs = [c.get("high") for c in recent]
-    lows  = [c.get("low")  for c in recent]
-
     return {
-        "eqh": _cluster(highs, is_high=True),
-        "eql": _cluster(lows,  is_high=False),
+        "eqh": _cluster(_swings("high", is_high=True), is_high=True),
+        "eql": _cluster(_swings("low",  is_high=False), is_high=False),
     }
 
 
@@ -1163,7 +1216,7 @@ def detect_accumulation_range(candles: List[Dict], window: int = 20,
     inner_high = high - range_abs * 0.25
     inner_pct  = sum(1 for c in recent if inner_low <= c["close"] <= inner_high) / len(recent)
 
-    detected = inner_pct >= 0.50 and choppiness < 0.55
+    detected = inner_pct >= 0.60 and choppiness < 0.55
 
     return {
         "detected":   detected,
@@ -1956,6 +2009,17 @@ def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
     if gap_end > gap_start * TW_CONVERGE_FRAC:
         return None                                   # not converging enough
 
+    # A converging structure only exists before its rails meet. Without an apex
+    # deadline, extrapolated rails eventually invert (upper < lower), at which
+    # point almost any close satisfies one of the breakout comparisons and an
+    # expired triangle is falsely resurrected as a fresh confirmation.
+    gap_slope = h_slope - l_slope
+    if gap_slope >= 0:
+        return None                                   # not actually converging
+    apex_i = (l_int - h_int) / gap_slope
+    if apex_i <= last_i:
+        return None                                   # rails meet inside structure
+
     mid = (upper(last_i) + lower(last_i)) / 2.0
     if mid <= 0:
         return None
@@ -1990,13 +2054,22 @@ def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
     scan_from = max(hs[-1]["index"], ls[-1]["index"])
     status, confirmed, brk_dir, break_ts = "forming", False, None, None
     bo_i = None
+    reached_apex = False
     for off, c in enumerate(candles[scan_from + 1:]):
         i = scan_from + 1 + off
+        if i >= apex_i:
+            reached_apex = True
+            break
         up_lvl, lo_lvl = upper(i), lower(i)
         if c["close"] > up_lvl:
             status, confirmed, brk_dir, break_ts, bo_i = "confirmed", True, "up", c["timestamp"], i; break
         if c["close"] < lo_lvl:
             status, confirmed, brk_dir, break_ts, bo_i = "confirmed", True, "down", c["timestamp"], i; break
+
+    # No breakout before the apex means the structure expired unresolved. Do not
+    # keep it forming and do not let later candles break inverted rails.
+    if reached_apex and not confirmed:
+        return None
 
     # ── A break the WRONG way: confirm it before believing it ────────────────
     #
@@ -2145,6 +2218,7 @@ def _pattern_from_pivots(candles: List[Dict], hs, ls, tf_label: str,
         "upper_slope_pct": round(h_pct, 4),
         "lower_slope_pct": round(l_pct, 4),
         "converge_pct": round((1 - gap_end / gap_start) * 100, 1),
+        "apex_index": round(apex_i, 3),
         "target":     target,
         "status":     status, "confirmed": confirmed,
         "failed_ts":  failed_ts, "failure_reason": failure_reason,
