@@ -2561,11 +2561,20 @@ def _pool_sweep(pool: Dict, candles: List[Dict]) -> Dict:
     Only candles strictly AFTER the last forming pivot count. The pivot candle
     itself made the level; it cannot also have swept it.
 
+    The boundary is ``sweep_level``, the EXTREME of the cluster, not its mean.
+    A pool is a zone: pivots at 105.0 and 105.4 average to 105.2, but the stops
+    behind the equal highs rest above 105.4, and a wick to 105.3 has taken none
+    of them. Measuring against the mean marks a pool swept while half its zone
+    is untouched — the arithmetic centre of a cluster is not a price level any
+    order rests at. ``price`` is kept for display; it is not a boundary.
+
     Returns ``{"swept", "swept_ts", "swept_bars_ago"}`` — all None/False when
     the pool is intact. Never raises: a malformed candle is skipped, because a
     chart annotation must not be able to break the analysis it decorates.
     """
-    level = pool.get("price")
+    level = pool.get("sweep_level", pool.get("price"))
+    if level is None:
+        level = pool.get("price")
     kind = pool.get("kind")
     after = pool.get("last_ts")
     if level is None or after is None or kind not in ("high", "low"):
@@ -2592,8 +2601,14 @@ def detect_liquidity_pools(candles: List[Dict], window: int = 3,
                            max_pools: int = LIQ_MAX_POOLS) -> List[Dict]:
     """Cluster swing highs/lows into liquidity pools (resting stops).
 
-    Returns [{price, touches, side, kind, last_ts, swept, swept_ts,
-    swept_bars_ago}] sorted by touch count then recency.
+    Returns [{price, zone_low, zone_high, sweep_level, touches, side, kind,
+    last_ts, swept, swept_ts, swept_bars_ago}] sorted by touch count then
+    recency.
+
+    `price` is the cluster mean, kept for display. `zone_low`/`zone_high` are
+    its real edges, and `sweep_level` is the edge that has to be exceeded for
+    the resting stops to be taken: the high edge for a high pool, the low edge
+    for a low pool.
 
     `side` is 'above'/'below' relative to the LATEST CLOSE — it says where the
     pool sits now, never whether it is intact.
@@ -2604,9 +2619,11 @@ def detect_liquidity_pools(candles: List[Dict], window: int = 3,
     pivots that formed it age out of the window — because where the stops WERE
     is worth seeing. The flag is what lets a reader tell the two apart.
 
-    REPORTING ONLY. No scoring path reads `swept`; the pools returned, their
-    order and every other field are byte-identical to before it existed. See
-    tests/test_liquidity_pool_sweeps.py."""
+    `swept` IS read by scoring as of v45 — see `is_live_liquidity_pool` in
+    signals.py. It was reporting-only when introduced, which left the chart
+    saying a pool was gone while the stop placer still moved stops to sit
+    behind it. See tests/test_liquidity_pool_sweeps.py and
+    tests/test_swept_pool_exclusion.py."""
     if len(candles) < window * 2 + 3:
         return []
     ph, pl = find_pivots(candles, window=window)
@@ -2634,7 +2651,16 @@ def detect_liquidity_pools(candles: List[Dict], window: int = 3,
             if len(c["prices"]) < LIQ_MIN_TOUCHES:
                 continue
             lvl = sum(c["prices"]) / len(c["prices"])
+            zone_low, zone_high = min(c["prices"]), max(c["prices"])
             pools.append({"price": round(lvl, 8), "touches": len(c["prices"]),
+                          # The cluster is a zone, not a line. `price` is its
+                          # representative centre for display; the edges are
+                          # what stops actually rest behind, and `sweep_level`
+                          # is the edge a sweep has to clear.
+                          "zone_low": round(zone_low, 8),
+                          "zone_high": round(zone_high, 8),
+                          "sweep_level": round(
+                              zone_high if kind == "high" else zone_low, 8),
                           "side": "above" if lvl > price else "below",
                           # Which side the resting stops sit on, fixed at
                           # formation. `side` moves with price; this does not,

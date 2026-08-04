@@ -104,7 +104,7 @@ the P/L.
 | `timeframe` | `text` | no | `2H` for published recommendations. |
 | `direction` | `text` | no | `LONG` or `SHORT`. CHECK-constrained. |
 | `strategy_name` | `text` | no | `mtf_confluence_top3`. |
-| `strategy_version` | `text` | no | e.g. `v44_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
+| `strategy_version` | `text` | no | e.g. `v45_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
 | `candle_open_time` | `timestamptz` | no | Open of the closed candle the decision was made on. |
 | `candle_close_time` | `timestamptz` | no | Close of that candle. **Part of the idempotency key.** |
 | `generated_at` | `timestamptz` | no | When the recommendation was published. Drives the batch/slot grouping. |

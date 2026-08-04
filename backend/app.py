@@ -2870,7 +2870,10 @@ def _rec_cache_key() -> str:
     #   v44 published on the 4H close only — three per bar, eighteen a day — and
     #       ranked by the average of 1H and 2H strength, with the composite
     #       quality score demoted to the tiebreak.
-    return f"v44_4h_avg_{date}_{slot}"
+    #   v45 swept liquidity pools no longer score — stop placement, TP walls and
+    #       stop-run risk all skip a pool whose stops have already been taken,
+    #       and the sweep boundary is the zone edge rather than the mean.
+    return f"v45_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

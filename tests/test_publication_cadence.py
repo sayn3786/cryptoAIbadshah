@@ -22,6 +22,7 @@ agreement, data quality, TP-behind-live, correlation diversification). Demoting
 it affects the ORDER of candidates that already passed, not whether they pass.
 """
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -129,7 +130,7 @@ def test_a_day_has_exactly_six_cache_keys(monkeypatch):
 def test_cache_key_carries_the_strategy_generation(monkeypatch):
     # The key is versioned so a strategy bump cannot serve a stale set that was
     # built under the previous rules.
-    assert _key_at(monkeypatch, 16).startswith("v44_4h_avg_")
+    assert _key_at(monkeypatch, 16).startswith("v45_4h_avg_")
 
 
 def test_the_slot_changes_exactly_on_the_boundary(monkeypatch):
@@ -302,7 +303,11 @@ def test_the_cadence_change_is_a_new_strategy_version():
     # Cadence and ranking both change WHICH trades exist, so signals from before
     # this are not comparable with signals from after — the whole point of the
     # column. v43 and earlier rows must stay separable.
-    assert sp.STRATEGY_VERSION.startswith("v44"), \
+    #
+    # Pinned as "v44 or later" rather than "v44", so a later rules change can
+    # bump the version without this reading as a cadence regression.
+    major = int(re.match(r"v(\d+)", sp.STRATEGY_VERSION).group(1))
+    assert major >= 44, \
         "the 4H cadence must not be recorded under the v43 rules"
 
 

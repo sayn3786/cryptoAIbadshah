@@ -8,11 +8,15 @@ its forming pivots age out of the window, because where the stops WERE is worth
 seeing), but drawing it identically to a live one reads as a target still
 ahead, which is the opposite of the truth.
 
-REPORTING ONLY. `swept` exists so the chart can grey the level. No scoring path
-reads it, and the last test in this file is the guard: the pools returned,
-their order, and every pre-existing field must be byte-identical to what the
-scoring code saw before the flag existed. Stop placement and TP anchoring both
-consume these pools, so a change here would be a strategy change.
+`swept` began as a chart annotation that no scoring path read. That split was
+the bug: the chart greyed a level out while stop placement was still widening
+real risk to sit behind it, and TP anchoring was still targeting it. As of v45
+the scoring paths read the flag — see tests/test_swept_pool_exclusion.py.
+
+What this file still owns is the DETECTION: which pool is swept, and against
+what boundary. The boundary is `sweep_level`, the extreme of the cluster, not
+`price`, its mean — a cluster of highs at 105.0 and 105.4 has stops resting
+above 105.4, and a wick to 105.3 has taken none of them.
 """
 import os
 import sys
@@ -128,32 +132,84 @@ def test_a_malformed_candle_cannot_break_the_sweep_check():
     assert patterns._pool_sweep(pool, junk)["swept"] is True
 
 
+# ── The boundary is the zone edge, not the mean ─────────────────────────────
+
+def test_reaching_the_mean_of_a_low_cluster_is_not_a_sweep():
+    """
+    The regression this branch exists for. Lows at 100.0 and 100.2 average to
+    100.1. Price wicking to 100.05 is below the MEAN but above the lowest stop
+    in the pool — nothing has been taken. Measured against the mean this pool
+    would read as swept while half its zone is untouched.
+    """
+    candles = _series_with_double_bottom([(116, 100.05), (117, 109), (118, 110)])
+    pool = _pool_at(candles and patterns.detect_liquidity_pools(candles), 100.1)
+    assert pool is not None
+    assert pool["sweep_level"] == 100.0, "the low edge, not the 100.1 mean"
+    assert pool["swept"] is False
+
+
+def test_clearing_the_low_edge_of_a_low_cluster_is_a_sweep():
+    """The other side of the same line: below 100.0 does take them."""
+    candles = _series_with_double_bottom([(116, 99.9), (117, 109), (118, 110)])
+    pool = _pool_at(patterns.detect_liquidity_pools(candles), 100.1)
+    assert pool["swept"] is True
+
+
+def test_a_high_pool_measures_against_its_upper_edge():
+    """Mirrored: stops behind equal highs rest above the HIGHEST of them."""
+    pool = {"price": 105.2, "zone_low": 105.0, "zone_high": 105.4,
+            "sweep_level": 105.4, "kind": "high", "last_ts": BASE_TS}
+    reached_the_mean = [_c(1, 105.3, 104)]
+    assert patterns._pool_sweep(pool, reached_the_mean)["swept"] is False
+    cleared_the_edge = [_c(1, 105.5, 104)]
+    assert patterns._pool_sweep(pool, cleared_the_edge)["swept"] is True
+
+
+def test_a_legacy_pool_without_a_sweep_level_falls_back_to_price():
+    """
+    Pools cached from before this field existed still have to be classifiable.
+    Falling back to `price` reproduces the old behaviour rather than treating
+    the pool as unsweepable.
+    """
+    legacy = {"price": 100.0, "kind": "low", "last_ts": BASE_TS}
+    assert patterns._pool_sweep(legacy, [_c(1, 116, 99)])["swept"] is True
+    assert patterns._pool_sweep(legacy, [_c(1, 116, 101)])["swept"] is False
+
+
 # ── The guard ───────────────────────────────────────────────────────────────
 
-def test_the_flag_changes_nothing_the_scoring_code_reads():
+def test_the_pool_contract_is_stable():
     """
-    Pools feed clear_stop_of_liquidity (stop placement) and _tp_pool_levels (TP
-    anchoring). If this flag altered which pools are returned, their order, or
-    any pre-existing field, it would be a strategy change wearing a chart
-    annotation's clothes — and it landed during a deliberate freeze on strategy
-    behaviour.
+    Every consumer — stop placement, TP anchoring, the chart — reads these
+    fields by name off a plain dict. Dropping one is a silent failure, not an
+    error, because `.get()` returns None and the pool quietly stops qualifying.
     """
     candles = _series_with_double_bottom([(116, 98), (130, 109), (118, 110)])
     pools = patterns.detect_liquidity_pools(candles)
     assert pools, "need pools for this to prove anything"
 
-    legacy_fields = ("price", "touches", "side", "last_ts")
+    expected = {"price", "zone_low", "zone_high", "sweep_level", "touches",
+                "side", "kind", "last_ts", "swept", "swept_ts",
+                "swept_bars_ago"}
     for p in pools:
-        # Every field the scoring code has always read is still present…
-        for f in legacy_fields:
-            assert f in p, f"{f} disappeared from the pool dict"
-        # …and the only additions are the reporting ones.
-        assert set(p) - set(legacy_fields) == {"kind", "swept", "swept_ts",
-                                               "swept_bars_ago"}
+        assert set(p) == expected, f"pool shape changed: {set(p) ^ expected}"
 
     # Order is part of the contract: callers take the strongest pool first.
     assert pools == sorted(pools, key=lambda p: (p["touches"], p["last_ts"]),
                            reverse=True)
+
+
+def test_the_zone_brackets_the_representative_price():
+    """
+    `price` is the mean of the clustered pivots, so it must sit inside the
+    edges. If it ever escaped them, `sweep_level` would be on the wrong side of
+    the level the chart draws.
+    """
+    candles = _series_with_double_bottom([(116, 98), (130, 109), (118, 110)])
+    for p in patterns.detect_liquidity_pools(candles):
+        assert p["zone_low"] <= p["price"] <= p["zone_high"]
+        assert p["sweep_level"] == (p["zone_high"] if p["kind"] == "high"
+                                    else p["zone_low"])
 
 
 def test_swept_pools_are_still_returned():

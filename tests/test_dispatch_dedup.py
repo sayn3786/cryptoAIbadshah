@@ -44,7 +44,7 @@ def fake_kv(monkeypatch, tmp_path):
     return store
 
 
-SLOT = "v44_4h_avg_20260801_08"
+SLOT = "v45_4h_avg_20260801_08"
 
 
 # ── At most once per slot ──────────────────────────────────────────────────
@@ -69,7 +69,7 @@ def test_a_retry_after_a_successful_send_does_not_send_again():
 def test_a_later_slot_sends_again():
     send = lambda: True
     assert appmod._dispatch_once("tg:recs", SLOT, send) == "sent"
-    assert appmod._dispatch_once("tg:recs", "v44_4h_avg_20260801_12", send) == "sent"
+    assert appmod._dispatch_once("tg:recs", "v45_4h_avg_20260801_12", send) == "sent"
 
 
 def test_channels_do_not_block_each_other():

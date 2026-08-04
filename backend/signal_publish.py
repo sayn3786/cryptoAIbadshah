@@ -41,7 +41,7 @@ STRATEGY_NAME = "mtf_confluence_top3"
 # than by the composite quality score, which is demoted to the tiebreak. Both the
 # cadence and the ranking change WHICH trades exist, so signals from before this
 # are NOT comparable with signals from after — exactly what this column is for.
-_DEFAULT_STRATEGY_VERSION = "v44_4h_avg"
+_DEFAULT_STRATEGY_VERSION = "v45_4h_avg"
 STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
                     or _DEFAULT_STRATEGY_VERSION)
 

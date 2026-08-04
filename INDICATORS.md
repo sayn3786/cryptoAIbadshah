@@ -540,6 +540,11 @@ one level per side, and on a live BTC 2H chart that single equal-high was a leve
 price had already traded through, while the ladder held a 7-touch and a 4-touch
 cluster 0.18–0.19 ATR overhead that scored nothing.
 
+**Swept pools do not score** — see *Swept liquidity* below. The fallback to
+`equal_levels` fires only when the ladder is **absent or empty**, never when it
+is present and everything in it is swept: `equal_levels` carries no sweep flag,
+so falling back there would readmit the same spent level unflagged.
+
 **Only the nearest qualifying pool scores.** Two clusters a few points apart are
 one zone in practice; a penalty per level would double-count it.
 
@@ -630,6 +635,7 @@ moves the stop past it with `0.10 ATR` (min 0.15%) of clearance.
 | Only pools just beyond | A distant pool is not what takes the stop out |
 | Needs 3+ touches | Stricter than the 2 required merely to dock conviction — widening real risk demands a better-defended level |
 | Needs freshness ≥ 0.5 | A **stale** pool cannot widen a stop at all (≈ touched within 20 bars). Spending real risk needs a live claim that a sweep is coming — stricter than the 0.35 scoring floor. |
+| Must be unswept | A pool whose stops have already been taken cannot widen a stop — the sweep it would protect against has happened. See *Swept liquidity* |
 
 Exposed on the signal as `stop_liquidity`
 (`{sl_dist, moved, pool_price, touches, blocked, note}`), with the note added to
@@ -659,6 +665,7 @@ level rather than inside the fight over it.
 |---|---|
 | Direction | Only pools ahead of entry — above for a LONG, below for a SHORT |
 | Minimum touches | **2** — looser than the 3 required to move a stop |
+| Must be unswept | A spent pool has no resting orders left to draw price, so it is not a target. See *Swept liquidity* |
 | Front-running | Inherited: TP fills before the pool, never inside it |
 | Labelling | When the chosen wall *is* a pool, the reason says `"N-touch liquidity pool"` instead of `"zone / line"` |
 
@@ -678,6 +685,68 @@ closest structure.
 Exposed on the signal as `structure_adjustment` (signed delta) and
 `structure_factors` (per-factor breakdown), and the individual reasons appear in
 the normal bullish/bearish factor lists.
+
+---
+
+### Swept Liquidity · *risk, targets and scoring*
+*Changes where stops go, where targets go, and the strength number.*
+
+A liquidity pool is resting stop orders. Once price has traded through it those
+orders are filled: the level stops pulling price toward it, and there is nothing
+left there to run a stop out. The `swept` flag has recorded this since it was
+added — but only the chart read it. Every scoring path went on treating a spent
+pool as loaded, so the system asserted two contradictory things about one level
+at the same time: greyed out on screen, fully weighted in the maths.
+
+**The sweep boundary is the zone edge, not the mean.** A pool is a cluster of
+pivots, and `price` is their average — a number no order rests at. Pivots at
+105.0 and 105.4 average to 105.2, but the stops behind those equal highs rest
+above **105.4**, and a wick to 105.3 has taken none of them. Pools now carry
+`zone_low`, `zone_high` and `sweep_level` (the high edge for a high pool, the
+low edge for a low pool), and a sweep must clear `sweep_level`:
+
+| Pool kind | Swept when a later closed candle |
+|---|---|
+| `high` | high **>** `zone_high` |
+| `low` | low **<** `zone_low` |
+
+`price` is unchanged and still what the chart labels and the reasons quote.
+
+**Every consumer now skips a swept pool**, via one helper,
+`signals.is_live_liquidity_pool(pool)`:
+
+| Consumer | Effect of the exclusion |
+|---|---|
+| `clear_stop_of_liquidity` | Stop is **not widened** past a spent pool |
+| `_tp_pool_levels` | A spent pool is not a TP wall |
+| `_matching_pool` | A wall at a spent pool's price is not labelled as one |
+| `_nearest_threatening_pool` | Stop-run risk does not dock conviction for it |
+
+Skipping is per-pool, not early exit: a live pool sitting *behind* a swept one
+is still found, and is usually the real risk.
+
+**A missing `swept` field means live.** Payloads written before the flag existed
+must not have liquidity logic switched off wholesale.
+
+**Freshness stays a separate axis.** An old pool may still be loaded; a swept
+pool is empty however recently it was touched. `pool_freshness` answers "how
+long ago", this answers "is anything left" — conflating them would discount a
+live level twice.
+
+**The `equal_levels` fallback narrowed.** It now fires only when
+`liquidity_pools` is **absent or empty**, never when the ladder is present and
+everything in it is swept. `equal_levels` carries one level per side and no
+sweep flag at all, so the old "nothing qualified, ask the weaker source"
+behaviour would have readmitted the very level just discarded, unflagged. *"All
+the stops around here have been taken"* is an answer, not a reason to ask again.
+
+The stop-placement case is the costly one: widening a stop spends permanent,
+unrecoverable risk on the claim that a sweep is coming. If the sweep already
+happened, the claim is false and the extra risk buys nothing on every trade
+through that level.
+
+`STRATEGY_VERSION` moved to **v45_4h_avg** — this changes stops, targets and
+strength, so v44 rows are not comparable with v45 rows.
 
 ---
 
