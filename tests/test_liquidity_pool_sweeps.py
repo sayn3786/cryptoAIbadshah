@@ -165,6 +165,24 @@ def test_a_high_pool_measures_against_its_upper_edge():
     assert patterns._pool_sweep(pool, cleared_the_edge)["swept"] is True
 
 
+def test_exact_contact_with_the_edge_is_not_a_sweep():
+    """
+    Trading TO the level is not trading THROUGH it. A stop resting at 100.0 is
+    filled when price prints below it, not when price touches it — the
+    comparison is strict on both sides, and a boundary equal to the edge is the
+    single most likely value to appear on a real chart.
+    """
+    low = {"price": 100.0, "zone_low": 100.0, "zone_high": 100.2,
+           "sweep_level": 100.0, "kind": "low", "last_ts": BASE_TS}
+    assert patterns._pool_sweep(low, [_c(1, 110, 100.0)])["swept"] is False
+    assert patterns._pool_sweep(low, [_c(1, 110, 99.999)])["swept"] is True
+
+    high = {"price": 105.2, "zone_low": 105.0, "zone_high": 105.4,
+            "sweep_level": 105.4, "kind": "high", "last_ts": BASE_TS}
+    assert patterns._pool_sweep(high, [_c(1, 105.4, 100)])["swept"] is False
+    assert patterns._pool_sweep(high, [_c(1, 105.401, 100)])["swept"] is True
+
+
 def test_a_legacy_pool_without_a_sweep_level_falls_back_to_price():
     """
     Pools cached from before this field existed still have to be classifiable.

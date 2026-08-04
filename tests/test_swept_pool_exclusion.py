@@ -22,6 +22,8 @@ loaded with stops, a swept pool is empty however recently it was touched.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 import signals                                                          # noqa: E402
@@ -47,6 +49,11 @@ def _pool(price, touches, kind, *, swept=False, last_ts=None):
     return p
 
 
+def _pool_with(swept):
+    """A well-formed pool carrying an arbitrary value in `swept`."""
+    return {"price": 100.0, "touches": 3, "kind": "low", "swept": swept}
+
+
 # ── The helper ──────────────────────────────────────────────────────────────
 
 def test_a_pool_with_no_sweep_field_is_live():
@@ -68,8 +75,62 @@ def test_a_swept_pool_is_not_live():
 
 def test_junk_is_not_live():
     """A malformed entry must not be treated as a level worth scoring."""
-    for junk in (None, "pool", 100.0, []):
+    for junk in (None, "pool", 100.0, [], ("price", 100.0)):
         assert signals.is_live_liquidity_pool(junk) is False
+
+
+# ── Reading the flag without truthiness ─────────────────────────────────────
+# The string "false" is truthy in Python, as is "0". A pool arriving from JSON
+# text, a cache, or anything that stringified its booleans would read as swept
+# and be silently dropped from scoring while every display said it was intact.
+
+LIVE_VALUES = [
+    False, 0, 0.0,
+    "false", "FALSE", "  False  ", "0", " 0 ",
+    "no", "NO", "off", "Off",
+    "",                      # empty string: no assertion made
+    None,                    # present but null: same as absent
+]
+
+SWEPT_VALUES = [
+    True, 1, 1.0,
+    "true", "TRUE", "  True  ", "1", " 1 ",
+    "yes", "YES", "on", "ON",
+]
+
+# Unreadable. These must NOT be treated as live: an unparseable flag is not
+# evidence that the liquidity is still there, and the cost of being wrong is
+# asymmetric — skipping one pool costs a little conviction, while widening a
+# stop past a pool that is actually spent costs real, unrecoverable risk.
+MALFORMED_VALUES = [
+    "maybe", "swept", "truthy", "None", "null", "2",
+    2, -1, 0.5, float("nan"),
+    [], [False], {}, {"swept": False}, object(),
+]
+
+
+@pytest.mark.parametrize("value", LIVE_VALUES)
+def test_values_meaning_not_swept_read_as_live(value):
+    assert signals.is_live_liquidity_pool(_pool_with(value)) is True
+
+
+@pytest.mark.parametrize("value", SWEPT_VALUES)
+def test_values_meaning_swept_read_as_not_live(value):
+    assert signals.is_live_liquidity_pool(_pool_with(value)) is False
+
+
+@pytest.mark.parametrize("value", MALFORMED_VALUES)
+def test_unreadable_values_are_not_live(value):
+    assert signals.is_live_liquidity_pool(_pool_with(value)) is False
+
+
+def test_the_string_false_would_have_been_read_as_swept_by_truthiness():
+    """
+    Names the specific regression rather than trusting the table above to be
+    read. bool("false") is True; this must not be.
+    """
+    assert bool("false") is True
+    assert signals.is_live_liquidity_pool(_pool_with("false")) is True
 
 
 def test_a_stale_pool_is_still_live():
@@ -157,16 +218,38 @@ def test_a_legacy_payload_with_no_ladder_still_uses_equal_levels():
     assert (price, touches, source) == (99.0, 5, "equal_levels")
 
 
-def test_an_empty_ladder_still_uses_equal_levels():
+def test_an_empty_ladder_does_not_reach_the_fallback():
     """
-    An empty list cannot be hiding a swept level, and the detector returns []
-    on histories too short for it to run at all. Treating that as "nothing is
-    there" would lose the fallback on exactly the payloads that need it.
+    An empty list is a PRESENT answer: the detector ran and found nothing
+    qualifying. Reading it as silence and asking `equal_levels` instead can
+    readmit a level price has already traded through, with no sweep metadata
+    attached to say so — the same leak as the swept case, arriving by a
+    different route.
+
+    Presence is therefore tested by key, never by truthiness, since `[]` and a
+    missing key are both falsy and mean opposite things.
     """
     a = {"liquidity_pools": [],
          "equal_levels": {"eql": {"price": 99.0, "touches": 5}}}
+    assert signals._nearest_threatening_pool(a, 100.0, True) == (None, 0, None, None)
+
+
+def test_a_null_ladder_is_treated_as_absent():
+    """
+    None is not a result, it is the absence of one — a payload where the
+    detector never ran. It keeps the documented legacy behaviour.
+    """
+    a = {"liquidity_pools": None,
+         "equal_levels": {"eql": {"price": 99.0, "touches": 5}}}
     price, _, source, _ = signals._nearest_threatening_pool(a, 100.0, True)
     assert (price, source) == (99.0, "equal_levels")
+
+
+def test_a_ladder_of_only_malformed_pools_does_not_reach_the_fallback():
+    """Present and unusable is still present."""
+    a = {"liquidity_pools": [{"price": "x"}, None, {"touches": 5}],
+         "equal_levels": {"eql": {"price": 99.0, "touches": 5}}}
+    assert signals._nearest_threatening_pool(a, 100.0, True) == (None, 0, None, None)
 
 
 # ── TP anchoring ────────────────────────────────────────────────────────────

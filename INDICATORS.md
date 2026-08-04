@@ -541,9 +541,9 @@ price had already traded through, while the ladder held a 7-touch and a 4-touch
 cluster 0.18–0.19 ATR overhead that scored nothing.
 
 **Swept pools do not score** — see *Swept liquidity* below. The fallback to
-`equal_levels` fires only when the ladder is **absent or empty**, never when it
-is present and everything in it is swept: `equal_levels` carries no sweep flag,
-so falling back there would readmit the same spent level unflagged.
+`equal_levels` fires only when the ladder **key is absent** (or null), never
+when it is present — including present and empty. `equal_levels` carries no
+sweep flag, so falling back there would readmit a spent level unflagged.
 
 **Only the nearest qualifying pool scores.** Two clusters a few points apart are
 one zone in practice; a penalty per level would double-count it.
@@ -725,20 +725,50 @@ low edge for a low pool), and a sweep must clear `sweep_level`:
 Skipping is per-pool, not early exit: a live pool sitting *behind* a swept one
 is still found, and is usually the real risk.
 
-**A missing `swept` field means live.** Payloads written before the flag existed
-must not have liquidity logic switched off wholesale.
+**A missing `swept` field means live**, and so does a null one. Payloads
+written before the flag existed must not have liquidity logic switched off
+wholesale.
+
+**The flag is normalised, never read by truthiness.** `bool("false")` is
+`True`, and so is `bool("0")` — a pool arriving from JSON text, a cache, or
+anything that stringified its booleans would read as swept and be dropped from
+scoring while every display still called it intact.
+
+| `swept` value | Read as |
+|---|---|
+| absent, `None` | live |
+| `False`, `0`, `"false"`, `"0"`, `"no"`, `"off"`, `""` | live |
+| `True`, `1`, `"true"`, `"1"`, `"yes"`, `"on"` | swept |
+| anything else — `"maybe"`, `2`, `NaN`, lists, dicts | **swept** |
+
+Strings are matched case-insensitively after stripping whitespace. Unreadable
+values fall on the *swept* side deliberately: the costs are asymmetric. Skipping
+a pool that was really live costs a little conviction; widening a real stop past
+a pool that was really spent costs permanent risk on every trade through that
+level.
 
 **Freshness stays a separate axis.** An old pool may still be loaded; a swept
 pool is empty however recently it was touched. `pool_freshness` answers "how
 long ago", this answers "is anything left" — conflating them would discount a
 live level twice.
 
-**The `equal_levels` fallback narrowed.** It now fires only when
-`liquidity_pools` is **absent or empty**, never when the ladder is present and
-everything in it is swept. `equal_levels` carries one level per side and no
-sweep flag at all, so the old "nothing qualified, ask the weaker source"
-behaviour would have readmitted the very level just discarded, unflagged. *"All
-the stops around here have been taken"* is an answer, not a reason to ask again.
+**The `equal_levels` fallback narrowed.** `equal_levels` carries one level per
+side and no sweep flag at all, so falling back to it after discarding a ladder
+readmits the very level just thrown out, unflagged. It now fires **only when
+the `liquidity_pools` key is absent, or explicitly null** — a payload from
+before the detector existed, or one where it never ran.
+
+| Ladder | Fallback |
+|---|---|
+| key absent | yes — legacy payload |
+| `None` | yes — the detector never ran |
+| `[]` | **no** — the detector ran and found nothing |
+| present, nothing qualifies (swept, stale, malformed, safe side) | **no** |
+
+Presence is tested by **key**, never by truthiness, because `[]` and a missing
+key are both falsy and mean opposite things. An empty ladder is a current,
+authoritative result: *"all the stops around here have been taken"* is an
+answer, not a reason to ask a weaker source the same question.
 
 The stop-placement case is the costly one: widening a stop spends permanent,
 unrecoverable risk on the claim that a sweep is coming. If the sweep already
