@@ -1,4 +1,4 @@
-/* CryptoBadshah — Service Worker
+/* CryptoStarsSpace — Service Worker
    Strategy:
    - HTML / CSS / JS   → Network-first (always fresh), cache as offline fallback
    - API calls (/api/) → Network-only, never cached (live market data)

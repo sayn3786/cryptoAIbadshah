@@ -1,5 +1,5 @@
 """
-Interactive first-time setup for CryptoBadshah.
+Interactive first-time setup for CryptoStarsSpace.
 Run: python setup.py
 """
 import os
@@ -10,7 +10,7 @@ import shutil
 
 def main():
     print("\n" + "=" * 50)
-    print("  CryptoBadshah — First-Time Setup")
+    print("  CryptoStarsSpace — First-Time Setup")
     print("=" * 50 + "\n")
 
     root = os.path.dirname(os.path.abspath(__file__))

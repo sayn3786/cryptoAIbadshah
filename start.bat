@@ -1,8 +1,8 @@
 @echo off
-title CryptoBadshah AI Analysis
+title CryptoStarsSpace AI Analysis
 echo.
 echo  ============================================
-echo   CryptoBadshah AI Analysis Platform
+echo   CryptoStarsSpace AI Analysis Platform
 echo  ============================================
 echo.
 
