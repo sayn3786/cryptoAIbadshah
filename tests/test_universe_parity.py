@@ -237,6 +237,68 @@ def test_a_replay_with_no_declared_universe_is_a_subset():
     assert rep["result_kind"] == "subset_price_only"
 
 
+def test_present_symbol_with_empty_histories_is_not_full_universe():
+    """A dictionary key is not participation in the ranking population."""
+    market = _market(("BTC", "BROKEN"), seed=4)
+    market["BROKEN"] = {"1H": [], "2H": [], "4H": []}
+    rep = pbt.replay(market, symbols=["BTC", "BROKEN"],
+                     production_universe=["BTC", "BROKEN"], max_slots=4,
+                     keep_trades=False)
+    universe = rep["parity"]["universe"]
+    assert rep["result_kind"] == "subset_price_only"
+    assert universe["universe_complete"] is False
+    assert universe["history_complete"] is False
+    assert universe["insufficient_history_symbols"] == ["BROKEN"]
+    assert universe["unavailable_symbol_slots"] == 4
+    assert any("UNIVERSE_HISTORY_INCOMPLETE" in blocker
+               for blocker in rep["parity"]["parity_blockers"])
+
+
+@pytest.mark.parametrize("broken_tf", ["1H", "2H", "4H"])
+def test_missing_or_short_tradable_timeframe_denies_full_label(broken_tf):
+    market = _market(("BTC", "AAA"), seed=5)
+    market["AAA"][broken_tf] = market["AAA"][broken_tf][:20]
+    rep = pbt.replay(market, production_universe=["BTC", "AAA"],
+                     max_slots=5, keep_trades=False)
+    assert rep["result_kind"] == "subset_price_only"
+    detail = rep["parity"]["universe"]["insufficient_history_by_symbol"]
+    assert broken_tf in detail["AAA"]["timeframes"]
+
+
+def test_history_starting_too_late_for_some_slots_is_reported():
+    market = _market(("BTC", "AAA"), seed=6)
+    market["AAA"]["4H"] = market["AAA"]["4H"][-65:]
+    rep = pbt.replay(market, production_universe=["BTC", "AAA"],
+                     max_slots=40, keep_trades=False)
+    universe = rep["parity"]["universe"]
+    assert rep["result_kind"] == "subset_price_only"
+    assert 0 < universe["history_coverage"] < 1
+    assert universe["insufficient_history_by_symbol"]["AAA"][
+        "unavailable_slots"] > 0
+
+
+def test_insufficient_btc_context_denies_full_label():
+    market = _market(("BTC", "AAA"), seed=7)
+    market["BTC"]["2H"] = market["BTC"]["2H"][-20:]
+    rep = pbt.replay(market, production_universe=["BTC", "AAA"],
+                     max_slots=5, keep_trades=False)
+    universe = rep["parity"]["universe"]
+    assert rep["result_kind"] == "subset_price_only"
+    assert universe["insufficient_history_by_symbol"]["BTC"]["timeframes"] \
+        == {"2H": 5}
+
+
+def test_a_gap_inside_an_otherwise_long_series_denies_full_label():
+    market = _market(("BTC", "AAA"), seed=8)
+    del market["AAA"]["2H"][-30]
+    rep = pbt.replay(market, production_universe=["BTC", "AAA"],
+                     max_slots=5, keep_trades=False)
+    universe = rep["parity"]["universe"]
+    assert rep["result_kind"] == "subset_price_only"
+    assert universe["insufficient_history_by_symbol"]["AAA"]["timeframes"][
+        "2H"] > 0
+
+
 # ══ 4. THE ENDPOINT ═════════════════════════════════════════════════════════
 
 APP_SRC = open(os.path.join(BACKEND, "app.py"), encoding="utf-8").read()
@@ -341,3 +403,55 @@ def test_the_cli_refuses_saved_candles_that_are_missing_symbols(tmp_path, capsys
     code = cli.main(["--candles", str(path), "--symbols", "production"])
     assert code == 2
     assert "missing" in capsys.readouterr().err
+
+
+def test_the_cli_refuses_present_symbols_with_empty_timeframes(tmp_path, capsys):
+    import json
+    import portfolio_backtest_cli as cli
+
+    path = tmp_path / "candles.json"
+    path.write_text(json.dumps({"BTC": {"1H": [], "2H": [], "4H": []}}))
+    code = cli.main(["--candles", str(path), "--symbols", "BTC"])
+    assert code == 2
+    error = capsys.readouterr().err
+    assert "BTC 1H: 0 bars" in error
+    assert "BTC 2H: 0 bars" in error
+    assert "BTC 4H: 0 bars" in error
+
+
+def test_the_cli_refuses_malformed_saved_json(tmp_path, capsys):
+    import portfolio_backtest_cli as cli
+
+    path = tmp_path / "candles.json"
+    path.write_text("{not-json")
+    assert cli.main(["--candles", str(path), "--symbols", "BTC"]) == 2
+    assert "cannot read saved candles" in capsys.readouterr().err
+
+
+def test_allow_missing_cached_history_produces_a_subset(tmp_path, capsys):
+    import json
+    import portfolio_backtest_cli as cli
+
+    market = _market(("BTC", "ETH"), seed=31)
+    market["ETH"] = {"1H": [], "2H": [], "4H": []}
+    path = tmp_path / "candles.json"
+    path.write_text(json.dumps(market))
+    code = cli.main(["--candles", str(path), "--symbols", "BTC,ETH",
+                     "--allow-missing", "--slots", "1"])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "continuing as a SUBSET" in captured.err
+    assert json.loads(captured.out)["result_kind"] == "subset_price_only"
+
+
+def test_cached_history_validator_rejects_bad_ohlcv_and_ordering():
+    import portfolio_backtest_cli as cli
+
+    market = _market(("BTC",), seed=32)
+    market["BTC"]["1H"][10]["high"] = 0
+    market["BTC"]["2H"][20]["timestamp"] = \
+        market["BTC"]["2H"][19]["timestamp"]
+    problems = cli.validate_market_history(market, ["BTC"])
+    assert any("invalid OHLCV range" in problem for problem in problems)
+    assert any("timestamp cadence is not 2H" in problem
+               for problem in problems)
