@@ -965,10 +965,10 @@ def test_choch_exception_confirmation_candle_not_a_pivot():
     # that candle's wick must not move the broken level: it is intentionally
     # excluded from pivot construction (documented exception).
     cs = []
-    # two clear swing lows (valleys with 3 lower-low neighbours each side):
-    # V1 low 98.4 @ i3, V2 low 101.0 @ i9 — a HIGHER low (uptrend structure).
-    pattern = [104, 103, 101, 99, 100.5, 102, 104, 103.5, 101.8, 101.6,
-               103, 105, 106, 105.5, 105.2]
+    # Two clear higher highs and two clear higher lows, each with three
+    # neighbours on both sides: established uptrend structure before the break.
+    pattern = [100, 102, 104, 106, 104, 102, 99, 101, 103, 105,
+               108, 105, 103, 102, 104, 106, 107, 106, 105]
     for i, px in enumerate(pattern):
         cs.append({"timestamp": T0 + i * STEP, "open": px + 0.1, "high": px + 0.6,
                    "low": px - 0.6, "close": px, "volume": 10.0})

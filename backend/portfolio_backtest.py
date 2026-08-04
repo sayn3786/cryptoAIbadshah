@@ -747,6 +747,13 @@ def _settle(pos: _PaperPosition, rec: Dict, *, fee_bps: float,
         "avg_tf_strength": rec["avg_tf_strength"],
         "quality_score": rec["quality_score"],
         "rr_ratio": rec["rr_ratio"],
+        # Preserve the volatility tier provenance from the published
+        # recommendation on every execution outcome, including an unfilled
+        # cancellation. Otherwise changing a score can expose a trade row whose
+        # ladder cannot be audited back to the market-cap input that priced it.
+        "market_cap": rec.get("market_cap"),
+        "market_cap_source": rec.get("market_cap_source", "unavailable"),
+        "vol_tier_label": rec.get("vol_tier_label"),
         "entry": pos.entry,
         "entry_fill": pos.row.get("entry_fill_price"),
         "stop": pos.stop,
