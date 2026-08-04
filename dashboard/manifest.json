@@ -1,6 +1,6 @@
 {
-  "name": "CryptoMonk",
-  "short_name": "CryptoMonk",
+  "name": "CryptoStarsSpace",
+  "short_name": "CryptoStarsSpace",
   "description": "AI-powered crypto market intelligence dashboard",
   "start_url": "/dashboard/",
   "scope": "/",
