@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from typing import Dict, List, Optional
@@ -53,8 +54,73 @@ class MissingHistory(RuntimeError):
 
 
 def load_candles(path: str) -> Dict[str, Dict[str, List[Dict]]]:
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            market = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MissingHistory(f"cannot read saved candles ({exc})") from exc
+    if not isinstance(market, dict):
+        raise MissingHistory("saved candles must be a symbol-keyed JSON object")
+    return market
+
+
+def validate_market_history(market: Dict, symbols,
+                            minimums: Optional[Dict[str, int]] = None) -> List[str]:
+    """Return every cached-history problem; an empty list means usable input."""
+    minimums = minimums or MIN_BARS
+    problems: List[str] = []
+    for sym in symbols:
+        tfs = market.get(sym)
+        if not isinstance(tfs, dict):
+            problems.append(f"{sym}: symbol history missing or not an object")
+            continue
+        for tf in TIMEFRAMES:
+            candles = tfs.get(tf)
+            if not isinstance(candles, list):
+                problems.append(f"{sym} {tf}: timeframe missing or not an array")
+                continue
+            need = int(minimums.get(tf, 0))
+            if len(candles) < need:
+                problems.append(f"{sym} {tf}: {len(candles)} bars, need {need}")
+            previous_ts = None
+            for index, candle in enumerate(candles):
+                prefix = f"{sym} {tf} candle {index}"
+                if not isinstance(candle, dict):
+                    problems.append(f"{prefix}: not an object")
+                    break
+                values = {}
+                invalid = None
+                for field in ("timestamp", "open", "high", "low", "close", "volume"):
+                    try:
+                        value = float(candle[field])
+                    except (KeyError, TypeError, ValueError):
+                        invalid = f"{prefix}: invalid {field}"
+                        break
+                    if not math.isfinite(value):
+                        invalid = f"{prefix}: non-finite {field}"
+                        break
+                    values[field] = value
+                if invalid:
+                    problems.append(invalid)
+                    break
+                ts = int(values["timestamp"])
+                span = pbt.TF_MS[tf]
+                if values["timestamp"] != ts or ts % span:
+                    problems.append(f"{prefix}: timestamp is not {tf}-aligned")
+                    break
+                if previous_ts is not None and ts - previous_ts != span:
+                    problems.append(f"{prefix}: timestamp cadence is not {tf}")
+                    break
+                previous_ts = ts
+                if (values["open"] <= 0 or values["high"] <= 0
+                        or values["low"] <= 0 or values["close"] <= 0
+                        or values["volume"] < 0
+                        or values["high"] < max(values["open"], values["close"])
+                        or values["low"] > min(values["open"], values["close"])
+                        or values["high"] < values["low"]):
+                    problems.append(f"{prefix}: invalid OHLCV range")
+                    break
+    return problems
 
 
 def fetch_candles(symbols, limit: int, *, verbose: bool = True) -> Dict:
@@ -154,12 +220,25 @@ def main(argv=None) -> int:
             wanted = ["BTC"] + wanted
 
     if args.candles:
-        market = load_candles(args.candles)
-        missing = [s for s in wanted if s not in market]
-        if missing and not args.allow_missing:
-            print(f"error: saved candles are missing {missing}", file=sys.stderr)
+        try:
+            market = load_candles(args.candles)
+        except MissingHistory as exc:
+            print(f"error: {exc}", file=sys.stderr)
             return 2
-        wanted = [s for s in wanted if s in market]
+        problems = validate_market_history(market, wanted)
+        if problems and not args.allow_missing:
+            print("error: incomplete saved candle history, refusing to claim "
+                  "full universe parity:\n  " + "; ".join(problems),
+                  file=sys.stderr)
+            print("re-run with --allow-missing to produce a subset report",
+                  file=sys.stderr)
+            return 2
+        if problems:
+            print("warning: incomplete saved history, continuing as a SUBSET:\n  "
+                  + "; ".join(problems), file=sys.stderr)
+            wanted = [s for s in wanted
+                      if not validate_market_history(market, [s])]
+            market = {s: market[s] for s in wanted}
     else:
         print(f"fetching {len(wanted)} symbols x {len(TIMEFRAMES)} timeframes "
               f"({args.limit} bars)...", file=sys.stderr)
