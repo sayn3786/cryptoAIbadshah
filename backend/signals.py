@@ -102,6 +102,73 @@ def pool_freshness(pool: Dict, candles: List[Dict]) -> float:
     return max(POOL_STALE_FLOOR, 1.0 - bars / POOL_DECAY_BARS)
 
 
+_SWEPT_TRUE = frozenset(("true", "1", "yes", "on"))
+_SWEPT_FALSE = frozenset(("false", "0", "no", "off", ""))
+
+
+def _is_swept_value(value) -> bool:
+    """
+    Read a ``swept`` field as a boolean, without truthiness.
+
+    Returns True for a recognisably swept value, False for a recognisably
+    intact one — and True for anything unrecognisable, because an unreadable
+    flag is not evidence of live liquidity.
+    """
+    if value is None:
+        return False                      # no information; same as absent
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _SWEPT_FALSE:
+            return False
+        if token in _SWEPT_TRUE:
+            return True
+        return True                       # unreadable — do not assume live
+    if isinstance(value, (int, float)):
+        # Zero is the only number that says "intact". 1 says swept; a 2, a -1
+        # or a NaN is a serialisation accident, and an accident is not a claim
+        # that the pool is still loaded. (NaN != 0 is True, as required.)
+        return value != 0
+    return True                           # lists, dicts, objects — unreadable
+
+
+def is_live_liquidity_pool(pool: Dict) -> bool:
+    """
+    Is this pool still holding resting stops?
+
+    A swept pool is spent. The orders that made it a magnet have been filled,
+    so it no longer pulls price toward it and no longer threatens a stop placed
+    short of it. Scoring against one is scoring against liquidity that is not
+    there — the chart said the pool was gone while the stop placer was still
+    widening real risk to sit behind it.
+
+    Freshness is a separate axis and stays separate: an old pool may still be
+    loaded, a swept pool is empty however recent. This answers only "is there
+    anything left here".
+
+    A missing ``swept`` field means live. Legacy payloads and hand-built test
+    analyses predate the flag, and reading their silence as "swept" would
+    switch liquidity logic off wholesale. A field present but set to None says
+    the same thing: no information.
+
+    Anything else is normalised explicitly, never by truthiness. Truthiness
+    reads the string ``"false"`` as swept, because every non-empty string is
+    truthy — and a pool that arrives as JSON text, from a cache or a payload
+    that stringified its booleans, would then be silently discarded while
+    reading as intact everywhere it is displayed.
+
+    A value that is neither recognisably true nor recognisably false is NOT
+    live. That is the safe direction: unrecognised input skips one pool, while
+    the opposite would let a level of unknown state widen a real stop.
+    """
+    if not isinstance(pool, dict):
+        return False
+    if "swept" not in pool:
+        return True
+    return not _is_swept_value(pool["swept"])
+
+
 # ── Liquidity pools as take-profit anchors ───────────────────────────────────
 # A pool ahead of the trade is where resting orders sit, so price is drawn to
 # it. TP snapping already anchored to zones, trend-lines and swings but ignored
@@ -119,11 +186,17 @@ _TP_POOL_MATCH_TOL = 0.0005
 
 
 def _tp_pool_levels(analysis: Dict, entry: float, is_long: bool) -> List[float]:
-    """Pool prices lying ahead of the trade, usable as TP walls."""
+    """Pool prices lying ahead of the trade, usable as TP walls.
+
+    Swept pools are skipped: the orders that would have drawn price to the
+    level are already filled, so it is no longer a magnet to target.
+    """
     if entry <= 0:
         return []
     out = []
     for pool in (analysis.get("liquidity_pools") or []):
+        if not is_live_liquidity_pool(pool):
+            continue
         try:
             lvl = float(pool.get("price"))
             tch = int(pool.get("touches") or 0)
@@ -143,12 +216,18 @@ def _matching_pool(analysis: Dict, wall: float) -> Optional[Dict]:
     Used only for labelling: the wall comes back as a bare price, so this is how
     we know whether to call it a liquidity pool or a zone. Tolerance is relative
     to price, not absolute, so it behaves the same on BTC and on a sub-cent alt.
+
+    Swept pools are skipped for the same reason `_tp_pool_levels` skips them:
+    they can no longer be chosen as walls, so labelling a wall as one of them
+    would be describing a coincidence of price.
     """
     if not wall or wall <= 0:
         return None
     tol = abs(wall) * _TP_POOL_MATCH_TOL
     best = None
     for pool in (analysis.get("liquidity_pools") or []):
+        if not is_live_liquidity_pool(pool):
+            continue
         try:
             lvl = float(pool.get("price"))
             tch = int(pool.get("touches") or 0)
@@ -193,6 +272,10 @@ def clear_stop_of_liquidity(analysis: Dict, *, entry: float, sl_dist: float,
     * **Only pools that threaten** — below entry for a LONG, above for a SHORT.
     * **Only pools just beyond the stop.** A pool far past the stop is not what
       takes it out; reaching for it would inflate risk for no reason.
+    * **Only live pools.** Widening a stop past a pool whose stops have already
+      been taken buys protection from a sweep that has happened. That is a
+      permanent, unrecoverable cost — every trade through that level risks more
+      for nothing.
     """
     out = {"sl_dist": sl_dist, "moved": False, "pool_price": None,
            "touches": 0, "blocked": False, "note": None}
@@ -206,6 +289,8 @@ def clear_stop_of_liquidity(analysis: Dict, *, entry: float, sl_dist: float,
     # the stop, but close enough that a sweep of it would take the stop first.
     worst = None
     for pool in (analysis.get("liquidity_pools") or []):
+        if not is_live_liquidity_pool(pool):
+            continue
         try:
             lvl = float(pool.get("price"))
             tch = int(pool.get("touches") or 0)
@@ -270,9 +355,20 @@ def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
     while the ladder held a 7-touch and a 4-touch cluster 0.18-0.19 ATR
     overhead — genuine stop-run risk the scorer could not see.
 
-    Only the NEAREST qualifying pool is returned. Two clusters a few points
-    apart are one zone in practice, and stacking a penalty per level would
-    double-count it.
+    The fallback fires only when ``liquidity_pools`` is genuinely ABSENT — a
+    legacy payload from before the ladder existed, or one carrying None where
+    the detector never ran. Presence is tested by KEY, not by truthiness: an
+    empty list is a present, authoritative result meaning "the detector looked
+    and there is nothing", and it must be believed.
+
+    It must never fire merely because no ladder pool qualified — swept, stale,
+    malformed, or safely on the other side of price. "All the stops round here
+    have been taken" is a real answer, and re-asking a source that cannot
+    represent sweeps at all would readmit the discarded level, unflagged.
+
+    Only the NEAREST qualifying LIVE pool is returned. Two clusters a few
+    points apart are one zone in practice, and stacking a penalty per level
+    would double-count it.
 
     A pool sitting exactly AT price counts as threatening: price has just
     arrived at the level where the stops rest, which is the worst case, not an
@@ -286,7 +382,14 @@ def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
     # Preferred source: the clustered ladder. `side` is computed against the
     # latest close in detect_liquidity_pools, but re-check against `price` here
     # so this stays correct even if the two ever diverge.
-    for pool in (analysis.get("liquidity_pools") or []):
+    ladder = analysis.get("liquidity_pools") if isinstance(analysis, dict) else None
+    # Key presence, not truthiness: [] is an answer, a missing key is silence.
+    ladder_present = isinstance(analysis, dict) \
+        and "liquidity_pools" in analysis \
+        and analysis["liquidity_pools"] is not None
+    for pool in (ladder if isinstance(ladder, list) else []):
+        if not is_live_liquidity_pool(pool):
+            continue
         try:
             lvl = float(pool.get("price"))
             tch = int(pool.get("touches") or 0)
@@ -299,7 +402,14 @@ def _nearest_threatening_pool(analysis: Dict, price: float, is_long: bool):
     if best_price is not None:
         return best_price, best_touches, "liquidity_pools", best_pool
 
-    # Fallback: the single equal-high/equal-low pair.
+    if ladder_present:
+        # The ladder was consulted and holds nothing live and threatening —
+        # including when it is empty. That is the answer, not a reason to
+        # consult a source that predates sweep tracking.
+        return None, 0, None, None
+
+    # Fallback: the single equal-high/equal-low pair, for payloads that carry
+    # no ladder at all.
     eq = analysis.get("equal_levels") or {}
     lv = (eq.get("eql") if is_long else eq.get("eqh")) or {}
     try:
