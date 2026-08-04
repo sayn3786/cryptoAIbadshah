@@ -41,6 +41,8 @@ from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_bos_streak, detect_liquidity_pools, session_ranges, detect_equal_levels, detect_flags, pick_dominant_flags, summarize_flag_diagnostics, detect_reversals, detect_triangles_wedges, build_structure_panel, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
 from signals import generate_signal, _swing_levels
+import rec_policy
+import portfolio_backtest
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs, send_pattern_alerts as _send_pattern_alerts
 from kv import claim as _kv_claim, exists as _kv_exists, kv_enabled as _kv_enabled
@@ -1902,9 +1904,24 @@ def api_exhaustion(symbol):
 
 @app.get("/api/backtest/<symbol>")
 def api_backtest(symbol):
-    """Phase 4 — measurable validation. Replays the price/structure signal over
-    real candle history and returns expectancy, win-rate, profit-factor, drawdown
-    and (optionally) a per-group ablation study.
+    """DEPRECATED — single-symbol, single-timeframe indicator study.
+
+    Kept because it is the only thing that runs a per-group ablation, which is a
+    genuinely useful question about the INDICATORS. It is not, and never was,
+    a test of the published strategy: it takes one timeframe with no 1H/2H
+    agreement, no BTC adjustment, no R/R gate, no ranking, no top-three, enters
+    at market on the next bar's open instead of resting a limit order, and
+    treats TP1 as a full exit. Nine of the rules that decide what actually gets
+    traded are absent here.
+
+    Use /api/backtest/portfolio to ask whether the PUBLISHED strategy has
+    positive expectancy. This endpoint answers "do these indicators contain
+    price/structure edge", which is a different and weaker claim — and the
+    response says so in `result_kind: legacy_price_only`.
+
+    Replays the price/structure signal over real candle history and returns
+    expectancy, win-rate, profit-factor, drawdown and (optionally) a per-group
+    ablation study.
 
     Query params:
       tf            timeframe (default 2H — the primary trading TF)
@@ -1965,6 +1982,98 @@ def api_backtest(symbol):
         fee_bps=fee_bps, stride=stride,
     )
     report["data_source"] = src
+    # Versioned so a reader — or a future caller parsing this — cannot mistake
+    # it for the production-parity result. The shape is unchanged for existing
+    # callers; only the labelling is new.
+    report["result_kind"] = "legacy_price_only"
+    report["deprecated"] = True
+    report["superseded_by"] = "/api/backtest/portfolio"
+    report["not_a_strategy_test"] = (
+        "Single timeframe, no 1H/2H agreement, no BTC adjustment, no R/R gate, "
+        "no ranking or top-three, market entry at the next open instead of a "
+        "resting limit, TP1 treated as a full exit. This measures indicator "
+        "edge, NOT the published strategy.")
+    return jsonify(report)
+
+
+@app.get("/api/backtest/portfolio")
+def api_backtest_portfolio():
+    """Walk-forward replay of the strategy that actually publishes.
+
+    Every historical 4H slot, closed candles only, the real gates from
+    rec_policy, ranking and correlation-aware top-three across the universe,
+    resting limit entries with the 24-hour cancellation, and the 50/30/20
+    scale-out with the stop to breakeven — all through the same functions
+    production and the monitor call.
+
+    Query params:
+      symbols   comma-separated (default: the scan universe, capped by `cap`)
+      cap       max symbols to replay (default 6) — each one costs a full
+                1H/2H/4H analysis at every slot, and this runs inside the same
+                60s function ceiling as everything else
+      slots     max publication slots, most recent first (default 20)
+      limit     candles pulled per timeframe (default 700, max 1000)
+      fee_bps / slippage_bps   execution cost assumptions
+      trades    1 = include the per-trade ledger
+
+    Modes: price_only only. `historical_full` needs timestamped external
+    snapshots, which no endpoint can supply today — asking for it returns 400
+    rather than silently substituting current values for historical ones.
+    """
+    args = request.args
+    mode = args.get("parity_mode", "price_only")
+    if mode != "price_only":
+        return jsonify({
+            "error": "historical_full requires timestamped external snapshots, "
+                     "which this endpoint cannot supply. Substituting current "
+                     "values would produce a confident number built on data the "
+                     "strategy never had.",
+            "supported": ["price_only"],
+        }), 400
+    try:
+        cap    = min(12, max(2, int(args.get("cap", 6))))
+        slots  = min(60, max(1, int(args.get("slots", 20))))
+        limit  = min(1000, max(200, int(args.get("limit", 700))))
+        fee    = float(args.get("fee_bps", portfolio_backtest.DEFAULT_FEE_BPS))
+        slip   = float(args.get("slippage_bps", portfolio_backtest.DEFAULT_SLIPPAGE_BPS))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid numeric parameter"}), 400
+    want_trades = args.get("trades") in ("1", "true", "yes")
+
+    requested = [s.strip().upper() for s in (args.get("symbols") or "").split(",")
+                 if s.strip()]
+    universe = [s for s in (requested or list(SCAN_SYMBOLS)) if s in SYMBOLS]
+    if requested:
+        unknown = [s for s in requested if s not in SYMBOLS]
+        if unknown:
+            return jsonify({"error": f"unknown symbols: {unknown}"}), 400
+    # BTC is always replayed: every candidate's strength is adjusted against it,
+    # so a run without it would be measuring a different policy.
+    universe = [s for s in universe if s != "BTC"][:cap - 1]
+    universe = ["BTC"] + universe
+
+    market: Dict[str, Dict[str, list]] = {}
+    for sym in universe:
+        bs = SYMBOLS[sym]
+        tfs = {}
+        for tf in ("1H", "2H", "4H"):
+            raw = client.get_spot_klines(bs, TF_INTERVAL.get(tf, "2h"), limit)
+            if tf in TF_AGG:
+                raw = client.aggregate_candles(raw, TF_AGG[tf])
+            closed, _live = _split_closed(raw, TF_SECONDS.get(tf, 7200))
+            tfs[tf] = closed
+        market[sym] = tfs
+
+    if client.data_source == "demo":
+        return jsonify({"error": "demo data cannot validate a strategy",
+                        "data_source": "demo"}), 200
+
+    report = portfolio_backtest.replay(
+        market, correlations=_BTC_CORR, parity_mode="price_only",
+        fee_bps=fee, slippage_bps=slip, max_slots=slots,
+        keep_trades=want_trades)
+    report["data_source"] = client.data_source
+    report["result_kind"] = "production_parity_price_only"
     return jsonify(report)
 
 
@@ -2000,115 +2109,11 @@ def api_dashboard():
     return jsonify(results)
 
 
-def _rec_quality(cand: dict, htf_dir: str) -> tuple:
-    """
-    Composite trade-quality score for recommendation ranking (Phase 3).
-
-    A recommendation is an execution call, so we rank on *trade quality*, not
-    raw signal strength alone. Strength answers "how much confluence?"; quality
-    answers "is this a good trade to actually take right now?" — which folds in
-    reward/risk, higher-timeframe agreement, and whether the setup is fighting
-    an active reversal or running on exhausted momentum.
-
-    Returns (score, factors) where factors is a list of human-readable
-    adjustments for transparency on the card.
-    """
-    base   = cand["strength"]
-    d      = cand["direction"]
-    factors = []
-    score  = float(base)
-
-    # ── Reward/risk — the single most important execution filter ─────────
-    rr = cand.get("rr_ratio")
-    if rr is not None:
-        try:
-            rr = float(rr)
-            if rr >= 3.0:
-                score += 10; factors.append(f"R/R {rr:.1f} (+10)")
-            elif rr >= 2.0:
-                score += 5;  factors.append(f"R/R {rr:.1f} (+5)")
-            elif rr < 1.3:
-                score -= 12; factors.append(f"R/R {rr:.1f} weak (−12)")
-        except (TypeError, ValueError):
-            pass
-
-    # ── Higher-timeframe (4H) agreement ─────────────────────────────────
-    if htf_dir and htf_dir != "NEUTRAL":
-        if htf_dir == d:
-            score += 8;  factors.append("4H agrees (+8)")
-        else:
-            score -= 10; factors.append("4H opposes (−10)")
-
-    # ── Reversal radar fighting the trade ───────────────────────────────
-    # If we're LONG but a strong bearish reversal is firing (or SHORT into a
-    # bullish reversal), the trade is swimming upstream — penalise it.
-    rev_lvl = str(cand.get("reversal_against") or "").lower()
-    if rev_lvl == "high":
-        score -= 15; factors.append("reversal-against high (−15)")
-    elif rev_lvl == "elevated":
-        score -= 8;  factors.append("reversal-against elevated (−8)")
-
-    # ── Exhausted momentum ──────────────────────────────────────────────
-    if cand.get("h2_exhausted"):
-        score -= 6; factors.append("2H exhausted (−6)")
-
-    # ── Fresh reversal flips on the primary TF (fuel for the move) ──────
-    if (cand.get("h2_reversal_count") or 0) >= 2:
-        score += 4; factors.append("fresh 2H flips (+4)")
-
-    # ── Data quality ────────────────────────────────────────────────────
-    if cand.get("data_quality") == "degraded":
-        score -= 6; factors.append("degraded data (−6)")
-
-    return round(max(0.0, score), 1), factors
-
-
-def _targets_behind_live(direction: str, tp_targets, live_price) -> dict:
-    """
-    Which targets has price ALREADY traded through?
-
-    The ladder is priced off the last CLOSED candle, but a recommendation is
-    served for the whole slot — so by the time anyone reads it, price may have
-    moved past a target. A LONG whose TP1 sits below the live price offers no
-    reward for the risk it still carries: entering there means taking the full
-    stop distance to chase a level the market has already given away.
-
-    Returns {"behind": [target numbers, 1-indexed], "tp1_behind": bool,
-             "all_behind": bool, "evaluated": bool}. `evaluated` is False when
-    there is nothing to compare (no live price, no ladder), in which case the
-    caller must NOT treat the setup as expired — absence of a live price is not
-    evidence that the targets are still ahead.
-    """
-    levels = [t for t in (tp_targets or [])]
-    try:
-        live = float(live_price) if live_price is not None else None
-    except (TypeError, ValueError):
-        live = None
-    if not levels or not live or live <= 0 or direction not in ("LONG", "SHORT"):
-        return {"behind": [], "tp1_behind": False, "all_behind": False,
-                "evaluated": False}
-
-    behind = []
-    priced = 0
-    for i, lvl in enumerate(levels, start=1):
-        try:
-            lvl = float(lvl)
-        except (TypeError, ValueError):
-            continue
-        if lvl <= 0:
-            continue
-        priced += 1
-        # A target is spent once price has reached it: at or beyond, in the
-        # direction of the trade.
-        if (direction == "LONG" and lvl <= live) or (direction == "SHORT" and lvl >= live):
-            behind.append(i)
-
-    return {
-        "behind":     behind,
-        "tp1_behind": 1 in behind,
-        "all_behind": bool(priced) and len(behind) == priced,
-        "evaluated":  bool(priced),
-    }
+# The recommendation policy lives in rec_policy so the backtest can replay the
+# same rules. These names are kept because the rest of app.py, the tests and the
+# card builders all use them — they are the same functions, not copies.
+_rec_quality = rec_policy.rec_quality
+_targets_behind_live = rec_policy.targets_behind_live
 
 
 class _SkipPersistence(Exception):
@@ -2310,24 +2315,7 @@ def _observed_patterns(analysis: dict) -> list:
     return out
 
 
-def _passes_tf_gates(h1, h2) -> bool:
-    """
-    Could this symbol still become a candidate on its 1H/2H reading alone?
-
-    The gates that do not depend on 4H: both timeframes present and tradeable,
-    neither NEUTRAL, and the two agreeing on direction.
-
-    Deliberately shared with the candidate loop rather than duplicated there.
-    It decides which symbols are worth fetching a 4H analysis for, so if the two
-    copies ever drifted, a symbol could reach the loop with no 4H data and be
-    scored as though 4H were neutral — a silent change to the published set.
-    """
-    if not h1 or not h2:
-        return False
-    if not h1.get("tradeable", True) or not h2.get("tradeable", True):
-        return False
-    d1, d2 = h1.get("direction", "NEUTRAL"), h2.get("direction", "NEUTRAL")
-    return d1 != "NEUTRAL" and d2 != "NEUTRAL" and d1 == d2
+_passes_tf_gates = rec_policy.passes_tf_gates
 
 
 def _compute_recommendations() -> dict:
@@ -2416,16 +2404,17 @@ def _compute_recommendations() -> dict:
     btc_2h    = raw.get("BTC", {}).get("2H", {})
     btc_dir   = btc_2h.get("direction", "NEUTRAL")
     btc_str   = btc_2h.get("strength", 0) or 0
-    btc_scale = math.sqrt(btc_str / 100.0) if btc_str > 0 else 0.0
-    BTC_BONUS   = 12   # pts when token aligns with BTC 2H
-    BTC_PENALTY = 18   # pts when token opposes BTC 2H
 
-    # On-chain score: shifts BTC_BONUS/PENALTY by up to ±20%
+    # On-chain score shifts the BTC bonus/penalty by up to ±20%. The whole BTC
+    # context is one object computed once per slot — the backtest builds the
+    # same object from historical readings and passes it to the same functions.
     _oc = get_btc_mining_signals()
     _oc_score = (_oc.get("onchain_score") or {}).get("score", 50)
-    _oc_mult  = 0.8 + 0.4 * (_oc_score / 100.0)
-    BTC_BONUS   = round(BTC_BONUS   * _oc_mult, 1)
-    BTC_PENALTY = round(BTC_PENALTY * _oc_mult, 1)
+    _btc_influence = rec_policy.btc_influence(btc_dir, btc_str,
+                                              onchain_score=_oc_score)
+    btc_scale   = _btc_influence["scale"]
+    BTC_BONUS   = _btc_influence["bonus"]
+    BTC_PENALTY = _btc_influence["penalty"]
 
     # Options expiry: BTC options pinning pressure cascades to all ALTs
     # — in the expiry window, bearish pin on BTC → increase ALT bearish bias
@@ -2448,42 +2437,28 @@ def _compute_recommendations() -> dict:
         h1 = tfs.get("1H")
         h2 = tfs.get("2H")
         h4 = tfs.get("4H") or {}
-        if not (h1 and h2):
-            continue
 
-        # 4H higher-timeframe direction (HTF confirmation) — used by the
-        # composite quality score, not as a hard filter (a clean 1H·2H setup
-        # is still tradeable when 4H is neutral, just scored a touch lower).
-        htf_4h_dir = h4.get("direction", "NEUTRAL") if h4.get("tradeable", True) else "NEUTRAL"
-
-        # ── Data-integrity gate + the confirmation filter ─────────────────────
-        # A recommendation is an execution call, so both timeframes must be
-        # clean (demo, stale, misaligned, missing candles, or live price too far
-        # from the signal price all disqualify it — see _assess_data_quality),
-        # and both must agree on direction.
+        # ── Every deterministic gate, in one call ────────────────────────────
+        # 1H/2H presence and agreement, data quality, the BTC adjustment, the
+        # live-price divergence check, minimum strength, R/R and the expired-
+        # setup check — in this exact order, from rec_policy.
         #
-        # Same helper the 4H prefetch uses. Sharing it is the point: it decides
-        # which symbols got a 4H analysis at all, so a second copy here could
-        # drift and let a symbol through with no 4H data, scored as though 4H
-        # were neutral.
-        if not _passes_tf_gates(h1, h2):
+        # The screen is shared with the backtest replay, which is the point:
+        # the previous backtest scored a single timeframe with none of these
+        # gates and reported the result as evidence about the published
+        # strategy. Two copies of a policy do not stay equal.
+        corr_factor = _BTC_CORR.get(sym, 1.0)
+        _screen = rec_policy.screen_candidate(h1, h2, h4, corr_factor=corr_factor,
+                                              influence=_btc_influence)
+        htf_4h_dir = _screen.get("htf_4h_dir", "NEUTRAL")
+        if not _screen["ok"] and _screen["reason"] != "TP1_BEHIND_LIVE":
             continue
 
-        direction = h2["direction"]   # 2H is primary
-        # Strength = 2H signal strength, then adjusted by BTC 2H direction.
-        # Both are at the same timeframe (2H), so the adjustment is meaningful.
-        strength = round(h2["strength"], 1)
-
-        corr_factor  = _BTC_CORR.get(sym, 1.0)
-        btc_aligned  = (btc_dir != "NEUTRAL" and direction == btc_dir)
-        btc_conflict = (btc_dir != "NEUTRAL" and direction != btc_dir)
-        btc_adj      = 0
-        if btc_aligned:
-            btc_adj  = round(BTC_BONUS   * btc_scale * corr_factor, 1)
-            strength = min(100, round(strength + btc_adj, 1))
-        elif btc_conflict:
-            btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
-            strength = max(0, round(strength + btc_adj, 1))
+        direction    = _screen["direction"]
+        strength     = _screen["strength"]
+        btc_adj      = _screen["btc_adj"]
+        btc_aligned  = _screen["aligned"]
+        btc_conflict = _screen["conflict"]
 
         # Options-expiry pressure is applied EXACTLY ONCE — inside generate_signal
         # (options_application_stage == "signal"), so h2["strength"] already
@@ -2515,35 +2490,16 @@ def _compute_recommendations() -> dict:
 
         # Entry/SL/TP from the 2H signal
         sig = h2["sig"]
-
-        # Live price vs the price the signal was computed on. The per-analysis
-        # data-quality gate already invalidates a >20% 2H gap; this is a final
-        # belt-and-suspenders + gives the card a live-price to show.
-        _sig_p  = h2.get("signal_price") or sig.get("current_price") or sig.get("entry")
-        _live_p = h2.get("live_price") or _sig_p
-        if _sig_p and _live_p and _live_p > 0 and abs(_sig_p - _live_p) / _live_p > 0.25:
-            continue
-
-        # Minimum conviction — skip noise
-        if strength < 32:
-            continue
-
-        # ── Reward/risk minimum — never publish a trade whose downside is
-        # bigger than a third of its upside (R/R < 1.3 is not worth the risk).
-        _rr = sig.get("rr_ratio")
-        try:
-            if _rr is not None and float(_rr) < 1.3:
-                continue
-        except (TypeError, ValueError):
-            pass
+        _sig_p  = _screen["signal_price"]
+        _live_p = _screen["live_price"]
 
         # ── Expired setup — TP1 already taken ────────────────────────────
-        # The R/R gate above is computed against the ladder's own entry, off the
-        # closed candle. If price has since traded through TP1, that published
-        # R/R is fiction for anyone entering now: the reward has been collected
-        # and only the risk is left. Drop the candidate rather than repricing —
-        # a setup the market already ran is not a setup.
-        _behind = _targets_behind_live(direction, sig.get("tp_targets"), _live_p)
+        # The R/R gate inside the screen is computed against the ladder's own
+        # entry, off the closed candle. If price has since traded through TP1,
+        # that published R/R is fiction for anyone entering now: the reward has
+        # been collected and only the risk is left. Drop the candidate rather
+        # than repricing — a setup the market already ran is not a setup.
+        _behind = _screen["targets_behind"]
         if _behind["tp1_behind"]:
             expired.append({
                 "symbol":          sym,
@@ -2628,46 +2584,22 @@ def _compute_recommendations() -> dict:
         # The ranking key: the AVERAGE of the two timeframes that had to agree
         # for this to be a candidate at all. Ranking on 2H alone let a strong 2H
         # with a barely-qualifying 1H outrank a setup both timeframes liked.
-        cand["avg_tf_strength"] = round(
-            (float(h1["strength"]) + float(h2["strength"])) / 2.0, 1)
+        cand["avg_tf_strength"] = _screen["avg_tf_strength"]
         candidates.append(cand)
 
-    # ── Rank by the 1H/2H average, quality as the tiebreak ──────────────
+    # ── Rank, then diversify, then publish the top three ────────────────
     # Both timeframes must already agree on direction for a candidate to exist,
-    # so their average measures how strongly they agree. Quality breaks ties, so
-    # between two equally-agreed setups the one with better R/R and less
-    # reversal risk still wins.
-    candidates.sort(key=lambda x: (x.get("avg_tf_strength", x["strength"]),
-                                   x.get("quality_score", 0), x["strength"]),
-                    reverse=True)
-
-    # ── Correlation-aware diversification ────────────────────────────────
-    # Publishing three high-correlation ALTs in the same direction is one bet
-    # in a trench-coat: if BTC turns, all three lose together. Fill the top-3
-    # greedily by quality, but skip a candidate that would be the third+
-    # same-direction pick highly correlated (BTC-corr ≥ 0.7) with those already
-    # chosen — unless we'd otherwise run out of candidates.
-    HIGH_CORR = 0.7
-    top: list = []
-    deferred: list = []
-    for c in candidates:
-        if len(top) >= 3:
-            break
-        same_dir_corr = [t for t in top
-                         if t["direction"] == c["direction"]
-                         and (t.get("btc_corr") or 0) >= HIGH_CORR
-                         and (c.get("btc_corr") or 0) >= HIGH_CORR]
-        if len(same_dir_corr) >= 2:
-            deferred.append(c)   # would be a 3rd correlated same-direction bet
-            continue
-        top.append(c)
-
-    # Backfill from deferred (still ranked by quality) if we came up short
-    if len(top) < 3:
-        for c in deferred:
-            if len(top) >= 3:
-                break
-            top.append(c)
+    # so their average measures how strongly they agree; quality breaks ties.
+    # Then: publishing three high-correlation ALTs in the same direction is one
+    # bet in a trench-coat, so a third correlated same-direction pick is
+    # deferred and only backfilled if we would otherwise come up short.
+    #
+    # Both steps live in rec_policy so the replay ranks and selects identically.
+    # Ranking is where a backtest is easiest to flatter without noticing: score
+    # the same candidates in a different order and you measure a different
+    # strategy while every individual trade looks right.
+    candidates = rec_policy.rank_candidates(candidates)
+    top = rec_policy.select_publishable(candidates)
 
     intraday_recs = top[:3]
 
