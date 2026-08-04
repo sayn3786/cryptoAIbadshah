@@ -54,16 +54,18 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+import candle_analysis
 import rec_policy
 import signal_monitor
-from backtest import build_price_analysis
+import signal_inputs
 from signal_store import ladder_shares, weighted_return
 from signals import generate_signal
 
 __all__ = [
-    "PARITY_MODES", "TF_MS", "PUBLICATION_INTERVAL_MS",
+    "PARITY_MODES", "TF_MS", "PUBLICATION_INTERVAL_MS", "RESULT_LABELS",
     "DEFAULT_FEE_BPS", "DEFAULT_SLIPPAGE_BPS",
-    "closed_slice", "publication_slots", "replay",
+    "closed_slice", "publication_slots", "replay", "result_label",
+    "universe_report", "market_cap_at",
 ]
 
 # Bar length in epoch milliseconds. A candle whose open timestamp is `ts` is
@@ -90,6 +92,16 @@ DEFAULT_SLIPPAGE_BPS = 2.0
 EXTERNAL_FEATURE_FAMILIES = (
     "funding", "open_interest", "futures_cvd", "long_short_ratio",
     "fear_greed", "news_sentiment", "onchain", "etf_flows", "macro", "options",
+)
+
+# What a result may call itself. The distinctions are the point: a top three
+# chosen from five alts is not the top three production would have published
+# from thirty-one, however correct the machinery underneath it is.
+RESULT_LABELS = (
+    "subset_price_only",              # not the full universe; OHLCV inputs only
+    "full_universe_price_only",       # every production symbol; OHLCV inputs only
+    "historical_full_partial_coverage",  # external history supplied, incomplete
+    "production_parity",              # everything. See parity_blockers.
 )
 
 
@@ -144,10 +156,110 @@ def _iso(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).isoformat()
 
 
+# ── Universe completeness ────────────────────────────────────────────────────
+
+def universe_report(evaluated: Sequence[str],
+                    production_universe: Optional[Sequence[str]]) -> Dict:
+    """
+    Did this replay see the universe production ranks against?
+
+    Selection is a comparison. Production takes the best three out of
+    thirty-one; taking the best three out of five is a different question with
+    the same arithmetic, and it will usually publish trades production would
+    have ranked fourth or twentieth. A subset replay can validate the machinery
+    — the gates, the fills, the scale-out — and it cannot validate the
+    selection, because the candidates it was choosing between were not the
+    candidates production had.
+
+    ``production_universe`` is passed in rather than imported, because importing
+    it would drag app.py (and its eleven service clients) into a pure module.
+    """
+    seen = list(dict.fromkeys(evaluated))
+    if not production_universe:
+        return {
+            "universe_mode": "unspecified",
+            "expected_symbols": None,
+            "evaluated_symbols": seen,
+            "missing_symbols": None,
+            "universe_complete": False,
+            "production_universe_size": None,
+            "note": ("No production universe was supplied, so completeness "
+                     "cannot be claimed. Treat this as a subset."),
+        }
+    expected = list(dict.fromkeys(production_universe))
+    missing = [s for s in expected if s not in set(seen)]
+    return {
+        "universe_mode": "production" if not missing else "subset",
+        "expected_symbols": expected,
+        "evaluated_symbols": seen,
+        "missing_symbols": missing,
+        "universe_complete": not missing,
+        "production_universe_size": len(expected),
+        "extra_symbols": [s for s in seen if s not in set(expected)],
+    }
+
+
+# ── Historical market cap ────────────────────────────────────────────────────
+
+def market_cap_at(symbol: str, slot_ms: int,
+                  history: Optional[Dict[str, List[Dict]]]) -> Dict:
+    """
+    The market cap as of ``slot_ms``, or an honest admission that there is none.
+
+    Returns ``{"value", "source"}`` where source is ``historical`` or
+    ``unavailable``. Never today's figure: market cap tiers the ATR caps, stop
+    widths, target distances and the leverage suggestion, so substituting the
+    current number into a slot from last March prices the trade against a
+    company size the market did not have — and it does it in the direction of
+    whatever has happened since, which for a token that has since ten-xed means
+    replaying its small-cap history with large-cap stops.
+
+    Absent history falls through to `_mcap_tier(None)`, which is "Unknown Cap"
+    with a 2.0 ATR multiplier. That is a defined fallback, not a guess — but a
+    report that used it is not full production parity, and says so.
+    """
+    snaps = (history or {}).get(symbol) or []
+    usable = [s for s in snaps
+              if s.get("available_at") is not None
+              and int(s["available_at"]) <= slot_ms
+              and s.get("market_cap") is not None]
+    if not usable:
+        return {"value": None, "source": "unavailable"}
+    latest = max(usable, key=lambda s: int(s["available_at"]))
+    return {"value": latest["market_cap"], "source": "historical",
+            "as_of": int(latest["available_at"])}
+
+
+# ── What the result may call itself ──────────────────────────────────────────
+
+def result_label(*, parity_mode: str, universe_complete: bool,
+                 pipeline_complete: bool, external_complete: bool,
+                 market_cap_complete: bool,
+                 blockers: Sequence[str]) -> str:
+    """
+    Pick the strongest label the evidence supports, and no stronger.
+
+    `production_parity` requires every one of: the complete production universe,
+    the shared candle pipeline, full external history, historical market cap,
+    and no outstanding blocker that could change direction, ranking, entry, stop
+    or targets. The live-tick and data-quality gaps are permanent blockers
+    today, so this label is currently unreachable — which is the correct state
+    of affairs to encode, not a bug to route around.
+    """
+    if (parity_mode == "historical_full" and universe_complete
+            and pipeline_complete and external_complete and market_cap_complete
+            and not blockers):
+        return "production_parity"
+    if parity_mode == "historical_full":
+        return "historical_full_partial_coverage"
+    return "full_universe_price_only" if universe_complete else "subset_price_only"
+
+
 # ── Building one timeframe's reading, the way production shapes it ───────────
 
 def _tf_reading(symbol: str, timeframe: str, window: List[Dict],
-                *, external: Optional[Dict] = None) -> Optional[Dict]:
+                *, external: Optional[Dict] = None,
+                market_cap=None) -> Optional[Dict]:
     """
     One (symbol, timeframe) reading in the shape `rec_policy` consumes.
 
@@ -156,10 +268,20 @@ def _tf_reading(symbol: str, timeframe: str, window: List[Dict],
     flags. `signal_price` and `live_price` are BOTH the last closed price —
     see the parity notes: at the moment of publication production reads a live
     tick, and the only honest historical stand-in is the close it was built on.
+
+    The analysis comes from `candle_analysis.build_candle_analysis`, which is
+    the function production calls. The replay used to have its own smaller
+    builder, and it was missing the liquidity-pool ladder, equal highs/lows, the
+    BOS streak, reversal patterns, triangles and wedges, deep swing levels and
+    the volatility regime. Calling the same `generate_signal` proved nothing:
+    the function was identical and the dictionary was not, so stop placement, TP
+    anchoring and the leverage suggestion all scored against inputs production
+    never had.
     """
-    if len(window) < 60:
+    if len(window) < candle_analysis.SIGNAL_WINDOW_BARS:
         return None                      # not enough history to seed indicators
-    analysis = build_price_analysis(window, timeframe, symbol)
+    analysis = candle_analysis.build_candle_analysis(
+        window, timeframe, symbol, market_cap=market_cap)
     if external:
         analysis.update(external)
     sig = generate_signal(analysis)
@@ -352,6 +474,9 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
            fill_window_hours: int = signal_monitor.DEFAULT_FILL_WINDOW_HOURS,
            max_age_hours: int = signal_monitor.DEFAULT_MAX_AGE_HOURS,
            max_slots: Optional[int] = None,
+           production_universe: Optional[Sequence[str]] = None,
+           market_cap_history: Optional[Dict[str, List[Dict]]] = None,
+           strategy_version: Optional[str] = None,
            keep_trades: bool = True) -> Dict[str, Any]:
     """
     Replay the publication strategy over `market` and report what it did.
@@ -359,6 +484,18 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     ``market`` is ``{symbol: {"1H": [...], "2H": [...], "4H": [...]}}``, each a
     list of closed candles oldest-first with timestamp (epoch ms), open, high,
     low, close, volume.
+
+    ``production_universe`` is the symbol list production actually ranks against
+    (SCAN_SYMBOLS). Supply it and the report can state whether the top three
+    were chosen from the same field production chose from; omit it and the
+    result is labelled a subset, because completeness cannot be claimed by a
+    function that was never told what complete meant.
+
+    ``market_cap_history`` is ``{symbol: [{available_at, market_cap}, ...]}``.
+    Only observations at or before a slot are used. Without it every slot falls
+    through to the "Unknown Cap" tier and the report says so — market cap sets
+    the ATR caps, stop widths, target distances and leverage, so this is a gap
+    in entry and exit prices, not only in the score.
 
     Deterministic: no wall clock is read anywhere in this function or anything
     it calls. The same market produces the same report, which is what makes a
@@ -382,6 +519,7 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     candidates_seen = 0
     slots_evaluated = 0
     coverage = _ExternalCoverage(parity_mode)
+    mcap_seen = {"historical": 0, "unavailable": 0}
 
     for slot in slots:
         # ── BTC first: every candidate in this slot is measured against it ──
@@ -397,10 +535,13 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
         for sym in tradable:
             tfs = market.get(sym) or {}
             ext = coverage.features_for(sym, slot, external)
+            mcap = market_cap_at(sym, slot, market_cap_history)
+            mcap_seen[mcap["source"]] = mcap_seen.get(mcap["source"], 0) + 1
             reads = {}
             for tf in ("1H", "2H", "4H"):
                 win = closed_slice(tfs.get(tf) or [], tf, slot, lookback=lookback)
-                reads[tf] = (_tf_reading(sym, tf, win, external=ext)
+                reads[tf] = (_tf_reading(sym, tf, win, external=ext,
+                                         market_cap=mcap["value"])
                              if len(win) >= warmup_bars else None)
             h1, h2, h4 = reads["1H"], reads["2H"], reads["4H"]
 
@@ -434,6 +575,13 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
                 "sl": sig.get("sl"),
                 "tp_targets": list(sig.get("tp_targets") or []),
                 "leverage": sig.get("leverage"),
+                # The tier that actually priced this ladder. Reported per
+                # recommendation because it moves the ATR cap, the stop width,
+                # the targets and the leverage — so a reader can see which rows
+                # were built on a real market cap and which on the fallback.
+                "market_cap": mcap["value"],
+                "market_cap_source": mcap["source"],
+                "vol_tier_label": sig.get("vol_tier_label"),
             }
             q, qf = rec_policy.rec_quality(cand, cand["htf_4h_dir"])
             cand["quality_score"], cand["quality_factors"] = q, qf
@@ -461,10 +609,13 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
                        max_age_hours=max_age_hours)
         trades.append(_settle(pos, rec, fee_bps=fee_bps, slippage_bps=slippage_bps))
 
+    parity = _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
+                           coverage, fee_bps, slippage_bps, fill_window_hours,
+                           max_age_hours, production_universe, mcap_seen,
+                           strategy_version)
     report = {
-        "parity": _parity_block(parity_mode, market, symbols, slots,
-                                slots_evaluated, coverage, fee_bps, slippage_bps,
-                                fill_window_hours, max_age_hours),
+        "result_kind": parity["result_kind"],
+        "parity": parity,
         "population": _population(candidates_seen, published, trades, rejections),
         "metrics": aggregate(trades),
     }
@@ -601,13 +752,84 @@ class _ExternalCoverage:
 
 def _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
                   coverage, fee_bps, slippage_bps, fill_window_hours,
-                  max_age_hours) -> Dict:
+                  max_age_hours, production_universe, mcap_seen,
+                  strategy_version) -> Dict:
+    """
+    Everything a reader needs to know what this result is NOT.
+
+    The blockers list is the important part. Anything in it can change
+    direction, ranking, entry, stop or targets, and while it is non-empty the
+    result cannot be called production parity — however clean the machinery is.
+    """
     candle_cov = {}
     for sym in symbols:
         tfs = market.get(sym) or {}
         candle_cov[sym] = {tf: len(tfs.get(tf) or []) for tf in ("1H", "2H", "4H")}
+
+    uni = universe_report(symbols, production_universe)
+    ext = coverage.report()
+    mcap_total = sum(mcap_seen.values()) or 0
+    mcap_hist = mcap_seen.get("historical", 0)
+    mcap_complete = bool(mcap_total) and mcap_hist == mcap_total
+
+    # Every candle-derived input generate_signal reads is produced by the shared
+    # builder. Checked here rather than asserted, so a report cannot claim a
+    # completeness the code no longer has.
+    missing_pipeline = sorted(signal_inputs.CANDLE_DERIVED
+                              - set(candle_analysis.CANDLE_DERIVED_KEYS))
+    pipeline_complete = not missing_pipeline
+
+    blockers = []
+    if not uni["universe_complete"]:
+        blockers.append(
+            "UNIVERSE_INCOMPLETE: the top three was chosen from a different "
+            "field than production ranks against, so selection is not validated")
+    if not pipeline_complete:
+        blockers.append(f"PIPELINE_INCOMPLETE: {missing_pipeline}")
+    if parity_mode == "price_only":
+        blockers.append(
+            "EXTERNAL_DATA_ABSENT: funding, OI, futures CVD, sentiment, macro, "
+            "on-chain and options scoring blocks never fired")
+    elif ext.get("families_omitted"):
+        blockers.append(f"EXTERNAL_DATA_PARTIAL: {ext['families_omitted']}")
+    if not mcap_complete:
+        blockers.append(
+            "MARKET_CAP_FALLBACK: the Unknown Cap tier (2.0x ATR) priced some "
+            "or all ladders, which moves stops, targets and leverage")
+    # Permanent, and stated as such rather than quietly omitted.
+    blockers.append(
+        "LIVE_TICK_UNAVAILABLE: the divergence gate and the TP1-behind-live "
+        "gate measure against the last close, not an intra-slot tick")
+    blockers.append(
+        "DATA_QUALITY_NOT_RECONSTRUCTED: replay cannot know which candles were "
+        "stale or misaligned at the time, so candidates production dropped as "
+        "untradeable are still published here")
+
     return {
+        "result_kind": result_label(
+            parity_mode=parity_mode,
+            universe_complete=uni["universe_complete"],
+            pipeline_complete=pipeline_complete,
+            external_complete=parity_mode == "historical_full"
+            and not ext.get("families_omitted"),
+            market_cap_complete=mcap_complete,
+            blockers=blockers),
         "parity_mode": parity_mode,
+        "strategy_version": strategy_version,
+        "universe": uni,
+        "candle_pipeline": {
+            "shared_builder": "candle_analysis.build_candle_analysis",
+            "complete": pipeline_complete,
+            "missing_inputs": missing_pipeline,
+            "candle_derived_inputs": len(signal_inputs.CANDLE_DERIVED),
+        },
+        "market_cap": {
+            "historical_lookups": mcap_hist,
+            "fallback_lookups": mcap_seen.get("unavailable", 0),
+            "coverage": round(mcap_hist / mcap_total, 4) if mcap_total else 0.0,
+            "complete": mcap_complete,
+            "fallback_tier": "Unknown Cap (2.0x ATR multiplier)",
+        },
         "replayed_gates": list(rec_policy.REJECTION_REASONS) + [
             "RANKING_avg_1h_2h_strength", "TIEBREAK_quality_score",
             "CORRELATION_DIVERSIFICATION", f"TOP_{rec_policy.PUBLISH_TOP_N}"],
@@ -618,7 +840,7 @@ def _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
             "high_corr": rec_policy.HIGH_CORR,
             "publish_top_n": rec_policy.PUBLISH_TOP_N,
         },
-        "external_data": coverage.report(),
+        "external_data": ext,
         "candle_coverage": candle_cov,
         "symbols": list(symbols),
         "publication_slots_available": len(slots),
@@ -629,6 +851,9 @@ def _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
             "entry": "resting limit at the published entry; fills only when a "
                      "later candle trades through it",
             "fill_window_hours": fill_window_hours,
+            "fill_deadline": "absolute, computed from generated_at before any "
+                             "candle is read; a candle OPENING at or after it "
+                             "can create no event of any kind",
             "max_age_hours": max_age_hours,
             "scale_out": "TP1 50%, TP2 30%, TP3 20% (signal_store.SCALE_OUT_SHARES)",
             "breakeven": "stop moves to entry after the first partial target",
@@ -640,16 +865,8 @@ def _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
             "cost_model": "(fee + slippage) charged on the entry leg and on "
                           "every fraction closed",
         },
-        "known_non_parity": [
-            "No live tick: signal_price and live_price are both the last closed "
-            "price, so the divergence gate and the TP1-behind-live gate are "
-            "measured against the close rather than an intra-slot tick.",
-            "data_quality is always good: replay feeds complete closed candles "
-            "from one source, so candidates production drops for stale or "
-            "misaligned data are still published here.",
-            "Options-expiry pressure and the on-chain multiplier are constants, "
-            "not historical series.",
-        ],
+        "parity_blockers": blockers,
+        "known_non_parity": blockers,
     }
 
 

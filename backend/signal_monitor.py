@@ -200,6 +200,23 @@ def evaluate(signal: Dict[str, Any],
     after = _utc(signal.get("candle_close_time"))
     started = _utc(signal.get("generated_at")) or after
 
+    # The fill deadline is ABSOLUTE and computed before a single candle is
+    # read. It used to be checked only after the whole series had been scanned
+    # for an entry touch, which meant a delayed run filled orders the exchange
+    # would have withdrawn hours earlier: signal at hour 0, window 24 hours, no
+    # touch until hour 30 — and the monitor recorded ENTRY_FILLED, then traded
+    # it forward and booked the result. The trade never existed. GitHub Actions
+    # cron has run one to three hours late repeatedly, so this is not a corner
+    # case; and it flatters, because an order price took a day and a half to
+    # come back to is one the market moved decisively away from first.
+    #
+    # Candle timestamps are OPEN times, so a candle opening AT the deadline is
+    # already outside the window — the order was withdrawn before that bar
+    # began trading.
+    fill_deadline = None
+    if pending_fill and started is not None and fill_window_hours:
+        fill_deadline = started + timedelta(hours=fill_window_hours)
+
     pending = []
     for t in sorted(targets or [], key=lambda x: int(x.get("target_number") or 0)):
         if t.get("hit_at"):
@@ -221,6 +238,15 @@ def evaluate(signal: Dict[str, Any],
         high, low = _dec(candle.get("high")), _dec(candle.get("low"))
         if high is None or low is None:
             continue
+        if pending_fill and fill_deadline is not None and at >= fill_deadline:
+            # Past the deadline with no fill. Withdraw the order HERE, before
+            # this candle is examined for an entry, a target or a stop — a bar
+            # after the deadline must not be able to create any event at all.
+            withdrawn = last_seen or fill_deadline
+            return [{"kind": "CANCELLED", "at": withdrawn,
+                     "source_ts": withdrawn, "reason": "NEVER_FILLED",
+                     "age_hours": float(fill_window_hours)}]
+
         last_seen = at
         last_close = _dec(candle.get("close")) or last_close
 
@@ -274,10 +300,16 @@ def evaluate(signal: Dict[str, Any],
     # A working order that price never came back to is CANCELLED, not expired
     # and certainly not a loss. It never became a position, so it must not reach
     # the win rate, the averages or the P/L in any form.
-    if pending_fill and started is not None and fill_window_hours:
+    #
+    # The in-loop check above catches the case where a candle exists past the
+    # deadline. This catches the other one: the candles simply ran out, and the
+    # clock has moved past the deadline anyway. Both use the same absolute
+    # instant, so an order cannot be cancelled by one rule and filled by the
+    # other depending on whether market data happened to arrive.
+    if pending_fill and fill_deadline is not None:
         reference = now or datetime.now(timezone.utc)
-        if reference - started >= timedelta(hours=fill_window_hours):
-            at = last_seen or (started + timedelta(hours=fill_window_hours))
+        if reference >= fill_deadline:
+            at = last_seen or fill_deadline
             return [{"kind": "CANCELLED", "at": at, "source_ts": at,
                      "reason": "NEVER_FILLED",
                      "age_hours": round(

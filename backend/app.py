@@ -43,6 +43,7 @@ from patterns import detect_bos_streak, detect_liquidity_pools, session_ranges, 
 from signals import generate_signal, _swing_levels
 import rec_policy
 import portfolio_backtest
+import candle_analysis
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs, send_pattern_alerts as _send_pattern_alerts
 from kv import claim as _kv_claim, exists as _kv_exists, kv_enabled as _kv_enabled
@@ -337,37 +338,11 @@ TF_LIMIT = {
 
 # Minimum pole size (%) required for flag detection per TF.
 # Shorter bars need smaller thresholds — a 4H candle rarely moves 8%.
-TF_MIN_POLE_PCT = {
-    "1H": 2.0, "2H": 2.5,
-    "4H": 3.0, "8H": 4.0, "12H": 5.0, "1D":  6.0,
-    "1W": 8.0, "2W": 8.0, "3W":  8.0, "1M": 10.0,
-}
+# Moved to candle_analysis so production and the replay share one copy.
+TF_MIN_POLE_PCT = candle_analysis.TF_MIN_POLE_PCT
 
 
-def _flag_diagnostics_for(flags: list, raw_diag: list) -> list:
-    """Build the "why is the flag card empty" explanation.
-
-    Fires whenever NO ACTIVE flag exists — that's exactly when the dashboard card
-    is empty (the frontend hides inactive/stale flags). Prefers the concrete
-    rejection reasons from detect_flags; if flags were found but merely resolved /
-    aged out (nothing was rejected), describes that state instead.
-    """
-    if any(f.get("is_active") for f in flags):
-        return []
-    diag = summarize_flag_diagnostics(raw_diag)
-    if not diag and flags:
-        f0 = flags[0]
-        state = ("its breakout already played out" if f0.get("confirmed")
-                 else "it resolved or aged out of the active window")
-        diag = [{
-            "reason": "inactive",
-            "direction": f0.get("direction"),
-            "message": (f"A {f0.get('direction')} flag was found but is no "
-                        f"longer active — {state}."),
-            "consolidation_bars": f0.get("consolidation_bars"),
-            "capped_at_max": False,
-        }]
-    return diag
+_flag_diagnostics_for = candle_analysis.flag_diagnostics_for
 
 # Higher timeframes that each TF must align with for confluence validation.
 # Shorter TFs depend on a larger stack of HTFs; longer TFs have fewer above them.
@@ -386,10 +361,7 @@ _HTF_DEPS: Dict[str, List[str]] = {
 
 # How many closed candles to use for direction checks per TF.
 # Lower TFs are noisier so we require more candles for confidence.
-_TF_CANDLE_N: Dict[str, int] = {
-    "1H": 4, "2H": 4, "4H": 4, "8H": 4, "12H": 4,
-    "1D": 3, "1W": 2, "2W": 2, "3W": 2, "1M": 4,
-}
+_TF_CANDLE_N = candle_analysis.TF_CANDLE_N
 
 
 def _ema_val(values: List[float], period: int):
@@ -403,20 +375,7 @@ def _ema_val(values: List[float], period: int):
     return e
 
 
-def _ema_series(values: List[float], period: int) -> List:
-    """EMA value at each index (None before there's enough data to seed it).
-    Used to draw the EMA line on the chart aligned candle-for-candle."""
-    n = len(values)
-    out = [None] * n
-    if n < period:
-        return out
-    k = 2.0 / (period + 1)
-    e = sum(values[:period]) / period
-    out[period - 1] = e
-    for i in range(period, n):
-        e = values[i] * k + e * (1 - k)
-        out[i] = e
-    return out
+_ema_series = candle_analysis.ema_series
 
 
 def _rec_reasons(sig: dict, direction: str, limit: int = 3) -> list:
@@ -568,7 +527,7 @@ _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 # The dedicated structure chart draws a deeper window than the main chart's 60
 # bars — past liquidity pools need room to show. Candles AND the SuperTrend
 # overlay both use this, so the line and shading span the whole pane.
-STRUCTURE_CHART_BARS = 150
+STRUCTURE_CHART_BARS = candle_analysis.STRUCTURE_CHART_BARS
 
 
 def _pattern_alert_id(sym: str, tf: str, pat: dict) -> str:
@@ -840,38 +799,7 @@ def _btc_top_signals(realized_price, spot_price=None):
 
 
 # ── Volatility regime ─────────────────────────────────────────────────────────
-def _vol_regime(candles: list):
-    """
-    Percentile of the current normalised ATR(14) vs this candle history.
-    >85th pct = explosive tape (halve size); <20th = dead calm.
-    """
-    try:
-        if not candles or len(candles) < 45:
-            return None
-        trs = []
-        for i in range(1, len(candles)):
-            c, p = candles[i], candles[i - 1]
-            tr = max(c["high"] - c["low"],
-                     abs(c["high"] - p["close"]),
-                     abs(c["low"] - p["close"]))
-            trs.append(tr / c["close"] if c["close"] else 0)
-        # ATR(14) series (simple mean), normalised by price
-        natr = [sum(trs[i - 14:i]) / 14 for i in range(14, len(trs) + 1)]
-        if len(natr) < 20:
-            return None
-        cur = natr[-1]
-        # Midrank percentile — ties count half, so a flat tape reads 50th, not 100th
-        less  = sum(1 for v in natr if v < cur - 1e-12)
-        equal = sum(1 for v in natr if abs(v - cur) <= 1e-12)
-        pct = (less + 0.5 * equal) / len(natr) * 100
-        if   pct >= 85: zone, note = "extreme", "Volatility in top 15% of this token's history — expect violent moves, halve position size"
-        elif pct >= 60: zone, note = "elevated", "Volatility above normal — size with care"
-        elif pct <= 20: zone, note = "calm", "Volatility in bottom 20% — compressed tape, breakouts often follow"
-        else:           zone, note = "normal", "Volatility in its normal range"
-        return {"atr_pct": round(cur * 100, 2), "percentile": round(pct),
-                "zone": zone, "note": note}
-    except Exception:
-        return None
+_vol_regime = candle_analysis.vol_regime
 
 
 # ── Higher-timeframe swing levels ─────────────────────────────────────────────
@@ -1041,53 +969,21 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         oi["thr_strong"]    = _smin
         oi["thr_quad"]      = _qmin
 
-    closes     = [c["close"] for c in spot]
-    macd         = calculate_macd(closes)
-    ema_trend    = calculate_ema_trend(closes)
-    # EMA 50/200 series for the chart line, aligned to the visible 60-candle
-    # window. EMA200 needs 200 closes to seed — on TFs with less history it
-    # stays empty and simply isn't drawn.
-    _ema50_s  = _ema_series(closes, 50)
-    _ema200_s = _ema_series(closes, 200)
-    _cut_ts   = spot[-60]["timestamp"] if len(spot) >= 60 else (spot[0]["timestamp"] if spot else 0)
-    ema_lines = {
-        "ema50":  [{"timestamp": spot[i]["timestamp"], "value": round(_ema50_s[i], 8)}
-                   for i in range(len(spot))
-                   if _ema50_s[i] is not None and spot[i]["timestamp"] >= _cut_ts],
-        "ema200": [{"timestamp": spot[i]["timestamp"], "value": round(_ema200_s[i], 8)}
-                   for i in range(len(spot))
-                   if _ema200_s[i] is not None and spot[i]["timestamp"] >= _cut_ts],
-    }
+    # ── External fetches — the half that cannot be replayed ──────────────────
     long_short   = client.get_long_short_ratio(bs)
     fear_greed   = _fetch_fear_greed()
     news         = fetch_news_sentiment(bs)
-    rsi_series = calculate_rsi_series(closes)
-    current_rsi = next((v for v in reversed(rsi_series) if v is not None), None)
-    # RSI slope: change over last 5 valid values — positive = momentum building, negative = fading
-    _valid_rsi = [v for v in rsi_series if v is not None]
-    rsi_slope = round(_valid_rsi[-1] - _valid_rsi[-5], 2) if len(_valid_rsi) >= 5 else None
-    # Price ROC: 4-candle rate of change — captures "the coin is actively moving right now"
-    price_roc = round((closes[-1] - closes[-5]) / closes[-5] * 100, 2) if len(closes) >= 5 and closes[-5] != 0 else None
-    # Candle direction: +1 bullish / -1 bearish for last N CLOSED candles.
-    # Count varies by TF — lower TFs are noisier so we require more candles.
-    # `spot` is ALREADY closed candles here (the forming bar was removed by
-    # _split_closed above), so spot[-1] is the NEWEST COMPLETED candle and must be
-    # included. The old slice spot[-(1+n):-1] dropped it — an off-by-one that
-    # ignored the most recent closed bar's direction.
-    _n_dir = _TF_CANDLE_N.get(timeframe, 4)
-    # Shared helper: +1 / -1 / 0(doji) — a doji is NOT bearish (old `else -1`
-    # classified every doji as a bearish candle → false SHORT momentum).
-    candle_dirs = [candle_direction(c) for c in spot[-_n_dir:]] if len(spot) >= _n_dir else []
 
-    # Aggregated spot CVD: sums real taker buy/sell deltas from Binance+OKX+MEXC
-    # in parallel. Falls back to single-exchange estimate only if all three fail.
-    # price_map lets the aggregator convert base-coin sources (OKX spot) to USD
-    # by timestamp before summing, so the total stays in one unit.
+    # Aggregated spot CVD: real taker buy/sell deltas from Binance+OKX+MEXC in
+    # parallel. price_map converts base-coin sources (OKX spot) to USD by
+    # timestamp before summing, so the total stays in one unit. When every
+    # source fails, the shared builder's candle estimate stands in.
     _cvd_price_map = {int(c["timestamp"]): c["close"] for c in spot if c.get("close")}
-    spot_cvd = (fetch_aggregated_spot_cvd(bs, interval, limit, price_map=_cvd_price_map)
-                or calculate_cvd(spot, "spot"))
-    # Only compute futures CVD when we have real perp candles — if get_futures_klines
-    # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
+    spot_cvd = fetch_aggregated_spot_cvd(bs, interval, limit,
+                                         price_map=_cvd_price_map) or None
+    # Only compute futures CVD when we have real perp candles — if
+    # get_futures_klines fell back to spot data, futures CVD would be identical
+    # to spot CVD (misleading).
     fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None
     # Fallback: aggregate real taker CVD from Binance+OKX perps directly. Covers
     # alts like TAO whose perp isn't the primary futures source (so futures_real
@@ -1098,108 +994,27 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
             fut_cvd = agg_fut
             futures_real = True   # we now have genuine perp taker data
 
-    # CoinGlass aggregated CVD: real taker buy/sell volume across Binance+Bybit+OKX+others.
-    # Always preferred over candle-estimated fut_cvd when CoinGlass key is configured.
+    # CoinGlass aggregated CVD: real taker buy/sell volume across
+    # Binance+Bybit+OKX+others. Always preferred over candle-estimated fut_cvd
+    # when a CoinGlass key is configured.
     agg_cvd = cg_client.get_aggregated_cvd(bs, interval) if cg_client.enabled else None
     if agg_cvd:
         fut_cvd = agg_cvd  # real taker data beats candle close/open estimation
         agg_cvd = None      # avoid double-counting in CVD divergence calc
-    volume_spikes = find_volume_spikes(spot)
-    whale_activity = detect_whale_activity(spot)
-    # Classical reversal patterns (Double Top/Bottom, Head & Shoulders) over the
-    # full closed history — display alongside flags with the same lifecycle.
-    reversal_patterns = detect_reversals(spot, timeframe)
-    # Converging-trendline patterns (triangles + wedges).
-    triangle_patterns = detect_triangles_wedges(spot, timeframe)
+
     market_cap    = client.get_market_cap(bs)
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
-    fvgs = detect_fvg(spot)
-    engulfing = detect_engulfing(spot)
 
-    # Elliott Wave pivots + SMC structure
-    ph, pl  = find_pivots(spot, window=2)
-    elliott = analyze_elliott_wave(spot, ph, pl)
-    choch    = detect_choch(spot, window=3)
-    liq_grab = detect_liquidity_grab(spot, window=3, lookback=5)
-    acc_setup = detect_acc_eql_fvg_setup(spot, fvgs, window=20)
-
-    # ── Say the lifecycle out loud ───────────────────────────────────────────
-    # These detectors already reported `candles_ago`, and signals.py already
-    # faded them by it — but only inside the scorer, as bare divisions. The
-    # dashboard could not tell a CHoCH that printed this candle from one nine
-    # candles old and nearly worthless, because nothing said so.
-    #
-    # `annotate` attaches the status, window and freshness the scorer uses. It
-    # returns None once a pattern has aged past its grace bars, so a lapsed
-    # signal is dropped rather than shown as live.
-    import lifecycle as _life
-    choch     = _life.annotate(choch, "choch") or {"signal": "none"}
-    liq_grab  = _life.annotate(liq_grab, "liquidity_grab") or {"signal": "none"}
-    acc_setup = _life.annotate(acc_setup, "acc_eql_fvg") or {}
-    engulfing = [e for e in
-                 (_life.annotate(e, "engulfing") for e in (engulfing or []))
-                 if e]
-    # Equal highs/lows = resting liquidity pools (feeds the structure panel).
-    equal_levels = detect_equal_levels(spot)
-    # BOS streak + trading-session ranges (feed the structure panel).
-    bos_streak    = detect_bos_streak(spot)
-    # Full ladder of resting-stop levels for the structure chart.
-    liquidity_pools = detect_liquidity_pools(spot)
-    sess_ranges   = session_ranges(spot, timeframe)
-    # Diagonal trendline + supply/demand zones — computed on the same 60-candle
-    # window the chart draws so the overlay lines up with the visible candles.
-    _chart_win = spot[-60:] if len(spot) >= 60 else spot
-    trendline = detect_trendline(_chart_win, window=3)
-    sr_zones  = detect_sr_zones(_chart_win, window=3)
-    # The structure chart draws a deeper window, so it gets its own trendline.
-    # Reusing the 60-bar one would strand the line in the right-hand third and
-    # miss any support that has been running for longer than that.
-    structure_trendline = detect_trendline(spot[-STRUCTURE_CHART_BARS:], window=3)
-
-    # Flag patterns — detect on the same candles already fetched for this TF.
-    # One flag set per timeframe, no cross-TF duplication.
-    min_pole = TF_MIN_POLE_PCT.get(timeframe, 5.0)
-    _flag_diag: list = []
-    flags = pick_dominant_flags(detect_flags(spot, timeframe, 1.0,
-                                             min_pole_pct=min_pole, diag_out=_flag_diag))
-    # Surface "why suppressed" reasons whenever NO ACTIVE flag exists — that's
-    # exactly when the dashboard card is empty (the frontend hides inactive/stale
-    # flags). Covers both "nothing detected" and "only stale flags remain".
-    flag_diagnostics = _flag_diagnostics_for(flags, _flag_diag)
-
-    rsi_with_ts = [
-        {"timestamp": spot[i]["timestamp"], "rsi": v}
-        for i, v in enumerate(rsi_series)
-        if v is not None and i < len(spot)
-    ]
-
-    supertrend    = calculate_supertrend(spot)
-    ichimoku      = calculate_ichimoku(spot)
-    # Trim chart overlay series to the same 60-candle window sent to the chart
-    # so the SuperTrend line / Ichimoku cloud line up with the visible candles.
-    _chart_cutoff_ts = spot[-60]["timestamp"] if len(spot) >= 60 else (spot[0]["timestamp"] if spot else 0)
-    # The structure chart draws a DEEPER window (STRUCTURE_CHART_BARS), so it
-    # needs its own untrimmed SuperTrend series — reusing the 60-bar one left
-    # the older two thirds of that chart with no line and no regime shading.
-    _struct_cutoff_ts = (spot[-STRUCTURE_CHART_BARS]["timestamp"]
-                         if len(spot) >= STRUCTURE_CHART_BARS
-                         else (spot[0]["timestamp"] if spot else 0))
-    structure_supertrend = [p for p in (supertrend.get("series") or [])
-                            if p["timestamp"] >= _struct_cutoff_ts]
-    if supertrend.get("series"):
-        supertrend["series"] = [p for p in supertrend["series"] if p["timestamp"] >= _chart_cutoff_ts]
-    if ichimoku.get("series"):
-        ichimoku["series"] = [p for p in ichimoku["series"] if p["timestamp"] >= _chart_cutoff_ts]
-    bollinger     = calculate_bollinger_bands(spot)
-    # Weekly+ uses a 2-candle pivot window: with 3, a fresh swing low needs 3
-    # more WEEKLY closes to confirm — nearly a month of lag on the exact charts
-    # where analysts call divergences early.
-    rsi_div       = detect_rsi_divergence(
-        spot, rsi_series,
-        pivot_window=2 if timeframe in ("1W", "2W", "3W", "1M") else 3)
-    vwap          = calculate_vwap(spot)
-    stoch_rsi     = calculate_stoch_rsi([c["close"] for c in spot])
-    vol_signal    = calculate_volume_signal(spot)
+    # ── Everything derived from candles — the half that CAN be replayed ──────
+    # One builder, called by production here and by portfolio_backtest over
+    # history. Calling the same generate_signal proves nothing if the two hand
+    # it different dictionaries, and for a long time they did: the replay had no
+    # liquidity-pool ladder, no equal levels, no BOS streak, no reversal or
+    # triangle patterns, no deep swing levels and no volatility regime.
+    _cd = candle_analysis.build_candle_analysis(
+        spot, timeframe, symbol,
+        market_cap=market_cap, spot_cvd=spot_cvd, futures_cvd=fut_cvd)
+    spot_cvd = _cd["spot_cvd"]          # the candle estimate, if the fetch failed
 
     # Exchange netflow: coins flowing into exchanges (sell pressure) vs out (HODLing).
     # Only available for BTC/ETH via CoinGlass. Panel stays hidden for other tokens.
@@ -1288,11 +1103,6 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         except Exception:
             tao_ecosystem = None
 
-    # Volatility regime: current ATR(14)/price percentile vs this token's own
-    # history — tells the signal whether "full size" is being suggested into a
-    # dead-calm or an explosive tape.
-    vol_regime = _vol_regime(spot)
-
     # GoMining advisor: lightweight GOMINING price direction (BTC view only).
     # Uses a simple EMA20 slope on 1D candles — avoids full build_analysis overhead.
     gomining_token_signal = None
@@ -1335,76 +1145,32 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         candles_4w=_daily_candles,
     ) if symbol == "BTC" else get_options_expiry_data()  # calendar-only for ALTs
 
-    # Deep swing pivots over the full fetched history (window=3 = chunkier, more
-    # significant swings than the intraday-grade window=2 the signal uses on the
-    # 60-candle view). These give higher-timeframe TP targets real far structure.
-    _deep_swing_highs, _deep_swing_lows = _swing_levels(spot, window=3)
-
-    analysis = {
-        "symbol":       symbol,
-        "timeframe":    timeframe,
-        "candles":      spot[-60:],           # CLOSED candles — signals/structure
-        # Deep swing pivots over the FULL fetched history (up to TF_LIMIT candles,
-        # e.g. ~3 yrs on 1W / ~8 yrs on 1M) — the far structure a swing trader
-        # targets, which the 60-candle signal window can't see. Feeds TP snapping.
-        "deep_swing_highs": _deep_swing_highs,
-        "deep_swing_lows":  _deep_swing_lows,
+    # ── The analysis dict: candle-derived first, external merged on top ──────
+    # The order is the contract. Everything replayable comes from the shared
+    # builder; everything added below is fetched, live, or clock-bound — which
+    # is exactly the set a historical replay has to declare it is missing.
+    analysis = dict(_cd)
+    analysis.update({
         "live_candle":  live_candle,          # forming candle — display only
         "live_price":   live_price,           # latest (possibly unfinished) price
-        "signal_price": signal_price,         # last CLOSED close — signals computed on this
-        "rsi":          current_rsi,
-        "rsi_slope":    rsi_slope,
-        "price_roc":    price_roc,
-        "candle_dirs":  candle_dirs,
-        "rsi_series":   rsi_with_ts[-30:],
+        "signal_price": signal_price,         # last CLOSED close
         "spot_cvd":     spot_cvd,
         "futures_cvd":  fut_cvd,
         "agg_cvd":      agg_cvd,
+        "cvd_divergence": detect_cvd_divergence(spot_cvd, fut_cvd, spot),
         "funding_rate": funding,
         "open_interest": oi,
         "liquidations": liq,
-        "fvgs":         fvgs[:15],
-        "choch":        choch,
-        "liq_grab":     liq_grab,
-        "acc_setup":    acc_setup,
-        "trendline":    trendline,
-        "sr_zones":     sr_zones,
         "htf_levels":   _collect_htf_levels(symbol, timeframe),
-        "engulfing":    engulfing,
-        "flags":        flags,
-        "flag_diagnostics": flag_diagnostics,
-        "reversal_patterns": reversal_patterns,
-        "triangle_patterns": triangle_patterns,
-        "elliott_wave": elliott,
-        "market_cap":        market_cap,
-        "volume_spikes":     volume_spikes,
-        "whale_activity":    whale_activity,
         "order_book":        order_book,
         "upcoming_holidays": get_upcoming_holidays(),
         "data_source":       spot_source,
         "demo_mode":         spot_source == "demo",
         "futures_available": futures_real,
         "coinglass_enabled": cg_client.enabled,
-        "cvd_divergence":    detect_cvd_divergence(spot_cvd, fut_cvd, spot),
-        # On-Balance Volume. REPORTING ONLY — generate_signal never reads it.
-        # CVD already answers the same question with real taker buy/sell volume
-        # rather than OBV's assumption that a candle closing +0.01% was 100%
-        # buying, so scoring both would count the same volume twice. This is
-        # here because a lot of chart commentary is written in OBV's language.
-        "obv":               calculate_obv(spot),
-        "macd":          macd,
-        "ema_trend":     ema_trend,
-        "ema_lines":     ema_lines,
         "long_short":    long_short,
         "fear_greed":    fear_greed,
         "news":          news,
-        "supertrend":    supertrend,
-        "ichimoku":      ichimoku,
-        "bollinger":     bollinger,
-        "rsi_divergence": rsi_div,
-        "vwap":          vwap,
-        "stoch_rsi":     stoch_rsi,
-        "vol_signal":    vol_signal,
         "btc_mining":             btc_mining,
         "gomining_strategy":      gomining_strategy,
         "gomining_token_signal":  gomining_token_signal,
@@ -1416,20 +1182,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "markets":                markets,
         "regime":                 regime,
         "event_risk":             event_risk,
-        "vol_regime":             vol_regime,
         "gomining_tokenomics":    gomining_tokenomics,
         "tao_ecosystem":          tao_ecosystem,
-        "equal_levels":           equal_levels,
-        "bos_streak":             bos_streak,
-        "liquidity_pools":        liquidity_pools,
-        # Deeper window for the structure chart — 60 bars is too few to
-        # show where past liquidity actually sits.
-        "structure_candles":      spot[-STRUCTURE_CHART_BARS:],
-        "structure_supertrend":   structure_supertrend,
-        "structure_trendline":    structure_trendline,
-        "session_ranges":         sess_ranges,
         "generated_at":           int(time.time() * 1000),
-    }
+    })
     analysis["signal"] = generate_signal(analysis)
     # Dense market-structure status panel (trend / structure / liquidity),
     # built from data already in `analysis` — no extra fetches.
@@ -1996,6 +1752,15 @@ def api_backtest(symbol):
     return jsonify(report)
 
 
+def _strategy_version_for_reports():
+    """The rule-set a replay was run against, for the report header."""
+    try:
+        import signal_publish
+        return signal_publish.STRATEGY_VERSION
+    except Exception:
+        return None
+
+
 @app.get("/api/backtest/portfolio")
 def api_backtest_portfolio():
     """Walk-forward replay of the strategy that actually publishes.
@@ -2070,10 +1835,23 @@ def api_backtest_portfolio():
 
     report = portfolio_backtest.replay(
         market, correlations=_BTC_CORR, parity_mode="price_only",
+        production_universe=list(SCAN_SYMBOLS),
+        strategy_version=_strategy_version_for_reports(),
         fee_bps=fee, slippage_bps=slip, max_slots=slots,
         keep_trades=want_trades)
     report["data_source"] = client.data_source
-    report["result_kind"] = "production_parity_price_only"
+    # result_kind is decided by the replay from the evidence, not asserted here.
+    # A capped run can only ever be subset_price_only: the endpoint fetches at
+    # most `cap` symbols and production ranks against SCAN_SYMBOLS, so the top
+    # three came out of a different field.
+    if not report["parity"]["universe"]["universe_complete"]:
+        report["subset_warning"] = (
+            "This is a SUBSET replay. The top three was selected from "
+            f"{len(universe)} symbols; production ranks across "
+            f"{len(SCAN_SYMBOLS)}. Gates, fills and exits are validated; "
+            "top-three SELECTION is not. Run portfolio_backtest_cli for the "
+            "full universe — it cannot run here because a complete replay "
+            "exceeds the 60s function ceiling.")
     return jsonify(report)
 
 

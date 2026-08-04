@@ -739,8 +739,10 @@ def test_the_report_states_candle_and_slot_coverage(report):
 def test_the_report_names_its_own_non_parity(report):
     gaps = report["parity"]["known_non_parity"]
     joined = " ".join(gaps).lower()
-    assert "live tick" in joined
-    assert "data_quality" in joined
+    assert "live_tick_unavailable" in joined
+    assert "data_quality_not_reconstructed" in joined
+    assert gaps == report["parity"]["parity_blockers"], \
+        "the gaps a reader sees must be the same list that blocks the label"
 
 
 def test_the_report_states_its_execution_cost_assumptions(report):

@@ -355,6 +355,20 @@ still differs from production. Asking for `historical_full` without supplying
 timestamped snapshots returns 400 rather than substituting today's values for
 last March's.
 
+The endpoint is **capped** (12 symbols) for timeout safety, so it always returns
+`result_kind: subset_price_only`: production ranks across all 31 `SCAN_SYMBOLS`,
+and a top three chosen from a smaller field is a different top three. A subset
+run validates the gates, the fills and the exits — **not** the selection. For
+the complete universe use the offline CLI, which is not capped:
+
+```
+python -m portfolio_backtest_cli --symbols production --slots 100 \
+    --limit 1000 --output report.json
+```
+
+It fails closed when any symbol is short of history rather than quietly dropping
+it and still claiming full-universe parity.
+
 `/api/backtest/<symbol>` is **deprecated** and returns
 `result_kind: legacy_price_only`. It is a single-symbol indicator study with a
 per-group ablation — no 1H/2H agreement, no BTC adjustment, no R/R gate, no
