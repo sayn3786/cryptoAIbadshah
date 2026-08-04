@@ -65,7 +65,7 @@ __all__ = [
     "PARITY_MODES", "TF_MS", "PUBLICATION_INTERVAL_MS", "RESULT_LABELS",
     "DEFAULT_FEE_BPS", "DEFAULT_SLIPPAGE_BPS",
     "closed_slice", "publication_slots", "replay", "result_label",
-    "universe_report", "market_cap_at",
+    "universe_report", "history_coverage_report", "market_cap_at",
 ]
 
 # Bar length in epoch milliseconds. A candle whose open timestamp is `ts` is
@@ -158,8 +158,89 @@ def _iso(ms: int) -> str:
 
 # ── Universe completeness ────────────────────────────────────────────────────
 
+def history_coverage_report(market: Dict[str, Dict[str, List[Dict]]],
+                            evaluated: Sequence[str], slots: Sequence[int], *,
+                            production_universe: Optional[Sequence[str]] = None,
+                            btc_symbol: str = "BTC", warmup_bars: int = 60,
+                            lookback: int = 240) -> Dict:
+    """Report whether every symbol could actually participate at every slot.
+
+    A symbol key is not evidence that the symbol was evaluated. Ranking needs
+    warm indicator history for all three tradable timeframes, while BTC needs a
+    warm 2H reading for the market-influence adjustment.
+    """
+    expected = list(dict.fromkeys(production_universe or evaluated))
+    slot_list = list(slots)
+    total = len(expected) * len(slot_list)
+    unavailable = 0
+    insufficient: Dict[str, Dict[str, Any]] = {}
+
+    if not slot_list:
+        for sym in expected:
+            insufficient[sym] = {
+                "unavailable_slots": 0,
+                "timeframes": {},
+                "reason": "NO_PUBLICATION_SLOTS",
+            }
+        return {
+            "history_complete": False,
+            "insufficient_history_symbols": expected,
+            "insufficient_history_by_symbol": insufficient,
+            "unavailable_symbol_slots": 0,
+            "total_expected_symbol_slots": 0,
+            "history_coverage": 0.0,
+            "warmup_bars": warmup_bars,
+        }
+
+    for sym in expected:
+        required = ("2H",) if sym == btc_symbol else ("1H", "2H", "4H")
+        tfs = market.get(sym) or {}
+        misses = {tf: 0 for tf in required}
+        unavailable_slots = 0
+        first_unavailable = None
+        for slot in slot_list:
+            missing_at_slot = False
+            for tf in required:
+                window = closed_slice(tfs.get(tf) or [], tf, slot,
+                                      lookback=lookback)
+                span = TF_MS[tf]
+                ready = len(window) >= warmup_bars
+                if ready:
+                    # A stale last candle or a hole anywhere in the actual
+                    # indicator window means this symbol did not have the same
+                    # information production would have had at the slot.
+                    timestamps = [int(c["timestamp"]) for c in window]
+                    ready = timestamps[-1] + span == slot and all(
+                        current - previous == span
+                        for previous, current in zip(timestamps, timestamps[1:]))
+                if not ready:
+                    misses[tf] += 1
+                    missing_at_slot = True
+            if missing_at_slot:
+                unavailable_slots += 1
+                first_unavailable = first_unavailable or slot
+        if unavailable_slots:
+            unavailable += unavailable_slots
+            insufficient[sym] = {
+                "unavailable_slots": unavailable_slots,
+                "timeframes": {tf: count for tf, count in misses.items() if count},
+                "first_unavailable_slot": _iso(first_unavailable),
+            }
+
+    return {
+        "history_complete": not insufficient,
+        "insufficient_history_symbols": list(insufficient),
+        "insufficient_history_by_symbol": insufficient,
+        "unavailable_symbol_slots": unavailable,
+        "total_expected_symbol_slots": total,
+        "history_coverage": round((total - unavailable) / total, 4),
+        "warmup_bars": warmup_bars,
+    }
+
+
 def universe_report(evaluated: Sequence[str],
-                    production_universe: Optional[Sequence[str]]) -> Dict:
+                    production_universe: Optional[Sequence[str]],
+                    history: Optional[Dict] = None) -> Dict:
     """
     Did this replay see the universe production ranks against?
 
@@ -175,8 +256,10 @@ def universe_report(evaluated: Sequence[str],
     it would drag app.py (and its eleven service clients) into a pure module.
     """
     seen = list(dict.fromkeys(evaluated))
+    history = history or {}
+    history_complete = history.get("history_complete", True)
     if not production_universe:
-        return {
+        report = {
             "universe_mode": "unspecified",
             "expected_symbols": None,
             "evaluated_symbols": seen,
@@ -186,17 +269,22 @@ def universe_report(evaluated: Sequence[str],
             "note": ("No production universe was supplied, so completeness "
                      "cannot be claimed. Treat this as a subset."),
         }
+        report.update(history)
+        return report
     expected = list(dict.fromkeys(production_universe))
     missing = [s for s in expected if s not in set(seen)]
-    return {
-        "universe_mode": "production" if not missing else "subset",
+    complete = not missing and history_complete
+    report = {
+        "universe_mode": "production" if complete else "subset",
         "expected_symbols": expected,
         "evaluated_symbols": seen,
         "missing_symbols": missing,
-        "universe_complete": not missing,
+        "universe_complete": complete,
         "production_universe_size": len(expected),
         "extra_symbols": [s for s in seen if s not in set(expected)],
     }
+    report.update(history)
+    return report
 
 
 # ── Historical market cap ────────────────────────────────────────────────────
@@ -612,7 +700,7 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     parity = _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
                            coverage, fee_bps, slippage_bps, fill_window_hours,
                            max_age_hours, production_universe, mcap_seen,
-                           strategy_version)
+                           strategy_version, btc_symbol, warmup_bars, lookback)
     report = {
         "result_kind": parity["result_kind"],
         "parity": parity,
@@ -753,7 +841,7 @@ class _ExternalCoverage:
 def _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
                   coverage, fee_bps, slippage_bps, fill_window_hours,
                   max_age_hours, production_universe, mcap_seen,
-                  strategy_version) -> Dict:
+                  strategy_version, btc_symbol, warmup_bars, lookback) -> Dict:
     """
     Everything a reader needs to know what this result is NOT.
 
@@ -766,7 +854,10 @@ def _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
         tfs = market.get(sym) or {}
         candle_cov[sym] = {tf: len(tfs.get(tf) or []) for tf in ("1H", "2H", "4H")}
 
-    uni = universe_report(symbols, production_universe)
+    history = history_coverage_report(
+        market, symbols, slots, production_universe=production_universe,
+        btc_symbol=btc_symbol, warmup_bars=warmup_bars, lookback=lookback)
+    uni = universe_report(symbols, production_universe, history)
     ext = coverage.report()
     mcap_total = sum(mcap_seen.values()) or 0
     mcap_hist = mcap_seen.get("historical", 0)
@@ -780,10 +871,14 @@ def _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
     pipeline_complete = not missing_pipeline
 
     blockers = []
-    if not uni["universe_complete"]:
+    if not production_universe or uni.get("missing_symbols"):
         blockers.append(
             "UNIVERSE_INCOMPLETE: the top three was chosen from a different "
             "field than production ranks against, so selection is not validated")
+    if not history["history_complete"]:
+        blockers.append(
+            "UNIVERSE_HISTORY_INCOMPLETE: one or more expected symbols lacked "
+            "warm timeframe history at an evaluated ranking slot")
     if not pipeline_complete:
         blockers.append(f"PIPELINE_INCOMPLETE: {missing_pipeline}")
     if parity_mode == "price_only":
