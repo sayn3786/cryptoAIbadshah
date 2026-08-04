@@ -58,12 +58,21 @@ def test_the_candidate_loop_uses_the_same_gate():
     # Two copies could drift, and a symbol reaching the loop with no 4H data
     # would be scored as though 4H were neutral — a silent change to the
     # published set.
+    #
+    # The prefetch calls the gate directly; the loop reaches it through
+    # rec_policy.screen_candidate, which runs it first. One implementation,
+    # two callers — which is the property, not the literal call count.
     import inspect
+    import rec_policy
     src = inspect.getsource(appmod._compute_recommendations)
-    assert src.count("_passes_tf_gates(") == 2, \
-        "the prefetch and the loop must share one gate"
+    assert "_passes_tf_gates(" in src, "the prefetch must use the shared gate"
+    assert "rec_policy.screen_candidate(" in src, \
+        "the loop must screen through the shared policy"
     assert 'h1["direction"] != h2["direction"]' not in src, \
         "the duplicated gate logic must be gone"
+    assert appmod._passes_tf_gates is rec_policy.passes_tf_gates
+    assert "passes_tf_gates(h1, h2)" in inspect.getsource(
+        rec_policy.screen_candidate), "the screen must run the gate itself"
 
 
 # ── The saving, and that it costs no correctness ───────────────────────────

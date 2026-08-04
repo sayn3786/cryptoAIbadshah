@@ -326,6 +326,8 @@ the mutation endpoints stay **closed**, not open.
 | POST | `/api/signals/<id>/postmortem` | internal |
 | GET | `/api/db/health` | public (code only) |
 | GET | `/api/db/usage` | internal |
+| GET | `/api/backtest/portfolio` | public |
+| GET | `/api/backtest/<symbol>` | public (**deprecated**) |
 
 Filters on `/api/signals/history`: `symbol`, `timeframe`, `direction`,
 `status` (repeatable), `strategy_version`, `exchange`, `include_archived=1`,
@@ -334,6 +336,47 @@ by default and results are scoped to this deployment's environment.
 
 `/api/signals/tracker` takes `days` (closed window, default 3, max 30) and
 `environment`.
+
+### Validating the strategy
+
+`/api/backtest/portfolio` is the walk-forward replay of the **published**
+strategy: every historical 4H slot, closed candles only, the real gates and
+ranking from `rec_policy`, the correlation-aware top-three, resting limit
+entries with the 24-hour cancellation, and the 50/30/20 scale-out with the stop
+to breakeven — all through the same functions production and the monitor call.
+Params: `symbols`, `cap` (6), `slots` (20), `limit` (700), `fee_bps` (6),
+`slippage_bps` (2), `trades`.
+
+It runs in `price_only` mode: funding, OI, futures CVD, sentiment, macro,
+on-chain and options have no historical series, so it measures the
+price/structure edge and **cannot validate any external input**. Every response
+states its parity mode, the gates it replayed, what it omitted, and where it
+still differs from production. Asking for `historical_full` without supplying
+timestamped snapshots returns 400 rather than substituting today's values for
+last March's.
+
+The endpoint is **capped** (12 symbols) for timeout safety, so it always returns
+`result_kind: subset_price_only`: production ranks across all 31 `SCAN_SYMBOLS`,
+and a top three chosen from a smaller field is a different top three. A subset
+run validates the gates, the fills and the exits — **not** the selection. For
+the complete universe use the offline CLI, which is not capped:
+
+```
+python -m portfolio_backtest_cli --symbols production --slots 100 \
+    --limit 1000 --output report.json
+```
+
+It fails closed when any symbol is short of history rather than quietly dropping
+it and still claiming full-universe parity.
+
+`/api/backtest/<symbol>` is **deprecated** and returns
+`result_kind: legacy_price_only`. It is a single-symbol indicator study with a
+per-group ablation — no 1H/2H agreement, no BTC adjustment, no R/R gate, no
+ranking, market entry at the next open, TP1 as a full exit. It is not a test of
+the published strategy and its responses say so.
+
+Full detail, including the metric definitions and the remaining parity gaps, is
+in [SIGNAL_RELIABILITY.md](SIGNAL_RELIABILITY.md).
 
 ## Publication cadence
 

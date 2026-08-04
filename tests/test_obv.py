@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
+import candle_analysis                                                # noqa: E402
 from indicators import calculate_obv                                  # noqa: E402
 
 
@@ -144,7 +145,14 @@ def test_obv_never_reaches_the_score():
 
 
 def test_the_analysis_payload_exposes_it_for_display():
-    app_src = open(os.path.join(os.path.dirname(__file__), "..",
-                                "backend", "app.py"), encoding="utf-8").read()
-    assert '"obv":' in app_src, "OBV is not exposed to the dashboard"
-    assert "calculate_obv" in app_src
+    """
+    OBV is computed in the shared candle builder now, alongside every other
+    candle-derived field, and reaches the payload through it. Checked at the
+    source rather than through a live build because build_analysis fetches from
+    eleven services.
+    """
+    ca_src = open(os.path.join(os.path.dirname(__file__), "..", "backend",
+                               "candle_analysis.py"), encoding="utf-8").read()
+    assert '"obv":' in ca_src, "OBV is not exposed to the dashboard"
+    assert "calculate_obv" in ca_src
+    assert "obv" in candle_analysis.CANDLE_DERIVED_KEYS

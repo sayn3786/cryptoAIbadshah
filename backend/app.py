@@ -41,6 +41,9 @@ from news import fetch_news_sentiment
 from holidays import get_upcoming_holidays
 from patterns import detect_bos_streak, detect_liquidity_pools, session_ranges, detect_equal_levels, detect_flags, pick_dominant_flags, summarize_flag_diagnostics, detect_reversals, detect_triangles_wedges, build_structure_panel, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
 from signals import generate_signal, _swing_levels
+import rec_policy
+import portfolio_backtest
+import candle_analysis
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs, send_pattern_alerts as _send_pattern_alerts
 from kv import claim as _kv_claim, exists as _kv_exists, kv_enabled as _kv_enabled
@@ -335,37 +338,11 @@ TF_LIMIT = {
 
 # Minimum pole size (%) required for flag detection per TF.
 # Shorter bars need smaller thresholds — a 4H candle rarely moves 8%.
-TF_MIN_POLE_PCT = {
-    "1H": 2.0, "2H": 2.5,
-    "4H": 3.0, "8H": 4.0, "12H": 5.0, "1D":  6.0,
-    "1W": 8.0, "2W": 8.0, "3W":  8.0, "1M": 10.0,
-}
+# Moved to candle_analysis so production and the replay share one copy.
+TF_MIN_POLE_PCT = candle_analysis.TF_MIN_POLE_PCT
 
 
-def _flag_diagnostics_for(flags: list, raw_diag: list) -> list:
-    """Build the "why is the flag card empty" explanation.
-
-    Fires whenever NO ACTIVE flag exists — that's exactly when the dashboard card
-    is empty (the frontend hides inactive/stale flags). Prefers the concrete
-    rejection reasons from detect_flags; if flags were found but merely resolved /
-    aged out (nothing was rejected), describes that state instead.
-    """
-    if any(f.get("is_active") for f in flags):
-        return []
-    diag = summarize_flag_diagnostics(raw_diag)
-    if not diag and flags:
-        f0 = flags[0]
-        state = ("its breakout already played out" if f0.get("confirmed")
-                 else "it resolved or aged out of the active window")
-        diag = [{
-            "reason": "inactive",
-            "direction": f0.get("direction"),
-            "message": (f"A {f0.get('direction')} flag was found but is no "
-                        f"longer active — {state}."),
-            "consolidation_bars": f0.get("consolidation_bars"),
-            "capped_at_max": False,
-        }]
-    return diag
+_flag_diagnostics_for = candle_analysis.flag_diagnostics_for
 
 # Higher timeframes that each TF must align with for confluence validation.
 # Shorter TFs depend on a larger stack of HTFs; longer TFs have fewer above them.
@@ -384,10 +361,7 @@ _HTF_DEPS: Dict[str, List[str]] = {
 
 # How many closed candles to use for direction checks per TF.
 # Lower TFs are noisier so we require more candles for confidence.
-_TF_CANDLE_N: Dict[str, int] = {
-    "1H": 4, "2H": 4, "4H": 4, "8H": 4, "12H": 4,
-    "1D": 3, "1W": 2, "2W": 2, "3W": 2, "1M": 4,
-}
+_TF_CANDLE_N = candle_analysis.TF_CANDLE_N
 
 
 def _ema_val(values: List[float], period: int):
@@ -401,20 +375,7 @@ def _ema_val(values: List[float], period: int):
     return e
 
 
-def _ema_series(values: List[float], period: int) -> List:
-    """EMA value at each index (None before there's enough data to seed it).
-    Used to draw the EMA line on the chart aligned candle-for-candle."""
-    n = len(values)
-    out = [None] * n
-    if n < period:
-        return out
-    k = 2.0 / (period + 1)
-    e = sum(values[:period]) / period
-    out[period - 1] = e
-    for i in range(period, n):
-        e = values[i] * k + e * (1 - k)
-        out[i] = e
-    return out
+_ema_series = candle_analysis.ema_series
 
 
 def _rec_reasons(sig: dict, direction: str, limit: int = 3) -> list:
@@ -566,7 +527,7 @@ _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 # The dedicated structure chart draws a deeper window than the main chart's 60
 # bars — past liquidity pools need room to show. Candles AND the SuperTrend
 # overlay both use this, so the line and shading span the whole pane.
-STRUCTURE_CHART_BARS = 150
+STRUCTURE_CHART_BARS = candle_analysis.STRUCTURE_CHART_BARS
 
 
 def _pattern_alert_id(sym: str, tf: str, pat: dict) -> str:
@@ -838,38 +799,7 @@ def _btc_top_signals(realized_price, spot_price=None):
 
 
 # ── Volatility regime ─────────────────────────────────────────────────────────
-def _vol_regime(candles: list):
-    """
-    Percentile of the current normalised ATR(14) vs this candle history.
-    >85th pct = explosive tape (halve size); <20th = dead calm.
-    """
-    try:
-        if not candles or len(candles) < 45:
-            return None
-        trs = []
-        for i in range(1, len(candles)):
-            c, p = candles[i], candles[i - 1]
-            tr = max(c["high"] - c["low"],
-                     abs(c["high"] - p["close"]),
-                     abs(c["low"] - p["close"]))
-            trs.append(tr / c["close"] if c["close"] else 0)
-        # ATR(14) series (simple mean), normalised by price
-        natr = [sum(trs[i - 14:i]) / 14 for i in range(14, len(trs) + 1)]
-        if len(natr) < 20:
-            return None
-        cur = natr[-1]
-        # Midrank percentile — ties count half, so a flat tape reads 50th, not 100th
-        less  = sum(1 for v in natr if v < cur - 1e-12)
-        equal = sum(1 for v in natr if abs(v - cur) <= 1e-12)
-        pct = (less + 0.5 * equal) / len(natr) * 100
-        if   pct >= 85: zone, note = "extreme", "Volatility in top 15% of this token's history — expect violent moves, halve position size"
-        elif pct >= 60: zone, note = "elevated", "Volatility above normal — size with care"
-        elif pct <= 20: zone, note = "calm", "Volatility in bottom 20% — compressed tape, breakouts often follow"
-        else:           zone, note = "normal", "Volatility in its normal range"
-        return {"atr_pct": round(cur * 100, 2), "percentile": round(pct),
-                "zone": zone, "note": note}
-    except Exception:
-        return None
+_vol_regime = candle_analysis.vol_regime
 
 
 # ── Higher-timeframe swing levels ─────────────────────────────────────────────
@@ -1039,53 +969,21 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         oi["thr_strong"]    = _smin
         oi["thr_quad"]      = _qmin
 
-    closes     = [c["close"] for c in spot]
-    macd         = calculate_macd(closes)
-    ema_trend    = calculate_ema_trend(closes)
-    # EMA 50/200 series for the chart line, aligned to the visible 60-candle
-    # window. EMA200 needs 200 closes to seed — on TFs with less history it
-    # stays empty and simply isn't drawn.
-    _ema50_s  = _ema_series(closes, 50)
-    _ema200_s = _ema_series(closes, 200)
-    _cut_ts   = spot[-60]["timestamp"] if len(spot) >= 60 else (spot[0]["timestamp"] if spot else 0)
-    ema_lines = {
-        "ema50":  [{"timestamp": spot[i]["timestamp"], "value": round(_ema50_s[i], 8)}
-                   for i in range(len(spot))
-                   if _ema50_s[i] is not None and spot[i]["timestamp"] >= _cut_ts],
-        "ema200": [{"timestamp": spot[i]["timestamp"], "value": round(_ema200_s[i], 8)}
-                   for i in range(len(spot))
-                   if _ema200_s[i] is not None and spot[i]["timestamp"] >= _cut_ts],
-    }
+    # ── External fetches — the half that cannot be replayed ──────────────────
     long_short   = client.get_long_short_ratio(bs)
     fear_greed   = _fetch_fear_greed()
     news         = fetch_news_sentiment(bs)
-    rsi_series = calculate_rsi_series(closes)
-    current_rsi = next((v for v in reversed(rsi_series) if v is not None), None)
-    # RSI slope: change over last 5 valid values — positive = momentum building, negative = fading
-    _valid_rsi = [v for v in rsi_series if v is not None]
-    rsi_slope = round(_valid_rsi[-1] - _valid_rsi[-5], 2) if len(_valid_rsi) >= 5 else None
-    # Price ROC: 4-candle rate of change — captures "the coin is actively moving right now"
-    price_roc = round((closes[-1] - closes[-5]) / closes[-5] * 100, 2) if len(closes) >= 5 and closes[-5] != 0 else None
-    # Candle direction: +1 bullish / -1 bearish for last N CLOSED candles.
-    # Count varies by TF — lower TFs are noisier so we require more candles.
-    # `spot` is ALREADY closed candles here (the forming bar was removed by
-    # _split_closed above), so spot[-1] is the NEWEST COMPLETED candle and must be
-    # included. The old slice spot[-(1+n):-1] dropped it — an off-by-one that
-    # ignored the most recent closed bar's direction.
-    _n_dir = _TF_CANDLE_N.get(timeframe, 4)
-    # Shared helper: +1 / -1 / 0(doji) — a doji is NOT bearish (old `else -1`
-    # classified every doji as a bearish candle → false SHORT momentum).
-    candle_dirs = [candle_direction(c) for c in spot[-_n_dir:]] if len(spot) >= _n_dir else []
 
-    # Aggregated spot CVD: sums real taker buy/sell deltas from Binance+OKX+MEXC
-    # in parallel. Falls back to single-exchange estimate only if all three fail.
-    # price_map lets the aggregator convert base-coin sources (OKX spot) to USD
-    # by timestamp before summing, so the total stays in one unit.
+    # Aggregated spot CVD: real taker buy/sell deltas from Binance+OKX+MEXC in
+    # parallel. price_map converts base-coin sources (OKX spot) to USD by
+    # timestamp before summing, so the total stays in one unit. When every
+    # source fails, the shared builder's candle estimate stands in.
     _cvd_price_map = {int(c["timestamp"]): c["close"] for c in spot if c.get("close")}
-    spot_cvd = (fetch_aggregated_spot_cvd(bs, interval, limit, price_map=_cvd_price_map)
-                or calculate_cvd(spot, "spot"))
-    # Only compute futures CVD when we have real perp candles — if get_futures_klines
-    # fell back to spot data, futures CVD would be identical to spot CVD (misleading).
+    spot_cvd = fetch_aggregated_spot_cvd(bs, interval, limit,
+                                         price_map=_cvd_price_map) or None
+    # Only compute futures CVD when we have real perp candles — if
+    # get_futures_klines fell back to spot data, futures CVD would be identical
+    # to spot CVD (misleading).
     fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None
     # Fallback: aggregate real taker CVD from Binance+OKX perps directly. Covers
     # alts like TAO whose perp isn't the primary futures source (so futures_real
@@ -1096,108 +994,27 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
             fut_cvd = agg_fut
             futures_real = True   # we now have genuine perp taker data
 
-    # CoinGlass aggregated CVD: real taker buy/sell volume across Binance+Bybit+OKX+others.
-    # Always preferred over candle-estimated fut_cvd when CoinGlass key is configured.
+    # CoinGlass aggregated CVD: real taker buy/sell volume across
+    # Binance+Bybit+OKX+others. Always preferred over candle-estimated fut_cvd
+    # when a CoinGlass key is configured.
     agg_cvd = cg_client.get_aggregated_cvd(bs, interval) if cg_client.enabled else None
     if agg_cvd:
         fut_cvd = agg_cvd  # real taker data beats candle close/open estimation
         agg_cvd = None      # avoid double-counting in CVD divergence calc
-    volume_spikes = find_volume_spikes(spot)
-    whale_activity = detect_whale_activity(spot)
-    # Classical reversal patterns (Double Top/Bottom, Head & Shoulders) over the
-    # full closed history — display alongside flags with the same lifecycle.
-    reversal_patterns = detect_reversals(spot, timeframe)
-    # Converging-trendline patterns (triangles + wedges).
-    triangle_patterns = detect_triangles_wedges(spot, timeframe)
+
     market_cap    = client.get_market_cap(bs)
     order_book    = client.get_order_book_walls(bs, market_cap=market_cap)
-    fvgs = detect_fvg(spot)
-    engulfing = detect_engulfing(spot)
 
-    # Elliott Wave pivots + SMC structure
-    ph, pl  = find_pivots(spot, window=2)
-    elliott = analyze_elliott_wave(spot, ph, pl)
-    choch    = detect_choch(spot, window=3)
-    liq_grab = detect_liquidity_grab(spot, window=3, lookback=5)
-    acc_setup = detect_acc_eql_fvg_setup(spot, fvgs, window=20)
-
-    # ── Say the lifecycle out loud ───────────────────────────────────────────
-    # These detectors already reported `candles_ago`, and signals.py already
-    # faded them by it — but only inside the scorer, as bare divisions. The
-    # dashboard could not tell a CHoCH that printed this candle from one nine
-    # candles old and nearly worthless, because nothing said so.
-    #
-    # `annotate` attaches the status, window and freshness the scorer uses. It
-    # returns None once a pattern has aged past its grace bars, so a lapsed
-    # signal is dropped rather than shown as live.
-    import lifecycle as _life
-    choch     = _life.annotate(choch, "choch") or {"signal": "none"}
-    liq_grab  = _life.annotate(liq_grab, "liquidity_grab") or {"signal": "none"}
-    acc_setup = _life.annotate(acc_setup, "acc_eql_fvg") or {}
-    engulfing = [e for e in
-                 (_life.annotate(e, "engulfing") for e in (engulfing or []))
-                 if e]
-    # Equal highs/lows = resting liquidity pools (feeds the structure panel).
-    equal_levels = detect_equal_levels(spot)
-    # BOS streak + trading-session ranges (feed the structure panel).
-    bos_streak    = detect_bos_streak(spot)
-    # Full ladder of resting-stop levels for the structure chart.
-    liquidity_pools = detect_liquidity_pools(spot)
-    sess_ranges   = session_ranges(spot, timeframe)
-    # Diagonal trendline + supply/demand zones — computed on the same 60-candle
-    # window the chart draws so the overlay lines up with the visible candles.
-    _chart_win = spot[-60:] if len(spot) >= 60 else spot
-    trendline = detect_trendline(_chart_win, window=3)
-    sr_zones  = detect_sr_zones(_chart_win, window=3)
-    # The structure chart draws a deeper window, so it gets its own trendline.
-    # Reusing the 60-bar one would strand the line in the right-hand third and
-    # miss any support that has been running for longer than that.
-    structure_trendline = detect_trendline(spot[-STRUCTURE_CHART_BARS:], window=3)
-
-    # Flag patterns — detect on the same candles already fetched for this TF.
-    # One flag set per timeframe, no cross-TF duplication.
-    min_pole = TF_MIN_POLE_PCT.get(timeframe, 5.0)
-    _flag_diag: list = []
-    flags = pick_dominant_flags(detect_flags(spot, timeframe, 1.0,
-                                             min_pole_pct=min_pole, diag_out=_flag_diag))
-    # Surface "why suppressed" reasons whenever NO ACTIVE flag exists — that's
-    # exactly when the dashboard card is empty (the frontend hides inactive/stale
-    # flags). Covers both "nothing detected" and "only stale flags remain".
-    flag_diagnostics = _flag_diagnostics_for(flags, _flag_diag)
-
-    rsi_with_ts = [
-        {"timestamp": spot[i]["timestamp"], "rsi": v}
-        for i, v in enumerate(rsi_series)
-        if v is not None and i < len(spot)
-    ]
-
-    supertrend    = calculate_supertrend(spot)
-    ichimoku      = calculate_ichimoku(spot)
-    # Trim chart overlay series to the same 60-candle window sent to the chart
-    # so the SuperTrend line / Ichimoku cloud line up with the visible candles.
-    _chart_cutoff_ts = spot[-60]["timestamp"] if len(spot) >= 60 else (spot[0]["timestamp"] if spot else 0)
-    # The structure chart draws a DEEPER window (STRUCTURE_CHART_BARS), so it
-    # needs its own untrimmed SuperTrend series — reusing the 60-bar one left
-    # the older two thirds of that chart with no line and no regime shading.
-    _struct_cutoff_ts = (spot[-STRUCTURE_CHART_BARS]["timestamp"]
-                         if len(spot) >= STRUCTURE_CHART_BARS
-                         else (spot[0]["timestamp"] if spot else 0))
-    structure_supertrend = [p for p in (supertrend.get("series") or [])
-                            if p["timestamp"] >= _struct_cutoff_ts]
-    if supertrend.get("series"):
-        supertrend["series"] = [p for p in supertrend["series"] if p["timestamp"] >= _chart_cutoff_ts]
-    if ichimoku.get("series"):
-        ichimoku["series"] = [p for p in ichimoku["series"] if p["timestamp"] >= _chart_cutoff_ts]
-    bollinger     = calculate_bollinger_bands(spot)
-    # Weekly+ uses a 2-candle pivot window: with 3, a fresh swing low needs 3
-    # more WEEKLY closes to confirm — nearly a month of lag on the exact charts
-    # where analysts call divergences early.
-    rsi_div       = detect_rsi_divergence(
-        spot, rsi_series,
-        pivot_window=2 if timeframe in ("1W", "2W", "3W", "1M") else 3)
-    vwap          = calculate_vwap(spot)
-    stoch_rsi     = calculate_stoch_rsi([c["close"] for c in spot])
-    vol_signal    = calculate_volume_signal(spot)
+    # ── Everything derived from candles — the half that CAN be replayed ──────
+    # One builder, called by production here and by portfolio_backtest over
+    # history. Calling the same generate_signal proves nothing if the two hand
+    # it different dictionaries, and for a long time they did: the replay had no
+    # liquidity-pool ladder, no equal levels, no BOS streak, no reversal or
+    # triangle patterns, no deep swing levels and no volatility regime.
+    _cd = candle_analysis.build_candle_analysis(
+        spot, timeframe, symbol,
+        market_cap=market_cap, spot_cvd=spot_cvd, futures_cvd=fut_cvd)
+    spot_cvd = _cd["spot_cvd"]          # the candle estimate, if the fetch failed
 
     # Exchange netflow: coins flowing into exchanges (sell pressure) vs out (HODLing).
     # Only available for BTC/ETH via CoinGlass. Panel stays hidden for other tokens.
@@ -1286,11 +1103,6 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         except Exception:
             tao_ecosystem = None
 
-    # Volatility regime: current ATR(14)/price percentile vs this token's own
-    # history — tells the signal whether "full size" is being suggested into a
-    # dead-calm or an explosive tape.
-    vol_regime = _vol_regime(spot)
-
     # GoMining advisor: lightweight GOMINING price direction (BTC view only).
     # Uses a simple EMA20 slope on 1D candles — avoids full build_analysis overhead.
     gomining_token_signal = None
@@ -1333,76 +1145,32 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         candles_4w=_daily_candles,
     ) if symbol == "BTC" else get_options_expiry_data()  # calendar-only for ALTs
 
-    # Deep swing pivots over the full fetched history (window=3 = chunkier, more
-    # significant swings than the intraday-grade window=2 the signal uses on the
-    # 60-candle view). These give higher-timeframe TP targets real far structure.
-    _deep_swing_highs, _deep_swing_lows = _swing_levels(spot, window=3)
-
-    analysis = {
-        "symbol":       symbol,
-        "timeframe":    timeframe,
-        "candles":      spot[-60:],           # CLOSED candles — signals/structure
-        # Deep swing pivots over the FULL fetched history (up to TF_LIMIT candles,
-        # e.g. ~3 yrs on 1W / ~8 yrs on 1M) — the far structure a swing trader
-        # targets, which the 60-candle signal window can't see. Feeds TP snapping.
-        "deep_swing_highs": _deep_swing_highs,
-        "deep_swing_lows":  _deep_swing_lows,
+    # ── The analysis dict: candle-derived first, external merged on top ──────
+    # The order is the contract. Everything replayable comes from the shared
+    # builder; everything added below is fetched, live, or clock-bound — which
+    # is exactly the set a historical replay has to declare it is missing.
+    analysis = dict(_cd)
+    analysis.update({
         "live_candle":  live_candle,          # forming candle — display only
         "live_price":   live_price,           # latest (possibly unfinished) price
-        "signal_price": signal_price,         # last CLOSED close — signals computed on this
-        "rsi":          current_rsi,
-        "rsi_slope":    rsi_slope,
-        "price_roc":    price_roc,
-        "candle_dirs":  candle_dirs,
-        "rsi_series":   rsi_with_ts[-30:],
+        "signal_price": signal_price,         # last CLOSED close
         "spot_cvd":     spot_cvd,
         "futures_cvd":  fut_cvd,
         "agg_cvd":      agg_cvd,
+        "cvd_divergence": detect_cvd_divergence(spot_cvd, fut_cvd, spot),
         "funding_rate": funding,
         "open_interest": oi,
         "liquidations": liq,
-        "fvgs":         fvgs[:15],
-        "choch":        choch,
-        "liq_grab":     liq_grab,
-        "acc_setup":    acc_setup,
-        "trendline":    trendline,
-        "sr_zones":     sr_zones,
         "htf_levels":   _collect_htf_levels(symbol, timeframe),
-        "engulfing":    engulfing,
-        "flags":        flags,
-        "flag_diagnostics": flag_diagnostics,
-        "reversal_patterns": reversal_patterns,
-        "triangle_patterns": triangle_patterns,
-        "elliott_wave": elliott,
-        "market_cap":        market_cap,
-        "volume_spikes":     volume_spikes,
-        "whale_activity":    whale_activity,
         "order_book":        order_book,
         "upcoming_holidays": get_upcoming_holidays(),
         "data_source":       spot_source,
         "demo_mode":         spot_source == "demo",
         "futures_available": futures_real,
         "coinglass_enabled": cg_client.enabled,
-        "cvd_divergence":    detect_cvd_divergence(spot_cvd, fut_cvd, spot),
-        # On-Balance Volume. REPORTING ONLY — generate_signal never reads it.
-        # CVD already answers the same question with real taker buy/sell volume
-        # rather than OBV's assumption that a candle closing +0.01% was 100%
-        # buying, so scoring both would count the same volume twice. This is
-        # here because a lot of chart commentary is written in OBV's language.
-        "obv":               calculate_obv(spot),
-        "macd":          macd,
-        "ema_trend":     ema_trend,
-        "ema_lines":     ema_lines,
         "long_short":    long_short,
         "fear_greed":    fear_greed,
         "news":          news,
-        "supertrend":    supertrend,
-        "ichimoku":      ichimoku,
-        "bollinger":     bollinger,
-        "rsi_divergence": rsi_div,
-        "vwap":          vwap,
-        "stoch_rsi":     stoch_rsi,
-        "vol_signal":    vol_signal,
         "btc_mining":             btc_mining,
         "gomining_strategy":      gomining_strategy,
         "gomining_token_signal":  gomining_token_signal,
@@ -1414,20 +1182,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "markets":                markets,
         "regime":                 regime,
         "event_risk":             event_risk,
-        "vol_regime":             vol_regime,
         "gomining_tokenomics":    gomining_tokenomics,
         "tao_ecosystem":          tao_ecosystem,
-        "equal_levels":           equal_levels,
-        "bos_streak":             bos_streak,
-        "liquidity_pools":        liquidity_pools,
-        # Deeper window for the structure chart — 60 bars is too few to
-        # show where past liquidity actually sits.
-        "structure_candles":      spot[-STRUCTURE_CHART_BARS:],
-        "structure_supertrend":   structure_supertrend,
-        "structure_trendline":    structure_trendline,
-        "session_ranges":         sess_ranges,
         "generated_at":           int(time.time() * 1000),
-    }
+    })
     analysis["signal"] = generate_signal(analysis)
     # Dense market-structure status panel (trend / structure / liquidity),
     # built from data already in `analysis` — no extra fetches.
@@ -1902,9 +1660,24 @@ def api_exhaustion(symbol):
 
 @app.get("/api/backtest/<symbol>")
 def api_backtest(symbol):
-    """Phase 4 — measurable validation. Replays the price/structure signal over
-    real candle history and returns expectancy, win-rate, profit-factor, drawdown
-    and (optionally) a per-group ablation study.
+    """DEPRECATED — single-symbol, single-timeframe indicator study.
+
+    Kept because it is the only thing that runs a per-group ablation, which is a
+    genuinely useful question about the INDICATORS. It is not, and never was,
+    a test of the published strategy: it takes one timeframe with no 1H/2H
+    agreement, no BTC adjustment, no R/R gate, no ranking, no top-three, enters
+    at market on the next bar's open instead of resting a limit order, and
+    treats TP1 as a full exit. Nine of the rules that decide what actually gets
+    traded are absent here.
+
+    Use /api/backtest/portfolio to ask whether the PUBLISHED strategy has
+    positive expectancy. This endpoint answers "do these indicators contain
+    price/structure edge", which is a different and weaker claim — and the
+    response says so in `result_kind: legacy_price_only`.
+
+    Replays the price/structure signal over real candle history and returns
+    expectancy, win-rate, profit-factor, drawdown and (optionally) a per-group
+    ablation study.
 
     Query params:
       tf            timeframe (default 2H — the primary trading TF)
@@ -1965,6 +1738,120 @@ def api_backtest(symbol):
         fee_bps=fee_bps, stride=stride,
     )
     report["data_source"] = src
+    # Versioned so a reader — or a future caller parsing this — cannot mistake
+    # it for the production-parity result. The shape is unchanged for existing
+    # callers; only the labelling is new.
+    report["result_kind"] = "legacy_price_only"
+    report["deprecated"] = True
+    report["superseded_by"] = "/api/backtest/portfolio"
+    report["not_a_strategy_test"] = (
+        "Single timeframe, no 1H/2H agreement, no BTC adjustment, no R/R gate, "
+        "no ranking or top-three, market entry at the next open instead of a "
+        "resting limit, TP1 treated as a full exit. This measures indicator "
+        "edge, NOT the published strategy.")
+    return jsonify(report)
+
+
+def _strategy_version_for_reports():
+    """The rule-set a replay was run against, for the report header."""
+    try:
+        import signal_publish
+        return signal_publish.STRATEGY_VERSION
+    except Exception:
+        return None
+
+
+@app.get("/api/backtest/portfolio")
+def api_backtest_portfolio():
+    """Walk-forward replay of the strategy that actually publishes.
+
+    Every historical 4H slot, closed candles only, the real gates from
+    rec_policy, ranking and correlation-aware top-three across the universe,
+    resting limit entries with the 24-hour cancellation, and the 50/30/20
+    scale-out with the stop to breakeven — all through the same functions
+    production and the monitor call.
+
+    Query params:
+      symbols   comma-separated (default: the scan universe, capped by `cap`)
+      cap       max symbols to replay (default 6) — each one costs a full
+                1H/2H/4H analysis at every slot, and this runs inside the same
+                60s function ceiling as everything else
+      slots     max publication slots, most recent first (default 20)
+      limit     candles pulled per timeframe (default 700, max 1000)
+      fee_bps / slippage_bps   execution cost assumptions
+      trades    1 = include the per-trade ledger
+
+    Modes: price_only only. `historical_full` needs timestamped external
+    snapshots, which no endpoint can supply today — asking for it returns 400
+    rather than silently substituting current values for historical ones.
+    """
+    args = request.args
+    mode = args.get("parity_mode", "price_only")
+    if mode != "price_only":
+        return jsonify({
+            "error": "historical_full requires timestamped external snapshots, "
+                     "which this endpoint cannot supply. Substituting current "
+                     "values would produce a confident number built on data the "
+                     "strategy never had.",
+            "supported": ["price_only"],
+        }), 400
+    try:
+        cap    = min(12, max(2, int(args.get("cap", 6))))
+        slots  = min(60, max(1, int(args.get("slots", 20))))
+        limit  = min(1000, max(200, int(args.get("limit", 700))))
+        fee    = float(args.get("fee_bps", portfolio_backtest.DEFAULT_FEE_BPS))
+        slip   = float(args.get("slippage_bps", portfolio_backtest.DEFAULT_SLIPPAGE_BPS))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid numeric parameter"}), 400
+    want_trades = args.get("trades") in ("1", "true", "yes")
+
+    requested = [s.strip().upper() for s in (args.get("symbols") or "").split(",")
+                 if s.strip()]
+    universe = [s for s in (requested or list(SCAN_SYMBOLS)) if s in SYMBOLS]
+    if requested:
+        unknown = [s for s in requested if s not in SYMBOLS]
+        if unknown:
+            return jsonify({"error": f"unknown symbols: {unknown}"}), 400
+    # BTC is always replayed: every candidate's strength is adjusted against it,
+    # so a run without it would be measuring a different policy.
+    universe = [s for s in universe if s != "BTC"][:cap - 1]
+    universe = ["BTC"] + universe
+
+    market: Dict[str, Dict[str, list]] = {}
+    for sym in universe:
+        bs = SYMBOLS[sym]
+        tfs = {}
+        for tf in ("1H", "2H", "4H"):
+            raw = client.get_spot_klines(bs, TF_INTERVAL.get(tf, "2h"), limit)
+            if tf in TF_AGG:
+                raw = client.aggregate_candles(raw, TF_AGG[tf])
+            closed, _live = _split_closed(raw, TF_SECONDS.get(tf, 7200))
+            tfs[tf] = closed
+        market[sym] = tfs
+
+    if client.data_source == "demo":
+        return jsonify({"error": "demo data cannot validate a strategy",
+                        "data_source": "demo"}), 200
+
+    report = portfolio_backtest.replay(
+        market, correlations=_BTC_CORR, parity_mode="price_only",
+        production_universe=list(SCAN_SYMBOLS),
+        strategy_version=_strategy_version_for_reports(),
+        fee_bps=fee, slippage_bps=slip, max_slots=slots,
+        keep_trades=want_trades)
+    report["data_source"] = client.data_source
+    # result_kind is decided by the replay from the evidence, not asserted here.
+    # A capped run can only ever be subset_price_only: the endpoint fetches at
+    # most `cap` symbols and production ranks against SCAN_SYMBOLS, so the top
+    # three came out of a different field.
+    if not report["parity"]["universe"]["universe_complete"]:
+        report["subset_warning"] = (
+            "This is a SUBSET replay. The top three was selected from "
+            f"{len(universe)} symbols; production ranks across "
+            f"{len(SCAN_SYMBOLS)}. Gates, fills and exits are validated; "
+            "top-three SELECTION is not. Run portfolio_backtest_cli for the "
+            "full universe — it cannot run here because a complete replay "
+            "exceeds the 60s function ceiling.")
     return jsonify(report)
 
 
@@ -2000,115 +1887,11 @@ def api_dashboard():
     return jsonify(results)
 
 
-def _rec_quality(cand: dict, htf_dir: str) -> tuple:
-    """
-    Composite trade-quality score for recommendation ranking (Phase 3).
-
-    A recommendation is an execution call, so we rank on *trade quality*, not
-    raw signal strength alone. Strength answers "how much confluence?"; quality
-    answers "is this a good trade to actually take right now?" — which folds in
-    reward/risk, higher-timeframe agreement, and whether the setup is fighting
-    an active reversal or running on exhausted momentum.
-
-    Returns (score, factors) where factors is a list of human-readable
-    adjustments for transparency on the card.
-    """
-    base   = cand["strength"]
-    d      = cand["direction"]
-    factors = []
-    score  = float(base)
-
-    # ── Reward/risk — the single most important execution filter ─────────
-    rr = cand.get("rr_ratio")
-    if rr is not None:
-        try:
-            rr = float(rr)
-            if rr >= 3.0:
-                score += 10; factors.append(f"R/R {rr:.1f} (+10)")
-            elif rr >= 2.0:
-                score += 5;  factors.append(f"R/R {rr:.1f} (+5)")
-            elif rr < 1.3:
-                score -= 12; factors.append(f"R/R {rr:.1f} weak (−12)")
-        except (TypeError, ValueError):
-            pass
-
-    # ── Higher-timeframe (4H) agreement ─────────────────────────────────
-    if htf_dir and htf_dir != "NEUTRAL":
-        if htf_dir == d:
-            score += 8;  factors.append("4H agrees (+8)")
-        else:
-            score -= 10; factors.append("4H opposes (−10)")
-
-    # ── Reversal radar fighting the trade ───────────────────────────────
-    # If we're LONG but a strong bearish reversal is firing (or SHORT into a
-    # bullish reversal), the trade is swimming upstream — penalise it.
-    rev_lvl = str(cand.get("reversal_against") or "").lower()
-    if rev_lvl == "high":
-        score -= 15; factors.append("reversal-against high (−15)")
-    elif rev_lvl == "elevated":
-        score -= 8;  factors.append("reversal-against elevated (−8)")
-
-    # ── Exhausted momentum ──────────────────────────────────────────────
-    if cand.get("h2_exhausted"):
-        score -= 6; factors.append("2H exhausted (−6)")
-
-    # ── Fresh reversal flips on the primary TF (fuel for the move) ──────
-    if (cand.get("h2_reversal_count") or 0) >= 2:
-        score += 4; factors.append("fresh 2H flips (+4)")
-
-    # ── Data quality ────────────────────────────────────────────────────
-    if cand.get("data_quality") == "degraded":
-        score -= 6; factors.append("degraded data (−6)")
-
-    return round(max(0.0, score), 1), factors
-
-
-def _targets_behind_live(direction: str, tp_targets, live_price) -> dict:
-    """
-    Which targets has price ALREADY traded through?
-
-    The ladder is priced off the last CLOSED candle, but a recommendation is
-    served for the whole slot — so by the time anyone reads it, price may have
-    moved past a target. A LONG whose TP1 sits below the live price offers no
-    reward for the risk it still carries: entering there means taking the full
-    stop distance to chase a level the market has already given away.
-
-    Returns {"behind": [target numbers, 1-indexed], "tp1_behind": bool,
-             "all_behind": bool, "evaluated": bool}. `evaluated` is False when
-    there is nothing to compare (no live price, no ladder), in which case the
-    caller must NOT treat the setup as expired — absence of a live price is not
-    evidence that the targets are still ahead.
-    """
-    levels = [t for t in (tp_targets or [])]
-    try:
-        live = float(live_price) if live_price is not None else None
-    except (TypeError, ValueError):
-        live = None
-    if not levels or not live or live <= 0 or direction not in ("LONG", "SHORT"):
-        return {"behind": [], "tp1_behind": False, "all_behind": False,
-                "evaluated": False}
-
-    behind = []
-    priced = 0
-    for i, lvl in enumerate(levels, start=1):
-        try:
-            lvl = float(lvl)
-        except (TypeError, ValueError):
-            continue
-        if lvl <= 0:
-            continue
-        priced += 1
-        # A target is spent once price has reached it: at or beyond, in the
-        # direction of the trade.
-        if (direction == "LONG" and lvl <= live) or (direction == "SHORT" and lvl >= live):
-            behind.append(i)
-
-    return {
-        "behind":     behind,
-        "tp1_behind": 1 in behind,
-        "all_behind": bool(priced) and len(behind) == priced,
-        "evaluated":  bool(priced),
-    }
+# The recommendation policy lives in rec_policy so the backtest can replay the
+# same rules. These names are kept because the rest of app.py, the tests and the
+# card builders all use them — they are the same functions, not copies.
+_rec_quality = rec_policy.rec_quality
+_targets_behind_live = rec_policy.targets_behind_live
 
 
 class _SkipPersistence(Exception):
@@ -2310,24 +2093,7 @@ def _observed_patterns(analysis: dict) -> list:
     return out
 
 
-def _passes_tf_gates(h1, h2) -> bool:
-    """
-    Could this symbol still become a candidate on its 1H/2H reading alone?
-
-    The gates that do not depend on 4H: both timeframes present and tradeable,
-    neither NEUTRAL, and the two agreeing on direction.
-
-    Deliberately shared with the candidate loop rather than duplicated there.
-    It decides which symbols are worth fetching a 4H analysis for, so if the two
-    copies ever drifted, a symbol could reach the loop with no 4H data and be
-    scored as though 4H were neutral — a silent change to the published set.
-    """
-    if not h1 or not h2:
-        return False
-    if not h1.get("tradeable", True) or not h2.get("tradeable", True):
-        return False
-    d1, d2 = h1.get("direction", "NEUTRAL"), h2.get("direction", "NEUTRAL")
-    return d1 != "NEUTRAL" and d2 != "NEUTRAL" and d1 == d2
+_passes_tf_gates = rec_policy.passes_tf_gates
 
 
 def _compute_recommendations() -> dict:
@@ -2416,16 +2182,17 @@ def _compute_recommendations() -> dict:
     btc_2h    = raw.get("BTC", {}).get("2H", {})
     btc_dir   = btc_2h.get("direction", "NEUTRAL")
     btc_str   = btc_2h.get("strength", 0) or 0
-    btc_scale = math.sqrt(btc_str / 100.0) if btc_str > 0 else 0.0
-    BTC_BONUS   = 12   # pts when token aligns with BTC 2H
-    BTC_PENALTY = 18   # pts when token opposes BTC 2H
 
-    # On-chain score: shifts BTC_BONUS/PENALTY by up to ±20%
+    # On-chain score shifts the BTC bonus/penalty by up to ±20%. The whole BTC
+    # context is one object computed once per slot — the backtest builds the
+    # same object from historical readings and passes it to the same functions.
     _oc = get_btc_mining_signals()
     _oc_score = (_oc.get("onchain_score") or {}).get("score", 50)
-    _oc_mult  = 0.8 + 0.4 * (_oc_score / 100.0)
-    BTC_BONUS   = round(BTC_BONUS   * _oc_mult, 1)
-    BTC_PENALTY = round(BTC_PENALTY * _oc_mult, 1)
+    _btc_influence = rec_policy.btc_influence(btc_dir, btc_str,
+                                              onchain_score=_oc_score)
+    btc_scale   = _btc_influence["scale"]
+    BTC_BONUS   = _btc_influence["bonus"]
+    BTC_PENALTY = _btc_influence["penalty"]
 
     # Options expiry: BTC options pinning pressure cascades to all ALTs
     # — in the expiry window, bearish pin on BTC → increase ALT bearish bias
@@ -2448,42 +2215,28 @@ def _compute_recommendations() -> dict:
         h1 = tfs.get("1H")
         h2 = tfs.get("2H")
         h4 = tfs.get("4H") or {}
-        if not (h1 and h2):
-            continue
 
-        # 4H higher-timeframe direction (HTF confirmation) — used by the
-        # composite quality score, not as a hard filter (a clean 1H·2H setup
-        # is still tradeable when 4H is neutral, just scored a touch lower).
-        htf_4h_dir = h4.get("direction", "NEUTRAL") if h4.get("tradeable", True) else "NEUTRAL"
-
-        # ── Data-integrity gate + the confirmation filter ─────────────────────
-        # A recommendation is an execution call, so both timeframes must be
-        # clean (demo, stale, misaligned, missing candles, or live price too far
-        # from the signal price all disqualify it — see _assess_data_quality),
-        # and both must agree on direction.
+        # ── Every deterministic gate, in one call ────────────────────────────
+        # 1H/2H presence and agreement, data quality, the BTC adjustment, the
+        # live-price divergence check, minimum strength, R/R and the expired-
+        # setup check — in this exact order, from rec_policy.
         #
-        # Same helper the 4H prefetch uses. Sharing it is the point: it decides
-        # which symbols got a 4H analysis at all, so a second copy here could
-        # drift and let a symbol through with no 4H data, scored as though 4H
-        # were neutral.
-        if not _passes_tf_gates(h1, h2):
+        # The screen is shared with the backtest replay, which is the point:
+        # the previous backtest scored a single timeframe with none of these
+        # gates and reported the result as evidence about the published
+        # strategy. Two copies of a policy do not stay equal.
+        corr_factor = _BTC_CORR.get(sym, 1.0)
+        _screen = rec_policy.screen_candidate(h1, h2, h4, corr_factor=corr_factor,
+                                              influence=_btc_influence)
+        htf_4h_dir = _screen.get("htf_4h_dir", "NEUTRAL")
+        if not _screen["ok"] and _screen["reason"] != "TP1_BEHIND_LIVE":
             continue
 
-        direction = h2["direction"]   # 2H is primary
-        # Strength = 2H signal strength, then adjusted by BTC 2H direction.
-        # Both are at the same timeframe (2H), so the adjustment is meaningful.
-        strength = round(h2["strength"], 1)
-
-        corr_factor  = _BTC_CORR.get(sym, 1.0)
-        btc_aligned  = (btc_dir != "NEUTRAL" and direction == btc_dir)
-        btc_conflict = (btc_dir != "NEUTRAL" and direction != btc_dir)
-        btc_adj      = 0
-        if btc_aligned:
-            btc_adj  = round(BTC_BONUS   * btc_scale * corr_factor, 1)
-            strength = min(100, round(strength + btc_adj, 1))
-        elif btc_conflict:
-            btc_adj  = -round(BTC_PENALTY * btc_scale * corr_factor, 1)
-            strength = max(0, round(strength + btc_adj, 1))
+        direction    = _screen["direction"]
+        strength     = _screen["strength"]
+        btc_adj      = _screen["btc_adj"]
+        btc_aligned  = _screen["aligned"]
+        btc_conflict = _screen["conflict"]
 
         # Options-expiry pressure is applied EXACTLY ONCE — inside generate_signal
         # (options_application_stage == "signal"), so h2["strength"] already
@@ -2515,35 +2268,16 @@ def _compute_recommendations() -> dict:
 
         # Entry/SL/TP from the 2H signal
         sig = h2["sig"]
-
-        # Live price vs the price the signal was computed on. The per-analysis
-        # data-quality gate already invalidates a >20% 2H gap; this is a final
-        # belt-and-suspenders + gives the card a live-price to show.
-        _sig_p  = h2.get("signal_price") or sig.get("current_price") or sig.get("entry")
-        _live_p = h2.get("live_price") or _sig_p
-        if _sig_p and _live_p and _live_p > 0 and abs(_sig_p - _live_p) / _live_p > 0.25:
-            continue
-
-        # Minimum conviction — skip noise
-        if strength < 32:
-            continue
-
-        # ── Reward/risk minimum — never publish a trade whose downside is
-        # bigger than a third of its upside (R/R < 1.3 is not worth the risk).
-        _rr = sig.get("rr_ratio")
-        try:
-            if _rr is not None and float(_rr) < 1.3:
-                continue
-        except (TypeError, ValueError):
-            pass
+        _sig_p  = _screen["signal_price"]
+        _live_p = _screen["live_price"]
 
         # ── Expired setup — TP1 already taken ────────────────────────────
-        # The R/R gate above is computed against the ladder's own entry, off the
-        # closed candle. If price has since traded through TP1, that published
-        # R/R is fiction for anyone entering now: the reward has been collected
-        # and only the risk is left. Drop the candidate rather than repricing —
-        # a setup the market already ran is not a setup.
-        _behind = _targets_behind_live(direction, sig.get("tp_targets"), _live_p)
+        # The R/R gate inside the screen is computed against the ladder's own
+        # entry, off the closed candle. If price has since traded through TP1,
+        # that published R/R is fiction for anyone entering now: the reward has
+        # been collected and only the risk is left. Drop the candidate rather
+        # than repricing — a setup the market already ran is not a setup.
+        _behind = _screen["targets_behind"]
         if _behind["tp1_behind"]:
             expired.append({
                 "symbol":          sym,
@@ -2628,46 +2362,22 @@ def _compute_recommendations() -> dict:
         # The ranking key: the AVERAGE of the two timeframes that had to agree
         # for this to be a candidate at all. Ranking on 2H alone let a strong 2H
         # with a barely-qualifying 1H outrank a setup both timeframes liked.
-        cand["avg_tf_strength"] = round(
-            (float(h1["strength"]) + float(h2["strength"])) / 2.0, 1)
+        cand["avg_tf_strength"] = _screen["avg_tf_strength"]
         candidates.append(cand)
 
-    # ── Rank by the 1H/2H average, quality as the tiebreak ──────────────
+    # ── Rank, then diversify, then publish the top three ────────────────
     # Both timeframes must already agree on direction for a candidate to exist,
-    # so their average measures how strongly they agree. Quality breaks ties, so
-    # between two equally-agreed setups the one with better R/R and less
-    # reversal risk still wins.
-    candidates.sort(key=lambda x: (x.get("avg_tf_strength", x["strength"]),
-                                   x.get("quality_score", 0), x["strength"]),
-                    reverse=True)
-
-    # ── Correlation-aware diversification ────────────────────────────────
-    # Publishing three high-correlation ALTs in the same direction is one bet
-    # in a trench-coat: if BTC turns, all three lose together. Fill the top-3
-    # greedily by quality, but skip a candidate that would be the third+
-    # same-direction pick highly correlated (BTC-corr ≥ 0.7) with those already
-    # chosen — unless we'd otherwise run out of candidates.
-    HIGH_CORR = 0.7
-    top: list = []
-    deferred: list = []
-    for c in candidates:
-        if len(top) >= 3:
-            break
-        same_dir_corr = [t for t in top
-                         if t["direction"] == c["direction"]
-                         and (t.get("btc_corr") or 0) >= HIGH_CORR
-                         and (c.get("btc_corr") or 0) >= HIGH_CORR]
-        if len(same_dir_corr) >= 2:
-            deferred.append(c)   # would be a 3rd correlated same-direction bet
-            continue
-        top.append(c)
-
-    # Backfill from deferred (still ranked by quality) if we came up short
-    if len(top) < 3:
-        for c in deferred:
-            if len(top) >= 3:
-                break
-            top.append(c)
+    # so their average measures how strongly they agree; quality breaks ties.
+    # Then: publishing three high-correlation ALTs in the same direction is one
+    # bet in a trench-coat, so a third correlated same-direction pick is
+    # deferred and only backfilled if we would otherwise come up short.
+    #
+    # Both steps live in rec_policy so the replay ranks and selects identically.
+    # Ranking is where a backtest is easiest to flatter without noticing: score
+    # the same candidates in a different order and you measure a different
+    # strategy while every individual trade looks right.
+    candidates = rec_policy.rank_candidates(candidates)
+    top = rec_policy.select_publishable(candidates)
 
     intraday_recs = top[:3]
 
