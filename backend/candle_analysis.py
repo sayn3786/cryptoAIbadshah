@@ -41,7 +41,7 @@ from indicators import (
     calculate_stoch_rsi, calculate_supertrend, calculate_volume_signal,
     calculate_vwap, candle_direction, detect_cvd_divergence, detect_engulfing,
     detect_fvg, detect_rsi_divergence, detect_whale_activity, find_pivots,
-    find_volume_spikes,
+    find_volume_spikes, flip_close_ts,
 )
 from patterns import (
     analyze_elliott_wave, detect_acc_eql_fvg_setup, detect_bos_streak,
@@ -183,6 +183,25 @@ def flag_diagnostics_for(flags: list, raw_diag: list) -> list:
     return diag
 
 
+def _with_flip_ts(indicator: Dict, candles: List[Dict]) -> Dict:
+    """
+    Turn an indicator's bars-ago flip fields into close timestamps.
+
+    MACD and EMA are computed from a bare close list, so they report when they
+    last flipped only in bars. This is where the candles are in scope, so this
+    is where a bar count becomes a wall-clock close time — the same close time
+    SuperTrend and Ichimoku compute for themselves.
+    """
+    if not isinstance(indicator, dict):
+        return indicator
+    if "flipped_bars_ago" in indicator:
+        indicator["flipped_ts"] = flip_close_ts(candles, indicator["flipped_bars_ago"])
+    if "previous_bars_ago" in indicator:
+        indicator["previous_flipped_ts"] = flip_close_ts(
+            candles, indicator["previous_bars_ago"])
+    return indicator
+
+
 # ── The builder ──────────────────────────────────────────────────────────────
 
 def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
@@ -298,8 +317,11 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
         "price_roc": price_roc,
         "candle_dirs": candle_dirs,
 
-        "macd": calculate_macd(closes),
-        "ema_trend": calculate_ema_trend(closes),
+        # MACD and EMA are computed from closes and so cannot see timestamps;
+        # they return the flip in BARS, and the close time is attached here where
+        # the candles are in scope. _with_flip_ts leaves other keys untouched.
+        "macd": _with_flip_ts(calculate_macd(closes), candles),
+        "ema_trend": _with_flip_ts(calculate_ema_trend(closes), candles),
         "ema_lines": ema_lines,
         "supertrend": supertrend,
         "ichimoku": ichimoku,
