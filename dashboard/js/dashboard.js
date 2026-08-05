@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '207';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '208';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1275,8 +1275,36 @@ function renderSupertrendCard(st) {
   }
 
   const fmt = v => v != null ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
-  valEl.innerHTML = `<span class="st-label">${bull ? 'Support' : 'Resistance'}</span>
+  let html = `<span class="st-label">${bull ? 'Support' : 'Resistance'}</span>
     <span class="${bull ? 'bull' : 'bear'}">${fmt(st.value)}</span>`;
+
+  // Flip history: WHEN the current trend began (close time of the flip candle)
+  // and what it was before. Timestamps are epoch-ms close times from the
+  // backend; _stFlipWhen formats them and appends how long ago.
+  if (st.flipped_ts) {
+    html += `<span class="st-label">Turned ${bull ? 'bullish' : 'bearish'}</span>
+      <span class="${bull ? 'bull' : 'bear'}">${_stFlipWhen(st.flipped_ts, st.flipped_bars_ago)}</span>`;
+    if (st.previous_direction) {
+      const pb = st.previous_direction === 'bullish';
+      const prev = st.previous_flipped_ts
+        ? `${_stFlipWhen(st.previous_flipped_ts, st.previous_bars_ago)}` : 'earlier';
+      html += `<span class="st-label">Was ${st.previous_direction}</span>
+        <span class="${pb ? 'bull' : 'bear'}" style="opacity:.8">since ${prev}</span>`;
+    }
+  }
+  valEl.innerHTML = html;
+}
+
+// A flip time as "Aug 5, 14:00 (3 bars ago)" — date, HH:MM, and the bar count
+// so a reader can place it without doing timeframe arithmetic in their head.
+function _stFlipWhen(ms, barsAgo) {
+  const d = new Date(Number(ms));
+  const when = d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    hour12: false });
+  const ago = (barsAgo != null)
+    ? ` · ${barsAgo} bar${barsAgo === 1 ? '' : 's'} ago` : '';
+  return `${when}${ago}`;
 }
 
 function renderIchimokuCard(ichi) {

@@ -999,11 +999,43 @@ def detect_whale_activity(candles: List[Dict], lookback: int = 20,
     return sorted(results, key=lambda x: x["candles_ago"])
 
 
+def _infer_interval(candles: List[Dict]) -> Optional[int]:
+    """The bar length in ms, as the most common gap between opens. None if the
+    timestamps cannot say — a single candle, or non-numeric stamps. Robust to
+    the odd missing bar, which a bare last-minus-previous would trip on."""
+    diffs: Dict[int, int] = {}
+    prev = None
+    for c in candles or []:
+        ts = c.get("timestamp")
+        try:
+            ts = int(ts)
+        except (TypeError, ValueError):
+            prev = None
+            continue
+        if prev is not None:
+            gap = ts - prev
+            if gap > 0:
+                diffs[gap] = diffs.get(gap, 0) + 1
+        prev = ts
+    if not diffs:
+        return None
+    return max(diffs, key=diffs.get)
+
+
 def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: float = 3.0) -> Dict:
     """SuperTrend indicator.  Returns current direction, value and whether a
-    flip (new signal) occurred on the most recent closed candle."""
+    flip (new signal) occurred on the most recent closed candle.
+
+    Also reports the flip HISTORY: ``flipped_ts`` (the CLOSE time of the candle
+    that started the current run), ``flipped_bars_ago``, ``previous_direction``
+    and ``previous_flipped_ts`` — so the card can say when the trend turned and
+    what it was before, not just its state right now."""
     if len(candles) < period + 1:
-        return {"direction": None, "value": None, "signal": None, "flipped": False, "series": []}
+        return {"direction": None, "value": None, "signal": None,
+                "flipped": False, "series": [],
+                "flipped_ts": None, "flipped_bars_ago": None,
+                "previous_direction": None, "previous_flipped_ts": None,
+                "previous_bars_ago": None}
 
     highs  = [c["high"]  for c in candles]
     lows   = [c["low"]   for c in candles]
@@ -1060,6 +1092,46 @@ def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: floa
     flipped   = t_now != t_pre
     signal    = ("BUY" if t_now == 1 else "SELL") if flipped else None
 
+    # ── When did the CURRENT trend begin, and what was it before ─────────────
+    # The card showed "Bullish / No flip on last candle" but never said when the
+    # bullish run started or what preceded it. The trend array already holds the
+    # state at every bar, so the answer is a walk back to the last change.
+    #
+    # Timestamps are CLOSE times: a SuperTrend flip is confirmed by a candle
+    # closing beyond the band, so the moment it became real is that candle's
+    # close (its open timestamp + one interval), not its open. The interval is
+    # inferred from the series so this needs no timeframe argument.
+    first_valid = period - 1
+    interval = _infer_interval(candles)
+
+    def _close_ts(idx):
+        ts = candles[idx].get("timestamp")
+        if ts is None or interval is None:
+            return None
+        return int(ts) + interval
+
+    # Start of the current run.
+    rs = last
+    while rs > first_valid and trend[rs - 1] == t_now:
+        rs -= 1
+    if rs > first_valid:
+        # rs is a genuine flip bar (the state before it differed).
+        flipped_ts = _close_ts(rs)
+        flipped_bars_ago = last - rs
+        t_prev_run = trend[rs - 1]
+        previous_direction = "bullish" if t_prev_run == 1 else "bearish"
+        # Start of the PREVIOUS run.
+        ps = rs - 1
+        while ps > first_valid and trend[ps - 1] == t_prev_run:
+            ps -= 1
+        previous_flipped_ts = _close_ts(ps) if ps > first_valid else None
+        previous_bars_ago = last - ps
+    else:
+        # The current run reaches back to where the data starts — we cannot say
+        # it flipped within the window, only that it has held throughout it.
+        flipped_ts = flipped_bars_ago = None
+        previous_direction = previous_flipped_ts = previous_bars_ago = None
+
     # Full series for charting — value at each bar is the active band (dn while
     # bullish, up while bearish), so the line tracks price like the real indicator.
     series = []
@@ -1075,7 +1147,13 @@ def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: floa
             "trend":     "bullish" if trend[idx] == 1 else "bearish",
         })
 
-    return {"direction": direction, "value": value, "signal": signal, "flipped": flipped, "series": series}
+    return {"direction": direction, "value": value, "signal": signal,
+            "flipped": flipped, "series": series,
+            # New: the flip history the card asks for.
+            "flipped_ts": flipped_ts, "flipped_bars_ago": flipped_bars_ago,
+            "previous_direction": previous_direction,
+            "previous_flipped_ts": previous_flipped_ts,
+            "previous_bars_ago": previous_bars_ago}
 
 
 def calculate_ichimoku(candles: List[Dict],
