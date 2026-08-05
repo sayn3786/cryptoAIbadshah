@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '207';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '209';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1231,6 +1231,16 @@ function renderMACDCard(m) {
     const barH = Math.min(Math.abs(h) / (Math.abs(h) + 1e-9) * 28 + 4, 32);
     barsEl.innerHTML = `<div class="macd-hist-bar ${h >= 0 ? 'bull' : 'bear'}" style="height:${barH}px"></div>`;
   }
+
+  // When the MACD line last crossed its signal line, and what before.
+  const flipEl = document.getElementById('macdFlip');
+  if (flipEl) {
+    const fh = flipHistoryRows(m, { bull: trend === 'bullish', rowClass: 'st-row',
+      labelClass: 'st-label', verb: 'Crossed' });
+    flipEl.innerHTML = fh.html;
+    const card = document.getElementById('macdCard');
+    if (card) card.classList.toggle('st-fresh-flip', fh.recent);
+  }
 }
 
 function renderEMACard(ema) {
@@ -1246,11 +1256,19 @@ function renderEMACard(ema) {
   const above = ema.above || [];
   const fmt   = n => n != null ? `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 6 })}` : 'N/A';
   const rows  = [{ p: 20, v: ema.ema20 }, { p: 50, v: ema.ema50 }, { p: 200, v: ema.ema200 }].filter(r => r.v != null);
-  rowsEl.innerHTML = rows.map(r => {
+  let rowsHtml = rows.map(r => {
     const up  = above.includes(r.p);
     const cls = up ? 'bull' : 'bear';
     return `<div class="ema-row"><span class="ema-label">EMA${r.p}</span><span class="${cls}">${up ? '▲' : '▼'} ${fmt(r.v)}</span></div>`;
   }).join('');
+
+  // When price last crossed the 50 EMA — the flip that turns the headline.
+  const fh = flipHistoryRows(ema, { bull: trend.includes('bull'), rowClass: 'ema-row',
+    labelClass: 'ema-label', verb: 'Turned' });
+  rowsHtml += fh.html;
+  rowsEl.innerHTML = rowsHtml;
+  const card = document.getElementById('emaTrendCard');
+  if (card) card.classList.toggle('st-fresh-flip', fh.recent);
 }
 
 function renderSupertrendCard(st) {
@@ -1266,17 +1284,96 @@ function renderSupertrendCard(st) {
   dirEl.textContent = bull ? '▲ Bullish' : '▼ Bearish';
   dirEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
 
+  // A flip within the last 3 CANDLE CLOSES is a fresh trend the reader should
+  // not miss. Counted in bars, not wall-clock, so it means the same thing on
+  // every timeframe — the last three closes, whether that is 6 hours on 2H or
+  // 12 on 4H. bars_ago 0/1/2 are the three most recent closes.
+  const trendCol = bull ? 'var(--bull)' : 'var(--bear)';
+  const recentFlip = st.flipped_bars_ago != null &&
+    st.flipped_bars_ago >= 0 && st.flipped_bars_ago < ST_RECENT_FLIP_BARS;
+
+  const card = dirEl.closest('.card, .metric-card');
+  if (card) card.classList.toggle('st-fresh-flip', recentFlip);
+
   if (st.flipped && st.signal) {
     sigEl.textContent = `🔔 New ${st.signal} signal`;
-    sigEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+    sigEl.style.color = trendCol;
+  } else if (recentFlip) {
+    // Flipped in the last 3 closes, but not on the very last candle — the "New
+    // signal" bell above only fires on bars_ago 0, so this covers 1 and 2.
+    const n = st.flipped_bars_ago;
+    sigEl.textContent = `🔔 Flipped ${bull ? 'bullish' : 'bearish'} · ${n} bar${n === 1 ? '' : 's'} ago`;
+    sigEl.style.color = trendCol;
   } else {
     sigEl.textContent = 'No flip on last candle';
     sigEl.style.color = 'var(--muted)';
   }
 
   const fmt = v => v != null ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
-  valEl.innerHTML = `<span class="st-label">${bull ? 'Support' : 'Resistance'}</span>
-    <span class="${bull ? 'bull' : 'bear'}">${fmt(st.value)}</span>`;
+  const row = (label, value, valueCls) =>
+    `<div class="st-row"><span class="st-label">${label}</span>` +
+    `<span class="${valueCls}">${value}</span></div>`;
+
+  let html = row(bull ? 'Support' : 'Resistance', fmt(st.value), bull ? 'bull' : 'bear');
+
+  // Flip history: WHEN the current trend began (close time of the flip candle)
+  // and what it was before. Timestamps are epoch-ms close times from the
+  // backend; _stFlipWhen formats them and appends how long ago. A recent flip
+  // gets a highlighted "Turned" row so the emphasis matches the bell above.
+  if (st.flipped_ts) {
+    const dot = recentFlip ? '● ' : '';
+    const cls = (bull ? 'bull' : 'bear') + (recentFlip ? ' st-flip-hi' : '');
+    html += row(`${dot}Turned ${bull ? 'bullish' : 'bearish'}`,
+                _stFlipWhen(st.flipped_ts, st.flipped_bars_ago), cls);
+    if (st.previous_direction) {
+      const pb = st.previous_direction === 'bullish';
+      const prev = st.previous_flipped_ts
+        ? _stFlipWhen(st.previous_flipped_ts, st.previous_bars_ago) : 'earlier';
+      html += row(`Was ${st.previous_direction}`, `since ${prev}`,
+                  (pb ? 'bull' : 'bear') + ' st-flip-prev');
+    }
+  }
+  valEl.innerHTML = html;
+}
+
+// A flip counts as "fresh" for the last 3 candle closes — bars_ago 0, 1 and 2,
+// so the condition is `< 3`. Bars, not time, so it means the same on every
+// timeframe. Shared by SuperTrend, MACD, EMA and Ichimoku.
+const ST_RECENT_FLIP_BARS = 3;
+
+// The flip-history rows shared by the indicator cards. `o` carries flipped_ts /
+// flipped_bars_ago / previous_direction / previous_flipped_ts /
+// previous_bars_ago; `bull` is the CURRENT direction. Returns {recent, html} —
+// html is one or two rows in the caller's row style, and recent drives the
+// last-3-candles highlight. Empty html when there is no captured flip.
+function flipHistoryRows(o, { bull, rowClass, labelClass, verb }) {
+  const recent = o && o.flipped_bars_ago != null &&
+    o.flipped_bars_ago >= 0 && o.flipped_bars_ago < ST_RECENT_FLIP_BARS;
+  if (!o || o.flipped_ts == null) return { recent: false, html: '' };
+  const dot = recent ? '● ' : '';
+  const cls = (bull ? 'bull' : 'bear') + (recent ? ' st-flip-hi' : '');
+  let html = `<div class="${rowClass}"><span class="${labelClass}">${dot}${verb} ${bull ? 'bullish' : 'bearish'}</span>` +
+    `<span class="${cls}">${_stFlipWhen(o.flipped_ts, o.flipped_bars_ago)}</span></div>`;
+  if (o.previous_direction) {
+    const pb = o.previous_direction === 'bullish';
+    const prev = o.previous_flipped_ts
+      ? _stFlipWhen(o.previous_flipped_ts, o.previous_bars_ago) : 'earlier';
+    html += `<div class="${rowClass}"><span class="${labelClass}">Was ${o.previous_direction}</span>` +
+      `<span class="${pb ? 'bull' : 'bear'} st-flip-prev">since ${prev}</span></div>`;
+  }
+  return { recent, html };
+}
+
+// A flip time as "Aug 5, 14:00 (3 bars ago)" — date, HH:MM, and the bar count
+// so a reader can place it without doing timeframe arithmetic in their head.
+function _stFlipWhen(ms, barsAgo) {
+  const d = new Date(Number(ms));
+  const when = d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    hour12: false });
+  const ago = (barsAgo != null)
+    ? ` · ${barsAgo} bar${barsAgo === 1 ? '' : 's'} ago` : '';
+  return `${when}${ago}`;
 }
 
 function renderIchimokuCard(ichi) {
@@ -1302,12 +1399,25 @@ function renderIchimokuCard(ichi) {
   const tkColor = ichi.tk_cross === 'bullish' ? 'var(--bull)' : ichi.tk_cross === 'bearish' ? 'var(--bear)' : 'var(--muted)';
   const tkLabel = ichi.tk_cross === 'bullish' ? '🔼 TK Bullish Cross' : ichi.tk_cross === 'bearish' ? '🔽 TK Bearish Cross' : 'No TK cross';
 
+  // TK-cross flip history. Current direction is Tenkan's side of Kijun; the
+  // backend fields carry the tk_ prefix, so map them onto the shared shape.
+  const tkBull = ichi.tenkan != null && ichi.kijun != null && ichi.tenkan > ichi.kijun;
+  const fh = flipHistoryRows({
+    flipped_ts: ichi.tk_flipped_ts, flipped_bars_ago: ichi.tk_flipped_bars_ago,
+    previous_direction: ichi.tk_previous_direction,
+    previous_flipped_ts: ichi.tk_previous_flipped_ts,
+    previous_bars_ago: ichi.tk_previous_bars_ago,
+  }, { bull: tkBull, rowClass: 'ichi-row', labelClass: 'ichi-label', verb: 'Crossed' });
+
   rowsEl.innerHTML = `
     <div class="ichi-row"><span class="ichi-label">Tenkan</span><span>${fmt(ichi.tenkan)}</span></div>
     <div class="ichi-row"><span class="ichi-label">Kijun</span><span>${fmt(ichi.kijun)}</span></div>
     <div class="ichi-row"><span class="ichi-label">Span A</span><span>${fmt(ichi.span_a)}</span></div>
     <div class="ichi-row"><span class="ichi-label">Span B</span><span>${fmt(ichi.span_b)}</span></div>
-    <div class="ichi-row ichi-tk"><span class="ichi-label">TK Cross</span><span style="color:${tkColor}">${tkLabel}</span></div>`;
+    <div class="ichi-row ichi-tk"><span class="ichi-label">TK Cross</span><span style="color:${tkColor}">${tkLabel}</span></div>` +
+    fh.html;
+  const card = document.getElementById('ichimokuCard') || cloudEl.closest('.card, .metric-card');
+  if (card) card.classList.toggle('st-fresh-flip', fh.recent);
 }
 
 function renderBollingerCard(bb) {

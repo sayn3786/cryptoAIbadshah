@@ -848,6 +848,15 @@ def calculate_macd(closes: List[float], fast: int = 12, slow: int = 26, signal_p
     if histogram is not None:
         trend = "bullish" if histogram > 0 else "bearish"
 
+    # Flip history: the MACD line's side of its signal line at every bar, so the
+    # card can say when the last cross happened, not just its current state.
+    # Bars-ago only — calculate_macd sees closes, not timestamps; the analysis
+    # layer turns bars into a close time.
+    states = [1 if (m is not None and s is not None and m > s)
+              else (-1 if (m is not None and s is not None and m < s) else None)
+              for m, s in zip(macd_line, sig_line)]
+    flip = flip_history_bars(states)
+
     return {
         "macd":       round(cur_macd, 8) if cur_macd is not None else None,
         "signal_line": round(cur_sig,  8) if cur_sig  is not None else None,
@@ -855,6 +864,9 @@ def calculate_macd(closes: List[float], fast: int = 12, slow: int = 26, signal_p
         "cross":      cross,
         "zero_cross": zero_cross,
         "trend":      trend,
+        "flipped_bars_ago":   flip["flipped_bars_ago"],
+        "previous_direction": flip["previous_direction"],
+        "previous_bars_ago":  flip["previous_bars_ago"],
     }
 
 
@@ -909,6 +921,23 @@ def calculate_ema_trend(closes: List[float]) -> Dict:
     else:
         trend = "neutral"
 
+    # Flip history: price above (+1) or below (-1) the 50 EMA at every bar. The
+    # card headline ("Uptrend"/"Downtrend") is driven by the 50, so price
+    # crossing it IS the trend flip — that is when the card last changed. Bars-
+    # ago only; the analysis layer adds the close time.
+    ema50_series: List[Optional[float]] = [None] * len(closes)
+    if len(closes) >= 50:
+        k50 = 2.0 / 51.0
+        e = sum(closes[:50]) / 50
+        ema50_series[49] = e
+        for i in range(50, len(closes)):
+            e = closes[i] * k50 + e * (1 - k50)
+            ema50_series[i] = e
+    ema_states = [1 if (m is not None and c > m)
+                  else (-1 if (m is not None and c < m) else None)
+                  for c, m in zip(closes, ema50_series)]
+    flip = flip_history_bars(ema_states)
+
     return {
         "price":       round(price, 8),
         "ema7":        round(ema7,   8) if ema7   is not None else None,
@@ -921,6 +950,10 @@ def calculate_ema_trend(closes: List[float]) -> Dict:
         "trend":       trend,
         "ema7_cross":  ema7_cross,
         "short_trend": short_trend,
+        # Price vs the 50 EMA — the "turned up/down" event for the card.
+        "flipped_bars_ago":   flip["flipped_bars_ago"],
+        "previous_direction": flip["previous_direction"],
+        "previous_bars_ago":  flip["previous_bars_ago"],
     }
 
 
@@ -999,11 +1032,100 @@ def detect_whale_activity(candles: List[Dict], lookback: int = 20,
     return sorted(results, key=lambda x: x["candles_ago"])
 
 
+def _infer_interval(candles: List[Dict]) -> Optional[int]:
+    """The bar length in ms, as the most common gap between opens. None if the
+    timestamps cannot say — a single candle, or non-numeric stamps. Robust to
+    the odd missing bar, which a bare last-minus-previous would trip on."""
+    diffs: Dict[int, int] = {}
+    prev = None
+    for c in candles or []:
+        ts = c.get("timestamp")
+        try:
+            ts = int(ts)
+        except (TypeError, ValueError):
+            prev = None
+            continue
+        if prev is not None:
+            gap = ts - prev
+            if gap > 0:
+                diffs[gap] = diffs.get(gap, 0) + 1
+        prev = ts
+    if not diffs:
+        return None
+    return max(diffs, key=diffs.get)
+
+
+def flip_history_bars(states: List[Optional[int]]) -> Dict:
+    """
+    From a per-bar directional state array (values +1 bullish, -1 bearish, or
+    None where undefined), find when the CURRENT run began and what preceded it,
+    counted in bars.
+
+    Returns ``{flipped_bars_ago, previous_direction, previous_bars_ago}`` —
+    bars-ago from the LAST bar. All None when the current run reaches the first
+    known state, i.e. the flip happened before this window and inventing a bar
+    for it would be a lie. The caller turns bars-ago into a close timestamp,
+    because that needs the candles this pure walk does not have.
+
+    Shared by the MACD, EMA and Ichimoku cards; SuperTrend keeps its own copy
+    because it computes the state inline as it walks price.
+    """
+    null = {"flipped_bars_ago": None, "previous_direction": None,
+            "previous_bars_ago": None}
+    valid = [i for i, s in enumerate(states) if s in (1, -1)]
+    if not valid:
+        return null
+    last = valid[-1]
+    first_valid = valid[0]
+    t_now = states[last]
+
+    rs = last
+    while rs - 1 >= first_valid and states[rs - 1] == t_now:
+        rs -= 1
+    if rs <= first_valid or states[rs - 1] not in (1, -1):
+        return null                       # current run reaches the window edge
+
+    t_prev = states[rs - 1]
+    ps = rs - 1
+    while ps - 1 >= first_valid and states[ps - 1] == t_prev:
+        ps -= 1
+    prev_known = ps > first_valid and states[ps - 1] in (1, -1)
+    return {
+        "flipped_bars_ago": last - rs,
+        "previous_direction": "bullish" if t_prev == 1 else "bearish",
+        "previous_bars_ago": (last - ps) if prev_known else None,
+    }
+
+
+def flip_close_ts(candles: List[Dict], bars_ago: Optional[int]) -> Optional[int]:
+    """The CLOSE time of the bar ``bars_ago`` back from the last candle, in ms.
+
+    Close, not open: a cross is confirmed when the bar closes, so the moment it
+    became real is that bar's close (open + one inferred interval)."""
+    if bars_ago is None or not candles:
+        return None
+    interval = _infer_interval(candles)
+    idx = len(candles) - 1 - int(bars_ago)
+    if interval is None or idx < 0 or idx >= len(candles):
+        return None
+    ts = candles[idx].get("timestamp")
+    return int(ts) + interval if ts is not None else None
+
+
 def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: float = 3.0) -> Dict:
     """SuperTrend indicator.  Returns current direction, value and whether a
-    flip (new signal) occurred on the most recent closed candle."""
+    flip (new signal) occurred on the most recent closed candle.
+
+    Also reports the flip HISTORY: ``flipped_ts`` (the CLOSE time of the candle
+    that started the current run), ``flipped_bars_ago``, ``previous_direction``
+    and ``previous_flipped_ts`` — so the card can say when the trend turned and
+    what it was before, not just its state right now."""
     if len(candles) < period + 1:
-        return {"direction": None, "value": None, "signal": None, "flipped": False, "series": []}
+        return {"direction": None, "value": None, "signal": None,
+                "flipped": False, "series": [],
+                "flipped_ts": None, "flipped_bars_ago": None,
+                "previous_direction": None, "previous_flipped_ts": None,
+                "previous_bars_ago": None}
 
     highs  = [c["high"]  for c in candles]
     lows   = [c["low"]   for c in candles]
@@ -1060,6 +1182,46 @@ def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: floa
     flipped   = t_now != t_pre
     signal    = ("BUY" if t_now == 1 else "SELL") if flipped else None
 
+    # ── When did the CURRENT trend begin, and what was it before ─────────────
+    # The card showed "Bullish / No flip on last candle" but never said when the
+    # bullish run started or what preceded it. The trend array already holds the
+    # state at every bar, so the answer is a walk back to the last change.
+    #
+    # Timestamps are CLOSE times: a SuperTrend flip is confirmed by a candle
+    # closing beyond the band, so the moment it became real is that candle's
+    # close (its open timestamp + one interval), not its open. The interval is
+    # inferred from the series so this needs no timeframe argument.
+    first_valid = period - 1
+    interval = _infer_interval(candles)
+
+    def _close_ts(idx):
+        ts = candles[idx].get("timestamp")
+        if ts is None or interval is None:
+            return None
+        return int(ts) + interval
+
+    # Start of the current run.
+    rs = last
+    while rs > first_valid and trend[rs - 1] == t_now:
+        rs -= 1
+    if rs > first_valid:
+        # rs is a genuine flip bar (the state before it differed).
+        flipped_ts = _close_ts(rs)
+        flipped_bars_ago = last - rs
+        t_prev_run = trend[rs - 1]
+        previous_direction = "bullish" if t_prev_run == 1 else "bearish"
+        # Start of the PREVIOUS run.
+        ps = rs - 1
+        while ps > first_valid and trend[ps - 1] == t_prev_run:
+            ps -= 1
+        previous_flipped_ts = _close_ts(ps) if ps > first_valid else None
+        previous_bars_ago = last - ps
+    else:
+        # The current run reaches back to where the data starts — we cannot say
+        # it flipped within the window, only that it has held throughout it.
+        flipped_ts = flipped_bars_ago = None
+        previous_direction = previous_flipped_ts = previous_bars_ago = None
+
     # Full series for charting — value at each bar is the active band (dn while
     # bullish, up while bearish), so the line tracks price like the real indicator.
     series = []
@@ -1075,7 +1237,13 @@ def calculate_supertrend(candles: List[Dict], period: int = 22, multiplier: floa
             "trend":     "bullish" if trend[idx] == 1 else "bearish",
         })
 
-    return {"direction": direction, "value": value, "signal": signal, "flipped": flipped, "series": series}
+    return {"direction": direction, "value": value, "signal": signal,
+            "flipped": flipped, "series": series,
+            # New: the flip history the card asks for.
+            "flipped_ts": flipped_ts, "flipped_bars_ago": flipped_bars_ago,
+            "previous_direction": previous_direction,
+            "previous_flipped_ts": previous_flipped_ts,
+            "previous_bars_ago": previous_bars_ago}
 
 
 def calculate_ichimoku(candles: List[Dict],
@@ -1150,6 +1318,20 @@ def calculate_ichimoku(candles: List[Dict],
     def _r(v):
         return round(v, 8) if v is not None else None
 
+    # TK-cross flip history: Tenkan's side of Kijun at every bar, so the card can
+    # say when the last TK cross happened, not just that there is none right now.
+    # Ichimoku has the candles, so the close times are attached here.
+    tk_states = []
+    for idx in range(n):
+        t = _mid(candles, tenkan_period, idx)
+        k = _mid(candles, kijun_period, idx)
+        tk_states.append(1 if (t is not None and k is not None and t > k)
+                         else (-1 if (t is not None and k is not None and t < k)
+                               else None))
+    tk_flip = flip_history_bars(tk_states)
+    tk_flipped_bars_ago = tk_flip["flipped_bars_ago"]
+    tk_prev_bars_ago = tk_flip["previous_bars_ago"]
+
     # Full cloud series for charting — span_a/span_b at each bar, same
     # backward-displacement logic used for the current value above.
     series = []
@@ -1178,6 +1360,12 @@ def calculate_ichimoku(candles: List[Dict],
         "price_vs_cloud": price_vs_cloud,
         "tk_cross":      tk_cross,
         "series":        series,
+        # TK-cross flip history — when Tenkan last crossed Kijun and what before.
+        "tk_flipped_ts":       flip_close_ts(candles, tk_flipped_bars_ago),
+        "tk_flipped_bars_ago": tk_flipped_bars_ago,
+        "tk_previous_direction": tk_flip["previous_direction"],
+        "tk_previous_flipped_ts": flip_close_ts(candles, tk_prev_bars_ago),
+        "tk_previous_bars_ago":  tk_prev_bars_ago,
     }
 
 
