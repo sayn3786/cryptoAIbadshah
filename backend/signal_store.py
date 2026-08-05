@@ -35,6 +35,7 @@ __all__ = [
     "has_environment_column", "has_exit_fraction_column", "reset_capabilities",
     "SCALE_OUT_SHARES", "ladder_shares",
     "create_signal", "get_signal", "list_active_signals", "list_signals",
+    "list_closed_with_snapshots",
     "attach_targets", "record_entry_fill", "record_excursion",
     "record_stop_move", "weighted_return", "WORKING_STATUSES",
     "record_target_hit", "record_stop_loss_hit", "close_signal",
@@ -417,6 +418,19 @@ def _row_to_dict(row) -> Dict[str, Any]:
         elif isinstance(v, datetime):
             d[k] = v.astimezone(timezone.utc).isoformat()
     return d
+
+
+def _as_dict(value) -> Dict[str, Any]:
+    """A JSONB column as a dict, whether the driver handed it back parsed or raw."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+    return {}
 
 
 def _insert_event(session, signal_id, event_type: str, event_time,
@@ -869,6 +883,64 @@ def list_published_between(since, until, *,
             # the missing parts.
             r["published_card"] = ctx.get("published_card") or {}
             r["market_context"] = ctx
+        return items
+
+    if session is not None:
+        return _work(session)
+    with session_scope() as s:
+        return _work(s)
+
+
+def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
+                               environment: Optional[str] = None,
+                               limit: int = 500,
+                               session=None) -> List[Dict[str, Any]]:
+    """
+    Terminal signals with their decision snapshot attached — the postmortem feed.
+
+    Only closed rows (``TERMINAL_STATUSES``), newest first, each carrying its
+    stored ``indicator_values`` and ``market_context`` under ``snapshot`` plus
+    its excursion (``mfe_pct``/``mae_pct``) already on the signal row. Two round
+    trips — signals, then every snapshot in one ``ANY`` — never one per row,
+    because the pool is NullPool and each statement is a fresh connection.
+
+    Read-only. This never writes, and the report built from it never feeds back
+    into live parameters — the same rule the postmortem table itself carries.
+    """
+    limit = max(1, min(int(limit or 500), MAX_PAGE_SIZE))
+    terminal = sorted(TERMINAL_STATUSES)
+
+    def _work(s):
+        env_sql, env_params = _environment_clause(s, environment)
+        where = ["status = ANY(:statuses)", "archived_at IS NULL"]
+        params: Dict[str, Any] = {"statuses": terminal, "limit": limit,
+                                  **env_params}
+        if strategy_version:
+            where.append("strategy_version = :sver")
+            params["sver"] = strategy_version.strip()
+        clause = " AND ".join(where) + env_sql
+        rows = s.execute(_sql(
+            f"SELECT * FROM signals WHERE {clause} "
+            f"ORDER BY closed_at DESC NULLS LAST, generated_at DESC LIMIT :limit"
+        ), params).all()
+        items = [_row_to_dict(r) for r in rows]
+        if not items:
+            return items
+        ids = [str(r["id"]) for r in items]
+        snaps: Dict[str, Dict[str, Any]] = {}
+        for row in s.execute(_sql("""
+            SELECT signal_id, indicator_values, market_context, data_quality_flags
+            FROM   signal_indicator_snapshots
+            WHERE  signal_id = ANY(CAST(:ids AS uuid[]))
+        """), {"ids": ids}).all():
+            d = _row_to_dict(row)
+            snaps[str(d["signal_id"])] = {
+                "indicator_values": _as_dict(d.get("indicator_values")),
+                "market_context": _as_dict(d.get("market_context")),
+                "data_quality_flags": _as_dict(d.get("data_quality_flags")),
+            }
+        for r in items:
+            r["snapshot"] = snaps.get(str(r["id"])) or {}
         return items
 
     if session is not None:

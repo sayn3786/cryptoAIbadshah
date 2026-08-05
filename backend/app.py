@@ -3314,6 +3314,41 @@ def api_signals_outcomes():
         return _db_error_response(exc)
 
 
+@app.get("/api/signals/postmortem-report")
+def api_signals_postmortem_report():
+    """
+    Aggregate postmortem across CLOSED signals — why the losers lost.
+
+    Reads every terminal signal of a strategy_version with its decision
+    snapshot, and ranks the decision-time flags by how much more often they
+    preceded a loss than a win. Read-only, and it changes no live parameter:
+    any weighting change it suggests is a new strategy_version, backtested and
+    human-approved.
+
+    Query params:
+      strategy_version   which rule-set (default: the current default). Rows
+                         are never pooled across versions — v44 and v45 stops,
+                         targets and strength differ, so their trades are not
+                         comparable.
+      environment        environment scope (defaults to this deployment's)
+      limit              max closed rows to pull (default 500)
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    import postmortem_report as _pm
+    sver = request.args.get("strategy_version") or _strategy_version_for_reports()
+    try:
+        rows = store.list_closed_with_snapshots(
+            strategy_version=sver,
+            environment=request.args.get("environment"),
+            limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
+        return jsonify(_pm.build_report(rows, strategy_version=sver))
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.get("/api/signals/postmortems")
 def api_signals_postmortems():
     """Post-trade analyses, newest first."""
