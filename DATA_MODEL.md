@@ -258,6 +258,41 @@ via `POST /api/signals/<id>/postmortem`. The live MFE/MAE figures are on
 
 > Postmortem data **never** automatically modifies live strategy parameters.
 
+#### The aggregate postmortem report
+
+`signal_postmortems` is per-signal and hand-written. The **aggregate** read is
+`GET /api/signals/postmortem-report` (pure logic in `backend/postmortem_report.py`),
+and it needs nothing written first — it reads every closed signal of one
+`strategy_version` together with its stored decision snapshot.
+
+It answers the standing question — *when a trade hit its stop, what did we
+already know?* — by measuring each decision-time flag (structure fought the
+trade, stop sat in a sweep zone, reversal-against, chase, 1H/2H disagreement,
+thin R/R, violent tape, degraded data, opposed BTC) as its **rate in losers
+against its rate in winners**. A flag common to both is not a discriminator,
+however common; only the lift between the cohorts is ranked. It also splits the
+losers by whether they first ran ≥1R in your favour — which separates a
+too-tight stop from a wrong signal.
+
+Three honesty rules are built in: it refuses to call anything a discriminator
+until both cohorts clear `MIN_COHORT` (5) trades; a snapshot field a row never
+recorded counts as *unknown*, never as *all-clear*; and it states in its own
+`caveats`, every response, that it is correlation not causation and changes no
+live parameter. A v46 that acts on a discriminator is a separate, backtested,
+human-approved strategy_version.
+
+**Running it after the v45 freeze.** v45 resets the sample — v44 and v45 stops,
+targets and strength differ, so their trades are not poolable. From the first
+v45 deploy, wait for both cohorts to fill (≈15 closed for a first qualitative
+read, ≈30 for a quantitative one), then:
+
+```
+GET /api/signals/postmortem-report?strategy_version=v45_4h_avg
+```
+
+Check `powered` before reading the discriminators; if it is false the sample is
+still too thin to mean anything.
+
 ### 3.6 `schema_migrations`
 
 `version` (PK), `description`, `applied_at`. Written only by
@@ -340,7 +375,8 @@ mutation endpoints stay **closed**, not open.
 | GET | `/api/signals/active` | public | Working signals. |
 | GET | `/api/signals/history` | public | Paginated. `symbol`, `timeframe`, `direction`, `status`×N, `strategy_version`, `exchange`, `include_archived=1`, `environment`, `limit`, `offset`. |
 | GET | `/api/signals/outcomes` | public | Terminal signals only. |
-| GET | `/api/signals/postmortems` | public | |
+| GET | `/api/signals/postmortems` | public | Per-signal post-trade analyses, newest first. |
+| GET | `/api/signals/postmortem-report` | public | Aggregate across CLOSED signals of a `strategy_version`: ranks decision-time flags by how much more often they preceded a loss than a win. Read-only; never tunes. `strategy_version`, `environment`, `limit`. |
 | GET | `/api/signals/<id>` | public | One signal with targets, snapshot, events, postmortem. |
 | POST | `/api/signals/monitor` | internal | Advance the lifecycle. `max_age_hours`, `fill_window_hours`, `limit`. |
 | POST | `/api/signals/<id>/archive` | internal | |
