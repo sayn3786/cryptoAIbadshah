@@ -1266,33 +1266,69 @@ function renderSupertrendCard(st) {
   dirEl.textContent = bull ? '▲ Bullish' : '▼ Bearish';
   dirEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
 
+  // A flip within the last 3 days is a fresh trend the reader should not miss.
+  // Measured against the flip's CLOSE time and wall-clock now, so it is the
+  // same 3 days on any timeframe.
+  const trendCol = bull ? 'var(--bull)' : 'var(--bear)';
+  const recentFlip = st.flipped_ts != null &&
+    (Date.now() - Number(st.flipped_ts)) <= ST_RECENT_FLIP_MS &&
+    (Date.now() - Number(st.flipped_ts)) >= 0;
+
+  const card = dirEl.closest('.card, .metric-card');
+  if (card) card.classList.toggle('st-fresh-flip', recentFlip);
+
   if (st.flipped && st.signal) {
     sigEl.textContent = `🔔 New ${st.signal} signal`;
-    sigEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+    sigEl.style.color = trendCol;
+  } else if (recentFlip) {
+    // Flipped recently, but not on the very last candle — still worth a bell.
+    sigEl.textContent = `🔔 Flipped ${bull ? 'bullish' : 'bearish'} ${_stAgo(st.flipped_ts)}`;
+    sigEl.style.color = trendCol;
   } else {
     sigEl.textContent = 'No flip on last candle';
     sigEl.style.color = 'var(--muted)';
   }
 
   const fmt = v => v != null ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : '—';
-  let html = `<span class="st-label">${bull ? 'Support' : 'Resistance'}</span>
-    <span class="${bull ? 'bull' : 'bear'}">${fmt(st.value)}</span>`;
+  const row = (label, value, valueCls) =>
+    `<div class="st-row"><span class="st-label">${label}</span>` +
+    `<span class="${valueCls}">${value}</span></div>`;
+
+  let html = row(bull ? 'Support' : 'Resistance', fmt(st.value), bull ? 'bull' : 'bear');
 
   // Flip history: WHEN the current trend began (close time of the flip candle)
   // and what it was before. Timestamps are epoch-ms close times from the
-  // backend; _stFlipWhen formats them and appends how long ago.
+  // backend; _stFlipWhen formats them and appends how long ago. A recent flip
+  // gets a highlighted "Turned" row so the emphasis matches the bell above.
   if (st.flipped_ts) {
-    html += `<span class="st-label">Turned ${bull ? 'bullish' : 'bearish'}</span>
-      <span class="${bull ? 'bull' : 'bear'}">${_stFlipWhen(st.flipped_ts, st.flipped_bars_ago)}</span>`;
+    const dot = recentFlip ? '● ' : '';
+    const cls = (bull ? 'bull' : 'bear') + (recentFlip ? ' st-flip-hi' : '');
+    html += row(`${dot}Turned ${bull ? 'bullish' : 'bearish'}`,
+                _stFlipWhen(st.flipped_ts, st.flipped_bars_ago), cls);
     if (st.previous_direction) {
       const pb = st.previous_direction === 'bullish';
       const prev = st.previous_flipped_ts
-        ? `${_stFlipWhen(st.previous_flipped_ts, st.previous_bars_ago)}` : 'earlier';
-      html += `<span class="st-label">Was ${st.previous_direction}</span>
-        <span class="${pb ? 'bull' : 'bear'}" style="opacity:.8">since ${prev}</span>`;
+        ? _stFlipWhen(st.previous_flipped_ts, st.previous_bars_ago) : 'earlier';
+      html += row(`Was ${st.previous_direction}`, `since ${prev}`,
+                  (pb ? 'bull' : 'bear') + ' st-flip-prev');
     }
   }
   valEl.innerHTML = html;
+}
+
+// A SuperTrend flip counts as "fresh" for three days after its close.
+const ST_RECENT_FLIP_MS = 3 * 24 * 60 * 60 * 1000;
+
+// Coarse "how long ago" in days/hours/minutes — for the flip bell, where the
+// exact minute is already shown on the row below it.
+function _stAgo(ms) {
+  const diff = Date.now() - Number(ms);
+  if (!(diff >= 0)) return 'just now';
+  const days = Math.floor(diff / 86400000);
+  if (days >= 1) return `${days}d ago`;
+  const hours = Math.floor(diff / 3600000);
+  if (hours >= 1) return `${hours}h ago`;
+  return `${Math.max(1, Math.floor(diff / 60000))}m ago`;
 }
 
 // A flip time as "Aug 5, 14:00 (3 bars ago)" — date, HH:MM, and the bar count
