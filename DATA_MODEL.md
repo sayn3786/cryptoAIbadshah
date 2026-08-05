@@ -377,6 +377,7 @@ mutation endpoints stay **closed**, not open.
 | GET | `/api/signals/outcomes` | public | Terminal signals only. |
 | GET | `/api/signals/postmortems` | public | Per-signal post-trade analyses, newest first. |
 | GET | `/api/signals/postmortem-report` | public | Aggregate across CLOSED signals of a `strategy_version`: ranks decision-time flags by how much more often they preceded a loss than a win. Read-only; never tunes. `strategy_version`, `environment`, `limit`. |
+| GET | `/api/signals/cadence` | public | How fast the closed-trade sample is filling for a `strategy_version`, and when ~15 and ~30 closed land at the current rate. Read-only estimate. `strategy_version`, `environment`, `limit`. |
 | GET | `/api/signals/<id>` | public | One signal with targets, snapshot, events, postmortem. |
 | POST | `/api/signals/monitor` | internal | Advance the lifecycle. `max_age_hours`, `fill_window_hours`, `limit`. |
 | POST | `/api/signals/<id>/archive` | internal | |

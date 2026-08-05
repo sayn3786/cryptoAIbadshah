@@ -3349,6 +3349,45 @@ def api_signals_postmortem_report():
         return _db_error_response(exc)
 
 
+@app.get("/api/signals/cadence")
+def api_signals_cadence():
+    """
+    How fast the closed-trade sample is filling for a strategy_version, and when
+    the postmortem milestones (~15 and ~30 closed) land at the current rate.
+
+    v45 reset the count — v44 and v45 trades are not poolable. Read-only; the
+    projection is an estimate that moves as the rate settles, and `now` is the
+    server clock at request time.
+
+    Query params: `strategy_version` (default: current), `environment`, `limit`.
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    import postmortem_report as _pm
+    sver = request.args.get("strategy_version") or _strategy_version_for_reports()
+    limit = _int_arg("limit", 1000, 1, store.MAX_PAGE_SIZE)
+    try:
+        got, offset = [], 0
+        while len(got) < limit:
+            page = store.list_signals(
+                strategy_version=sver,
+                environment=request.args.get("environment"),
+                limit=min(limit - len(got), store.MAX_PAGE_SIZE),
+                offset=offset, with_total=False)
+            items = page.get("items") or []
+            got.extend(items)
+            if len(items) < store.MAX_PAGE_SIZE:
+                break
+            offset += len(items)
+        rep = _pm.cadence_report(got, now=datetime.now(timezone.utc))
+        rep["strategy_version"] = sver
+        return jsonify(rep)
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.get("/api/signals/postmortems")
 def api_signals_postmortems():
     """Post-trade analyses, newest first."""

@@ -30,12 +30,25 @@ report says so in its own `caveats`, every time.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 __all__ = [
-    "build_report", "FEATURES", "MIN_COHORT", "LIFT_THRESHOLD",
+    "build_report", "cadence_report", "FEATURES", "MIN_COHORT",
+    "LIFT_THRESHOLD", "QUALITATIVE_TARGET", "QUANTITATIVE_TARGET",
     "classify_outcome",
 ]
+
+# The two milestones from the postmortem plan. A first qualitative read of the
+# discriminators wants both cohorts populated; a quantitative expectancy read
+# wants enough n that the win rate is not a coin toss dressed up.
+QUALITATIVE_TARGET = 15
+QUANTITATIVE_TARGET = 30
+
+# Below this many days of history the closes-per-day figure is too green to
+# project from — the first trades of a version cluster oddly as the pipeline
+# warms up. The report still shows the rate, but flags the projection as soft.
+MIN_DAYS_FOR_PROJECTION = 3.0
 
 # Below this many trades in either cohort, a rate is noise wearing a decimal
 # point. The report still computes everything, but flags the discriminator
@@ -399,5 +412,148 @@ def build_report(rows: Sequence[Dict[str, Any]], *,
             "a new strategy_version, backtested and human-approved.",
             "Unknown != absent. Rows predating a snapshot field are counted as "
             "'unknown' for that flag, never as 'all clear'.",
+        ],
+    }
+
+
+# ── Cadence: how fast is the sample filling, and when will it be ready ────────
+# The postmortem needs closed trades, and v45 resets the count to zero. This
+# reads how quickly analysable closes are actually accumulating and projects the
+# two milestones, so the 15-Aug / 26-Aug dates come from data rather than a
+# guess. It is the companion to build_report: that one says WHAT the losers
+# tell us, this one says WHEN there will be enough of them to ask.
+
+def _to_ms(value) -> Optional[int]:
+    """Epoch-ms from an int, a float, or an ISO-8601 string. None if unparseable.
+
+    Deterministic parsing only — no wall clock is read, so this stays pure and
+    the projection is reproducible from the same rows and the same `now`.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    try:
+        txt = str(value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(txt)
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except (ValueError, TypeError):
+        return None
+
+
+def _iso(ms: Optional[int]) -> Optional[str]:
+    if ms is None:
+        return None
+    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).isoformat()
+
+
+def cadence_report(rows: Sequence[Dict[str, Any]], *, now,
+                   targets: Sequence[int] = (QUALITATIVE_TARGET,
+                                             QUANTITATIVE_TARGET)) -> Dict[str, Any]:
+    """
+    How fast the closed-trade sample is filling, and when each target lands.
+
+    ``rows`` are ALL signals of one strategy_version — open, cancelled and
+    closed — each with ``generated_at`` and (for closed rows) ``closed_at``,
+    ``status`` and ``realized_return_pct``. ``now`` is the evaluation instant
+    (epoch-ms, ISO string or datetime); it is passed in, never read from the
+    clock, so the same rows always produce the same projection.
+
+    The rate is analysable closes per day since the FIRST v45 publication — not
+    since the first close, because the gap before the first close (a trade takes
+    up to ~4 days to resolve) is real elapsed time the sample was filling
+    through. Projecting off "since first close" would flatter the rate by
+    hiding that lag.
+
+    Projections are estimates and say so. Early on, closes cluster oddly while
+    the pipeline warms, so a run inside the first few days flags its projection
+    as soft rather than pretending to a date it cannot support.
+    """
+    now_ms = _to_ms(now)
+    if now_ms is None:
+        raise ValueError("cadence_report needs an explicit `now`")
+
+    published = list(rows or [])
+    buckets: Dict[str, List[Dict]] = {"win": [], "loss": [], "scratch": [],
+                                      "expired": [], "cancelled": [], "open": []}
+    for r in published:
+        buckets[classify_outcome(r)].append(r)
+
+    winners, losers = buckets["win"], buckets["loss"]
+    analysable = winners + losers + buckets["scratch"] + buckets["expired"]
+
+    gen_ms = sorted(m for m in (_to_ms(r.get("generated_at")) for r in published)
+                    if m is not None)
+    close_ms = sorted(m for m in (_to_ms(r.get("closed_at")) for r in analysable)
+                      if m is not None)
+    first_pub = gen_ms[0] if gen_ms else None
+    first_close = close_ms[0] if close_ms else None
+    last_close = close_ms[-1] if close_ms else None
+
+    elapsed_days = ((now_ms - first_pub) / 86_400_000.0) if first_pub else 0.0
+    n_analysable = len(analysable)
+    per_day = (round(n_analysable / elapsed_days, 3)
+               if elapsed_days > 0 and n_analysable else None)
+
+    returns = [_f(r.get("realized_return_pct")) for r in analysable]
+    returns = [x for x in returns if x is not None]
+    decided = len(winners) + len(losers)
+
+    soft = elapsed_days < MIN_DAYS_FOR_PROJECTION or n_analysable < 3
+    projections = []
+    for target in targets:
+        remaining = max(0, int(target) - n_analysable)
+        if remaining == 0:
+            projections.append({"target": int(target), "remaining": 0,
+                                 "eta_days": 0, "eta_date": _iso(now_ms),
+                                 "reached": True})
+            continue
+        if per_day and per_day > 0:
+            eta_days = round(remaining / per_day, 1)
+            eta_date = _iso(now_ms + int(eta_days * 86_400_000))
+        else:
+            eta_days = eta_date = None
+        projections.append({"target": int(target), "remaining": remaining,
+                            "eta_days": eta_days, "eta_date": eta_date,
+                            "reached": False})
+
+    return {
+        "now": _iso(now_ms),
+        "counts": {
+            "published": len(published),
+            "analysable_closed": n_analysable,
+            "wins": len(winners),
+            "losses": len(losers),
+            "scratches": len(buckets["scratch"]),
+            "expired": len(buckets["expired"]),
+            "cancelled": len(buckets["cancelled"]),
+            "still_open": len(buckets["open"]),
+        },
+        "first_published": _iso(first_pub),
+        "first_closed": _iso(first_close),
+        "last_closed": _iso(last_close),
+        "elapsed_days_since_first_publish": round(elapsed_days, 2),
+        "closes_per_day": per_day,
+        "win_rate_pct": round(len(winners) / decided * 100, 1) if decided else None,
+        "expectancy_pct": round(sum(returns) / len(returns), 4) if returns else None,
+        "powered_for_discriminators": (len(winners) >= MIN_COHORT
+                                       and len(losers) >= MIN_COHORT),
+        "projection_is_soft": bool(soft),
+        "projections": projections,
+        "notes": [
+            "Rate is analysable closes per day since the first v45 publication, "
+            "which includes the lag before the first trade could resolve.",
+            "Projections are estimates from the observed rate, not commitments; "
+            "they move as the rate settles." + (
+                " Flagged soft: too few days or trades to project from yet."
+                if soft else ""),
+            "Cancelled and still-open signals are excluded from the analysable "
+            "count — an unfilled or unfinished order is not a closed trade.",
         ],
     }
