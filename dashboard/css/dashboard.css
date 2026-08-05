@@ -920,8 +920,8 @@ a:hover { color: var(--gold2); }
 .st-label       { color: var(--muted2); }
 .st-flip-prev   { opacity: .8; }
 
-/* A flip inside the last 3 days: a bell above and a highlighted "Turned" row,
-   plus a soft accent border on the card so it stands out at a glance. */
+/* A flip inside the last 3 candle closes: a bell above and a highlighted
+   "Turned" row, plus a soft accent border on the card so it stands out. */
 .st-flip-hi     { font-weight: 700; }
 .card.st-fresh-flip, .metric-card.st-fresh-flip {
   box-shadow: inset 0 0 0 1px var(--accent, #f59e0b);

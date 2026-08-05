@@ -1266,13 +1266,13 @@ function renderSupertrendCard(st) {
   dirEl.textContent = bull ? '▲ Bullish' : '▼ Bearish';
   dirEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
 
-  // A flip within the last 3 days is a fresh trend the reader should not miss.
-  // Measured against the flip's CLOSE time and wall-clock now, so it is the
-  // same 3 days on any timeframe.
+  // A flip within the last 3 CANDLE CLOSES is a fresh trend the reader should
+  // not miss. Counted in bars, not wall-clock, so it means the same thing on
+  // every timeframe — the last three closes, whether that is 6 hours on 2H or
+  // 12 on 4H. bars_ago 0/1/2 are the three most recent closes.
   const trendCol = bull ? 'var(--bull)' : 'var(--bear)';
-  const recentFlip = st.flipped_ts != null &&
-    (Date.now() - Number(st.flipped_ts)) <= ST_RECENT_FLIP_MS &&
-    (Date.now() - Number(st.flipped_ts)) >= 0;
+  const recentFlip = st.flipped_bars_ago != null &&
+    st.flipped_bars_ago >= 0 && st.flipped_bars_ago < ST_RECENT_FLIP_BARS;
 
   const card = dirEl.closest('.card, .metric-card');
   if (card) card.classList.toggle('st-fresh-flip', recentFlip);
@@ -1281,8 +1281,10 @@ function renderSupertrendCard(st) {
     sigEl.textContent = `🔔 New ${st.signal} signal`;
     sigEl.style.color = trendCol;
   } else if (recentFlip) {
-    // Flipped recently, but not on the very last candle — still worth a bell.
-    sigEl.textContent = `🔔 Flipped ${bull ? 'bullish' : 'bearish'} ${_stAgo(st.flipped_ts)}`;
+    // Flipped in the last 3 closes, but not on the very last candle — the "New
+    // signal" bell above only fires on bars_ago 0, so this covers 1 and 2.
+    const n = st.flipped_bars_ago;
+    sigEl.textContent = `🔔 Flipped ${bull ? 'bullish' : 'bearish'} · ${n} bar${n === 1 ? '' : 's'} ago`;
     sigEl.style.color = trendCol;
   } else {
     sigEl.textContent = 'No flip on last candle';
@@ -1316,20 +1318,10 @@ function renderSupertrendCard(st) {
   valEl.innerHTML = html;
 }
 
-// A SuperTrend flip counts as "fresh" for three days after its close.
-const ST_RECENT_FLIP_MS = 3 * 24 * 60 * 60 * 1000;
-
-// Coarse "how long ago" in days/hours/minutes — for the flip bell, where the
-// exact minute is already shown on the row below it.
-function _stAgo(ms) {
-  const diff = Date.now() - Number(ms);
-  if (!(diff >= 0)) return 'just now';
-  const days = Math.floor(diff / 86400000);
-  if (days >= 1) return `${days}d ago`;
-  const hours = Math.floor(diff / 3600000);
-  if (hours >= 1) return `${hours}h ago`;
-  return `${Math.max(1, Math.floor(diff / 60000))}m ago`;
-}
+// A SuperTrend flip counts as "fresh" for the last 3 candle closes — bars_ago
+// 0, 1 and 2, so the condition is `< 3`. Bars, not time, so it is the same on
+// every timeframe.
+const ST_RECENT_FLIP_BARS = 3;
 
 // A flip time as "Aug 5, 14:00 (3 bars ago)" — date, HH:MM, and the bar count
 // so a reader can place it without doing timeframe arithmetic in their head.
