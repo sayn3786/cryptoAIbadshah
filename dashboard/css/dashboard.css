@@ -928,6 +928,19 @@ a:hover { color: var(--gold2); }
 }
 .st-fresh-flip .st-flip-hi { text-shadow: 0 0 10px currentColor; }
 
+/* Alignment for every label/value row on the flip cards. The label sits on the
+   left at its natural width and does not wrap mid-phrase; the value takes the
+   rest and is right-aligned, so a two-line value ("Jul 28, 08:00 · 8 bars ago")
+   stacks tidily against the right edge instead of running ragged. Shared by the
+   SuperTrend, EMA and Ichimoku rows. */
+.st-row, .ema-row, .ichi-row { align-items: baseline; gap: 10px; }
+.st-row  > :first-child,
+.ema-row > :first-child,
+.ichi-row > :first-child { flex: 0 0 auto; white-space: nowrap; }
+.st-row  > :last-child,
+.ema-row > :last-child,
+.ichi-row > :last-child { flex: 1 1 auto; min-width: 0; text-align: right; }
+
 /* Ichimoku card */
 .ichi-rows  { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; width: 100%; }
 .ichi-row   { display: flex; justify-content: space-between; font-size: .72rem; }
