@@ -89,6 +89,69 @@ def exists(key: str) -> bool:
     return key in _file_load()
 
 
+# ── value get / set (for small JSON state, not just dedup flags) ──────────────
+# claim/exists only record a key's PRESENCE. Persisting a little state — the
+# live chart patterns a symbol is tracking — needs an actual value. Same store,
+# same graceful degradation: Upstash SET/GET when configured, a local JSON map
+# otherwise. Never raises; a failure returns None / does nothing, because this
+# backs a DISPLAY nicety and must never break the analysis it decorates.
+
+def _file_vals() -> dict:
+    try:
+        with open(_FILE) as f:
+            return json.load(f).get("vals", {})
+    except Exception:
+        return {}
+
+
+def _file_write_vals(vals: dict) -> None:
+    with _lock:
+        try:
+            with open(_FILE) as f:
+                blob = json.load(f)
+        except Exception:
+            blob = {}
+        blob["vals"] = vals
+        try:
+            with open(_FILE, "w") as f:
+                json.dump(blob, f)
+        except Exception:
+            pass
+
+
+def get_value(key: str):
+    """The string stored at ``key``, or None. Never raises."""
+    if kv_enabled():
+        try:
+            return _kv_cmd("GET", key)
+        except Exception:
+            pass
+    import time
+    entry = _file_vals().get(key)
+    if not entry:
+        return None
+    if entry.get("exp") and entry["exp"] < time.time():
+        return None
+    return entry.get("v")
+
+
+def set_value(key: str, value: str, ttl_seconds: int = DEFAULT_TTL) -> bool:
+    """Store ``value`` at ``key`` with a TTL. Returns True on success. Never raises."""
+    if kv_enabled():
+        try:
+            return _kv_cmd("SET", key, value, "EX", ttl_seconds) == "OK"
+        except Exception:
+            pass
+    import time
+    vals = _file_vals()
+    vals[key] = {"v": value, "exp": time.time() + ttl_seconds}
+    # Keep the local fallback from growing without bound.
+    if len(vals) > 2000:
+        vals = dict(list(vals.items())[-2000:])
+    _file_write_vals(vals)
+    return True
+
+
 def release(key: str) -> None:
     """
     Give a claimed key back.
