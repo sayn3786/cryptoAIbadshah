@@ -1570,9 +1570,48 @@ def api_analysis(symbol):
     if symbol not in SYMBOLS:
         return jsonify({"error": f"Symbol {symbol} not supported"}), 404
     try:
-        return jsonify(get_analysis(symbol, timeframe))
+        data = get_analysis(symbol, timeframe)
+        # Keep a confirmed chart pattern on the card until it resolves, even
+        # after the stateless detector re-fits it away. Done HERE, on the
+        # interactive path only, so the KV read/write never touches the 60s
+        # publish scan (which calls get_analysis directly). Display-only —
+        # re-surfaced patterns are tagged so scoring skips them.
+        data = _with_tracked_patterns(symbol, timeframe, data)
+        return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _with_tracked_patterns(symbol: str, tf: str, data: dict) -> dict:
+    """
+    Merge persisted-but-still-live triangle/wedge patterns into the analysis for
+    display. Never mutates the shared cached dict, never raises — a KV hiccup
+    must not break the analysis view.
+    """
+    try:
+        import pattern_persist as _pp
+    except Exception:
+        return data
+    try:
+        fresh = data.get("triangle_patterns") or []
+        candles = data.get("structure_candles") or data.get("candles") or []
+        if not candles:
+            return data
+        price = data.get("signal_price") or candles[-1].get("close")
+        now_ts = int(candles[-1].get("timestamp"))
+        env = _deploy_env()
+        records = _pp.load(symbol, tf, env)
+        additions, updated = _pp.reconcile(fresh, records, candles, price,
+                                           symbol, tf, now_ts)
+        _pp.save(symbol, tf, env, updated)
+        if additions:
+            # Copy, don't mutate the cached object the rec scan also reads.
+            merged = list(fresh) + [a for a in additions
+                                    if not any(_pp._structs_match(a, f) for f in fresh)]
+            data = {**data, "triangle_patterns": merged[:_pp.MAX_TRACKED + 3]}
+    except Exception:
+        return data
+    return data
 
 
 # ── Shared analysis cache — used by both API endpoint and rec engine ───────────

@@ -753,6 +753,14 @@ def _counter_trend_break(analysis: Dict, want: str) -> Optional[Dict]:
         if r.get("confirmed") and r.get("direction") == want and _fresh(r.get("break_ts")):
             cands.append((2, r.get("label") or "Reversal pattern", "reversal", r.get("breakout_volume")))
     for t in (analysis.get("triangle_patterns") or []):
+        # display_only patterns are re-surfaced by pattern_persist for the card
+        # after the stateless detector would have dropped them; they must never
+        # re-enter scoring. A freshly detected pattern is never display_only, so
+        # this can only ever REMOVE a persisted card from scoring, never a live
+        # detection — provably score-neutral, which is what keeps it out of the
+        # v45 freeze.
+        if t.get("display_only"):
+            continue
         if t.get("confirmed") and t.get("direction") == want and _fresh(t.get("break_ts")):
             cands.append((1, t.get("label") or "Triangle/Wedge", "triangle", t.get("breakout_volume")))
     if not cands:
@@ -1582,7 +1590,8 @@ def generate_signal(analysis: Dict) -> Dict:
         if _pat.get("confirmed"):
             _pattern_specs.append((_pat, 18 if "head" in (_pat.get("type") or "") else 14))
     for _pat in (analysis.get("triangle_patterns") or []):
-        if _pat.get("confirmed"):
+        # Re-surfaced display_only patterns never score — see the note above.
+        if _pat.get("confirmed") and not _pat.get("display_only"):
             _pattern_specs.append((_pat, 12))
 
     _scored_pat_dirs: set = set()
