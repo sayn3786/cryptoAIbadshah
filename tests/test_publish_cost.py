@@ -151,7 +151,12 @@ def test_everything_passing_costs_what_it_always_did(counted):
         directions[s] = "LONG"
     by_tf, _ = _run(counted)
     assert by_tf["4H"] == len(appmod.SCAN_SYMBOLS) - 1, "BTC is not a candidate"
-    assert sum(by_tf.values()) <= len(appmod.SCAN_SYMBOLS) * 3
+    # 1H+2H for every symbol, 4H for the candidates, PLUS a 1D fetch for the
+    # PUBLISHED symbols only — the daily pattern log, done post-publication and
+    # bounded by the top-three, so it can never scale with the universe.
+    assert by_tf.get("1D", 0) <= appmod.rec_policy.PUBLISH_TOP_N, \
+        "1D is fetched only for the published symbols, for the pattern log"
+    assert sum(by_tf.values()) <= len(appmod.SCAN_SYMBOLS) * 3 + appmod.rec_policy.PUBLISH_TOP_N
 
 
 def test_btc_never_needs_a_4h_analysis(counted):
