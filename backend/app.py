@@ -2186,11 +2186,12 @@ def _compute_recommendations() -> dict:
                         # root. Reading data.get("reversal_radar") always yielded {},
                         # so the reversal-against penalty in _rec_quality never fired.
                         "reversal_radar": sig.get("reversal_radar") or {},
-                        # Full analysis kept for the 2H view only — entry/SL/TP come
-                        # from the 2H signal, so that is the decision snapshot we
-                        # persist. Keeping all three would triple the retained data
-                        # for no benefit.
-                        "analysis":      data if tf == "2H" else None,
+                        # Full analysis kept for the 2H view (the decision
+                        # snapshot: entry/SL/TP come from the 2H signal) AND for
+                        # 1D, which the pattern log reads to record daily
+                        # wedge/flag lifecycle. 1H/4H are not retained — nothing
+                        # reads their full analysis.
+                        "analysis":      data if tf in ("2H", "1D") else None,
                     }
                 except Exception:
                     pass
@@ -2487,14 +2488,37 @@ def _compute_recommendations() -> dict:
         # most" answerable, which a single-timeframe log cannot be.
         try:
             import pattern_store as _pstore
+            # 1D pattern lifecycle for the published symbols. The scan fetches
+            # 1H/2H/4H, never 1D, so it is fetched HERE — after publication has
+            # already committed, and for at most three symbols in parallel via
+            # the same cached get_analysis, so a slow or timed-out 1D build can
+            # only lose a log row, never the published signal. The 1D close time
+            # is stable across the day, so the store's bar-keyed idempotency
+            # writes at most one row per 1D pattern state per day however many
+            # 4H slots log it.
+            _fetch_tfs([(_r["symbol"], "1D") for _r in intraday_recs])
             _pat_rows = []
             for _r in intraday_recs:
-                for _tf in ("1H", "2H", "4H"):
+                for _tf in ("2H", "1D"):
+                    # Only 2H and 1D retain a full analysis in `raw` (see
+                    # _fetch_tfs); 1H/4H would be None here.
                     _an = (raw.get(_r["symbol"], {}).get(_tf, {}) or {}).get("analysis") or {}
                     if not _an:
-                        continue          # 4H is absent for anything gated out
+                        continue
+                    # Each timeframe's events are keyed on ITS OWN candle close,
+                    # not the 2H slot's. A 1D pattern's close time is stable all
+                    # day, so the bar-keyed idempotency records it once per day
+                    # instead of once per 4H slot.
+                    if _tf == "2H":
+                        _ct = _close_t
+                    else:
+                        _ms = _an.get("signal_candle_closed_at")
+                        _ct = (datetime.fromtimestamp(_ms / 1000, tz=timezone.utc)
+                               if _ms else None)
+                    if _ct is None:
+                        continue
                     _pat_rows += _pstore.build_events(
-                        _r["symbol"], _tf, _close_t, _observed_patterns(_an))
+                        _r["symbol"], _tf, _ct, _observed_patterns(_an))
             if _pat_rows:
                 _pat_out = _pstore.record_events(_pat_rows)
                 _persist["patterns"] = _pat_out
