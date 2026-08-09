@@ -59,7 +59,30 @@ def test_a_confirmed_pattern_becomes_a_trackable_record():
     assert rec["direction"] == "bullish"
     assert rec["break_level"] is not None and rec["fail_level"] is not None
     assert rec["apex_ts"] is not None
-    assert rec["key"].startswith("falling_wedge:bullish:")
+    # Keyed on the STRUCTURE, so a later re-fit cannot spawn a second record.
+    assert rec["key"] == "falling_wedge:bullish"
+    # A textbook target date and a void deadline are captured.
+    assert rec["target_eta_ts"] is not None
+    assert rec["apex_ts"] is not None
+
+
+def test_the_target_eta_is_within_the_apex_void_deadline():
+    """
+    The measured move is expected within roughly the formation time, but never
+    past the apex — a converging pattern is void once its rails meet.
+    """
+    rec = pp.record_from_pattern(_pattern(), "TAO", "1D", BASE + 41 * DAY)
+    assert rec["target_eta_ts"] is not None and rec["apex_ts"] is not None
+    assert rec["target_eta_ts"] <= rec["apex_ts"]
+    assert rec["target_eta_ts"] >= rec["break_ts"], "the ETA is after the breakout"
+
+
+def test_the_display_carries_the_target_and_void_dates():
+    rec = _rec()
+    cs = [_c(i, 200, 188, 192) for i in range(3)]
+    d = pp.to_display_pattern(rec, cs, 192.0)
+    assert d["target_eta_ts"] == rec["target_eta_ts"]
+    assert d["expiry_ts"] == rec["apex_ts"]
 
 
 def test_the_break_level_is_the_broken_rail_the_fail_level_the_other():
@@ -160,73 +183,102 @@ def test_the_display_pattern_carries_a_retest_read():
     assert d["retest"] is not None
 
 
-# ── reconcile ───────────────────────────────────────────────────────────────
+# ── reconcile: freeze, hold until resolved, suppress re-fits ────────────────
 
-def test_a_dropped_pattern_is_resurfaced_when_still_live():
+def test_a_dropped_pattern_is_held_when_still_live():
+    """The detector stopped surfacing it, but it hasn't resolved — keep showing it."""
     rec = _rec()
     cs = [_c(i, 200, 188, 192) for i in range(5)]
-    additions, updated = pp.reconcile([], [rec], cs, 192.0, "TAO", "1D",
-                                      BASE + 46 * DAY)
-    assert len(additions) == 1
-    assert additions[0]["display_only"] is True
-    assert len(updated) == 1                       # still tracked
-
-
-def test_a_resolved_pattern_is_dropped_from_the_store():
-    rec = _rec()
-    cs = [_c(i, 280, 260, 276) for i in range(3)]   # hit target
-    additions, updated = pp.reconcile([], [rec], cs, 276.0, "TAO", "1D",
-                                      BASE + 44 * DAY)
-    assert additions == [] and updated == []
-
-
-def test_a_fresh_detection_is_not_duplicated_by_the_tracked_copy():
-    """When the detector still surfaces it, the tracked copy must not double it."""
-    rec = _rec()
-    cs = [_c(i, 200, 188, 192) for i in range(5)]
-    fresh = pp.to_display_pattern(rec, cs, 192.0)
-    fresh = {**fresh, "display_only": False, "tracked": False}   # a fresh detection
-    additions, updated = pp.reconcile([fresh], [rec], cs, 192.0, "TAO", "1D",
-                                      BASE + 46 * DAY)
-    assert additions == []                          # already on the card
+    display, updated = pp.reconcile([], [rec], cs, 192.0, "TAO", "1D",
+                                    BASE + 46 * DAY)
+    assert len(display) == 1
+    assert display[0]["display_only"] is True and display[0]["tracked"] is True
     assert len(updated) == 1                        # still tracked
 
 
-def test_the_tracked_copy_dedupes_against_its_own_fresh_detection():
+def test_a_confirmed_pattern_is_frozen_and_does_not_re_measure():
     """
-    On the day a wedge is both freshly detected AND tracked, it must appear
-    once, not twice. The tracked copy's rail values are taken at the last pivot
-    — exactly where the fresh detector reports them — so `_same_structure`
-    matches and the duplicate is dropped.
+    THE requirement: once confirmed, the target must not drift. A later re-fit
+    of the same structure (different rails and target) is suppressed; the frozen
+    original is what shows.
     """
-    import patterns
+    original = _pattern(target=287.0)               # break_off=41
+    rec = pp.record_from_pattern(original, "TAO", "1D", BASE + 41 * DAY)
+    cs = [_c(i, 205, 190, 196) for i in range(5)]
+    refit = _pattern(target=220.0, break_off=43)     # same type+direction, new fit
+    display, updated = pp.reconcile([refit], [rec], cs, 196.0, "TAO", "1D",
+                                    BASE + 46 * DAY)
+    assert len(display) == 1, "the re-fit must not appear alongside the frozen one"
+    assert display[0]["target"] == 287.0, "the target must stay frozen at 287"
+    assert len(updated) == 1 and updated[0]["target"] == 287.0
+
+
+def test_reaching_target_shows_it_reached_once_then_drops():
+    rec = _rec()
+    cs = [_c(i, 280, 260, 276) for i in range(3)]    # price at/over target
+    display, updated = pp.reconcile([], [rec], cs, 276.0, "TAO", "1D",
+                                    BASE + 44 * DAY)
+    assert len(display) == 1 and display[0]["status"] == "target_hit"
+    assert display[0]["target_reached"] is True
+    assert updated == []                             # no longer tracked
+    # Next load: gone.
+    again, _ = pp.reconcile([], updated, cs, 276.0, "TAO", "1D", BASE + 45 * DAY)
+    assert again == []
+
+
+def test_an_invalidation_shows_failed_then_drops():
+    rec = _rec()
+    cs = [_c(0, 200, 188, 192), _c(1, 193, 178, rec["fail_level"] - 1)]  # closed back through
+    display, updated = pp.reconcile([], [rec], cs, rec["fail_level"] - 1,
+                                    "TAO", "1D", BASE + 43 * DAY)
+    assert len(display) == 1 and display[0]["status"] == "failed"
+
+
+def test_a_fresh_re_fit_of_a_tracked_structure_is_suppressed():
+    """A fresh detection of the SAME type+direction as a tracked one is dropped."""
     rec = _rec()
     cs = [_c(i, 200, 188, 192) for i in range(5)]
-    disp = pp.to_display_pattern(rec, cs, 192.0)
-    # A fresh detection reports upper_now/lower_now at the last pivot.
-    fresh = {**disp, "upper_now": rec["upper_line"][-1]["price"],
-             "lower_now": rec["lower_line"][-1]["price"],
-             "display_only": False, "tracked": False}
-    assert patterns._same_structure(disp, fresh), \
-        "the tracked copy must match its own fresh detection"
-    additions, _ = pp.reconcile([fresh], [rec], cs, 192.0, "TAO", "1D",
-                                BASE + 46 * DAY)
-    assert additions == []
+    fresh = _pattern(break_off=44)                   # same falling_wedge:bullish
+    display, updated = pp.reconcile([fresh], [rec], cs, 192.0, "TAO", "1D",
+                                    BASE + 46 * DAY)
+    assert len(display) == 1                         # only the frozen one
+    assert display[0]["tracked"] is True
+
+
+def test_a_different_structure_still_shows_alongside():
+    """A genuinely different structure (other direction) is NOT suppressed."""
+    rec = _rec()                                     # falling_wedge:bullish
+    cs = [_c(i, 200, 188, 192) for i in range(5)]
+    other = _pattern(direction="bearish", type_="rising_wedge")
+    display, _ = pp.reconcile([other], [rec], cs, 192.0, "TAO", "1D",
+                              BASE + 46 * DAY)
+    labels = {(d.get("type"), d.get("direction")) for d in display}
+    assert ("falling_wedge", "bullish") in labels
+    assert ("rising_wedge", "bearish") in labels
 
 
 def test_a_fresh_confirmation_is_stored_for_later():
     cs = [_c(i, 200, 188, 192) for i in range(5)]
     fresh = _pattern()
-    additions, updated = pp.reconcile([fresh], [], cs, 192.0, "TAO", "1D",
-                                      BASE + 46 * DAY)
-    assert len(updated) == 1                        # captured for future re-fits
-    assert updated[0]["key"].startswith("falling_wedge:bullish:")
+    display, updated = pp.reconcile([fresh], [], cs, 192.0, "TAO", "1D",
+                                    BASE + 46 * DAY)
+    assert len(updated) == 1                         # captured, and now frozen
+    assert updated[0]["key"] == "falling_wedge:bullish"
 
 
 def test_the_store_is_capped():
+    # Distinct structures (type x direction) — keyed separately, so several can
+    # be tracked at once and the cap must still bound them.
     cs = [_c(i, 200, 188, 192) for i in range(3)]
-    records = [pp.record_from_pattern(_pattern(break_off=b), "TAO", "1D", BASE)
-               for b in range(41, 41 + pp.MAX_TRACKED + 4)]
+    types = ("falling_wedge", "rising_wedge", "ascending_triangle",
+             "descending_triangle", "symmetrical_triangle")
+    records = []
+    for t in types:
+        for d in ("bullish", "bearish"):
+            records.append(pp.record_from_pattern(
+                _pattern(type_=t, direction=d), "TAO", "1D", BASE))
+    records = [r for r in records if r]
+    assert len(records) > pp.MAX_TRACKED, "need more than the cap to test it"
     _, updated = pp.reconcile([], records, cs, 192.0, "TAO", "1D", BASE + 60 * DAY)
     assert len(updated) <= pp.MAX_TRACKED
 
