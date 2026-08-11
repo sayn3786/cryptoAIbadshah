@@ -66,15 +66,41 @@ def test_a_confirmed_pattern_becomes_a_trackable_record():
     assert rec["apex_ts"] is not None
 
 
-def test_the_target_eta_is_within_the_apex_void_deadline():
+def test_the_two_textbook_dates_are_independent_projections():
     """
-    The measured move is expected within roughly the formation time, but never
-    past the apex — a converging pattern is void once its rails meet.
+    The apex and the measured-move-in-time ETA are two INDEPENDENT dates —
+    neither caps the other. The ETA is the raw formation-time projection
+    (breakout + formation width), even when that lands past the apex; the
+    pattern then expires at whichever date comes first (checked separately in
+    the reevaluate tests).
     """
     rec = pp.record_from_pattern(_pattern(), "TAO", "1D", BASE + 41 * DAY)
     assert rec["target_eta_ts"] is not None and rec["apex_ts"] is not None
-    assert rec["target_eta_ts"] <= rec["apex_ts"]
+    # The ETA is the uncapped formation-time projection: break + (break - start).
+    assert rec["target_eta_ts"] == rec["break_ts"] + (rec["break_ts"] - rec["pattern_start_ts"])
     assert rec["target_eta_ts"] >= rec["break_ts"], "the ETA is after the breakout"
+    # In this fixture the rails converge well before the measured-move window
+    # elapses, so the ETA lands PAST the apex — proving no cap is applied.
+    assert rec["target_eta_ts"] > rec["apex_ts"]
+
+
+def test_the_pattern_expires_at_whichever_date_comes_first():
+    """Past the earlier of {apex, ETA} with no target hit → expired."""
+    rec = _rec()
+    first = min(rec["apex_ts"], rec["target_eta_ts"])
+    cs = [_c(i, 200, 188, 192) for i in range(5)]
+    # Just before the earlier deadline it still holds.
+    assert pp.reevaluate(rec, cs, 192.0, int(first) - DAY)["state"] == "live"
+    # At/after the earlier deadline, with target not reached, it expires.
+    assert pp.reevaluate(rec, cs, 192.0, int(first) + DAY)["state"] == "expired"
+
+
+def test_reaching_the_target_wins_over_the_deadline():
+    """A target hit resolves even once the earlier deadline has lapsed."""
+    rec = _rec()
+    first = min(rec["apex_ts"], rec["target_eta_ts"])
+    cs = [_c(i, 280, 260, 276) for i in range(5)]
+    assert pp.reevaluate(rec, cs, 276.0, int(first) + DAY)["state"] == "target_hit"
 
 
 def test_the_display_carries_the_target_and_void_dates():

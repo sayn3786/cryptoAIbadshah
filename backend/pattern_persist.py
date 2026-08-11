@@ -113,12 +113,14 @@ def record_from_pattern(p: Dict, symbol: str, tf: str, now_ts: int) -> Optional[
     if brk_lvl is None or fail_lvl is None:
         return None
 
-    # ── Textbook target date and the void deadline ──────────────────────────
+    # ── Textbook target date and the void deadline (two independent dates) ───
     # The rails meet at the APEX; a converging pattern that reaches its apex
     # unresolved is void (Edwards & Magee; Bulkowski) — so the apex is the hard
-    # expiry. The measured move is expected to complete within roughly the time
-    # the pattern took to FORM (breakout + formation width), the classic
-    # rule-of-thumb, never later than the void deadline.
+    # structural deadline. Separately, the measured move is expected to complete
+    # within roughly the time the pattern took to FORM (breakout + formation
+    # width), the classic rule-of-thumb "expected by" date. These are kept as
+    # two independent projections — neither caps the other — and the pattern
+    # expires at whichever comes first (see ``reevaluate``).
     apex = _apex_ts(upper_line, lower_line)
     try:
         start_ts = int(upper_line[0]["timestamp"])
@@ -127,8 +129,6 @@ def record_from_pattern(p: Dict, symbol: str, tf: str, now_ts: int) -> Optional[
     target_eta = None
     if start_ts is not None:
         target_eta = int(break_ts) + (int(break_ts) - start_ts)
-        if apex is not None:
-            target_eta = min(target_eta, int(apex))
 
     # Keyed on the STRUCTURE (type + direction), not the break bar. One confirmed
     # falling wedge is one story to track; a later re-fit with a different break
@@ -168,7 +168,8 @@ def reevaluate(record: Dict, candles: Sequence[Dict], current_price: float,
       'live'        still holding the breakout side, target not yet reached
       'target_hit'  price reached the measured-move target — resolved
       'failed'      closed back through the failure level, or gave the move back
-      'expired'     price is past the apex without resolving
+      'expired'     ran out its deadline — the apex OR the measured-move-in-time
+                    projection, whichever comes first — without resolving
 
     ``candles`` need only cover from the break to now (the structure window is
     plenty); ``current_price`` is the last closed price.
@@ -180,17 +181,23 @@ def reevaluate(record: Dict, candles: Sequence[Dict], current_price: float,
     target = _num(record.get("target"))
     break_ts = record.get("break_ts")
     apex_ts = record.get("apex_ts")
+    target_eta_ts = record.get("target_eta_ts")
     if brk is None or fail is None or target is None or break_ts is None:
         return {"state": "failed", "reason": "malformed record"}
 
-    if apex_ts is not None and now_ts >= apex_ts:
-        return {"state": "expired"}
-
+    # Reaching the target wins over any deadline — if price is AT the target we
+    # call it a hit even on the very bar the deadline lapses.
     if current_price is not None:
         if bullish and current_price >= target:
             return {"state": "target_hit"}
         if not bullish and current_price <= target:
             return {"state": "target_hit"}
+
+    # Otherwise the pattern expires at whichever of its two textbook dates comes
+    # first: the apex void deadline, or the measured-move-in-time "expected by".
+    deadlines = [d for d in (apex_ts, target_eta_ts) if d is not None]
+    if deadlines and now_ts >= min(deadlines):
+        return {"state": "expired"}
 
     since = [c for c in candles or [] if _num(c.get("timestamp")) is not None
              and int(c["timestamp"]) >= int(break_ts)]

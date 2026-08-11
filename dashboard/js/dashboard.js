@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '210';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '211';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3587,20 +3587,29 @@ function _failedWhen(ts) {
   return ` · on ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} candle`;
 }
 
-// The textbook target date and void deadline for a tracked breakout: the move
-// is expected by target_eta_ts (roughly the time the pattern took to form), and
-// the pattern is void if it reaches its apex (expiry_ts) unresolved.
+// Two independent textbook dates for a tracked breakout, shown side by side:
+//   • target_eta_ts — the measured move is "expected by" roughly the time the
+//     pattern took to form (breakout + formation width).
+//   • expiry_ts (the apex) — the structure is void if it converges unresolved.
+// Neither caps the other; the pattern is held until WHICHEVER COMES FIRST, so
+// the earlier date is flagged as when tracking ends.
 function _targetWhen(t) {
   const fmt = ms => {
     const d = new Date(+ms);
     return isNaN(d) ? null : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
-  const by = t.target_eta_ts ? fmt(t.target_eta_ts) : null;
-  const voidBy = t.expiry_ts ? fmt(t.expiry_ts) : null;
-  let out = '';
-  if (by) out += ` by ~${by}`;
-  if (voidBy && voidBy !== by) out += ` · void if not met by ${voidBy}`;
-  return out;
+  const eta = t.target_eta_ts ? fmt(t.target_eta_ts) : null;
+  const apex = t.expiry_ts ? fmt(t.expiry_ts) : null;
+  if (eta && apex && eta !== apex) {
+    // Earlier of the two ends it — mark it.
+    const etaFirst = +t.target_eta_ts <= +t.expiry_ts;
+    return etaFirst
+      ? ` by ~${eta} · void by ${apex}`
+      : ` by ~${eta} · void by ${apex} (whichever first)`;
+  }
+  if (eta) return ` by ~${eta}`;
+  if (apex) return ` · void by ${apex}`;
+  return '';
 }
 
 function renderFlags(flags, candles, signal, diagnostics) {
