@@ -522,6 +522,15 @@ def _rec_cache_save(key: str, data: dict) -> None:
 PATTERN_ALERT_TFS        = ["1D", "1W"]           # Telegram: higher TFs only (no intraday spam)
 PATTERN_BELL_TFS         = ["1H", "4H", "1D", "1W"]  # in-app bell: also intraday
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
+# A CONFIRMED RSI divergence's second pivot is already `pivot_window` (3) closed
+# candles old the moment it confirms — a pivot needs that many closes on its
+# right to exist. So the 3-bar breakout window above can only ever catch a
+# divergence on the single scan where its pivot is exactly 3 candles back; miss
+# that one day and it never alerts. Observe divergences over a wider window (the
+# last 5 closes) so the confirmed-but-slightly-aged one still reaches Telegram.
+# The detector already returns only the single most-recent divergence, so this
+# alerts whichever is latest, exactly once (dedup is keyed on its pivot ts).
+DIVERGENCE_ALERT_FRESH_BARS = 5
 _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 
 # The dedicated structure chart draws a deeper window than the main chart's 60
@@ -565,8 +574,8 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
     ts_list = [c.get("timestamp") for c in closed]
     last_i  = len(ts_list) - 1
 
-    def _fresh(ts):
-        return ts is not None and ts in ts_list and (last_i - ts_list.index(ts)) <= PATTERN_ALERT_FRESH_BARS
+    def _fresh(ts, bars=PATTERN_ALERT_FRESH_BARS):
+        return ts is not None and ts in ts_list and (last_i - ts_list.index(ts)) <= bars
 
     out = []
 
@@ -616,9 +625,11 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
     # every renderer claiming a break that never happened.
     #
     # Gated on the detector's OWN lifecycle (status == "confirmed", so never a
-    # provisional second pivot and never an expired one) AND on the same
-    # freshness window every other alert here uses. The stricter of the two
-    # wins, which is the point: an alert is about something that just happened.
+    # provisional second pivot and never an expired one) AND on a divergence
+    # observation window (the last DIVERGENCE_ALERT_FRESH_BARS closes). That
+    # window is wider than the breakout one on purpose: a confirmed divergence's
+    # second pivot is already pivot_window candles old the instant it confirms,
+    # so the 3-bar breakout window could only catch it on a single scan.
     try:
         div = detect_rsi_divergence(
             closed, calculate_rsi_series([c.get("close") for c in closed]))
@@ -627,7 +638,8 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
         # No timestamp means no stable id, and an alert that cannot be deduped
         # would re-fire on every scan. Skip rather than spam.
         if (div.get("status") == "confirmed" and not div.get("forming")
-                and curr_ts is not None and _fresh(curr_ts)):
+                and curr_ts is not None
+                and _fresh(curr_ts, DIVERGENCE_ALERT_FRESH_BARS)):
             kind_s = str(div.get("type") or "")
             bullish = kind_s.endswith("bullish")
             hidden = kind_s.startswith("hidden")

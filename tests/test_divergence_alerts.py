@@ -104,13 +104,27 @@ def test_an_expired_divergence_does_not_alert(monkeypatch):
                                           age=9), candles) == []
 
 
+def test_a_confirmed_divergence_a_few_closes_back_still_alerts(monkeypatch):
+    """
+    A confirmed divergence's second pivot is already pivot_window (3) closes old
+    the instant it confirms, so it commonly sits 3-5 bars back. The wider
+    divergence window must still catch it — this is the whole point of the
+    5-close observation window (it would have been missed by the 3-bar breakout
+    window).
+    """
+    candles = _candles()
+    for bars_back in (4, appmod.DIVERGENCE_ALERT_FRESH_BARS):   # within the window
+        got = _scan(monkeypatch, _divergence(candles, bars_back=bars_back), candles)
+        assert len(got) == 1, f"a divergence {bars_back} closes back should alert"
+
+
 def test_a_stale_but_still_confirmed_divergence_does_not_alert(monkeypatch):
     """
     The detector's window is wider than the alert window. An alert is about
-    something that just happened, so the stricter of the two wins.
+    something that just happened, so past the observation window it stays quiet.
     """
     candles = _candles()
-    stale = _divergence(candles, bars_back=appmod.PATTERN_ALERT_FRESH_BARS + 3)
+    stale = _divergence(candles, bars_back=appmod.DIVERGENCE_ALERT_FRESH_BARS + 2)
     assert _scan(monkeypatch, stale, candles) == []
 
 
