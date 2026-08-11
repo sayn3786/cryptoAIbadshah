@@ -269,6 +269,10 @@ def to_display_pattern(record: Dict, candles: Sequence[Dict],
     return {
         "type": record.get("type"), "label": record.get("label"),
         "direction": record.get("direction"),
+        # Carry the timeframe through so the card's TF pill reads "1W"/"1D"
+        # rather than "undefined" (the fresh detector sets this; a tracked
+        # re-surface must too).
+        "timeframe": record.get("timeframe"),
         "status": status, "confirmed": status == "confirmed",
         "display_only": True, "tracked": True,
         "target": record.get("target"),
