@@ -193,6 +193,8 @@ def test_a_tracked_pattern_is_tagged_display_only():
     assert d["display_only"] is True and d["tracked"] is True
     assert d["confirmed"] is True and d["status"] == "confirmed"
     assert d["label"] == "Falling Wedge" and d["target"] == 275.0
+    # The timeframe must carry through, else the card's TF pill reads "undefined".
+    assert d["timeframe"] == "1D"
 
 
 def test_a_tracked_failure_is_not_confirmed():
