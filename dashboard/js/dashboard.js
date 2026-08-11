@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '209';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '211';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3587,6 +3587,31 @@ function _failedWhen(ts) {
   return ` · on ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} candle`;
 }
 
+// Two independent textbook dates for a tracked breakout, shown side by side:
+//   • target_eta_ts — the measured move is "expected by" roughly the time the
+//     pattern took to form (breakout + formation width).
+//   • expiry_ts (the apex) — the structure is void if it converges unresolved.
+// Neither caps the other; the pattern is held until WHICHEVER COMES FIRST, so
+// the earlier date is flagged as when tracking ends.
+function _targetWhen(t) {
+  const fmt = ms => {
+    const d = new Date(+ms);
+    return isNaN(d) ? null : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+  const eta = t.target_eta_ts ? fmt(t.target_eta_ts) : null;
+  const apex = t.expiry_ts ? fmt(t.expiry_ts) : null;
+  if (eta && apex && eta !== apex) {
+    // Earlier of the two ends it — mark it.
+    const etaFirst = +t.target_eta_ts <= +t.expiry_ts;
+    return etaFirst
+      ? ` by ~${eta} · void by ${apex}`
+      : ` by ~${eta} · void by ${apex} (whichever first)`;
+  }
+  if (eta) return ` by ~${eta}`;
+  if (apex) return ` · void by ${apex}`;
+  return '';
+}
+
 function renderFlags(flags, candles, signal, diagnostics) {
   const el    = document.getElementById('flagList');
   const badge = document.getElementById('flagCount');
@@ -3797,14 +3822,19 @@ function renderTriangles(patterns, candles) {
     // unreadable, which is itself a tradeable fact — stand aside.
     const isClash  = t.status === 'conflicted';
     const isFailed = t.status === 'failed' || isVoid || isClash;
+    // A tracked breakout that reached its measured-move target — the happy exit.
+    const isHit    = t.status === 'target_hit' || t.target_reached;
     const statusTxt = isClash
       ? `⚠️ AMBIGUOUS — a ${t.conflict?.label || 'competing structure'} on the same candles ` +
         `broke ${t.conflict?.breakout_dir === 'up' ? 'up' : 'down'}. The structure has not ` +
         `resolved, so this is not a signal either way`
+      : isHit
+      ? `🎯 TARGET REACHED — the measured move to $${p(t.target)} played out`
       : isFailed
       ? `❌ ${isVoid ? 'INVALIDATED' : 'FAILED'}${t.failure_reason ? ` — ${t.failure_reason}` : ''}${_failedWhen(t.failed_ts)}`
       : t.confirmed
-        ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}${_volTag(t.breakout_volume)}${_retestTag(t.retest)}`
+        ? `✅ confirmed — broke ${t.breakout_dir === 'up' ? 'up' : 'down'}${_volTag(t.breakout_volume)}${_retestTag(t.retest)}` +
+          `${t.tracked ? ' · tracked until target or invalidation' : ''}`
         // A single close through the WRONG rail that was reclaimed is a spring
         // (below support) or an upthrust (above resistance) — a stop-run, and
         // classically a point FOR the pattern rather than against it.
@@ -3817,12 +3847,14 @@ function renderTriangles(patterns, candles) {
           : `⏳ forming — awaiting a ${dir === 'bullish' ? 'break above' : 'break below'} the rail`;
     // No target on an ambiguous or ended structure — a measured move nobody
     // should act on reads as a price forecast.
-    const tgt = (t.target != null && !isFailed) ? `Target: <span>$${p(t.target)}</span> &nbsp;·&nbsp; ` : '';
-    return `<div class="flag-item ${isFailed ? 'pattern-failed' : cls}">
+    const tgt = (t.target != null && !isFailed && !isHit)
+      ? `Target: <span>$${p(t.target)}</span>${_targetWhen(t)} &nbsp;·&nbsp; ` : '';
+    return `<div class="flag-item ${isFailed ? 'pattern-failed' : (isHit ? 'bull' : cls)}">
       <div class="flag-top">
         <span class="flag-name ${isFailed ? '' : cls}">${icon} ${t.label}</span>
         <span class="flag-tf">${t.timeframe}</span>
         ${isFailed ? `<span class="flag-failed-badge">${isClash ? '⚠ Ambiguous' : `✕ ${isVoid ? 'Invalidated' : 'Failed'}`}</span>`
+          : isHit ? '<span class="flag-confirmed">🎯 Target hit</span>'
           : t.confirmed ? `<span class="flag-confirmed">${t.breakout_dir === 'up' ? '↑' : '↓'} Confirmed</span>`
           : t.sweep ? `<span class="flag-confirmed">⚡ ${t.sweep.type === 'spring' ? 'Spring' : 'Upthrust'}</span>`
                         : '<span class="flag-active">Forming</span>'}

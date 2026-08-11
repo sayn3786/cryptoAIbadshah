@@ -1601,14 +1601,15 @@ def _with_tracked_patterns(symbol: str, tf: str, data: dict) -> dict:
         now_ts = int(candles[-1].get("timestamp"))
         env = _deploy_env()
         records = _pp.load(symbol, tf, env)
-        additions, updated = _pp.reconcile(fresh, records, candles, price,
-                                           symbol, tf, now_ts)
+        # reconcile returns the FULL list to show — every frozen confirmed
+        # structure held until it resolves, plus any fresh detection that is not
+        # a re-fit of one already tracked. Copy, never mutate the cached object
+        # the recommendation scan also reads (scoring already ran on the fresh
+        # list inside build_analysis, so this display swap cannot change it).
+        display, updated = _pp.reconcile(fresh, records, candles, price,
+                                         symbol, tf, now_ts)
         _pp.save(symbol, tf, env, updated)
-        if additions:
-            # Copy, don't mutate the cached object the rec scan also reads.
-            merged = list(fresh) + [a for a in additions
-                                    if not any(_pp._structs_match(a, f) for f in fresh)]
-            data = {**data, "triangle_patterns": merged[:_pp.MAX_TRACKED + 3]}
+        data = {**data, "triangle_patterns": display[:_pp.MAX_TRACKED + 3]}
     except Exception:
         return data
     return data

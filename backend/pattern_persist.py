@@ -113,16 +113,40 @@ def record_from_pattern(p: Dict, symbol: str, tf: str, now_ts: int) -> Optional[
     if brk_lvl is None or fail_lvl is None:
         return None
 
+    # ── Textbook target date and the void deadline (two independent dates) ───
+    # The rails meet at the APEX; a converging pattern that reaches its apex
+    # unresolved is void (Edwards & Magee; Bulkowski) — so the apex is the hard
+    # structural deadline. Separately, the measured move is expected to complete
+    # within roughly the time the pattern took to FORM (breakout + formation
+    # width), the classic rule-of-thumb "expected by" date. These are kept as
+    # two independent projections — neither caps the other — and the pattern
+    # expires at whichever comes first (see ``reevaluate``).
+    apex = _apex_ts(upper_line, lower_line)
+    try:
+        start_ts = int(upper_line[0]["timestamp"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        start_ts = None
+    target_eta = None
+    if start_ts is not None:
+        target_eta = int(break_ts) + (int(break_ts) - start_ts)
+
+    # Keyed on the STRUCTURE (type + direction), not the break bar. One confirmed
+    # falling wedge is one story to track; a later re-fit with a different break
+    # bar must not spawn a second, and — because a tracked key is never
+    # overwritten — the first confirmation's rails and target are FROZEN until it
+    # resolves. That is what stops the target drifting 287 → 220 day to day.
     return {
         "symbol": symbol, "timeframe": tf,
-        "key": f"{p.get('type')}:{p['direction']}:{int(break_ts)}",
+        "key": f"{p.get('type')}:{p['direction']}",
         "type": p.get("type"), "label": p.get("label"),
         "direction": p["direction"],
         "break_ts": int(break_ts),
         "break_level": round(brk_lvl, 8),
         "fail_level": round(fail_lvl, 8),
         "target": target,
-        "apex_ts": _apex_ts(upper_line, lower_line),
+        "apex_ts": apex,
+        "target_eta_ts": target_eta,
+        "pattern_start_ts": start_ts,
         "upper_line": upper_line, "lower_line": lower_line,
         "converge_pct": p.get("converge_pct"),
         "breakout_volume": p.get("breakout_volume"),
@@ -144,7 +168,8 @@ def reevaluate(record: Dict, candles: Sequence[Dict], current_price: float,
       'live'        still holding the breakout side, target not yet reached
       'target_hit'  price reached the measured-move target — resolved
       'failed'      closed back through the failure level, or gave the move back
-      'expired'     price is past the apex without resolving
+      'expired'     ran out its deadline — the apex OR the measured-move-in-time
+                    projection, whichever comes first — without resolving
 
     ``candles`` need only cover from the break to now (the structure window is
     plenty); ``current_price`` is the last closed price.
@@ -156,17 +181,23 @@ def reevaluate(record: Dict, candles: Sequence[Dict], current_price: float,
     target = _num(record.get("target"))
     break_ts = record.get("break_ts")
     apex_ts = record.get("apex_ts")
+    target_eta_ts = record.get("target_eta_ts")
     if brk is None or fail is None or target is None or break_ts is None:
         return {"state": "failed", "reason": "malformed record"}
 
-    if apex_ts is not None and now_ts >= apex_ts:
-        return {"state": "expired"}
-
+    # Reaching the target wins over any deadline — if price is AT the target we
+    # call it a hit even on the very bar the deadline lapses.
     if current_price is not None:
         if bullish and current_price >= target:
             return {"state": "target_hit"}
         if not bullish and current_price <= target:
             return {"state": "target_hit"}
+
+    # Otherwise the pattern expires at whichever of its two textbook dates comes
+    # first: the apex void deadline, or the measured-move-in-time "expected by".
+    deadlines = [d for d in (apex_ts, target_eta_ts) if d is not None]
+    if deadlines and now_ts >= min(deadlines):
+        return {"state": "expired"}
 
     since = [c for c in candles or [] if _num(c.get("timestamp")) is not None
              and int(c["timestamp"]) >= int(break_ts)]
@@ -204,7 +235,8 @@ def reevaluate(record: Dict, candles: Sequence[Dict], current_price: float,
 
 
 def to_display_pattern(record: Dict, candles: Sequence[Dict],
-                       current_price: float, *, failed_ts=None) -> Dict:
+                       current_price: float, *, failed_ts=None,
+                       resolved: Optional[str] = None) -> Dict:
     """
     Shape a stored record back into the triangle_patterns dict the card renders.
 
@@ -228,13 +260,23 @@ def to_display_pattern(record: Dict, candles: Sequence[Dict],
     retest = (_retest_state(candles, break_idx, record.get("break_level"), bullish)
               if break_idx is not None else None)
 
-    status = "failed" if failed_ts else "confirmed"
+    if resolved == "target":
+        status = "target_hit"
+    elif failed_ts:
+        status = "failed"
+    else:
+        status = "confirmed"
     return {
         "type": record.get("type"), "label": record.get("label"),
         "direction": record.get("direction"),
-        "status": status, "confirmed": failed_ts is None,
+        "status": status, "confirmed": status == "confirmed",
         "display_only": True, "tracked": True,
         "target": record.get("target"),
+        # Textbook target date and the void deadline, so the card can say WHEN
+        # the move is expected and by when the pattern is void if it does not.
+        "target_eta_ts": record.get("target_eta_ts"),
+        "expiry_ts": record.get("apex_ts"),
+        "confirmed_at": record.get("break_ts"),
         "upper_now": round(upper_now, 8) if upper_now is not None else None,
         "lower_now": round(lower_now, 8) if lower_now is not None else None,
         "converge_pct": record.get("converge_pct"),
@@ -243,6 +285,7 @@ def to_display_pattern(record: Dict, candles: Sequence[Dict],
         "breakout_volume": record.get("breakout_volume"),
         "failed_ts": failed_ts,
         "failure_reason": ("closed back through the level" if failed_ts else None),
+        "target_reached": resolved == "target",
         "retest": retest,
         "upper_line": record.get("upper_line"),
         "lower_line": record.get("lower_line"),
@@ -252,56 +295,81 @@ def to_display_pattern(record: Dict, candles: Sequence[Dict],
 
 # ── Reconcile: fresh detections + what we were tracking ──────────────────────
 
+def _structure_key(pattern: Dict) -> str:
+    return f"{pattern.get('type')}:{pattern.get('direction')}"
+
+
 def reconcile(fresh: Sequence[Dict], records: List[Dict], candles: Sequence[Dict],
               current_price: float, symbol: str, tf: str,
               now_ts: int) -> Tuple[List[Dict], List[Dict]]:
     """
-    Merge freshly-detected patterns with the ones we were tracking. PURE — the
-    KV read and write happen in ``load``/``save`` around this.
+    Hold a confirmed pattern, frozen, until it resolves. PURE — KV read/write
+    happen in ``load``/``save`` around this.
 
-    Returns ``(additions, updated_records)``:
-      * ``additions`` — tracked patterns to append to the card list because the
-        fresh detector no longer surfaces them (deduped against what it does).
-      * ``updated_records`` — the store to persist: fresh confirmations upserted,
-        resolved/expired ones dropped.
+    Returns ``(display, updated_records)``:
+      * ``display`` — the full triangle/wedge list to show: every tracked
+        confirmed structure (with its ORIGINAL rails and target), plus any fresh
+        detection that is NOT a re-fit of one already tracked.
+      * ``updated_records`` — the store to persist.
+
+    The rules that give the user what they asked for — *a breakout stays until
+    it invalidates or reaches target*:
+
+      1. A confirmed structure is captured ONCE (keyed by type+direction) and
+         never re-measured. Its rails, target and target date are frozen.
+      2. It is held every load and re-evaluated only for OUTCOME — target hit,
+         invalidated, or voided at the apex — not re-fitted.
+      3. A fresh re-fit of a structure already tracked is suppressed, so the
+         drifting new fit never replaces or duplicates the frozen one.
+      4. It leaves the card only when it reaches target (shown once as reached),
+         fully invalidates (shown briefly as failed), or reaches its apex void
+         deadline.
     """
     by_key: Dict[str, Dict] = {r["key"]: dict(r) for r in records
                                if isinstance(r, dict) and r.get("key")}
 
-    # Upsert every fresh confirmation — refresh rails/target while it is still
-    # detected, so the record stays current for the day the detector loses it.
+    # Capture a NEW confirmation only when that structure is not already tracked.
+    # An already-tracked key is left untouched — that is the freeze.
     for p in fresh or []:
         rec = record_from_pattern(p, symbol, tf, now_ts)
-        if rec:
-            prior = by_key.get(rec["key"])
-            if prior:
-                rec["first_seen_ts"] = prior.get("first_seen_ts", now_ts)
+        if rec and rec["key"] not in by_key:
             by_key[rec["key"]] = rec
 
-    additions: List[Dict] = []
-    for key, rec in list(by_key.items()):
-        display = to_display_pattern(rec, candles, current_price)
-        # Already on the card via a fresh detection? Leave it to the fresh one.
-        if any(_structs_match(display, f) for f in (fresh or [])):
-            rec["last_seen_ts"] = now_ts
-            continue
+    display: List[Dict] = []
+    survivors: Dict[str, Dict] = {}
+    for key, rec in by_key.items():
         verdict = reevaluate(rec, candles, current_price, now_ts)
         state = verdict.get("state")
-        if state in ("target_hit", "expired"):
-            del by_key[key]                       # resolved — stop tracking
+        if state == "target_hit":
+            # Reached its measured move — show it as reached this once, then let
+            # it fall off (not carried into survivors).
+            display.append(to_display_pattern(rec, candles, current_price,
+                                              resolved="target"))
             continue
+        if state == "expired":
+            continue                              # voided at the apex, or an old failure
         if state == "failed":
-            additions.append(to_display_pattern(rec, candles, current_price,
-                                                failed_ts=verdict.get("failed_ts")))
+            display.append(to_display_pattern(rec, candles, current_price,
+                                              failed_ts=verdict.get("failed_ts")))
             rec["last_seen_ts"] = now_ts
+            survivors[key] = rec                  # keep briefly so 'failed' can show
             continue
-        additions.append(display)                 # live — keep showing it
+        display.append(to_display_pattern(rec, candles, current_price))
         rec["last_seen_ts"] = now_ts
+        survivors[key] = rec
 
-    # Newest breakouts first, and never store more than the cap.
-    updated = sorted(by_key.values(),
+    # Fresh detections that are NOT a re-fit of a tracked structure show as-is:
+    # a forming pattern, or a different type/direction entirely. A fresh re-fit
+    # of a tracked structure is dropped — the frozen one is the story.
+    tracked = set(by_key)
+    for p in fresh or []:
+        if _structure_key(p) in tracked:
+            continue
+        display.append(p)
+
+    updated = sorted(survivors.values(),
                      key=lambda r: r.get("break_ts", 0), reverse=True)[:MAX_TRACKED]
-    return additions, updated
+    return display, updated
 
 
 # ── KV-backed load / save (thin, guarded) ────────────────────────────────────
