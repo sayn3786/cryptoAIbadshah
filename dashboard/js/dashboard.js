@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '213';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '214';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -6902,6 +6902,28 @@ function renderTaoEco(eco, symbol) {
   // Price ÷ Daily Chain Buys — subnets ranked by how much daily TAO buy pressure
   // they get per unit of Alpha price (lowest ratio first = heaviest buying not
   // yet in price).
+  // Horizontal bar leaderboard — reused for buy-pressure and inflow rankings.
+  const barList = (title, rows, opt = {}) => {
+    if (!rows || !rows.length) return opt.empty || '';
+    const key = opt.key || 'buys';
+    const mx = Math.max(...rows.map(r => Math.abs(r[key]))) || 1;
+    const bars = rows.map(r => {
+      const v = r[key];
+      const pct = Math.max(3, Math.round(Math.abs(v) / mx * 100));
+      const vcls = key === 'flow' ? (v >= 0 ? 'bull' : 'bear') : 'bull';
+      return `<div class="tao-barrow">
+        <span class="tao-barlbl">SN${r.netuid} ${(r.name || '').slice(0, 16)}</span>
+        <span class="tao-bartrack"><span class="tao-bar ${vcls}" style="width:${pct}%"></span></span>
+        <span class="tao-barval ${vcls}">${fmtTao(v)}</span>
+      </div>`;
+    }).join('');
+    return `<div class="tao-barlist">
+      <div class="smc-header">${title}</div>${bars}
+      ${opt.sub ? `<div class="tao-stat-why">${opt.sub}</div>` : ''}</div>`;
+  };
+  const winLabel = w => !w || !w.days ? 'no history yet' :
+    w.days >= (w.target_days || w.days) ? `${w.days} days` : `${w.days} of ${w.target_days} days so far`;
+
   let cbTable = '';
   const cb = eco.chain_buys;
   if (cb && cb.rows && cb.rows.length) {
@@ -6913,15 +6935,46 @@ function renderTaoEco(eco, symbol) {
         <td>${s.daily_chain_buys != null ? Math.round(s.daily_chain_buys).toLocaleString() + ' τ' : '—'}</td>
         <td>${s.price_per_buy != null ? s.price_per_buy.toFixed(6) : '—'}</td>
       </tr>`;
+    const cbHead = cb.rows.slice(0, 10).map(cbRow).join('');
+    const cbRest = cb.rows.slice(10).map((s, i) => cbRow(s, i + 10)).join('');
+    // Buy-pressure leaderboards: 24h now, 7d/30d accumulating in KV over time.
+    const buildingNote = 'Multi-day buy history builds up as daily snapshots accumulate — bars fill in over the coming days.';
+    const charts =
+      barList('🟢 24H CHAIN BUYS — heaviest buying right now', cb.buys_24h,
+        {key: 'buys', sub: 'TAO spent buying each subnet\'s Alpha in the last 24h.'}) +
+      barList(`🟢 7D CHAIN BUYS — ${winLabel(cb.d7)}`, cb.d7 && cb.d7.rows,
+        {key: 'buys', empty: `<div class="tao-barlist"><div class="smc-header">🟢 7D CHAIN BUYS — ${winLabel(cb.d7)}</div><div class="tao-stat-why">${buildingNote}</div></div>`}) +
+      barList(`🟢 30D CHAIN BUYS — ${winLabel(cb.d30)}`, cb.d30 && cb.d30.rows,
+        {key: 'buys', empty: `<div class="tao-barlist"><div class="smc-header">🟢 30D CHAIN BUYS — ${winLabel(cb.d30)}</div><div class="tao-stat-why">${buildingNote}</div></div>`});
     cbTable = `<div style="overflow-x:auto;margin-top:14px">
       <div class="smc-header">🔎 PRICE ÷ DAILY CHAIN BUYS — most buy pressure per unit of price (lowest first)</div>
       <table class="sn-table">
         <thead><tr><th>#</th><th>Subnet</th><th>Price</th><th>Daily chain buys</th><th>Price / buys</th></tr></thead>
-        <tbody>${cb.rows.map(cbRow).join('')}</tbody>
+        <tbody>${cbHead}</tbody>
+        ${cbRest ? `<tbody id="cbTableRest" style="display:none">${cbRest}</tbody>` : ''}
       </table>
+      ${cbRest ? `<button class="sn-showall" id="cbShowAllBtn"
+        onclick="const r=document.getElementById('cbTableRest');const open=r.style.display==='none';
+                 r.style.display=open?'':'none';
+                 this.textContent=open?'Hide — show top 10 only':'Show all ${cb.count} subnets ▾';">
+        Show all ${cb.count} subnets ▾</button>` : ''}
       <div class="tao-stat-why">Daily chain buys = TAO spent buying each subnet's Alpha over 24h
       (${cb.basis || 'dTAO pool AMM'}). A low ratio means heavy daily buying the price hasn't caught up to
       — accumulation; a high ratio means price is rich for the buy flow it's getting.</div>
+      ${charts}
+    </div>`;
+  }
+
+  // Subnet inflow leaderboards over 7d / 30d — net TAO staked into each pool.
+  let inflowCharts = '';
+  const ir = eco.inflow_ranks;
+  if (ir && (ir.d7 && ir.d7.length || ir.d30 && ir.d30.length)) {
+    inflowCharts = `<div style="margin-top:14px">
+      <div class="smc-header">📥 SUBNET INFLOW — net TAO staked into each pool</div>
+      ${barList('7 days', ir.d7, {key: 'flow'})}
+      ${barList('30 days', ir.d30, {key: 'flow'})}
+      <div class="tao-stat-why">Green = net TAO flowing INTO a subnet's Alpha pool (staking demand, supply sink);
+      red = net outflow (unstaking). Distinct from chain buys — this is the staked balance change, not swap volume.</div>
     </div>`;
   }
 
@@ -6933,6 +6986,7 @@ function renderTaoEco(eco, symbol) {
     ${leadersBox}
     ${table}
     ${cbTable}
+    ${inflowCharts}
     ${notes ? `<div class="macro-reason" style="margin-top:8px">${notes}</div>` : ''}
     <div class="tao-explainer">The dTAO loop: buying a subnet's Alpha deposits TAO into its pool
     (locked supply); emissions follow Alpha prices, so the table shows where the market is voting.
