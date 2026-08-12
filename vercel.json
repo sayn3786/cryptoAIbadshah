@@ -26,6 +26,10 @@
     {
       "path": "/api/cron/daily",
       "schedule": "5 12 * * *"
+    },
+    {
+      "path": "/api/cron/tao-snapshot",
+      "schedule": "15 0 * * *"
     }
   ]
 }
