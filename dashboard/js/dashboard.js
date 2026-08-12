@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '215';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '216';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -7604,9 +7604,18 @@ function _patRow(e) {
     ? new Date(e.candle_close_time).toLocaleString('en-GB',
         { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
     : '—';
-  const age = Number.isFinite(+e.age_candles) ? `${e.age_candles}` : '—';
-  const dir = e.direction ? `<span class="pat-dir ${e.direction === 'LONG' ? 'bull' : 'bear'}">${e.direction}</span>` : '';
-  const detail = (e.detail && (e.detail.description || e.detail.signal || e.detail.type)) || '';
+  // age_candles is only recorded for divergences; triangles/flags leave it
+  // null. Guard on null explicitly — `+null === 0` is finite, so the old check
+  // printed the literal "null".
+  const age = (e.age_candles != null && Number.isFinite(+e.age_candles))
+    ? `${e.age_candles}` : '—';
+  // direction is 'bullish'/'bearish' (or LONG/SHORT) — the old check only
+  // matched 'LONG', so every side rendered bearish-red.
+  const isBull = e.direction === 'bullish' || e.direction === 'LONG';
+  const dir = e.direction ? `<span class="pat-dir ${isBull ? 'bull' : 'bear'}">${e.direction}</span>` : '';
+  // Fall back to the pattern_type column so flags (no detail.type) still label.
+  const detail = (e.detail && (e.detail.description || e.detail.signal || e.detail.type))
+    || e.pattern_type || '';
   return `<tr>
     <td class="pat-when">${when}</td>
     <td>${PAT_LABEL[e.pattern_kind] || e.pattern_kind}</td>
