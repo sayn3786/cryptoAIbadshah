@@ -258,6 +258,10 @@ def _pools() -> Optional[Dict[int, Dict]]:
         _sl = _num(r, "tao_sell_volume_24_hr")
         if _b is not None and _sl is not None:
             out[int(r["netuid"])]["amm_net_24h_raw"] = _b - _sl
+        # The GROSS daily TAO spent BUYING this subnet's Alpha — the "daily chain
+        # buys" figure (kept raw; unit resolved later against gross turnover).
+        if _b is not None:
+            out[int(r["netuid"])]["daily_buys_raw"] = _b
         _gv = _num(r, "tao_volume_24_hr")
         if _gv is not None:
             out[int(r["netuid"])]["amm_vol_24h_raw"] = _gv
@@ -410,7 +414,7 @@ def get_tao_ecosystem() -> Optional[Dict]:
                 continue
             for k in ("alpha_price_tao", "tao_in_pool", "mcap", "chg_1d", "chg_7d",
                       "flow_24h", "flow_7d", "flow_30d",
-                      "amm_net_24h_raw", "amm_vol_24h_raw"):
+                      "amm_net_24h_raw", "amm_vol_24h_raw", "daily_buys_raw"):
                 if s.get(k) is None and p.get(k) is not None:
                     s[k] = p[k]
             if p.get("name") and s["name"].startswith("SN"):
@@ -551,6 +555,46 @@ def get_tao_ecosystem() -> Optional[Dict]:
                                        "emission_share_pct", "chg_1d", "chg_7d")}
                     for s in by_emis],
         }
+
+    # ── Price ÷ Daily Chain Buys — which subnets get the most TAO buy pressure
+    # per unit of Alpha price. Low ratio = heavy daily buying not yet reflected
+    # in price (accumulation / "why is price sideways despite the buys"); high =
+    # richly priced for its buy flow. Sorted lowest→highest, matching the study
+    # doing the rounds.
+    #
+    # The buy-volume raw unit is pinned the SAME way the AMM columns are: total
+    # gross daily turnover across all pools must land in a plausible TAO band,
+    # and the candidate scales are 1000× apart so only one fits. The RANKING is
+    # scale-invariant (a constant multiplier can't reorder price÷buys), so a
+    # missed scale still ranks correctly — scaling only makes the buys and the
+    # ratio read in real TAO.
+    if subnets:
+        _gross_cb = sum(abs(s["amm_vol_24h_raw"]) for s in subnets
+                        if s.get("amm_vol_24h_raw") is not None)
+        _sc_cb = next((s_ for s_ in (1.0, 1e3, 1e6, 1e9, 1e12)
+                       if 30_000 <= _gross_cb / s_ <= 20_000_000), 1.0) if _gross_cb else 1.0
+        cb_rows = []
+        for s in subnets:
+            price    = s.get("alpha_price_tao")
+            buys_raw = s.get("daily_buys_raw")
+            if price is None or not buys_raw or buys_raw <= 0:
+                continue
+            buys = buys_raw / _sc_cb
+            if buys <= 0:
+                continue
+            cb_rows.append({
+                "netuid": s["netuid"], "name": s["name"],
+                "alpha_price_tao": price,
+                "daily_chain_buys": round(buys, 2),
+                "price_per_buy": round(price / buys, 8),
+            })
+        if cb_rows:
+            cb_rows.sort(key=lambda r: r["price_per_buy"])
+            result["chain_buys"] = {
+                "basis": "tao_buy_volume_24h (dTAO pool AMM)",
+                "count": len(cb_rows),
+                "rows": cb_rows[:10],
+            }
 
     # ── Signal points for TAO confluence (flow group) ─────────────────────────
     # Notes are structured {text, impact} so signals.py routes each parameter
