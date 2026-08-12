@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '211';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '212';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -6877,6 +6877,32 @@ function renderTaoEco(eco, symbol) {
       Taostats rate limit (5 calls/min) hit; retries automatically within ~3 minutes</div>`;
   }
 
+  // Price ÷ Daily Chain Buys — subnets ranked by how much daily TAO buy pressure
+  // they get per unit of Alpha price (lowest ratio first = heaviest buying not
+  // yet in price).
+  let cbTable = '';
+  const cb = eco.chain_buys;
+  if (cb && cb.rows && cb.rows.length) {
+    const fmtP = v => v == null ? '—' : v >= 1 ? v.toFixed(4) : v.toFixed(6);
+    const cbRow = (s, i) => `<tr>
+        <td>${i + 1}</td>
+        <td>${s.name || '—'} <span class="sn-chip">SN${s.netuid}</span></td>
+        <td>${s.alpha_price_tao != null ? fmtP(s.alpha_price_tao) + ' τ' : '—'}</td>
+        <td>${s.daily_chain_buys != null ? Math.round(s.daily_chain_buys).toLocaleString() + ' τ' : '—'}</td>
+        <td>${s.price_per_buy != null ? s.price_per_buy.toFixed(6) : '—'}</td>
+      </tr>`;
+    cbTable = `<div style="overflow-x:auto;margin-top:14px">
+      <div class="smc-header">🔎 PRICE ÷ DAILY CHAIN BUYS — most buy pressure per unit of price (lowest first)</div>
+      <table class="sn-table">
+        <thead><tr><th>#</th><th>Subnet</th><th>Price</th><th>Daily chain buys</th><th>Price / buys</th></tr></thead>
+        <tbody>${cb.rows.map(cbRow).join('')}</tbody>
+      </table>
+      <div class="tao-stat-why">Daily chain buys = TAO spent buying each subnet's Alpha over 24h
+      (${cb.basis || 'dTAO pool AMM'}). A low ratio means heavy daily buying the price hasn't caught up to
+      — accumulation; a high ratio means price is rich for the buy flow it's getting.</div>
+    </div>`;
+  }
+
   const notes = (eco.notes || [])
     .map(n => (n && typeof n === 'object') ? n.text : n)
     .filter(Boolean).join(' · ');
@@ -6884,6 +6910,7 @@ function renderTaoEco(eco, symbol) {
     <div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">${tiles.join('')}</div>
     ${leadersBox}
     ${table}
+    ${cbTable}
     ${notes ? `<div class="macro-reason" style="margin-top:8px">${notes}</div>` : ''}
     <div class="tao-explainer">The dTAO loop: buying a subnet's Alpha deposits TAO into its pool
     (locked supply); emissions follow Alpha prices, so the table shows where the market is voting.
