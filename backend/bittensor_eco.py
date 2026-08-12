@@ -16,9 +16,16 @@ Data: https://api.taostats.io (Authorization: <raw key>, free tier is
 Set TAOSTATS_API_KEY in the environment.
 """
 import os
+import json
 import time
 import requests
+from datetime import datetime, timezone
 from typing import Optional, Dict, List
+
+try:
+    import kv                              # persistent chain-buys history
+except Exception:                          # pragma: no cover
+    kv = None
 
 TAOSTATS_BASE = "https://api.taostats.io"
 TAOSTATS_KEY  = os.getenv("TAOSTATS_API_KEY", "")
@@ -162,6 +169,61 @@ def _calibrate_flow_cols(rows: List[Dict], agg24, agg7):
 # per-subnet flow fields, diff tao_in_pool against a snapshot taken hours ago
 # and scale to a 24h rate. Ephemeral (lost on cold start) — best-effort only.
 _pool_snap: Dict = {}
+
+
+# ── Chain-buys history (KV-persisted daily accumulation) ─────────────────────
+# Taostats' free feed gives only a 24h chain-buys figure per subnet — no 7d/30d
+# history. So we snapshot each subnet's 24h buys once per UTC day into KV and sum
+# the trailing 7 / 30 days to get real multi-day buy pressure. It fills in over
+# time (partial until 7/30 days have been collected) and degrades to nothing when
+# KV is unconfigured.
+_CB_HIST_KEY = "taocb:hist:v1"
+_CB_MAX_DAYS = 30
+
+
+def _utc_date() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _load_cb_hist() -> Dict[str, Dict[str, float]]:
+    if kv is None:
+        return {}
+    try:
+        raw = kv.get_value(_CB_HIST_KEY)
+        data = json.loads(raw) if raw else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_cb_hist(hist: Dict) -> None:
+    if kv is None:
+        return
+    try:
+        kv.set_value(_CB_HIST_KEY, json.dumps(hist, default=str))
+    except Exception:
+        pass
+
+
+def _record_chain_buys(day_buys: Dict[str, float], today: str) -> Dict[str, Dict]:
+    """Persist today's per-subnet 24h chain buys once per UTC day; return the
+    trailing 7d / 30d aggregates. ``day_buys`` is {netuid_str: buys_in_tao}."""
+    hist = _load_cb_hist()
+    if today not in hist and day_buys:
+        hist[today] = {str(k): round(float(v), 2) for k, v in day_buys.items()}
+        for stale in sorted(hist)[:-_CB_MAX_DAYS]:      # keep newest 30 days
+            del hist[stale]
+        _save_cb_hist(hist)
+
+    def _window(n: int) -> Dict:
+        days = sorted(hist)[-n:]
+        agg: Dict[str, float] = {}
+        for d in days:
+            for nid, v in (hist.get(d) or {}).items():
+                agg[nid] = agg.get(nid, 0.0) + float(v)
+        return {"days": len(days), "target_days": n, "sums": agg}
+
+    return {"d7": _window(7), "d30": _window(30)}
 
 
 def _network_stats() -> Optional[Dict]:
@@ -590,11 +652,45 @@ def get_tao_ecosystem() -> Optional[Dict]:
             })
         if cb_rows:
             cb_rows.sort(key=lambda r: r["price_per_buy"])
+            # Accumulate today's 24h buys into KV and read back the 7d/30d sums.
+            _name_of = {str(s["netuid"]): s["name"] for s in subnets}
+            windows = _record_chain_buys(
+                {str(r["netuid"]): r["daily_chain_buys"] for r in cb_rows}, _utc_date())
+
+            def _buy_leaders(win: Dict, top: int = 12) -> Dict:
+                sums = (win or {}).get("sums") or {}
+                ranked = sorted(sums.items(), key=lambda kv_: kv_[1], reverse=True)
+                return {
+                    "days": win.get("days", 0),
+                    "target_days": win.get("target_days"),
+                    "rows": [{"netuid": int(nid), "name": _name_of.get(nid, f"SN{nid}"),
+                              "buys": round(v, 2)} for nid, v in ranked[:top] if v > 0],
+                }
+
             result["chain_buys"] = {
                 "basis": "tao_buy_volume_24h (dTAO pool AMM)",
                 "count": len(cb_rows),
-                "rows": cb_rows[:10],
+                "rows": cb_rows,                       # ALL subnets, ranked by ratio
+                # 24h buy-pressure leaders (heaviest daily buying right now)
+                "buys_24h": sorted(
+                    [{"netuid": r["netuid"], "name": r["name"], "buys": r["daily_chain_buys"]}
+                     for r in cb_rows], key=lambda r: r["buys"], reverse=True)[:12],
+                "d7":  _buy_leaders(windows["d7"]),    # trailing 7d (fills in over time)
+                "d30": _buy_leaders(windows["d30"]),   # trailing 30d (fills in over time)
             }
+
+    # ── Subnet inflow leaders over 7d / 30d — ranked bars for the charts ──────
+    # Distinct from chain buys: net TAO STAKED into each subnet's pool (the
+    # supply sink), straight from the API's per-subnet flow columns.
+    if subnets:
+        def _inflow_rank(key: str, top: int = 12) -> List[Dict]:
+            rows = [{"netuid": s["netuid"], "name": s["name"], "flow": round(s[key])}
+                    for s in subnets if s.get(key) is not None]
+            rows.sort(key=lambda r: r["flow"], reverse=True)
+            return [r for r in rows if r["flow"] != 0][:top]
+        _inf = {"d7": _inflow_rank("flow_7d"), "d30": _inflow_rank("flow_30d")}
+        if _inf["d7"] or _inf["d30"]:
+            result["inflow_ranks"] = _inf
 
     # ── Signal points for TAO confluence (flow group) ─────────────────────────
     # Notes are structured {text, impact} so signals.py routes each parameter
