@@ -171,49 +171,50 @@ def _calibrate_flow_cols(rows: List[Dict], agg24, agg7):
 _pool_snap: Dict = {}
 
 
-# ── Chain-buys history (KV-persisted daily accumulation) ─────────────────────
-# Taostats' free feed gives only a 24h chain-buys figure per subnet — no 7d/30d
-# history. So we snapshot each subnet's 24h buys once per UTC day into KV and sum
-# the trailing 7 / 30 days to get real multi-day buy pressure. It fills in over
-# time (partial until 7/30 days have been collected) and degrades to nothing when
-# KV is unconfigured.
-_CB_HIST_KEY = "taocb:hist:v1"
-_CB_MAX_DAYS = 30
+# ── Per-subnet daily history (KV-persisted accumulation) ─────────────────────
+# Taostats' free feed gives only 24h figures per subnet — no 7d/30d history for
+# either chain buys OR pool flow. So we snapshot each subnet's 24h value once per
+# UTC day into KV and sum the trailing 7 / 30 days to get real multi-day series.
+# It fills in over time (partial until 7/30 days are collected) and degrades to
+# nothing when KV is unconfigured.
+_CB_HIST_KEY   = "taocb:hist:v1"     # chain buys (24h TAO bought)
+_FLOW_HIST_KEY = "taoflow:hist:v1"   # pool flow (24h net TAO swapped in)
+_HIST_MAX_DAYS = 30
 
 
 def _utc_date() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _load_cb_hist() -> Dict[str, Dict[str, float]]:
+def _load_hist(kv_key: str) -> Dict[str, Dict[str, float]]:
     if kv is None:
         return {}
     try:
-        raw = kv.get_value(_CB_HIST_KEY)
+        raw = kv.get_value(kv_key)
         data = json.loads(raw) if raw else {}
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
-def _save_cb_hist(hist: Dict) -> None:
+def _save_hist(kv_key: str, hist: Dict) -> None:
     if kv is None:
         return
     try:
-        kv.set_value(_CB_HIST_KEY, json.dumps(hist, default=str))
+        kv.set_value(kv_key, json.dumps(hist, default=str))
     except Exception:
         pass
 
 
-def _record_chain_buys(day_buys: Dict[str, float], today: str) -> Dict[str, Dict]:
-    """Persist today's per-subnet 24h chain buys once per UTC day; return the
-    trailing 7d / 30d aggregates. ``day_buys`` is {netuid_str: buys_in_tao}."""
-    hist = _load_cb_hist()
-    if today not in hist and day_buys:
-        hist[today] = {str(k): round(float(v), 2) for k, v in day_buys.items()}
-        for stale in sorted(hist)[:-_CB_MAX_DAYS]:      # keep newest 30 days
+def _accumulate_daily(kv_key: str, day_values: Dict[str, float], today: str) -> Dict[str, Dict]:
+    """Persist today's per-subnet values once per UTC day; return the trailing
+    7d / 30d aggregates. ``day_values`` is {netuid_str: value}."""
+    hist = _load_hist(kv_key)
+    if today not in hist and day_values:
+        hist[today] = {str(k): round(float(v), 2) for k, v in day_values.items()}
+        for stale in sorted(hist)[:-_HIST_MAX_DAYS]:    # keep newest 30 days
             del hist[stale]
-        _save_cb_hist(hist)
+        _save_hist(kv_key, hist)
 
     def _window(n: int) -> Dict:
         days = sorted(hist)[-n:]
@@ -224,6 +225,10 @@ def _record_chain_buys(day_buys: Dict[str, float], today: str) -> Dict[str, Dict
         return {"days": len(days), "target_days": n, "sums": agg}
 
     return {"d7": _window(7), "d30": _window(30)}
+
+
+def _record_chain_buys(day_buys: Dict[str, float], today: str) -> Dict[str, Dict]:
+    return _accumulate_daily(_CB_HIST_KEY, day_buys, today)
 
 
 def _network_stats() -> Optional[Dict]:
@@ -679,18 +684,64 @@ def get_tao_ecosystem() -> Optional[Dict]:
                 "d30": _buy_leaders(windows["d30"]),   # trailing 30d (fills in over time)
             }
 
-    # ── Subnet inflow leaders over 7d / 30d — ranked bars for the charts ──────
-    # Distinct from chain buys: net TAO STAKED into each subnet's pool (the
-    # supply sink), straight from the API's per-subnet flow columns.
+    # ── Subnet inflow / outflow leaders over 24h / 7d / 30d ───────────────────
+    # Distinct from chain buys: net TAO into each subnet's pool (the supply
+    # sink). The free feed only carries per-subnet flow for 24h, so — like chain
+    # buys — the 24h net is snapshotted daily into KV and summed for 7d/30d.
+    # Highest inflow AND highest outflow are surfaced for each window.
     if subnets:
-        def _inflow_rank(key: str, top: int = 12) -> List[Dict]:
-            rows = [{"netuid": s["netuid"], "name": s["name"], "flow": round(s[key])}
-                    for s in subnets if s.get(key) is not None]
-            rows.sort(key=lambda r: r["flow"], reverse=True)
-            return [r for r in rows if r["flow"] != 0][:top]
-        _inf = {"d7": _inflow_rank("flow_7d"), "d30": _inflow_rank("flow_30d")}
-        if _inf["d7"] or _inf["d30"]:
-            result["inflow_ranks"] = _inf
+        _name_of = {str(s["netuid"]): s["name"] for s in subnets}
+        live_flow = {str(s["netuid"]): s["flow_24h"] for s in subnets
+                     if s.get("flow_24h") is not None}
+        fwin = _accumulate_daily(_FLOW_HIST_KEY, live_flow, _utc_date())
+
+        def _in_out(sums: Dict[str, float], top: int = 10):
+            ranked = sorted(sums.items(), key=lambda kv_: kv_[1], reverse=True)
+            inflow  = [{"netuid": int(n), "name": _name_of.get(n, f"SN{n}"), "flow": round(v)}
+                       for n, v in ranked if v > 0][:top]
+            outflow = [{"netuid": int(n), "name": _name_of.get(n, f"SN{n}"), "flow": round(v)}
+                       for n, v in reversed(ranked) if v < 0][:top]
+            return inflow, outflow
+
+        def _win_ranks(win, sums):
+            _in, _out = _in_out(sums)
+            return {"days": win.get("days") if win else None,
+                    "target_days": win.get("target_days") if win else None,
+                    "in": _in, "out": _out}
+
+        h24_in, h24_out = _in_out(live_flow)
+        result["inflow_ranks"] = {
+            "basis": flow_basis_24h,
+            "h24": {"days": 1, "target_days": 1, "in": h24_in, "out": h24_out},
+            "d7":  _win_ranks(fwin["d7"],  fwin["d7"]["sums"]),
+            "d30": _win_ranks(fwin["d30"], fwin["d30"]["sums"]),
+        }
+
+        # ── Fresh-from-root vs subnet↔subnet rotation (ecosystem-level) ───────
+        # Provenance isn't in the free feed, so this is a NET read: pure rotation
+        # (TAO moving between subnets) nets to ~zero, so the net ÷ gross inflow
+        # ratio says how much of the churn is genuinely fresh directional flow.
+        def _composition(sums: Dict[str, float]) -> Optional[Dict]:
+            gross_in  = sum(v for v in sums.values() if v > 0)
+            gross_out = sum(-v for v in sums.values() if v < 0)
+            if gross_in <= 0 and gross_out <= 0:
+                return None
+            net = gross_in - gross_out
+            denom = max(gross_in, gross_out) or 1
+            fresh_share = round(max(0.0, abs(net)) / denom * 100)
+            label = ("mostly fresh flow" if fresh_share >= 60
+                     else "mostly rotation" if fresh_share <= 30 else "mixed")
+            return {"net": round(net), "gross_in": round(gross_in),
+                    "gross_out": round(gross_out),
+                    "fresh_share_pct": fresh_share,
+                    "direction": "inflow" if net > 0 else "outflow" if net < 0 else "flat",
+                    "label": label}
+        _comp = {"h24": _composition(live_flow),
+                 "d7":  _composition(fwin["d7"]["sums"]),
+                 "d30": _composition(fwin["d30"]["sums"])}
+        _comp["alpha_share_pct"] = (stats or {}).get("alpha_share_pct")
+        if any(_comp.get(k) for k in ("h24", "d7", "d30")):
+            result["flow_composition"] = _comp
 
     # ── Signal points for TAO confluence (flow group) ─────────────────────────
     # Notes are structured {text, impact} so signals.py routes each parameter

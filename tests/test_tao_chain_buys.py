@@ -123,16 +123,50 @@ def test_windows_survive_without_kv(monkeypatch):
     assert len(cb["rows"]) == 1                            # ratio table still works
 
 
-def test_inflow_ranks_from_flow_columns(monkeypatch):
-    s1 = _subnet(1, "engy", 0.0329); s1["flow_7d"] = 5000; s1["flow_30d"] = 20000
-    s2 = _subnet(2, "Chutes", 0.0858); s2["flow_7d"] = -2000; s2["flow_30d"] = 8000
+def test_inflow_outflow_leaders_24h(monkeypatch):
+    s1 = _subnet(1, "engy", 0.0329); s1["flow_24h"] = 800
+    s2 = _subnet(2, "Chutes", 0.0858); s2["flow_24h"] = -300
     pools = {1: _pool(0.0329, 100, 100_000), 2: _pool(0.0858, 300, 100_000)}
-    # The flow columns are unit-calibrated against the trusted aggregate; supply
-    # one that matches the 7d column sum (3000) so the scale resolves to 1.0.
-    out = _run(monkeypatch, [s1, s2], pools, flow_hist={"net_7d_tao": 3000})
+    # flow_24h is unit-calibrated against the aggregate; net 24h = 800−300 = 500
+    # → scale resolves to 1.0 so the values pass through.
+    out = _run(monkeypatch, [s1, s2], pools, flow_hist={"net_24h_tao": 500})
     ir = out["inflow_ranks"]
-    assert [r["netuid"] for r in ir["d7"]] == [1, 2]       # 5000 > −2000
-    assert ir["d7"][0]["flow"] == 5000
+    assert [r["netuid"] for r in ir["h24"]["in"]] == [1]      # only positive
+    assert ir["h24"]["in"][0]["flow"] == 800
+    assert [r["netuid"] for r in ir["h24"]["out"]] == [2]     # only negative
+    assert ir["h24"]["out"][0]["flow"] == -300
+
+
+def test_flow_composition_flags_fresh_vs_rotation(monkeypatch):
+    s1 = _subnet(1, "engy", 0.0329); s1["flow_24h"] = 800
+    s2 = _subnet(2, "Chutes", 0.0858); s2["flow_24h"] = -300
+    pools = {1: _pool(0.0329, 100, 100_000), 2: _pool(0.0858, 300, 100_000)}
+    out = _run(monkeypatch, [s1, s2], pools, flow_hist={"net_24h_tao": 500})
+    c = out["flow_composition"]["h24"]
+    assert c["gross_in"] == 800 and c["gross_out"] == 300 and c["net"] == 500
+    assert c["fresh_share_pct"] == 62          # round(500/800*100) = round(62.5) → 62
+    assert c["direction"] == "inflow" and c["label"] == "mostly fresh flow"
+
+
+def test_mostly_rotation_when_flows_cancel(monkeypatch):
+    s1 = _subnet(1, "a", 0.03); s1["flow_24h"] = 1000
+    s2 = _subnet(2, "b", 0.03); s2["flow_24h"] = -950
+    pools = {1: _pool(0.03, 100, 100_000), 2: _pool(0.03, 100, 100_000)}
+    out = _run(monkeypatch, [s1, s2], pools, flow_hist={"net_24h_tao": 50})
+    c = out["flow_composition"]["h24"]
+    assert c["fresh_share_pct"] == 5 and c["label"] == "mostly rotation"
+
+
+def test_flow_windows_accumulate_across_days(monkeypatch):
+    kv = _FakeKV()
+    s1 = _subnet(1, "engy", 0.03); s1["flow_24h"] = 400
+    s2 = _subnet(2, "b", 0.03); s2["flow_24h"] = -100
+    pools = {1: _pool(0.03, 100, 100_000), 2: _pool(0.03, 100, 100_000)}
+    _run(monkeypatch, [s1, s2], pools, kv=kv, date="2026-08-11", flow_hist={"net_24h_tao": 300})
+    out = _run(monkeypatch, [s1, s2], pools, kv=kv, date="2026-08-12", flow_hist={"net_24h_tao": 300})
+    d7 = out["inflow_ranks"]["d7"]
+    assert d7["days"] == 2
+    assert d7["in"][0]["netuid"] == 1 and d7["in"][0]["flow"] == 800     # 400 + 400
 
 
 def test_a_subnet_without_buy_volume_is_skipped(monkeypatch):

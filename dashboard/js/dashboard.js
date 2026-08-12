@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '214';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '215';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -6965,16 +6965,44 @@ function renderTaoEco(eco, symbol) {
     </div>`;
   }
 
-  // Subnet inflow leaderboards over 7d / 30d — net TAO staked into each pool.
+  // Subnet inflow / outflow leaders per window (24h live; 7d/30d accumulate),
+  // plus the ecosystem fresh-vs-rotation read.
   let inflowCharts = '';
   const ir = eco.inflow_ranks;
-  if (ir && (ir.d7 && ir.d7.length || ir.d30 && ir.d30.length)) {
+  const comp = eco.flow_composition;
+  if (ir || comp) {
+    const wl = w => !w ? '' : !w.days ? 'no history yet'
+      : (w.target_days && w.days < w.target_days) ? `${w.days} of ${w.target_days} days so far`
+      : `${w.days} day${w.days > 1 ? 's' : ''}`;
+    const buildNote = 'Multi-day per-subnet flow builds up as daily snapshots accumulate — bars fill in over the coming days.';
+    const flowWin = (title, w) => {
+      if (!w) return '';
+      const has = (w.in && w.in.length) || (w.out && w.out.length);
+      if (!has) return `<div class="tao-barlist"><div class="smc-header">${title} · ${wl(w)}</div>
+        <div class="tao-stat-why">${buildNote}</div></div>`;
+      return barList(`${title} · ${wl(w)} — top inflow`, w.in, {key: 'flow'}) +
+             barList(`${title} — top outflow`, w.out, {key: 'flow'});
+    };
+    // Fresh-from-root vs rotation tiles (24h / 7d / 30d).
+    let compBox = '';
+    if (comp) {
+      const ct = (lbl, c) => !c ? '' : tile(lbl, `${c.fresh_share_pct}% fresh`,
+        c.direction === 'outflow' ? 'bear' : c.fresh_share_pct >= 60 ? 'bull' : '',
+        `${c.label} · net ${fmtTao(c.net)}`);
+      const t2 = [ct('Fresh vs rotation · 24h', comp.h24), ct('7d', comp.d7), ct('30d', comp.d30)]
+        .filter(Boolean).join('');
+      compBox = `${t2 ? `<div class="etf-stats" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:8px">${t2}</div>` : ''}
+        <div class="tao-stat-why">Fresh = net directional flow — pure subnet↔subnet rotation nets to zero, so a high %
+        means genuinely new TAO into Alpha pools${comp.alpha_share_pct != null ? `, and ${comp.alpha_share_pct}% of staked TAO now sits in Alphas vs root` : ''}.
+        Per-transfer source isn't in the free feed, so this is a net read, not per-subnet attribution.</div>`;
+    }
     inflowCharts = `<div style="margin-top:14px">
-      <div class="smc-header">📥 SUBNET INFLOW — net TAO staked into each pool</div>
-      ${barList('7 days', ir.d7, {key: 'flow'})}
-      ${barList('30 days', ir.d30, {key: 'flow'})}
-      <div class="tao-stat-why">Green = net TAO flowing INTO a subnet's Alpha pool (staking demand, supply sink);
-      red = net outflow (unstaking). Distinct from chain buys — this is the staked balance change, not swap volume.</div>
+      <div class="smc-header">📥 SUBNET INFLOW / OUTFLOW — net TAO into each Alpha pool</div>
+      ${compBox}
+      ${flowWin('24H', ir && ir.h24)}
+      ${flowWin('7D', ir && ir.d7)}
+      ${flowWin('30D', ir && ir.d30)}
+      <div class="tao-stat-why">Green = net TAO INTO a pool (staking demand, supply sink); red = net outflow (unstaking).</div>
     </div>`;
   }
 
