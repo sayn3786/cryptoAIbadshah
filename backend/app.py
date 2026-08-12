@@ -27,7 +27,7 @@ from macro import get_macro_events, get_market_backdrop, get_event_expectation
 from market_regime import get_market_regime
 from calendar_events import get_upcoming_events, get_event_risk
 from gomining_token import get_gomining_tokenomics
-from bittensor_eco import get_tao_ecosystem
+from bittensor_eco import get_tao_ecosystem, snapshot_daily as _tao_snapshot_daily
 from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
                          fetch_aggregated_futures_cvd)
 from indicators import (calculate_rsi_series, calculate_cvd, calculate_obv, detect_fvg,
@@ -3114,6 +3114,24 @@ def api_cron_daily():
 
     print(f"[cron/daily] {results}")
     return jsonify({"ok": True, "results": results})
+
+
+@app.get("/api/cron/tao-snapshot")
+@app.post("/api/cron/tao-snapshot")
+def api_cron_tao_snapshot():
+    """
+    Persist today's per-subnet TAO chain-buys / pool-flow snapshot so the 7d/30d
+    history accumulates reliably, independent of page traffic. Own cron (isolated
+    from the recs/Twitter daily cron's time budget); idempotent per UTC day.
+    """
+    if not _cron_authorized():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    try:
+        res = _tao_snapshot_daily()
+    except Exception as e:
+        res = {"ok": False, "error": str(e)}
+    print(f"[cron/tao-snapshot] {res}")
+    return jsonify({"ok": bool(res.get("ok")), "result": res})
 
 
 @app.get("/api/prices")

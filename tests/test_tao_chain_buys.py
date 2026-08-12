@@ -169,6 +169,44 @@ def test_flow_windows_accumulate_across_days(monkeypatch):
     assert d7["in"][0]["netuid"] == 1 and d7["in"][0]["flow"] == 800     # 400 + 400
 
 
+def test_snapshot_daily_forces_a_fresh_accumulation(monkeypatch):
+    # The cron path clears the cache and drives one fresh compute so the day's
+    # snapshot lands even with no page traffic.
+    kv = _FakeKV()
+    subnets = [_subnet(1, "engy", 0.03)]; subnets[0]["flow_24h"] = 200
+    pools = {1: _pool(0.03, 100, 100_000)}
+    calls = {"n": 0}
+    real = eco.get_tao_ecosystem
+
+    def _counting():
+        calls["n"] += 1
+        return real()
+
+    monkeypatch.setattr(eco, "TAOSTATS_KEY", "x")
+    monkeypatch.setattr(eco, "kv", kv)
+    monkeypatch.setattr(eco, "_utc_date", lambda: "2026-08-12")
+    monkeypatch.setattr(eco, "_network_stats", lambda: {"staked_pct": 50})
+    monkeypatch.setattr(eco, "_subnets", lambda: subnets)
+    monkeypatch.setattr(eco, "_pools", lambda: pools)
+    monkeypatch.setattr(eco, "_flow_from_history", lambda: {"net_24h_tao": 200})
+    monkeypatch.setattr(eco, "get_tao_ecosystem", _counting)
+    eco._cache.clear(); eco._last_good.clear()
+
+    res = eco.snapshot_daily()
+    assert res["ok"] is True
+    assert res["date"] == "2026-08-12"
+    assert res["chain_buys_days"] == 1
+    assert calls["n"] == 1
+    # The snapshot really persisted to KV.
+    assert eco._CB_HIST_KEY in kv.store
+
+
+def test_snapshot_daily_without_a_key_is_a_noop(monkeypatch):
+    monkeypatch.setattr(eco, "TAOSTATS_KEY", "")
+    res = eco.snapshot_daily()
+    assert res["ok"] is False and "TAOSTATS" in res["reason"]
+
+
 def test_a_subnet_without_buy_volume_is_skipped(monkeypatch):
     subnets = [_subnet(1, "engy", 0.0329), _subnet(2, "Chutes", 0.0858)]
     pools = {1: _pool(0.0329, 144, 100_000),

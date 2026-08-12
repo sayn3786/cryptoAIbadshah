@@ -819,3 +819,30 @@ def get_tao_ecosystem() -> Optional[Dict]:
     result["notes"] = notes
     _cache["eco"] = (result, time.time())
     return result
+
+
+def snapshot_daily() -> Dict:
+    """
+    Force today's chain-buys / flow snapshot so the 7d/30d history never depends
+    on someone opening the TAO page. Called once a day by the cron.
+
+    The accumulation is a side effect of a FRESH ecosystem compute, so the
+    30-minute cache is cleared first to guarantee the fetch actually runs (a
+    warm instance could otherwise return cached data and skip the snapshot).
+    The per-UTC-day KV guard keeps it idempotent, so extra calls are harmless.
+    """
+    if not TAOSTATS_KEY:
+        return {"ok": False, "reason": "no TAOSTATS_API_KEY"}
+    _cache.pop("eco", None)
+    eco = get_tao_ecosystem()
+    if not eco:
+        return {"ok": False, "reason": "no ecosystem data"}
+    cb = eco.get("chain_buys") or {}
+    ir = eco.get("inflow_ranks") or {}
+    return {
+        "ok": True,
+        "date": _utc_date(),
+        "chain_buys_days": (cb.get("d7") or {}).get("days"),
+        "flow_days": (ir.get("d7") or {}).get("days"),
+        "subnets": cb.get("count"),
+    }
