@@ -260,6 +260,11 @@ a:hover { color: var(--gold2); }
 .liq-val.bullish { color: var(--bull); }
 .liq-val.bearish { color: var(--bear); }
 .liq-total { font-size: .72rem; color: var(--muted); font-family: var(--mono); margin-top: 4px; }
+.liq-bias { font-size: .78rem; font-weight: 700; margin-top: 8px; text-align: center;
+  display: flex; flex-direction: column; gap: 2px; }
+.liq-bias.bullish { color: var(--bull); }
+.liq-bias.bearish { color: var(--bear); }
+.liq-bias-why { font-size: .66rem; font-weight: 400; color: var(--muted); }
 
 /* ─── Row 2: Chart ────────────────────────────────────────────────────────────── */
 /* Chart gets the FULL row width; the CVD minis sit side-by-side underneath.

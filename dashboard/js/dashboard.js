@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '212';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '213';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -812,6 +812,28 @@ function renderLiquidations(l) {
   document.getElementById('liqLongs').textContent  = fmtK(l.longs_liquidated);
   document.getElementById('liqShorts').textContent = fmtK(l.shorts_liquidated);
   document.getElementById('liqTotal').textContent  = `Total: ${fmtK(l.total)}`;
+
+  // Max-pain / squeeze bias — which way forced-position pain leans.
+  const bEl = document.getElementById('liqBias');
+  if (bEl) {
+    const b = l.bias;
+    if (b && b.direction && b.direction !== 'balanced') {
+      const up = b.direction === 'upside';
+      const arrow = up ? '▲' : '▼';
+      const cls   = up ? 'bullish' : 'bearish';
+      const lean  = b.strength === 'strong' ? '' : ' (lean)';
+      bEl.className = `liq-bias ${cls}`;
+      bEl.innerHTML = `${arrow} Max pain to the ${up ? 'upside' : 'downside'}${lean}` +
+        `${b.reason ? `<span class="liq-bias-why">${b.reason}</span>` : ''}`;
+      bEl.style.display = '';
+    } else if (b && b.direction === 'balanced') {
+      bEl.className = 'liq-bias';
+      bEl.innerHTML = `⚖ Leverage balanced<span class="liq-bias-why">no clear max-pain direction</span>`;
+      bEl.style.display = '';
+    } else {
+      bEl.style.display = 'none';
+    }
+  }
 }
 
 /* ─── Main candlestick chart ──────────────────────────────────────────────── */
