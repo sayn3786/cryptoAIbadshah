@@ -189,8 +189,55 @@ def build_pattern_alert_message(alerts: List[Dict], date_label: str = "") -> str
     return "\n".join(lines)
 
 
+def _is_divergence(a: Dict) -> bool:
+    return a.get("kind") == "divergence"
+
+
+def build_divergence_alert_message(alerts: List[Dict], date_label: str = "") -> str:
+    """Format a batch of RSI-divergence events as their OWN Telegram message.
+
+    A divergence is momentum disagreeing with price — no level broken, no
+    measured target — so it gets a dedicated header rather than sharing the
+    breakout/failure 'Pattern' batch, where readers expect a broken level.
+    """
+    lines = ["📉 *CryptoMonk — RSI Divergence*"]
+    if date_label:
+        lines.append(f"🗓 {date_label}")
+    lines.append("")
+    for a in alerts:
+        gap = a.get("rsi_gap")
+        gap_s = f" by {abs(gap):.1f} RSI pts" if isinstance(gap, (int, float)) else ""
+        age = a.get("age_candles")
+        age_s = ("on the last close" if not age
+                 else f"{age} candle{'s' if age != 1 else ''} ago")
+        lines.append(
+            f"{_pat_dot(a.get('direction'))} *{a.get('symbol')}/USDT "
+            f"{a.get('timeframe')}* — {a.get('label')}")
+        lines.append(f"   Price and momentum disagree{gap_s}  ·  {age_s}")
+        lines.append("")
+    lines += ["⚠️ _Not financial advice. A divergence is a heads-up, not a trigger "
+              "— wait for confirmation._",
+              "🌟 @CryptoMonk1560"]
+    return "\n".join(lines)
+
+
+def _post_message(token: str, chat_id: str, text: str) -> bool:
+    resp = requests.post(
+        f"{TELEGRAM_API}/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return True
+
+
 def send_pattern_alerts(alerts: List[Dict], date_label: str = "") -> bool:
-    """Send freshly-confirmed pattern alerts to the configured Telegram channel."""
+    """Send freshly-confirmed alerts to the configured Telegram channel.
+
+    Divergences go out as their OWN dedicated message; breakout confirmations
+    and failures go out as the 'Pattern' message. Both to the same channel.
+    Returns True if any message was sent.
+    """
     if not alerts:
         return False
     token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -198,19 +245,26 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "") -> bool:
     if not token or not chat_id:
         print("[telegram] BOT_TOKEN or CHAT_ID not set — skipping pattern alerts")
         return False
-    text = build_pattern_alert_message(alerts, date_label)
+
+    divergences = [a for a in alerts if _is_divergence(a)]
+    patterns    = [a for a in alerts if not _is_divergence(a)]
+
+    sent = False
     try:
-        resp = requests.post(
-            f"{TELEGRAM_API}/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        print(f"[telegram] {len(alerts)} pattern alert(s) sent to {chat_id}")
-        return True
+        if patterns:
+            _post_message(token, chat_id, build_pattern_alert_message(patterns, date_label))
+            print(f"[telegram] {len(patterns)} pattern alert(s) sent to {chat_id}")
+            sent = True
     except Exception as e:
         print(f"[telegram] ERROR sending pattern alerts: {e}")
-        return False
+    try:
+        if divergences:
+            _post_message(token, chat_id, build_divergence_alert_message(divergences, date_label))
+            print(f"[telegram] {len(divergences)} divergence alert(s) sent to {chat_id}")
+            sent = True
+    except Exception as e:
+        print(f"[telegram] ERROR sending divergence alerts: {e}")
+    return sent
 
 
 def send_daily_recs(recs_data: Dict) -> bool:

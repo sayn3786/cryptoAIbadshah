@@ -21,7 +21,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 import app as appmod                                                  # noqa: E402
-from telegram import build_pattern_alert_message                      # noqa: E402
+import telegram as tgmod                                              # noqa: E402
+from telegram import (build_pattern_alert_message,                    # noqa: E402
+                      build_divergence_alert_message, send_pattern_alerts)
 
 
 BASE_TS = 1_767_268_800_000
@@ -159,7 +161,7 @@ def test_the_alert_id_is_stable_and_distinct(monkeypatch):
     assert appmod._pattern_alert_id("TAO", "1D", flag) != first
 
 
-# ── The copy ────────────────────────────────────────────────────────────────
+# ── The copy — divergences use their OWN dedicated message ────────────────────
 
 def _tg(**over):
     a = {"kind": "divergence", "symbol": "TAO", "timeframe": "1D",
@@ -167,7 +169,14 @@ def _tg(**over):
          "rsi_gap": 8.2, "age_candles": 1,
          "break_dir": None, "level": None, "target": None}
     a.update(over)
-    return build_pattern_alert_message([a])
+    return build_divergence_alert_message([a])
+
+
+def test_the_divergence_message_has_its_own_header():
+    msg = _tg()
+    assert "RSI Divergence" in msg
+    # It is NOT the breakout/failure 'Pattern' batch header.
+    assert "Pattern Confirmed" not in msg and "Pattern Update" not in msg
 
 
 def test_telegram_does_not_describe_a_divergence_as_a_breakout():
@@ -191,9 +200,56 @@ def test_telegram_survives_a_missing_rsi_gap():
 
 
 def test_a_breakout_alert_is_unaffected():
-    """The divergence branch must not change how every other alert reads."""
+    """The dedicated divergence message must not change how a breakout reads."""
     msg = build_pattern_alert_message([{
         "kind": "flag", "symbol": "BTC", "timeframe": "1D", "label": "Bullish Flag",
         "direction": "bullish", "break_dir": "up", "level": 65000, "target": 68000}])
     assert "Broke ↑" in msg
     assert "🎯" in msg
+
+
+# ── Separation: a mixed batch goes out as TWO messages ───────────────────────
+
+def _capture_sends(monkeypatch):
+    """Stub Telegram env + HTTP; capture every message body sent."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    sent = []
+    monkeypatch.setattr(tgmod, "_post_message",
+                        lambda token, chat_id, text: sent.append(text) or True)
+    return sent
+
+
+def test_a_mixed_batch_sends_divergences_as_a_separate_message(monkeypatch):
+    sent = _capture_sends(monkeypatch)
+    ok = send_pattern_alerts([
+        {"kind": "flag", "symbol": "BTC", "timeframe": "1D", "label": "Bullish Flag",
+         "direction": "bullish", "break_dir": "up", "level": 65000, "target": 68000},
+        {"kind": "divergence", "symbol": "TAO", "timeframe": "1D",
+         "label": "Bullish RSI Divergence", "direction": "bullish", "rsi_gap": 8.2,
+         "age_candles": 2, "break_dir": None, "level": None, "target": None},
+    ])
+    assert ok is True
+    assert len(sent) == 2, "breakouts and divergences go out as two messages"
+    pattern_msg = next(m for m in sent if "Bullish Flag" in m)
+    div_msg     = next(m for m in sent if "RSI Divergence" in m)
+    # Neither message bleeds into the other.
+    assert "RSI Divergence" not in pattern_msg
+    assert "Bullish Flag" not in div_msg
+
+
+def test_a_divergence_only_batch_sends_one_message(monkeypatch):
+    sent = _capture_sends(monkeypatch)
+    send_pattern_alerts([
+        {"kind": "divergence", "symbol": "TAO", "timeframe": "1D",
+         "label": "Bearish RSI Divergence", "direction": "bearish", "rsi_gap": 5.0,
+         "age_candles": 0, "break_dir": None, "level": None, "target": None}])
+    assert len(sent) == 1 and "RSI Divergence" in sent[0]
+
+
+def test_a_breakout_only_batch_sends_no_divergence_message(monkeypatch):
+    sent = _capture_sends(monkeypatch)
+    send_pattern_alerts([
+        {"kind": "flag", "symbol": "BTC", "timeframe": "1D", "label": "Bullish Flag",
+         "direction": "bullish", "break_dir": "up", "level": 65000, "target": 68000}])
+    assert len(sent) == 1 and "RSI Divergence" not in sent[0]
