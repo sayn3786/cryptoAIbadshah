@@ -903,6 +903,57 @@ def _collect_htf_levels(symbol: str, timeframe: str) -> list:
     return out
 
 
+def _liquidation_bias(liq: dict, oi: dict) -> dict:
+    """
+    The "max pain" DIRECTION from realized liquidations + the OI squeeze read.
+
+    This is NOT the Coinglass resting-leverage liquidation map (that needs a paid
+    tier). It answers a narrower question from what we already have: which way
+    does forced-position pain currently lean?
+
+      * Forward-looking (weighted strongest): who is crowding in RIGHT NOW, from
+        the OI squeeze quadrant — shorts piling in on a drop is short-squeeze
+        fuel (pain to the UPSIDE); crowded longs on hot funding is long-squeeze
+        risk (pain to the DOWNSIDE).
+      * Corroborating: which side has been getting liquidated more recently — the
+        already-over-leveraged side.
+
+    Returns {direction: upside|downside|balanced, strength: strong|lean|None,
+    reason, up_score, down_score}. Direction is the side price would move to
+    inflict the most pain.
+    """
+    longs   = float(liq.get("longs_liquidated") or 0.0)
+    shorts  = float(liq.get("shorts_liquidated") or 0.0)
+    squeeze = (oi or {}).get("squeeze")
+    up, down, reasons = 0, 0, []
+
+    if squeeze == "short_squeeze_fuel":
+        up += 2
+        reasons.append("shorts piling in as price falls — short-squeeze fuel")
+    elif squeeze == "long_squeeze_risk":
+        down += 2
+        reasons.append("crowded longs on hot funding — long-squeeze risk")
+
+    total = longs + shorts
+    if total > 0:
+        skew = (shorts - longs) / total          # + → shorts hit harder
+        if skew >= 0.2:
+            up += 1
+            reasons.append("shorts taking the bulk of recent liquidations")
+        elif skew <= -0.2:
+            down += 1
+            reasons.append("longs taking the bulk of recent liquidations")
+
+    if up == down:
+        return {"direction": "balanced", "strength": None, "up_score": up,
+                "down_score": down,
+                "reason": "leverage roughly balanced — no clear max-pain direction"}
+    direction = "upside" if up > down else "downside"
+    strength  = "strong" if abs(up - down) >= 2 else "lean"
+    return {"direction": direction, "strength": strength,
+            "up_score": up, "down_score": down, "reason": "; ".join(reasons)}
+
+
 # ── Core analysis ─────────────────────────────────────────────────────────────
 def build_analysis(symbol: str, timeframe: str) -> dict:
     bs       = SYMBOLS[symbol]
@@ -980,6 +1031,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         oi["px_change_pct"] = round(_px_chg, 2)
         oi["thr_strong"]    = _smin
         oi["thr_quad"]      = _qmin
+
+    # Liquidation / squeeze "max pain" direction from realized liquidations + the
+    # OI squeeze read (not a resting-leverage map — that needs a paid tier).
+    if liq:
+        liq["bias"] = _liquidation_bias(liq, oi or {})
 
     # ── External fetches — the half that cannot be replayed ──────────────────
     long_short   = client.get_long_short_ratio(bs)
