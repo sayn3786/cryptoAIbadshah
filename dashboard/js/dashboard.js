@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '216';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '217';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -365,7 +365,7 @@ function renderAll(a) {
   renderLiquidations(a.liquidations);
   renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels);
-  renderRSIChart(a.rsi_series);
+  renderRSIChart(a.rsi_series, a.rsi_markers);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
   renderOBV(a.obv);
@@ -1123,7 +1123,7 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
    RSI number too. A 1D view could sit there showing a weekly RSI over a 2023
    axis with nothing saying so. On a trading dashboard a number from a different
    timeframe presented as the current one is worse than no number at all. */
-function renderRSIChart(rsiSeries) {
+function renderRSIChart(rsiSeries, markers) {
   if (!S.rsiSeries) return;
   const data = (rsiSeries || [])
     .filter(d => d && d.rsi != null && d.timestamp != null)
@@ -1131,6 +1131,22 @@ function renderRSIChart(rsiSeries) {
   if (!data.length) { clearRSIChart(); return; }
   const unique = [...new Map(data.map(d => [d.time, d])).values()].sort((a, b) => a.time - b.time);
   S.rsiSeries.setData(unique);
+
+  // Oversold-bottom (green) / overbought-top (red) circles on swing pivots.
+  // Only keep markers whose time lands on a plotted point, sorted ascending.
+  const times = new Set(unique.map(d => d.time));
+  const mk = (markers || [])
+    .filter(m => m && m.timestamp != null)
+    .map(m => {
+      const os = m.kind === 'oversold_bottom';
+      return { time: Math.floor(m.timestamp / 1000),
+               position: os ? 'belowBar' : 'aboveBar',
+               color: os ? '#22c55e' : '#ef4444', shape: 'circle',
+               text: `${os ? 'OS' : 'OB'} ${m.rsi != null ? m.rsi : ''}`.trim() };
+    })
+    .filter(m => times.has(m.time))
+    .sort((a, b) => a.time - b.time);
+  try { S.rsiSeries.setMarkers(mk); } catch (_) {}
   try { S.rsiChart.timeScale().fitContent(); } catch (_) {}
 }
 
@@ -1139,6 +1155,7 @@ function renderRSIChart(rsiSeries) {
    previous selection's RSI. */
 function clearRSIChart() {
   try { S.rsiSeries?.setData([]); } catch (_) {}
+  try { S.rsiSeries?.setMarkers([]); } catch (_) {}
 }
 
 /* ─── CVD charts ──────────────────────────────────────────────────────────── */
