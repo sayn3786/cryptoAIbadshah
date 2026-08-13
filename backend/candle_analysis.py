@@ -89,7 +89,7 @@ SIGNAL_WINDOW_BARS = 60
 # here without a detector behind it will fail rather than quietly return None.
 CANDLE_DERIVED_KEYS = (
     "symbol", "timeframe", "candles", "signal_price",
-    "rsi", "rsi_slope", "rsi_series", "price_roc", "candle_dirs",
+    "rsi", "rsi_slope", "rsi_series", "rsi_markers", "price_roc", "candle_dirs",
     "macd", "ema_trend", "ema_lines", "supertrend", "ichimoku", "bollinger",
     "stoch_rsi", "vwap", "vol_signal", "obv", "vol_regime",
     "spot_cvd", "cvd_divergence",
@@ -103,6 +103,44 @@ CANDLE_DERIVED_KEYS = (
     "structure_candles", "structure_supertrend", "structure_trendline",
     "market_cap",
 )
+
+
+# RSI thresholds for the swing markers: a price swing LOW with RSI at/below
+# OVERSOLD is circled as a bottom; a swing HIGH with RSI at/above OVERBOUGHT as a
+# top. Requiring a real price pivot AND a momentum extreme is what makes these
+# "this marked a bottom/top" points rather than every 30/70 tag.
+RSI_MARK_OVERSOLD = 40
+RSI_MARK_OVERBOUGHT = 60
+
+
+def rsi_swing_markers(candles: Sequence[Dict], rsi_raw: Sequence,
+                      *, window: int = 3, since_ts=None) -> List[Dict]:
+    """
+    Green markers at price swing LOWS where RSI was oversold, red at swing HIGHS
+    where RSI was overbought — the recurring "RSI bottomed here" reads traders
+    circle on a chart. Pure; ``rsi_raw`` is index-aligned with ``candles``.
+    """
+    out: List[Dict] = []
+    n = len(candles)
+    for i in range(window, n - window):
+        r = rsi_raw[i] if i < len(rsi_raw) else None
+        if r is None:
+            continue
+        ts = candles[i].get("timestamp")
+        if since_ts is not None and ts is not None and ts < since_ts:
+            continue
+        lo, hi = candles[i].get("low"), candles[i].get("high")
+        lows = [candles[j].get("low") for j in range(i - window, i + window + 1)]
+        highs = [candles[j].get("high") for j in range(i - window, i + window + 1)]
+        lows = [x for x in lows if x is not None]
+        highs = [x for x in highs if x is not None]
+        if lo is not None and lows and lo == min(lows) and r <= RSI_MARK_OVERSOLD:
+            out.append({"timestamp": ts, "kind": "oversold_bottom",
+                        "rsi": round(r, 1), "price": lo})
+        elif hi is not None and highs and hi == max(highs) and r >= RSI_MARK_OVERBOUGHT:
+            out.append({"timestamp": ts, "kind": "overbought_top",
+                        "rsi": round(r, 1), "price": hi})
+    return out
 
 
 # ── Small pure helpers, moved here so both callers share one copy ────────────
@@ -247,6 +285,11 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
     rsi_with_ts = [{"timestamp": candles[i]["timestamp"], "rsi": v}
                    for i, v in enumerate(rsi_raw)
                    if v is not None and i < len(candles)]
+    # Swing-aligned oversold/overbought markers, limited to the RSI chart window
+    # (last 30 points) so they land on visible bars.
+    _rsi_win = rsi_with_ts[-30:]
+    rsi_markers = rsi_swing_markers(
+        candles, rsi_raw, since_ts=(_rsi_win[0]["timestamp"] if _rsi_win else None))
 
     # ── Trend ────────────────────────────────────────────────────────────────
     _ema50_s = ema_series(closes, 50)
@@ -314,6 +357,7 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
         "rsi": current_rsi,
         "rsi_slope": rsi_slope,
         "rsi_series": rsi_with_ts[-30:],
+        "rsi_markers": rsi_markers,
         "price_roc": price_roc,
         "candle_dirs": candle_dirs,
 
