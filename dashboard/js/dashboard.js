@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '217';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '218';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -341,6 +341,8 @@ function renderAll(a) {
   renderBollingerCard(a.bollinger);
   renderRsiDivCard(a.rsi_divergence, a.candles, a.rsi_series,
                    { price: a.live_price ?? a.signal_price, rsi: a.rsi });
+  renderRsiSwingPanel(a.rsi_markers, a.candles, a.rsi_series,
+                      { price: a.live_price ?? a.signal_price, rsi: a.rsi });
   renderVwapCard(a.vwap);
   renderStochRsiCard(a.stoch_rsi);
   renderVolSignalCard(a.vol_signal);
@@ -1762,6 +1764,153 @@ function buildDivergencePanel(div, candles, rsiSeries, now) {
     <text x="${(DVP.W - DVP.R + 6).toFixed(1)}" y="${(pTop - 8).toFixed(1)}" class="dvp-cap">NOW</text>
     ${dateTicks}
   </svg>`;
+}
+
+/* ─── RSI reversal marker, drawn full-size ───────────────────────────────────
+   The RSI chart circles an oversold bottom / overbought top; this panel draws
+   the price action AROUND that swing at a size you can read prices off — the
+   same two-panel language as the divergence card, but for a single momentum
+   turning point plus the move it made since. */
+function buildRsiSwingPanel(m, candles, rsiSeries, now) {
+  if (!m || !Number.isFinite(+m.timestamp) || !candles?.length || !rsiSeries?.length) return '';
+  const tPivot = +m.timestamp;
+  const tEnd = candles[candles.length - 1].timestamp;
+  // Show context on BOTH sides of the swing so the bottom/top reads as a turn.
+  const span = Math.max(1, tEnd - tPivot);
+  const start = tPivot - span * 0.6;
+
+  const px = candles.filter(c => c.timestamp >= start).map(c => ({ t: c.timestamp, v: c.close }));
+  const rs = rsiSeries.filter(r => r.timestamp >= start && r.rsi != null)
+                      .map(r => ({ t: r.timestamp, v: r.rsi }));
+  if (px.length < 2 || rs.length < 2) return '';
+
+  const innerW = DVP.W - DVP.L - DVP.R;
+  const x = t => DVP.L + ((t - start) / Math.max(1, tEnd - start)) * innerW;
+  const pTop = DVP.T + 12, pH = 158;
+  const rTop = pTop + pH + 52, rH = 74;
+  const axisY = rTop + rH + 26;
+
+  const nowPrice = Number.isFinite(+now?.price) ? +now.price : px[px.length - 1].v;
+  const nowRsi = Number.isFinite(+now?.rsi) ? +now.rsi : rs[rs.length - 1].v;
+  const mPrice = Number.isFinite(+m.price) ? +m.price : px[0].v;
+  const mRsi = Number.isFinite(+m.rsi) ? +m.rsi : null;
+
+  const P = _dvScale([...px.map(d => d.v), mPrice, nowPrice], pTop, pH, { ticks: 5, pad: 0.10 });
+  const R = _dvScale([...rs.map(d => d.v), mRsi, nowRsi, 30, 70].filter(v => v != null), rTop, rH);
+
+  const os = m.kind === 'oversold_bottom';
+  const accent = os ? '#34d399' : '#f87171';
+  const uid = `rs${Math.abs((tPivot | 0)).toString(36)}`;
+
+  const grid = (y, label, cls) => `
+    <line x1="${DVP.L}" y1="${y.toFixed(1)}" x2="${DVP.W - DVP.R}" y2="${y.toFixed(1)}"
+          stroke="#1b2942" stroke-width="1"/>
+    <text x="${(DVP.L - 10).toFixed(1)}" y="${(y + 3.5).toFixed(1)}" class="dvp-tick ${cls || ''}">${label}</text>`;
+
+  const nowLine = (y, label, color, top, height) => {
+    const yy = Math.max(top + 7, Math.min(top + height - 2, y));
+    const w = Math.max(46, label.length * 7.2 + 12);
+    return `
+      <line x1="${DVP.L}" y1="${yy.toFixed(1)}" x2="${(DVP.W - DVP.R + 4).toFixed(1)}" y2="${yy.toFixed(1)}"
+            stroke="${color}" stroke-width="1.25" stroke-dasharray="1 4" opacity="0.75"/>
+      <rect x="${(DVP.W - DVP.R + 6).toFixed(1)}" y="${(yy - 9).toFixed(1)}"
+            width="${w.toFixed(1)}" height="18" rx="4" fill="${color}" opacity="0.16"/>
+      <text x="${(DVP.W - DVP.R + 6 + w / 2).toFixed(1)}" y="${(yy + 4).toFixed(1)}"
+            text-anchor="middle" class="dvp-now" fill="${color}">${label}</text>`;
+  };
+
+  // Shade from the swing to now — the "since the signal" window.
+  const xs = x(tPivot), xe = x(tEnd);
+  const band = `<rect x="${xs.toFixed(1)}" y="${pTop.toFixed(1)}"
+      width="${(xe - xs).toFixed(1)}" height="${(rTop + rH - pTop).toFixed(1)}"
+      fill="${accent}" opacity="0.05"/>`;
+  const stem = `<line x1="${xs.toFixed(1)}" y1="${pTop.toFixed(1)}"
+      x2="${xs.toFixed(1)}" y2="${(rTop + rH).toFixed(1)}"
+      stroke="${accent}" stroke-width="1" stroke-dasharray="2 4" opacity="0.55"/>`;
+
+  const dot = (cx, cy, r = 5) =>
+    `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}" fill="${accent}" stroke="#0d1b2e" stroke-width="2"/>`;
+
+  // The move since the swing — the payoff a reader wants ("bottomed here, now?").
+  const dPct = (nowPrice - mPrice) / (mPrice || 1) * 100;
+  const since = `<line x1="${xs.toFixed(1)}" y1="${P.y(mPrice).toFixed(1)}"
+      x2="${x(tEnd).toFixed(1)}" y2="${P.y(nowPrice).toFixed(1)}"
+      stroke="${accent}" stroke-width="2.25" stroke-dasharray="7 4" stroke-linecap="round" opacity="0.9"/>`;
+  const sinceTag = `<text x="${((xs + x(tEnd)) / 2).toFixed(1)}"
+      y="${(Math.min(P.y(mPrice), P.y(nowPrice)) - 12).toFixed(1)}"
+      text-anchor="middle" class="dvp-tag">${dPct >= 0 ? '+' : ''}${dPct.toFixed(2)}% since</text>`;
+
+  const dateTicks = _dvDateTicks(px.map(d => d.t), 5)
+    .map(t => `<text x="${x(t).toFixed(1)}" y="${axisY}" text-anchor="middle" class="dvp-date">${_dvDate(t)}</text>`)
+    .join('');
+
+  const pMarkLbl = `<text x="${(xs + 11).toFixed(1)}" y="${(P.y(mPrice) - 11).toFixed(1)}"
+      text-anchor="start" class="dvp-val">${_dvValFmt(mPrice)}</text>
+    <text x="${(xs + 11).toFixed(1)}" y="${(P.y(mPrice) + 17).toFixed(1)}"
+      text-anchor="start" class="dvp-sub">${_dvDate(tPivot)}</text>`;
+
+  return `<svg viewBox="0 0 ${DVP.W} ${DVP.H}" width="100%" preserveAspectRatio="xMidYMid meet"
+       role="img" aria-label="RSI ${os ? 'oversold bottom' : 'overbought top'}: price ${_dvValFmt(mPrice)} at RSI ${mRsi != null ? mRsi.toFixed(1) : ''}, now ${_dvValFmt(nowPrice)}">
+    <defs>
+      <linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#7c8ba1" stop-opacity="0.20"/>
+        <stop offset="100%" stop-color="#7c8ba1" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    ${band}
+    <text x="${DVP.L}" y="${(DVP.T - 6).toFixed(1)}" class="dvp-cap">PRICE</text>
+    ${(() => { const t = P.ticks; const f = _dvTickFmt(t.length > 1 ? t[1] - t[0] : 1); return t.map(v => grid(P.y(v), f(v))).join(''); })()}
+    <path d="${_dvPath(px, x, P.y)} L${x(px[px.length - 1].t).toFixed(1)},${(pTop + pH).toFixed(1)} L${x(px[0].t).toFixed(1)},${(pTop + pH).toFixed(1)} Z"
+          fill="url(#${uid})" stroke="none"/>
+    <path d="${_dvPath(px, x, P.y)}" fill="none" stroke="#94a3b8" stroke-width="1.8"
+          stroke-linejoin="round" stroke-linecap="round"/>
+    ${stem}${since}${sinceTag}
+    ${dot(xs, P.y(mPrice))}${pMarkLbl}
+
+    <text x="${DVP.L}" y="${(rTop - 14).toFixed(1)}" class="dvp-cap">RSI (14)</text>
+    ${grid(R.y(70), '70', 'ob')}${grid(R.y(50), '50', 'mid')}${grid(R.y(30), '30', 'os')}
+    <path d="${_dvPath(rs, x, R.y)}" fill="none" stroke="#f59e0b" stroke-width="1.8"
+          stroke-linejoin="round" stroke-linecap="round"/>
+    ${mRsi != null ? dot(xs, R.y(mRsi)) : ''}
+    ${mRsi != null ? `<text x="${(xs + 11).toFixed(1)}" y="${(R.y(mRsi) - 9).toFixed(1)}" text-anchor="start" class="dvp-val">${mRsi.toFixed(1)}</text>` : ''}
+    ${nowLine(P.y(nowPrice), _dvValFmt(nowPrice), '#cbd5e1', pTop, pH)}
+    ${nowLine(R.y(nowRsi), nowRsi.toFixed(1), '#f59e0b', rTop, rH)}
+    <text x="${(DVP.W - DVP.R + 6).toFixed(1)}" y="${(pTop - 8).toFixed(1)}" class="dvp-cap">NOW</text>
+    ${dateTicks}
+  </svg>`;
+}
+
+/* Newest RSI swing marker, drawn full-size. Hidden when there is none. */
+function renderRsiSwingPanel(markers, candles, rsiSeries, now) {
+  const sec = document.getElementById('rsiSwingSection');
+  const box = document.getElementById('rsiSwingPanel');
+  if (!sec || !box) return;
+  const m = (markers || []).filter(Boolean).slice(-1)[0];   // most recent
+  const svg = m ? buildRsiSwingPanel(m, candles, rsiSeries, now) : '';
+  if (!svg) { box.innerHTML = ''; sec.style.display = 'none'; return; }
+  box.innerHTML = svg;
+  sec.style.display = '';
+  const os = m.kind === 'oversold_bottom';
+  const t = document.getElementById('rsiSwingTitle');
+  const sub = document.getElementById('rsiSwingSub');
+  if (t) {
+    t.textContent = `RSI Reversal — ${os ? 'Oversold Bottom' : 'Overbought Top'}`;
+    t.style.color = os ? 'var(--bull)' : 'var(--bear)';
+  }
+  if (sub) {
+    const ago = _barsAgoLabel(m.timestamp, candles);
+    sub.textContent = `RSI ${m.rsi != null ? (+m.rsi).toFixed(1) : ''} at a swing ${os ? 'low' : 'high'}`
+      + (ago ? ` · ${ago}` : '');
+  }
+}
+
+/* "N bars ago" from a timestamp against the candle set (0 = the last bar). */
+function _barsAgoLabel(ts, candles) {
+  if (ts == null || !candles?.length) return '';
+  const i = candles.findIndex(c => c.timestamp === ts);
+  if (i < 0) return '';
+  const n = (candles.length - 1) - i;
+  return n <= 0 ? 'this bar' : `${n} bar${n === 1 ? '' : 's'} ago`;
 }
 
 function renderRsiDivCard(div, candles, rsiSeries, now) {
