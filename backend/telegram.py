@@ -221,6 +221,32 @@ def build_divergence_alert_message(alerts: List[Dict], date_label: str = "") -> 
     return "\n".join(lines)
 
 
+def build_rsi_swing_alert_message(alerts: List[Dict], date_label: str = "") -> str:
+    """Format RSI oversold-bottom / overbought-top swing markers as their OWN
+    message. Like a divergence, this is a momentum turning-point read — no level
+    broken, no target — so it gets its own header, separate from the breakout
+    'Pattern' batch and from RSI divergences.
+    """
+    lines = ["📊 *CryptoMonk — RSI Reversal*"]
+    if date_label:
+        lines.append(f"🗓 {date_label}")
+    lines.append("")
+    for a in alerts:
+        os_ = a.get("type") == "oversold_bottom"
+        rsi = a.get("rsi")
+        rsi_s = f"RSI {rsi:g}" if isinstance(rsi, (int, float)) else "RSI"
+        where = "a swing low" if os_ else "a swing high"
+        lines.append(
+            f"{_pat_dot(a.get('direction'))} *{a.get('symbol')}/USDT "
+            f"{a.get('timeframe')}* — {a.get('label')}")
+        lines.append(f"   {rsi_s} at {where} — momentum {'bottomed' if os_ else 'topped'}")
+        lines.append("")
+    lines += ["⚠️ _Not financial advice. A momentum extreme is a heads-up, not a "
+              "trigger — wait for confirmation._",
+              "🌟 @CryptoMonk1560"]
+    return "\n".join(lines)
+
+
 def _post_message(token: str, chat_id: str, text: str) -> bool:
     resp = requests.post(
         f"{TELEGRAM_API}/bot{token}/sendMessage",
@@ -231,12 +257,20 @@ def _post_message(token: str, chat_id: str, text: str) -> bool:
     return True
 
 
+# Each alert kind that gets its OWN dedicated message: (predicate, builder, label).
+# Anything matching none of these falls through to the breakout 'Pattern' message.
+_DEDICATED = [
+    (lambda a: a.get("kind") == "divergence", build_divergence_alert_message, "divergence"),
+    (lambda a: a.get("kind") == "rsi_swing",  build_rsi_swing_alert_message,  "RSI reversal"),
+]
+
+
 def send_pattern_alerts(alerts: List[Dict], date_label: str = "") -> bool:
     """Send freshly-confirmed alerts to the configured Telegram channel.
 
-    Divergences go out as their OWN dedicated message; breakout confirmations
-    and failures go out as the 'Pattern' message. Both to the same channel.
-    Returns True if any message was sent.
+    Divergences and RSI reversal markers each go out as their OWN dedicated
+    message; breakout confirmations and failures go out as the 'Pattern'
+    message. All to the same channel. Returns True if any message was sent.
     """
     if not alerts:
         return False
@@ -246,24 +280,24 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "") -> bool:
         print("[telegram] BOT_TOKEN or CHAT_ID not set — skipping pattern alerts")
         return False
 
-    divergences = [a for a in alerts if _is_divergence(a)]
-    patterns    = [a for a in alerts if not _is_divergence(a)]
+    def _is_dedicated(a):
+        return any(pred(a) for pred, _b, _l in _DEDICATED)
+
+    groups = [(build_pattern_alert_message, "pattern",
+               [a for a in alerts if not _is_dedicated(a)])]
+    for pred, builder, label in _DEDICATED:
+        groups.append((builder, label, [a for a in alerts if pred(a)]))
 
     sent = False
-    try:
-        if patterns:
-            _post_message(token, chat_id, build_pattern_alert_message(patterns, date_label))
-            print(f"[telegram] {len(patterns)} pattern alert(s) sent to {chat_id}")
+    for builder, label, group in groups:
+        if not group:
+            continue
+        try:
+            _post_message(token, chat_id, builder(group, date_label))
+            print(f"[telegram] {len(group)} {label} alert(s) sent to {chat_id}")
             sent = True
-    except Exception as e:
-        print(f"[telegram] ERROR sending pattern alerts: {e}")
-    try:
-        if divergences:
-            _post_message(token, chat_id, build_divergence_alert_message(divergences, date_label))
-            print(f"[telegram] {len(divergences)} divergence alert(s) sent to {chat_id}")
-            sent = True
-    except Exception as e:
-        print(f"[telegram] ERROR sending divergence alerts: {e}")
+        except Exception as e:
+            print(f"[telegram] ERROR sending {label} alerts: {e}")
     return sent
 
 
