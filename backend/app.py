@@ -531,6 +531,10 @@ PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last 
 # The detector already returns only the single most-recent divergence, so this
 # alerts whichever is latest, exactly once (dedup is keyed on its pivot ts).
 DIVERGENCE_ALERT_FRESH_BARS = 5
+# An RSI swing marker (oversold bottom / overbought top) needs `window` closed
+# candles on its right to be a confirmed pivot, so — like a divergence — it is
+# already a few bars old the moment it confirms. Same 5-close observation window.
+RSI_SWING_ALERT_FRESH_BARS = 5
 _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 
 # The dedicated structure chart draws a deeper window than the main chart's 60
@@ -653,6 +657,29 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
                 "rsi_gap": div.get("strength"),
                 "age_candles": div.get("age_candles"),
             })
+    except Exception:
+        pass
+    # RSI swing markers — an oversold bottom at a price swing low, or an
+    # overbought top at a swing high. A momentum turning point (no level broken,
+    # no target), so it alerts on the SAME wide observation window a divergence
+    # uses (the pivot is a few closes old the moment it confirms) and — like a
+    # divergence — goes out as its own dedicated message. Newest marker only.
+    try:
+        _marks = candle_analysis.rsi_swing_markers(
+            closed, calculate_rsi_series([c.get("close") for c in closed]))
+        if _marks:
+            m = _marks[-1]
+            m_ts = m.get("timestamp")
+            if m_ts is not None and _fresh(m_ts, RSI_SWING_ALERT_FRESH_BARS):
+                _os = m.get("kind") == "oversold_bottom"
+                out.append({
+                    "kind": "rsi_swing", "type": m.get("kind"),
+                    "label": "RSI Oversold Bottom" if _os else "RSI Overbought Top",
+                    "direction": "bullish" if _os else "bearish",
+                    "break_dir": None, "level": None, "target": None,
+                    "break_ts": m_ts,
+                    "rsi": m.get("rsi"), "price": m.get("price"),
+                })
     except Exception:
         pass
     try:
