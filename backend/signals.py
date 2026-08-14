@@ -639,6 +639,44 @@ CHASE_MIN_RUN_PCT = 1.0    # price must have run at least this % past the break
 # sat ~2% away, producing a huge unreachable gap (e.g. TP2 +2.9%, TP3 +54%).
 TP3_MAX_MULT_OF_TP2 = 2.2
 
+# ── The ATR/RR fallback take-profit ladder (v48) ─────────────────────────────
+# Used when no structural wall snaps the TPs onto real levels. In R-multiples of
+# the stop distance, scaled by tp_factor (RSI headroom + trend + BB squeeze).
+#
+# v48 pulled TP2 and TP3 IN. The v45 analytics showed the peak favourable
+# excursion reached TP2 only 5.6% of the time and TP3 only 2.2%, against TP1's
+# 57% — at the old 3.5R / 5.5R the second and third rungs sat past where price
+# actually goes, so the 30%+20% of the position riding to them almost never
+# banked, and 59%-win trades still lost money because the winners were too small.
+# TP1 stays 2.0R (the primary, ~57% reached); TP2 3.5→2.6R and TP3 5.5→3.6R land
+# on reachable ground. TP2 stays above the 1.5 R/R publication floor.
+TP1_RR, TP2_RR, TP3_RR = 2.0, 2.6, 3.6
+
+
+def atr_rr_tp_ladder(sl_dist: float, tp_factor: float, max_tp3_abs: float):
+    """
+    Fallback TP distances ``(tp1, tp2, tp3)`` from the stop distance and factor.
+
+    Increasing by construction, hard-capped to a timeframe-proportional maximum
+    so a high tp_factor cannot price a target past reach, and re-ordered after
+    the cap so TP1 < TP2 < TP3 always holds. Pure, so the v48 pull-in is testable
+    without driving the whole generate_signal path.
+    """
+    tp1 = sl_dist * max(2.0, TP1_RR * tp_factor)
+    tp2 = sl_dist * max(2.2, TP2_RR * tp_factor)
+    tp3 = sl_dist * max(2.8, TP3_RR * tp_factor)
+    # Hard cap — proportional to the timeframe max, keeps targets realistic.
+    tp3 = min(tp3, max_tp3_abs)
+    tp2 = min(tp2, max_tp3_abs * 0.60)
+    tp1 = min(tp1, max_tp3_abs * 0.35)
+    # Preserve ordering if the caps (or a low factor) collapsed the distances.
+    # Ratios track the 2.0/2.6/3.6 ladder (tp1/tp2≈0.77, tp2/tp3≈0.72), loosened
+    # from the old 0.60/0.65 which were tuned to the wider 2.0/3.5/5.5 spread and
+    # would otherwise crush TP1/TP2 back down after the pull-in.
+    tp1 = min(tp1, tp2 * 0.90)
+    tp2 = min(tp2, tp3 * 0.80)
+    return tp1, tp2, tp3
+
 
 def _snap_tp_to_structure(direction: str, entry: float, sl: float, timeframe: str,
                           levels: list, max_tp3_abs: float):
@@ -3014,8 +3052,6 @@ def generate_signal(analysis: Dict) -> Dict:
     }
     sl_m = TF_SL_MULT.get(timeframe, 1.5)
 
-    TP1_RR, TP2_RR, TP3_RR = 1.5, 2.5, 4.0
-
     # Base ATR cap per timeframe — calibrated for mega-cap (BTC/ETH level).
     # Scaled up by atr_mult so smaller caps get room matching their true volatility:
     #   1H BTC cap: 1.5%  |  1H HYPE (small) cap: 1.5% × 3.0 = 4.5%
@@ -3235,18 +3271,11 @@ def generate_signal(analysis: Dict) -> Dict:
 
         tp_factor = max(0.5, min(2.0, rsi_room + tp_bonus))
 
-        TP1_RR, TP2_RR, TP3_RR = 2.0, 3.5, 5.5
-        tp1_dist = sl_dist * max(2.0, TP1_RR * tp_factor)
-        tp2_dist = sl_dist * max(3.0, TP2_RR * tp_factor)
-        tp3_dist = sl_dist * max(5.0, TP3_RR * tp_factor)
-
-        # Hard cap TP distances — proportional to TF max, keeps targets realistic
-        tp3_dist = min(tp3_dist, _max_tp3_abs)
-        tp2_dist = min(tp2_dist, _max_tp3_abs * 0.60)
-        tp1_dist = min(tp1_dist, _max_tp3_abs * 0.35)
-        # Preserve ordering if caps collapsed the distances
-        tp1_dist = min(tp1_dist, tp2_dist * 0.60)
-        tp2_dist = min(tp2_dist, tp3_dist * 0.65)
+        # The ATR/RR fallback ladder — see atr_rr_tp_ladder (v48 pulled TP2/TP3
+        # in after the reach analytics). A structural wall, when one is in range,
+        # snaps these onto real levels just below.
+        tp1_dist, tp2_dist, tp3_dist = atr_rr_tp_ladder(
+            sl_dist, tp_factor, _max_tp3_abs)
 
         def _tp_short(dist):
             target = entry - dist

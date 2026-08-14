@@ -2763,7 +2763,9 @@ def _rec_cache_key() -> str:
     #       nudge strength (small, capped) instead of being reporting-only.
     #   v47 R/R publication floor raised 1.3 → 1.5 — the thin-R/R band was
     #       over-represented in the losers and negative-expectancy.
-    return f"v47_4h_avg_{date}_{slot}"
+    #   v48 ATR/RR fallback TP ladder pulled in (TP2 3.5→2.6R, TP3 5.5→3.6R) —
+    #       TP2/TP3 were almost never reached, so winners banked only TP1.
+    return f"v48_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

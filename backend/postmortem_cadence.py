@@ -2,14 +2,14 @@
 How fast is the current sample filling, and when will the postmortem be ready.
 
 Each strategy_version resets the closed-trade count to zero — stops, targets and
-strength differ across versions, so their trades are not poolable (v47 raised the
-R/R publication floor, so it is not comparable with v46). This
+strength differ across versions, so their trades are not poolable (v48 pulled the
+take-profit ladder in, so it is not comparable with v47). This
 reads how quickly the current version's trades are actually closing and projects
 the two milestones, so the qualitative (~15 closed) and quantitative (~30 closed)
 read dates come from data rather than an estimate.
 
     python -m postmortem_cadence
-    python -m postmortem_cadence --strategy-version v47_4h_avg --json
+    python -m postmortem_cadence --strategy-version v48_4h_avg --json
 
 Read-only. It queries closed and open signals, computes a rate, and prints — no
 writes, no publication, no schema touch, and it changes no live parameter. Run
@@ -61,7 +61,7 @@ def _default_version():
         import signal_publish
         return signal_publish.STRATEGY_VERSION
     except Exception:                                    # noqa: BLE001
-        return "v47_4h_avg"
+        return "v48_4h_avg"
 
 
 def _render(rep) -> str:

@@ -824,6 +824,29 @@ rows are not comparable, and the postmortem cohort restarts.
 
 ---
 
+### Take-profit ladder pulled in · *trade construction (v48)*
+
+`/api/signals/analytics` showed the peak favourable excursion reached **TP1
+56.7%** of the time, **TP2 only 5.6%** and **TP3 only 2.2%**. At the old ATR/RR
+fallback multiples (TP1 2.0R, TP2 3.5R, TP3 5.5R) the upper two rungs sat past
+where price actually goes, so the 30% + 20% of the position riding to them almost
+never banked — which is why 59%-win trades still lost money: the winners were too
+small to cover the losers. `signals.atr_rr_tp_ladder` now uses **TP1 2.0R
+(unchanged, ~57% reached), TP2 2.6R, TP3 3.6R**, landing the second and third
+rungs on reachable ground while keeping TP2 above the 1.5 R/R floor. The
+structural-wall retrofit (`_snap_tp_to_structure`) is unchanged — it already
+targets real levels with its own reachability cap; this only tightens the
+no-structure fallback. `STRATEGY_VERSION` moved to **v48_4h_avg**; it changes
+targets and realized returns, so v47 rows are not comparable and the cohort
+restarts.
+
+*Not yet performance-backtested offline* (the walk-forward CLI needs a saved
+candle file this environment cannot fetch). The intended validation is watching
+v48's own `target_reach` climb in the analytics, or running
+`portfolio_backtest_cli` where history is available.
+
+---
+
 ### Expired Setups · *publication gate, not scoring*
 *Removes a recommendation entirely; never changes a strength number.*
 

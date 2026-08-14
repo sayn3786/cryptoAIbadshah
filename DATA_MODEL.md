@@ -104,7 +104,7 @@ the P/L.
 | `timeframe` | `text` | no | `2H` for published recommendations. |
 | `direction` | `text` | no | `LONG` or `SHORT`. CHECK-constrained. |
 | `strategy_name` | `text` | no | `mtf_confluence_top3`. |
-| `strategy_version` | `text` | no | e.g. `v47_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
+| `strategy_version` | `text` | no | e.g. `v48_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
 | `candle_open_time` | `timestamptz` | no | Open of the closed candle the decision was made on. |
 | `candle_close_time` | `timestamptz` | no | Close of that candle. **Part of the idempotency key.** |
 | `generated_at` | `timestamptz` | no | When the recommendation was published. Drives the batch/slot grouping. |
@@ -286,12 +286,12 @@ came out over-represented).
 
 **Running it after a version bump.** Each `STRATEGY_VERSION` resets the sample —
 stops, targets and strength differ across versions, so their trades are not
-poolable (v47 raised the R/R publication floor, so it is not comparable with v46). From the first deploy of the new version, wait for both
+poolable (v48 pulled the take-profit ladder in, so it is not comparable with v47). From the first deploy of the new version, wait for both
 cohorts to fill (≈15 closed for a first qualitative read, ≈30 for a quantitative
 one), then:
 
 ```
-GET /api/signals/postmortem-report?strategy_version=v47_4h_avg
+GET /api/signals/postmortem-report?strategy_version=v48_4h_avg
 ```
 
 Check `powered` before reading the discriminators; if it is false the sample is
