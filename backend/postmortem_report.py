@@ -271,7 +271,9 @@ FEATURES: Dict[str, Dict[str, Any]] = {
     },
     "thin_reward_to_risk": {
         "fn": _thin_rr,
-        "meaning": "R/R was under 1.5, close to the 1.3 publication floor",
+        "meaning": "R/R was under 1.5 — at or below the publication floor "
+                   "(raised to 1.5 in v47; a pre-v47 trade could sit in the "
+                   "1.3-1.5 band this now blocks)",
     },
     "violent_volatility_tape": {
         "fn": _violent_tape,

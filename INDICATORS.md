@@ -809,6 +809,21 @@ were reporting-only until a human opted them in. `STRATEGY_VERSION` moved to
 
 ---
 
+### R/R publication floor raised 1.3 → 1.5 · *publication gate (v47)*
+
+The v45 postmortem's `thin_reward_to_risk` flag (R/R < 1.5) came out
+**over-represented in the losers** — 35% of them carried it (lift 1.55), and the
+1.3–1.5 band won only ~48% against 59% overall: a negative-expectancy payoff at a
+thin reward. `rec_policy.MIN_RR` moves from 1.3 to 1.5, so that band no longer
+clears the gate. The app still publishes its top-ranked survivors each slot, so
+this swaps a worse candidate pool for a cleaner one rather than cutting volume.
+It is a **gate**, not a score change — it removes candidates, never re-weights
+them. The parity backtest reads `MIN_RR` from this one constant, so production
+and the replay moved together. `STRATEGY_VERSION` moved to **v47_4h_avg**; v46
+rows are not comparable, and the postmortem cohort restarts.
+
+---
+
 ### Expired Setups · *publication gate, not scoring*
 *Removes a recommendation entirely; never changes a strength number.*
 
@@ -898,9 +913,10 @@ Both timeframes must already agree on direction for a candidate to exist at all,
 so their average measures *how strongly they agree*. Ranking on 2H alone let a
 strong 2H with a barely-qualifying 1H outrank a setup both timeframes liked.
 
-What did **not** change: every quality gate still gates. R/R ≥ 1.3, direction
-agreement, the data-quality flag, the expired-setup filter above and
-correlation-aware diversification all still remove candidates. Demoting
+What did **not** change: every quality gate still gates. R/R ≥ 1.5 (raised from
+1.3 in v47), direction agreement, the data-quality flag, the expired-setup
+filter above and correlation-aware diversification all still remove candidates.
+Demoting
 `quality_score` changes the **order** of candidates that already passed, not
 whether they pass — but it does mean R/R and reversal risk no longer *weight* the
 ordering, only break ties between equally-agreed setups. `quality_score` and

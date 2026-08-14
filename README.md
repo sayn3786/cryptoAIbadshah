@@ -65,7 +65,7 @@ Set these in **Vercel → Project → Settings → Environment Variables**
 |---|---|---|
 | `DATABASE_URL` | yes, to persist | Neon connection string. Injected automatically by the Vercel↔Neon integration. |
 | `DB_REQUIRED` | recommended | `true` in production: refuse to publish a signal that was not recorded. Defaults to `false`. |
-| `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v46_4h_avg`. Bump whenever the signal maths changes. |
+| `STRATEGY_VERSION` | optional | Identifies the rule-set. Defaults to `v47_4h_avg`. Bump whenever the signal maths changes. |
 | `TRACKER_PRICE_BUDGET_S` | optional | How long `/api/signals/tracker` may spend fetching live prices before serving the table without them. Default 6s — generous, because pricing a row is one ticker call, not a full analysis. |
 | `SIGNAL_ENVIRONMENT` | optional | Overrides the environment label written on every signal. Defaults to Vercel's own `VERCEL_ENV`, then `local`. See *Shared database, separate environments*. |
 | `CRON_SECRET` | yes, for mutations | Existing project secret. Protects archive / postmortem / usage endpoints. |
@@ -209,7 +209,7 @@ without it.)
   candle — several times a day, all on the same calendar date.
 * **Strategy versions are independent.** Bump `STRATEGY_VERSION` and the new
   rules can be evaluated on the same candles without colliding with the old.
-  The current default is `v46_4h_avg`; anything scored before the
+  The current default is `v47_4h_avg`; anything scored before the
   market-structure confluence work is not comparable with anything after it.
 
 * **Environments do not collide.** A preview deploy sharing `DATABASE_URL`
@@ -481,7 +481,7 @@ columns) and no credentials.
 
 Ranking changed with the cadence: candidates are ordered by the **average of 1H
 and 2H strength**, with the composite `quality_score` demoted to the tiebreak.
-Every quality gate still gates — R/R ≥ 1.3, direction agreement, data quality,
+Every quality gate still gates — R/R ≥ 1.5, direction agreement, data quality,
 the expired-setup filter and correlation diversification all still remove
 candidates. See [INDICATORS.md](INDICATORS.md) for the detail.
 

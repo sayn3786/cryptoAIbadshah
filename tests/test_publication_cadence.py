@@ -17,7 +17,7 @@ Both timeframes must already agree on direction for a candidate to exist, so
 their average measures how strongly they agree; ranking on 2H alone let a strong
 2H with a barely-qualifying 1H outrank a setup both timeframes liked.
 
-Note what did NOT change: quality is still a GATE (R/R >= 1.3, direction
+Note what did NOT change: quality is still a GATE (R/R >= 1.5, direction
 agreement, data quality, TP-behind-live, correlation diversification). Demoting
 it affects the ORDER of candidates that already passed, not whether they pass.
 """
@@ -130,7 +130,7 @@ def test_a_day_has_exactly_six_cache_keys(monkeypatch):
 def test_cache_key_carries_the_strategy_generation(monkeypatch):
     # The key is versioned so a strategy bump cannot serve a stale set that was
     # built under the previous rules.
-    assert _key_at(monkeypatch, 16).startswith("v46_4h_avg_")
+    assert _key_at(monkeypatch, 16).startswith("v47_4h_avg_")
 
 
 def test_the_slot_changes_exactly_on_the_boundary(monkeypatch):

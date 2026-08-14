@@ -149,9 +149,12 @@ def engine_stub(monkeypatch):
 
 
 def test_expired_candidate_is_dropped_and_reported(engine_stub):
-    # TRX's real numbers: everything else about this setup qualifies.
+    # TRX's real setup, but R/R lifted to 1.86 to clear the v47 floor (1.5): at
+    # its real 1.36 the candidate is now rejected as LOW_RR before this check,
+    # which is a separate, correct behaviour. Here we isolate the EXPIRED path —
+    # TP1 already behind live — so the R/R must clear the gate to reach it.
     trx = _analysis("LONG", 0.32711979, 0.32601000,
-                    [0.32852649, 0.33150000, 0.33520000], 0.32864, 1.36)
+                    [0.32852649, 0.33150000, 0.33520000], 0.32864, 1.86)
     out = engine_stub({"TRX": trx})
 
     assert [r["symbol"] for r in out["recommendations"]] == [], \
