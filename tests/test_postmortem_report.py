@@ -314,6 +314,51 @@ def test_a_balanced_liquidation_bias_is_unknown_not_aligned():
         {"snapshot": {"indicator_values": {}}}) is None
 
 
+def test_rsi_divergence_against_reads_direction_and_type():
+    # Bearish divergence opposes a LONG; a bullish one under a LONG is aligned;
+    # no divergence recorded is False (nothing opposing); absent field is None.
+    assert pm._rsi_divergence_against(
+        _row(-1.0, direction="LONG", snapshot={"rsi_divergence_type": "bearish"})) is True
+    assert pm._rsi_divergence_against(
+        _row(2.0, direction="SHORT", snapshot={"rsi_divergence_type": "bearish"})) is False
+    assert pm._rsi_divergence_against(
+        _row(2.0, direction="LONG", snapshot={"rsi_divergence_type": None})) is False
+    assert pm._rsi_divergence_against(_row(2.0, direction="LONG")) is None
+
+
+def test_obv_divergence_against_reads_direction():
+    assert pm._obv_divergence_against(
+        _row(-1.0, direction="LONG", snapshot={"obv_divergence": "bearish"})) is True
+    assert pm._obv_divergence_against(
+        _row(-1.0, direction="SHORT", snapshot={"obv_divergence": "bullish"})) is True
+    assert pm._obv_divergence_against(
+        _row(2.0, direction="LONG", snapshot={"obv_divergence": "bullish"})) is False
+    assert pm._obv_divergence_against(_row(2.0, direction="LONG")) is None
+
+
+def test_rsi_reversal_against_reads_the_latest_marker():
+    # An overbought top opposes a LONG; an oversold bottom opposes a SHORT.
+    assert pm._rsi_reversal_against(
+        _row(-1.0, direction="LONG", snapshot={"rsi_reversal_latest": "overbought_top"})) is True
+    assert pm._rsi_reversal_against(
+        _row(-1.0, direction="SHORT", snapshot={"rsi_reversal_latest": "oversold_bottom"})) is True
+    assert pm._rsi_reversal_against(
+        _row(2.0, direction="LONG", snapshot={"rsi_reversal_latest": "oversold_bottom"})) is False
+    assert pm._rsi_reversal_against(_row(2.0, direction="LONG")) is None
+
+
+def test_an_opposing_scenario_concentrated_in_losers_is_surfaced():
+    # The whole point: a counter-signal present before the losers but not the
+    # winners is flagged; the rate-vs-winners test still applies.
+    losers = [_row(-1.0, direction="LONG",
+                   snapshot={"rsi_reversal_latest": "overbought_top"}) for _ in range(5)]
+    winners = [_row(2.0, direction="LONG",
+                    snapshot={"rsi_reversal_latest": "oversold_bottom"}) for _ in range(6)]
+    feat = _feature(pm.build_report(losers + winners), "rsi_reversal_opposed_the_trade")
+    assert feat["loser_rate"] == 1.0 and feat["winner_rate"] == 0.0
+    assert feat["over_represented_in_losses"] is True
+
+
 def test_btc_conflict_none_is_unknown_not_all_clear():
     """A row whose btc_conflict was never recorded stays unknown, not False."""
     row = {"status": "SL_HIT", "realized_return_pct": -1.0, "symbol": "BTC",

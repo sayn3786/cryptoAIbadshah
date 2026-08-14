@@ -268,11 +268,13 @@ and it needs nothing written first — it reads every closed signal of one
 It answers the standing question — *when a trade hit its stop, what did we
 already know?* — by measuring each decision-time flag (structure fought the
 trade, stop sat in a sweep zone, reversal-against, chase, 1H/2H disagreement,
-thin R/R, violent tape, degraded data, opposed BTC) as its **rate in losers
-against its rate in winners**. A flag common to both is not a discriminator,
-however common; only the lift between the cohorts is ranked. It also splits the
-losers by whether they first ran ≥1R in your favour — which separates a
-too-tight stop from a wrong signal.
+thin R/R, violent tape, degraded data, opposed BTC, fought the liquidation
+squeeze, and the *opposed-the-trade* reads — an RSI divergence, an OBV
+divergence, or an RSI swing reversal pointing the other way) as its **rate in
+losers against its rate in winners**. A flag common to both is not a
+discriminator, however common; only the lift between the cohorts is ranked. It
+also splits the losers by whether they first ran ≥1R in your favour — which
+separates a too-tight stop from a wrong signal.
 
 Three honesty rules are built in: it refuses to call anything a discriminator
 until both cohorts clear `MIN_COHORT` (5) trades; a snapshot field a row never

@@ -129,6 +129,27 @@ def _divergence_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _rsi_reversal_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    The most recent RSI swing-reversal marker, recorded so a postmortem can ask
+    whether a reversal firing AGAINST the trade preceded a stop.
+
+    ``rsi_markers`` is a list of {timestamp, kind, rsi, price} where kind is
+    ``oversold_bottom`` (a bullish reversal) or ``overbought_top`` (bearish). We
+    keep only the latest kind, its timestamp, and the count — enough for the
+    against-the-trade read, small enough for a once-per-signal row. All-None
+    when there were no markers; absence is NULL, not a neutral reading.
+    """
+    markers = analysis.get("rsi_markers")
+    if not isinstance(markers, list) or not markers:
+        return {"rsi_reversal_latest": None, "rsi_reversal_latest_ts": None,
+                "rsi_reversal_count": 0}
+    latest = max(markers, key=lambda m: (m or {}).get("timestamp") or 0)
+    return {"rsi_reversal_latest": latest.get("kind"),
+            "rsi_reversal_latest_ts": latest.get("timestamp"),
+            "rsi_reversal_count": len(markers)}
+
+
 def _pattern_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
     """Flag / breakout measurements — the things a postmortem asks about."""
     flags = analysis.get("flags") or []
@@ -282,6 +303,11 @@ def build_snapshot(analysis: Dict[str, Any],
         "volume_average": _num(vol_sig.get("average")),
         "spot_cvd_trend": spot_cvd.get("trend"),
         "futures_cvd_trend": fut_cvd.get("trend"),
+        # OBV is reporting-only in scoring (it would double-count volume against
+        # CVD), but its trend and price-divergence are recorded so a postmortem
+        # can learn whether an OBV divergence AGAINST the trade preceded a stop.
+        "obv_trend": (analysis.get("obv") or {}).get("trend"),
+        "obv_divergence": (analysis.get("obv") or {}).get("divergence"),
 
         # Trend classification
         "supertrend_direction": supertrend.get("direction"),
@@ -299,6 +325,9 @@ def build_snapshot(analysis: Dict[str, Any],
 
         # Divergence, with its age — see _divergence_summary.
         **_divergence_summary(analysis),
+
+        # Latest RSI swing-reversal marker — see _rsi_reversal_summary.
+        **_rsi_reversal_summary(analysis),
 
         # Market-structure confluence. These are the whole point of a postmortem
         # on a losing trade: they record whether the strategy KNEW about a

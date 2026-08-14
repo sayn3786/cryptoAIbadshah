@@ -181,6 +181,64 @@ def _btc_conflict(row) -> Optional[bool]:
     return bool(btc.get("conflict"))
 
 
+# ── "It opposed the trade" flags ─────────────────────────────────────────────
+# The question the user asked: what was firing AGAINST a trade that then hit its
+# stop? Each of these reads a directional indicator off the snapshot and the
+# trade's own direction and answers "was this pointing the other way?". Absent
+# from the snapshot → None (unknown); recorded but not opposing → False; only a
+# genuine counter-signal is True. Whether the counter-signal was over-
+# represented in the losers is then the same rate-vs-winners test as everything
+# else — a warning that fires just as often before wins is not a discriminator.
+
+def _direction(row) -> Optional[str]:
+    d = str(row.get("direction") or "").upper()
+    return d if d in ("LONG", "SHORT") else None
+
+
+def _rsi_divergence_against(row) -> Optional[bool]:
+    """Bearish RSI divergence under a LONG, or bullish under a SHORT."""
+    iv = _snap(row)
+    if "rsi_divergence_type" not in iv:
+        return None
+    d = _direction(row)
+    if d is None:
+        return None
+    typ = iv.get("rsi_divergence_type")
+    if typ not in ("bullish", "bearish"):
+        return False                       # no divergence = nothing opposing
+    return (typ == "bearish" and d == "LONG") or (typ == "bullish" and d == "SHORT")
+
+
+def _obv_divergence_against(row) -> Optional[bool]:
+    """OBV divergence (accumulation/distribution) pointing against the trade."""
+    iv = _snap(row)
+    if "obv_divergence" not in iv:
+        return None
+    d = _direction(row)
+    if d is None:
+        return None
+    div = iv.get("obv_divergence")
+    if div not in ("bullish", "bearish"):
+        return False
+    return (div == "bearish" and d == "LONG") or (div == "bullish" and d == "SHORT")
+
+
+def _rsi_reversal_against(row) -> Optional[bool]:
+    """Latest RSI swing-reversal marker firing against the trade — an
+    overbought top under a LONG, or an oversold bottom under a SHORT."""
+    iv = _snap(row)
+    if "rsi_reversal_latest" not in iv:
+        return None
+    d = _direction(row)
+    if d is None:
+        return None
+    kind = iv.get("rsi_reversal_latest")
+    if kind not in ("oversold_bottom", "overbought_top"):
+        return False
+    return ((kind == "overbought_top" and d == "LONG") or
+            (kind == "oversold_bottom" and d == "SHORT"))
+
+
 # Ordered, named, and each with a one-line reason a reader can act on. Adding a
 # feature here is the intended way to extend the postmortem — it needs a
 # predicate and nothing else.
@@ -232,6 +290,21 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "fn": _fought_the_squeeze,
         "meaning": "the trade was taken against the liquidation max-pain lean "
                    "(v46 docked its strength for it but published anyway)",
+    },
+    "rsi_divergence_opposed_the_trade": {
+        "fn": _rsi_divergence_against,
+        "meaning": "a bearish RSI divergence was present under a LONG (or a "
+                   "bullish one under a SHORT) — momentum diverging the other way",
+    },
+    "obv_divergence_opposed_the_trade": {
+        "fn": _obv_divergence_against,
+        "meaning": "OBV was diverging against the trade — volume quietly "
+                   "distributing under a LONG, or accumulating under a SHORT",
+    },
+    "rsi_reversal_opposed_the_trade": {
+        "fn": _rsi_reversal_against,
+        "meaning": "the latest RSI swing-reversal marker fired against the trade "
+                   "— an overbought top under a LONG, an oversold bottom under a SHORT",
     },
 }
 
