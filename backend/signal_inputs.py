@@ -62,6 +62,11 @@ EXTERNAL_HISTORICAL = frozenset({
     "fear_greed", "news", "macro", "markets", "regime", "event_risk",
     "etf_flows", "options_expiry", "btc_mining", "whale_sells",
     "gomining_tokenomics", "tao_ecosystem",
+    # Realized liquidations + the OI squeeze quadrant (the v46 max-pain nudge).
+    # Liquidation events are timestamped and replayable in principle, but this
+    # project does not store them, so — like funding and OI — the nudge stays
+    # dormant in the price_only backtest rather than reading a value it lacks.
+    "liquidations",
 })
 
 LIVE_ONLY = frozenset({

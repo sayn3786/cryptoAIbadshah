@@ -62,6 +62,66 @@ def test_captures_the_indicators_the_strategy_used():
     assert iv["resistance_zone"] == {"price": 110}
 
 
+def test_captures_volatility_regime_from_the_zone_key():
+    """
+    vol_regime() labels the tape under `zone` (extreme/elevated/normal/calm).
+    The snapshot used to read `regime`/`level`, so volatility_regime stored NULL
+    on every signal and the postmortem's violent_volatility_tape flag could
+    never fire. It must now carry the zone through.
+    """
+    a = _analysis(vol_regime={"atr_pct": 3.1, "percentile": 91,
+                              "zone": "extreme", "note": "top 15%"})
+    iv = build_snapshot(a, _signal())["indicator_values"]
+    assert iv["volatility_regime"] == "extreme"
+
+
+def test_volatility_regime_is_null_when_the_tape_is_unknown():
+    """No vol_regime dict (too few candles) stays NULL, not a fabricated zone."""
+    iv = build_snapshot(_analysis(vol_regime=None), _signal())["indicator_values"]
+    assert iv["volatility_regime"] is None
+
+
+def test_captures_the_liquidation_squeeze_nudge():
+    """
+    v46 folds the liquidation max-pain bias into strength. The snapshot must
+    record the signed delta and the side it leaned so a postmortem can later ask
+    whether trades taken against the squeeze lost more often.
+    """
+    iv = build_snapshot(_analysis(),
+                        _signal(liquidation_adjustment=-5,
+                                liquidation_bias_dir="downside"))["indicator_values"]
+    assert iv["liquidation_adjustment"] == -5
+    assert iv["liquidation_bias_dir"] == "downside"
+
+
+def test_captures_obv_trend_and_divergence_for_the_postmortem():
+    """OBV is reporting-only in scoring but recorded so a postmortem can learn
+    whether an OBV divergence against the trade preceded a stop."""
+    a = _analysis(obv={"trend": "falling", "divergence": "bearish",
+                       "value": 123, "change_pct": -4.0})
+    iv = build_snapshot(a, _signal())["indicator_values"]
+    assert iv["obv_trend"] == "falling"
+    assert iv["obv_divergence"] == "bearish"
+
+
+def test_captures_the_latest_rsi_reversal_marker():
+    a = _analysis(rsi_markers=[
+        {"timestamp": 100, "kind": "oversold_bottom", "rsi": 22.0, "price": 90},
+        {"timestamp": 300, "kind": "overbought_top", "rsi": 78.0, "price": 110},
+        {"timestamp": 200, "kind": "oversold_bottom", "rsi": 25.0, "price": 92},
+    ])
+    iv = build_snapshot(a, _signal())["indicator_values"]
+    assert iv["rsi_reversal_latest"] == "overbought_top"   # ts 300 is newest
+    assert iv["rsi_reversal_latest_ts"] == 300
+    assert iv["rsi_reversal_count"] == 3
+
+
+def test_no_rsi_markers_records_null_not_a_neutral_reading():
+    iv = build_snapshot(_analysis(rsi_markers=[]), _signal())["indicator_values"]
+    assert iv["rsi_reversal_latest"] is None
+    assert iv["rsi_reversal_count"] == 0
+
+
 def test_captures_flag_pattern_and_breakout_confirmation():
     iv = build_snapshot(_analysis(), _signal())["indicator_values"]
     assert iv["flag_type"] == "bullish_flag"

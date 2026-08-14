@@ -269,6 +269,104 @@ def test_the_strategy_version_is_echoed():
         == "v45_4h_avg"
 
 
+def test_opposed_btc_direction_reads_the_btc_conflict_key():
+    """
+    build_snapshot stores this on market_context as `btc_conflict`. The reader
+    used to look for a `conflict` key that never existed, so every row read
+    'unknown' and the flag was blind. With the key aligned, a conflict
+    concentrated in losers is seen and can become a finding.
+    """
+    def _r(ret, conflict):
+        status = "TP_HIT" if ret > 0 else "SL_HIT"
+        return {"status": status, "realized_return_pct": ret, "symbol": "BTC",
+                "direction": "LONG", "mfe_pct": None,
+                "snapshot": {"market_context": {"btc_conflict": conflict}}}
+
+    rows = ([_r(-1.0, True) for _ in range(5)]       # losers all fought BTC
+            + [_r(2.0, False) for _ in range(6)])     # winners all aligned
+    feat = _feature(pm.build_report(rows), "opposed_btc_direction")
+    assert feat["coverage"]["losers_known"] == 5      # no longer 'unknown'
+    assert feat["coverage"]["winners_known"] == 6
+    assert feat["loser_rate"] == 1.0 and feat["winner_rate"] == 0.0
+    assert feat["over_represented_in_losses"] is True
+
+
+def test_fought_the_liquidation_squeeze_reads_the_v46_nudge():
+    """
+    v46 stores liquidation_adjustment on the snapshot. A negative value means
+    the trade was published AGAINST the squeeze; the discriminator surfaces
+    whether that concentrated in losers. Zero/absent stays unknown (a balanced
+    bias or a pre-v46 row is not 'all clear').
+    """
+    losers = _flagged(5, {"liquidation_adjustment": -5}, -1.0)   # all fought it
+    winners = _flagged(6, {"liquidation_adjustment": 5}, 2.0)    # all aligned
+    feat = _feature(pm.build_report(losers + winners),
+                    "fought_the_liquidation_squeeze")
+    assert feat["coverage"]["losers_known"] == 5
+    assert feat["loser_rate"] == 1.0 and feat["winner_rate"] == 0.0
+    assert feat["over_represented_in_losses"] is True
+
+
+def test_a_balanced_liquidation_bias_is_unknown_not_aligned():
+    assert pm._fought_the_squeeze(
+        {"snapshot": {"indicator_values": {"liquidation_adjustment": 0}}}) is None
+    assert pm._fought_the_squeeze(
+        {"snapshot": {"indicator_values": {}}}) is None
+
+
+def test_rsi_divergence_against_reads_direction_and_type():
+    # Bearish divergence opposes a LONG; a bullish one under a LONG is aligned;
+    # no divergence recorded is False (nothing opposing); absent field is None.
+    assert pm._rsi_divergence_against(
+        _row(-1.0, direction="LONG", snapshot={"rsi_divergence_type": "bearish"})) is True
+    assert pm._rsi_divergence_against(
+        _row(2.0, direction="SHORT", snapshot={"rsi_divergence_type": "bearish"})) is False
+    assert pm._rsi_divergence_against(
+        _row(2.0, direction="LONG", snapshot={"rsi_divergence_type": None})) is False
+    assert pm._rsi_divergence_against(_row(2.0, direction="LONG")) is None
+
+
+def test_obv_divergence_against_reads_direction():
+    assert pm._obv_divergence_against(
+        _row(-1.0, direction="LONG", snapshot={"obv_divergence": "bearish"})) is True
+    assert pm._obv_divergence_against(
+        _row(-1.0, direction="SHORT", snapshot={"obv_divergence": "bullish"})) is True
+    assert pm._obv_divergence_against(
+        _row(2.0, direction="LONG", snapshot={"obv_divergence": "bullish"})) is False
+    assert pm._obv_divergence_against(_row(2.0, direction="LONG")) is None
+
+
+def test_rsi_reversal_against_reads_the_latest_marker():
+    # An overbought top opposes a LONG; an oversold bottom opposes a SHORT.
+    assert pm._rsi_reversal_against(
+        _row(-1.0, direction="LONG", snapshot={"rsi_reversal_latest": "overbought_top"})) is True
+    assert pm._rsi_reversal_against(
+        _row(-1.0, direction="SHORT", snapshot={"rsi_reversal_latest": "oversold_bottom"})) is True
+    assert pm._rsi_reversal_against(
+        _row(2.0, direction="LONG", snapshot={"rsi_reversal_latest": "oversold_bottom"})) is False
+    assert pm._rsi_reversal_against(_row(2.0, direction="LONG")) is None
+
+
+def test_an_opposing_scenario_concentrated_in_losers_is_surfaced():
+    # The whole point: a counter-signal present before the losers but not the
+    # winners is flagged; the rate-vs-winners test still applies.
+    losers = [_row(-1.0, direction="LONG",
+                   snapshot={"rsi_reversal_latest": "overbought_top"}) for _ in range(5)]
+    winners = [_row(2.0, direction="LONG",
+                    snapshot={"rsi_reversal_latest": "oversold_bottom"}) for _ in range(6)]
+    feat = _feature(pm.build_report(losers + winners), "rsi_reversal_opposed_the_trade")
+    assert feat["loser_rate"] == 1.0 and feat["winner_rate"] == 0.0
+    assert feat["over_represented_in_losses"] is True
+
+
+def test_btc_conflict_none_is_unknown_not_all_clear():
+    """A row whose btc_conflict was never recorded stays unknown, not False."""
+    row = {"status": "SL_HIT", "realized_return_pct": -1.0, "symbol": "BTC",
+           "direction": "LONG", "mfe_pct": None,
+           "snapshot": {"market_context": {"btc_conflict": None}}}
+    assert pm._btc_conflict(row) is None
+
+
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 def _feature(report, name):

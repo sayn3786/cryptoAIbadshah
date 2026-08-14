@@ -231,6 +231,31 @@ def _record_chain_buys(day_buys: Dict[str, float], today: str) -> Dict[str, Dict
     return _accumulate_daily(_CB_HIST_KEY, day_buys, today)
 
 
+def chain_buy_momentum_note(today_total, d7_avg) -> Optional[Dict]:
+    """
+    v46 chain-buy momentum note, or None.
+
+    dTAO AMM buy volume is TAO actually spent acquiring subnet Alpha — the
+    on-chain demand print. A day running >=1.5x the trailing 7d daily pace is
+    accumulation accelerating (+3, bullish); <=0.5x is buying drying up
+    (-3, bearish); anything between is unremarkable and returns None. Needs a
+    positive pace to divide by, so it stays silent until 7d of history exists.
+    Pure, so the nudge is testable without the network-backed assembly.
+    """
+    if not today_total or not d7_avg or d7_avg <= 0:
+        return None
+    ratio = today_total / d7_avg
+    if ratio >= 1.5:
+        return {"impact": "bullish", "pts": 3, "text":
+                f"Chain buys: {today_total:,.0f} TAO of subnet Alpha bought today, "
+                f"{ratio:.1f}× the 7d pace — on-chain accumulation accelerating"}
+    if ratio <= 0.5:
+        return {"impact": "bearish", "pts": -3, "text":
+                f"Chain buys: only {today_total:,.0f} TAO of subnet Alpha bought today, "
+                f"{ratio:.1f}× the 7d pace — on-chain buying drying up"}
+    return None
+
+
 def _network_stats() -> Optional[Dict]:
     j = _get("/api/stats/latest/v1")
     if not j:
@@ -683,6 +708,18 @@ def get_tao_ecosystem() -> Optional[Dict]:
                 "d7":  _buy_leaders(windows["d7"]),    # trailing 7d (fills in over time)
                 "d30": _buy_leaders(windows["d30"]),   # trailing 30d (fills in over time)
             }
+            # Ecosystem-wide chain-buy momentum, computed here from the FULL set
+            # (not the top-12 leaders) so the ratio isn't biased by truncation:
+            # today's total TAO spent buying subnet Alpha vs the trailing 7d
+            # daily pace. Feeds the v46 signal_pts nudge below. d7 needs >=2 days
+            # of history before a pace exists, so this is None until then.
+            _cb_today_total = sum(r["daily_chain_buys"] for r in cb_rows)
+            _d7_sums = (windows["d7"] or {}).get("sums") or {}
+            _d7_days = (windows["d7"] or {}).get("days") or 0
+            _cb_d7_avg = (sum(_d7_sums.values()) / _d7_days) if _d7_days >= 2 else None
+            result["chain_buys"]["today_total_tao"] = round(_cb_today_total, 2)
+            result["chain_buys"]["d7_daily_avg_tao"] = (
+                round(_cb_d7_avg, 2) if _cb_d7_avg else None)
 
     # ── Subnet inflow / outflow leaders over 24h / 7d / 30d ───────────────────
     # Distinct from chain buys: net TAO into each subnet's pool (the supply
@@ -814,6 +851,17 @@ def get_tao_ecosystem() -> Optional[Dict]:
     if stats and stats.get("staked_pct") is not None and stats["staked_pct"] >= 70:
         notes.append({"impact": "info", "pts": 0, "text":
             f"{stats['staked_pct']}% of supply staked — thin liquid float amplifies moves both ways"})
+
+    # ── Chain-buy momentum (v46) ──────────────────────────────────────────────
+    # Corroborates the net-flow read with the gross on-chain demand print, gated
+    # so it stays quiet without 7d of history and light enough to sit inside the
+    # ±12 cap. See chain_buy_momentum_note.
+    _cb = result.get("chain_buys") or {}
+    _cb_note = chain_buy_momentum_note(_cb.get("today_total_tao"),
+                                       _cb.get("d7_daily_avg_tao"))
+    if _cb_note:
+        pts += _cb_note["pts"]
+        notes.append(_cb_note)
 
     result["signal_pts"] = max(-12, min(12, pts))
     result["notes"] = notes

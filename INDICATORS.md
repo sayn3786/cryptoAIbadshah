@@ -780,6 +780,35 @@ strength, so v44 rows are not comparable with v45 rows.
 
 ---
 
+### Liquidation max-pain & TAO chain-buys nudges · *scoring (v46)*
+*Two reads that were reporting-only now move strength — small, capped, advisory.*
+
+Both sit beside the market-structure confluence, applied **after** direction is
+settled because both are direction-relative: they move **strength**, never the
+direction.
+
+* **Liquidation max-pain squeeze bias** (all symbols with a derivatives feed).
+  `_liquidation_bias` reads realized liquidations + the OI-squeeze quadrant and
+  points at the side price would move to inflict the most forced-position pain.
+  A trade **aligned** with that lean is confirmed, one **fighting** it is docked
+  — **±4** strength points when the bias is *strong*, **±2** on a *lean*, 0 when
+  balanced/absent. It corroborates; it can never manufacture a signal. The
+  signed delta is stored on the snapshot, so the postmortem's new
+  `fought_the_liquidation_squeeze` discriminator can later measure whether
+  opposing the squeeze actually cost anything.
+* **TAO chain-buy momentum** (TAO only). dTAO AMM buy volume is TAO actually
+  spent acquiring subnet Alpha — the on-chain demand print. A day running ≥1.5×
+  the trailing 7d pace adds +3 (accumulation accelerating); ≤0.5× subtracts 3
+  (buying drying up). It folds into the existing TAO ecosystem `signal_pts`
+  (±12 cap), corroborating the net-flow read rather than competing with it.
+
+Neither can be replayed from history (liquidations and chain-buys are not stored
+per bar), so both stay **dormant in the price-only backtest** — the reason they
+were reporting-only until a human opted them in. `STRATEGY_VERSION` moved to
+**v46_4h_avg**; v45 rows are not comparable, and the postmortem cohort restarts.
+
+---
+
 ### Expired Setups · *publication gate, not scoring*
 *Removes a recommendation entirely; never changes a strength number.*
 

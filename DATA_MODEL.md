@@ -104,7 +104,7 @@ the P/L.
 | `timeframe` | `text` | no | `2H` for published recommendations. |
 | `direction` | `text` | no | `LONG` or `SHORT`. CHECK-constrained. |
 | `strategy_name` | `text` | no | `mtf_confluence_top3`. |
-| `strategy_version` | `text` | no | e.g. `v45_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
+| `strategy_version` | `text` | no | e.g. `v46_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
 | `candle_open_time` | `timestamptz` | no | Open of the closed candle the decision was made on. |
 | `candle_close_time` | `timestamptz` | no | Close of that candle. **Part of the idempotency key.** |
 | `generated_at` | `timestamptz` | no | When the recommendation was published. Drives the batch/slot grouping. |
@@ -268,11 +268,13 @@ and it needs nothing written first — it reads every closed signal of one
 It answers the standing question — *when a trade hit its stop, what did we
 already know?* — by measuring each decision-time flag (structure fought the
 trade, stop sat in a sweep zone, reversal-against, chase, 1H/2H disagreement,
-thin R/R, violent tape, degraded data, opposed BTC) as its **rate in losers
-against its rate in winners**. A flag common to both is not a discriminator,
-however common; only the lift between the cohorts is ranked. It also splits the
-losers by whether they first ran ≥1R in your favour — which separates a
-too-tight stop from a wrong signal.
+thin R/R, violent tape, degraded data, opposed BTC, fought the liquidation
+squeeze, and the *opposed-the-trade* reads — an RSI divergence, an OBV
+divergence, or an RSI swing reversal pointing the other way) as its **rate in
+losers against its rate in winners**. A flag common to both is not a
+discriminator, however common; only the lift between the cohorts is ranked. It
+also splits the losers by whether they first ran ≥1R in your favour — which
+separates a too-tight stop from a wrong signal.
 
 Three honesty rules are built in: it refuses to call anything a discriminator
 until both cohorts clear `MIN_COHORT` (5) trades; a snapshot field a row never
@@ -281,13 +283,15 @@ recorded counts as *unknown*, never as *all-clear*; and it states in its own
 live parameter. A v46 that acts on a discriminator is a separate, backtested,
 human-approved strategy_version.
 
-**Running it after the v45 freeze.** v45 resets the sample — v44 and v45 stops,
-targets and strength differ, so their trades are not poolable. From the first
-v45 deploy, wait for both cohorts to fill (≈15 closed for a first qualitative
-read, ≈30 for a quantitative one), then:
+**Running it after a version bump.** Each `STRATEGY_VERSION` resets the sample —
+stops, targets and strength differ across versions, so their trades are not
+poolable (v46 added the liquidation and TAO chain-buy nudges, so it is not
+comparable with v45). From the first deploy of the new version, wait for both
+cohorts to fill (≈15 closed for a first qualitative read, ≈30 for a quantitative
+one), then:
 
 ```
-GET /api/signals/postmortem-report?strategy_version=v45_4h_avg
+GET /api/signals/postmortem-report?strategy_version=v46_4h_avg
 ```
 
 Check `powered` before reading the discriminators; if it is false the sample is

@@ -55,3 +55,45 @@ def test_squeeze_and_skew_can_disagree_squeeze_wins():
 def test_missing_liquidation_values_do_not_crash():
     b = _bias({}, {"squeeze": "short_squeeze_fuel"})
     assert b["direction"] == "upside"
+
+
+# ── v46: the bias as a strength nudge ────────────────────────────────────────
+# The bias above was reporting-only until v46, which folds it into strength as a
+# small signed confluence delta via signals.liquidation_squeeze_delta.
+
+from signals import liquidation_squeeze_delta                         # noqa: E402
+
+
+def test_a_long_aligned_with_upside_pain_is_confirmed():
+    assert liquidation_squeeze_delta(
+        "LONG", {"direction": "upside", "strength": "strong"}) == 4
+    assert liquidation_squeeze_delta(
+        "LONG", {"direction": "upside", "strength": "lean"}) == 2
+
+
+def test_a_long_against_downside_pain_is_docked():
+    assert liquidation_squeeze_delta(
+        "LONG", {"direction": "downside", "strength": "strong"}) == -4
+
+
+def test_a_short_aligned_with_downside_pain_is_confirmed():
+    assert liquidation_squeeze_delta(
+        "SHORT", {"direction": "downside", "strength": "lean"}) == 2
+    assert liquidation_squeeze_delta(
+        "SHORT", {"direction": "upside", "strength": "lean"}) == -2
+
+
+def test_balanced_absent_or_directionless_is_no_nudge():
+    assert liquidation_squeeze_delta("LONG", {"direction": "balanced"}) == 0
+    assert liquidation_squeeze_delta("LONG", {}) == 0
+    assert liquidation_squeeze_delta("LONG", None) == 0
+    assert liquidation_squeeze_delta(
+        "NEUTRAL", {"direction": "upside", "strength": "strong"}) == 0
+
+
+def test_the_nudge_is_small_enough_to_stay_advisory():
+    # Strength is a 0-100 scale; even the strong case is 4 points — the same
+    # order as the market-structure nudge — so it corroborates or docks but can
+    # never manufacture a publishable signal on its own.
+    assert abs(liquidation_squeeze_delta(
+        "LONG", {"direction": "upside", "strength": "strong"})) <= 4
