@@ -1115,6 +1115,15 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Only available for BTC/ETH via CoinGlass. Panel stays hidden for other tokens.
     whale_sells = cg_client.get_exchange_netflow(bs) if cg_client.enabled else None
 
+    # BTC/ETH: smart-money positioning from tracked Hyperliquid whale wallets
+    # (reporting only, cached, watchlist-driven). Guarded — None when the
+    # watchlist is empty or the fetch fails, never breaks the analysis.
+    try:
+        import hyperliquid as _hl
+        smart_money = _hl.get_smart_money_for(symbol)
+    except Exception:
+        smart_money = None
+
     # BTC-only: mining / on-chain signals (cached 1h, fetched from free APIs).
     # This is an ancillary enrichment — a failure in any free on-chain source must
     # NEVER 500 the core price/signal analysis, so it degrades to None.
@@ -1271,6 +1280,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "gomining_token_signal":  gomining_token_signal,
         "options_expiry":         options_expiry,
         "whale_sells":            whale_sells,
+        "smart_money":            smart_money,
         "lth_supply":             lth_supply,
         "etf_flows":              etf_flows,
         "macro":                  macro,
@@ -3288,6 +3298,22 @@ def api_pattern_alerts():
         _pattern_bell_cache["ts"]   = time.time()
         _pattern_bell_cache["data"] = data
     return jsonify(data)
+
+
+@app.get("/api/smart-money")
+def api_smart_money():
+    """Aggregated Hyperliquid whale positioning for BTC + ETH (reporting only).
+
+    Empty watchlist or a failed fetch returns ``{"ok": True, "data": None}`` —
+    the card simply hides. Configure via the HYPERLIQUID_WATCHLIST env.
+    """
+    try:
+        import hyperliquid as _hl
+        data = _hl.get_smart_money(("BTC", "ETH"))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 200
+    return jsonify({"ok": True, "data": data,
+                    "watchlist_size": len(_hl.watchlist())})
 
 
 _whale_cache: Dict = {"ts": 0, "data": None}
