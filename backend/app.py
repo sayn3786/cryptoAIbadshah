@@ -3563,6 +3563,39 @@ def api_signals_postmortem_report():
         return _db_error_response(exc)
 
 
+@app.get("/api/signals/analytics")
+def api_signals_analytics():
+    """
+    Read-off analytics across CLOSED signals — the questions the postmortem does
+    not ask: is the published strength calibrated (does a higher number actually
+    win more?), where do winners and losers separate on excursion, are the TP
+    rungs ever reached, and how/when do trades resolve.
+
+    Reads the same closed-with-snapshot feed as the postmortem. Read-only, and it
+    changes no live parameter.
+
+    Query params:
+      strategy_version   which rule-set (default: the current default). Rows are
+                         never pooled across versions.
+      environment        environment scope (defaults to this deployment's)
+      limit              max closed rows to pull (default 500)
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    import signal_analytics as _an
+    sver = request.args.get("strategy_version") or _strategy_version_for_reports()
+    try:
+        rows = store.list_closed_with_snapshots(
+            strategy_version=sver,
+            environment=request.args.get("environment"),
+            limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
+        return jsonify(_an.build_analytics(rows, strategy_version=sver))
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.get("/api/signals/cadence")
 def api_signals_cadence():
     """

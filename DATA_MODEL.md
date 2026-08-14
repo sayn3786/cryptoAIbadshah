@@ -297,6 +297,28 @@ GET /api/signals/postmortem-report?strategy_version=v47_4h_avg
 Check `powered` before reading the discriminators; if it is false the sample is
 still too thin to mean anything.
 
+**The companion read-off** — `GET /api/signals/analytics` (pure logic in
+`backend/signal_analytics.py`) — asks the questions the postmortem does not, off
+the same closed-with-snapshot feed and equally read-only:
+
+* **Strength calibration** — buckets the closed trades by the strength the engine
+  published (Weak / Moderate / Strong / Confirmed) and reports each bucket's win
+  rate and expectancy. The `monotonic` verdict is the headline: if the win rate
+  does not climb with strength, the score is not sorting trades and a higher
+  number is false confidence. Tiers under `MIN_BUCKET` (5) are marked `thin` and
+  excluded from that judgement.
+* **Excursions** — MFE/MAE split by outcome. `candidate_stop_floor_pct` is the
+  winners' 75th-percentile adverse excursion: a stop tighter than that would have
+  killed a quarter of the winners.
+* **Target reach** — what share of trades had their peak favourable excursion
+  actually touch TP1 / TP2 / TP3, from `mfe_pct` against the snapshot's ladder. A
+  low `reach_rate_tp3` means the rung is priced past where price goes.
+* **Timing & fill funnel** — duration to win vs loss, win rate by 4H publication
+  slot, and how many published orders never filled.
+
+Same discipline: reporting only, one `strategy_version` at a time, thin buckets
+flagged rather than mined.
+
 ### 3.6 `schema_migrations`
 
 `version` (PK), `description`, `applied_at`. Written only by
@@ -382,6 +404,7 @@ mutation endpoints stay **closed**, not open.
 | GET | `/api/signals/postmortems` | public | Per-signal post-trade analyses, newest first. |
 | GET | `/api/signals/postmortem-report` | public | Aggregate across CLOSED signals of a `strategy_version`: ranks decision-time flags by how much more often they preceded a loss than a win. Read-only; never tunes. `strategy_version`, `environment`, `limit`. |
 | GET | `/api/signals/cadence` | public | How fast the closed-trade sample is filling for a `strategy_version`, and when ~15 and ~30 closed land at the current rate. Read-only estimate. `strategy_version`, `environment`, `limit`. |
+| GET | `/api/signals/analytics` | public | Read-off across CLOSED signals of a `strategy_version`: strength calibration (does a higher published strength win more?), MFE/MAE excursions, TP-rung reach rates, duration and per-slot win rate, and the fill funnel. Pure logic in `backend/signal_analytics.py`. Read-only; never tunes. `strategy_version`, `environment`, `limit`. |
 | GET | `/api/signals/<id>` | public | One signal with targets, snapshot, events, postmortem. |
 | POST | `/api/signals/monitor` | internal | Advance the lifecycle. `max_age_hours`, `fill_window_hours`, `limit`. |
 | POST | `/api/signals/<id>/archive` | internal | |
