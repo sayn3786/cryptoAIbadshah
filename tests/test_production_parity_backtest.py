@@ -125,6 +125,24 @@ def test_the_replay_does_not_restate_the_gate_constants():
     assert "rec_policy.PUBLISH_TOP_N" in src
 
 
+def test_the_rr_floor_is_1_5_and_the_thin_band_is_rejected():
+    """
+    v47 raised the R/R publication floor 1.3 → 1.5 after the postmortem's
+    thin_reward_to_risk flag (R/R < 1.5) came out over-represented in the
+    losers. This pins the number — the R/R gate IS the strategy — and proves the
+    1.3–1.5 band it used to serve is now rejected as LOW_RR, while 1.5 clears.
+    """
+    assert rec_policy.MIN_RR == 1.5
+    thin = rec_policy.screen_candidate(
+        _tf_read("LONG", 60, rr=1.4), _tf_read("LONG", 60, rr=1.4), None,
+        corr_factor=1.0, influence=NEUTRAL_BTC)
+    assert (thin["ok"], thin["reason"]) == (False, "LOW_RR")
+    at_floor = rec_policy.screen_candidate(
+        _tf_read("LONG", 60, rr=1.5), _tf_read("LONG", 60, rr=1.5), None,
+        corr_factor=1.0, influence=NEUTRAL_BTC)
+    assert at_floor["ok"]
+
+
 def test_changing_a_gate_constant_moves_the_replay(monkeypatch):
     """
     The parity test with teeth. Raise the R/R floor above the candidate's ratio

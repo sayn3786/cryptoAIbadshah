@@ -43,10 +43,12 @@ STRATEGY_NAME = "mtf_confluence_top3"
 # are NOT comparable with signals from after — exactly what this column is for.
 # v46: folded two previously reporting-only reads into signal strength as small
 # capped confluence nudges — the liquidation max-pain squeeze bias (all symbols
-# with derivatives) and TAO chain-buy momentum (TAO only). Both change WHICH
-# trades clear the strength gate, so v45 and v46 signals are not comparable and
-# the postmortem cohort restarts here.
-_DEFAULT_STRATEGY_VERSION = "v46_4h_avg"
+# with derivatives) and TAO chain-buy momentum (TAO only).
+# v47: raised the R/R publication floor 1.3 → 1.5 (rec_policy.MIN_RR) after the
+# thin_reward_to_risk flag came out over-represented in the v45 losers. Changes
+# WHICH trades clear the gate, so v46 and v47 are not comparable and the
+# postmortem cohort restarts here.
+_DEFAULT_STRATEGY_VERSION = "v47_4h_avg"
 STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
                     or _DEFAULT_STRATEGY_VERSION)
 

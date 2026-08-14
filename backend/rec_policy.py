@@ -46,7 +46,12 @@ __all__ = [
 MIN_ADJUSTED_STRENGTH = 32
 
 # Never publish a trade whose downside is worth more than its upside is.
-MIN_RR = 1.3
+# Raised 1.3 → 1.5 (v47): the v45 postmortem's thin_reward_to_risk flag (R/R <
+# 1.5) was over-represented in losers (35% of them, lift 1.55) and the [1.3,1.5)
+# band won only ~48% vs 59% overall — negative expectancy at a thin payoff. The
+# gate now clears that band; the app still publishes its top-ranked survivors,
+# so this trades a worse pool for a cleaner one rather than cutting volume.
+MIN_RR = 1.5
 
 # The ladder is priced off a closed candle. If the live price has run this far
 # from it, the ladder describes a market that no longer exists.

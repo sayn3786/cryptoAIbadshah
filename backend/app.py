@@ -2761,7 +2761,9 @@ def _rec_cache_key() -> str:
     #       and the sweep boundary is the zone edge rather than the mean.
     #   v46 liquidation max-pain squeeze bias and TAO chain-buy momentum now
     #       nudge strength (small, capped) instead of being reporting-only.
-    return f"v46_4h_avg_{date}_{slot}"
+    #   v47 R/R publication floor raised 1.3 → 1.5 — the thin-R/R band was
+    #       over-represented in the losers and negative-expectancy.
+    return f"v47_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
