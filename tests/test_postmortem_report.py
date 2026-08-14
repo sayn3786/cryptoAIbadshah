@@ -291,6 +291,29 @@ def test_opposed_btc_direction_reads_the_btc_conflict_key():
     assert feat["over_represented_in_losses"] is True
 
 
+def test_fought_the_liquidation_squeeze_reads_the_v46_nudge():
+    """
+    v46 stores liquidation_adjustment on the snapshot. A negative value means
+    the trade was published AGAINST the squeeze; the discriminator surfaces
+    whether that concentrated in losers. Zero/absent stays unknown (a balanced
+    bias or a pre-v46 row is not 'all clear').
+    """
+    losers = _flagged(5, {"liquidation_adjustment": -5}, -1.0)   # all fought it
+    winners = _flagged(6, {"liquidation_adjustment": 5}, 2.0)    # all aligned
+    feat = _feature(pm.build_report(losers + winners),
+                    "fought_the_liquidation_squeeze")
+    assert feat["coverage"]["losers_known"] == 5
+    assert feat["loser_rate"] == 1.0 and feat["winner_rate"] == 0.0
+    assert feat["over_represented_in_losses"] is True
+
+
+def test_a_balanced_liquidation_bias_is_unknown_not_aligned():
+    assert pm._fought_the_squeeze(
+        {"snapshot": {"indicator_values": {"liquidation_adjustment": 0}}}) is None
+    assert pm._fought_the_squeeze(
+        {"snapshot": {"indicator_values": {}}}) is None
+
+
 def test_btc_conflict_none_is_unknown_not_all_clear():
     """A row whose btc_conflict was never recorded stays unknown, not False."""
     row = {"status": "SL_HIT", "realized_return_pct": -1.0, "symbol": "BTC",

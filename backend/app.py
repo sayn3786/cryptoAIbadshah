@@ -2759,7 +2759,9 @@ def _rec_cache_key() -> str:
     #   v45 swept liquidity pools no longer score — stop placement, TP walls and
     #       stop-run risk all skip a pool whose stops have already been taken,
     #       and the sweep boundary is the zone edge rather than the mean.
-    return f"v45_4h_avg_{date}_{slot}"
+    #   v46 liquidation max-pain squeeze bias and TAO chain-buy momentum now
+    #       nudge strength (small, capped) instead of being reporting-only.
+    return f"v46_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

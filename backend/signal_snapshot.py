@@ -307,6 +307,11 @@ def build_snapshot(analysis: Dict[str, Any],
         # show the strength but not why it was cut.
         "structure_adjustment": _num(signal.get("structure_adjustment")),
         "structure_factors": redact(signal.get("structure_factors")),
+        # Liquidation max-pain squeeze nudge (v46). The signed delta applied and
+        # the side it leaned, so a postmortem can ask whether trades taken
+        # AGAINST the squeeze (liquidation_adjustment < 0) lost more often.
+        "liquidation_adjustment": _num(signal.get("liquidation_adjustment")),
+        "liquidation_bias_dir": signal.get("liquidation_bias_dir"),
         # Whether the stop had to be moved clear of a pool, or could not be.
         # A trade that lost with stop_liquidity.blocked set was flagged as
         # sitting in a sweep zone before it was ever taken.

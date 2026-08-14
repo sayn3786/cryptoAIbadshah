@@ -81,6 +81,19 @@ def test_volatility_regime_is_null_when_the_tape_is_unknown():
     assert iv["volatility_regime"] is None
 
 
+def test_captures_the_liquidation_squeeze_nudge():
+    """
+    v46 folds the liquidation max-pain bias into strength. The snapshot must
+    record the signed delta and the side it leaned so a postmortem can later ask
+    whether trades taken against the squeeze lost more often.
+    """
+    iv = build_snapshot(_analysis(),
+                        _signal(liquidation_adjustment=-5,
+                                liquidation_bias_dir="downside"))["indicator_values"]
+    assert iv["liquidation_adjustment"] == -5
+    assert iv["liquidation_bias_dir"] == "downside"
+
+
 def test_captures_flag_pattern_and_breakout_confirmation():
     iv = build_snapshot(_analysis(), _signal())["indicator_values"]
     assert iv["flag_type"] == "bullish_flag"

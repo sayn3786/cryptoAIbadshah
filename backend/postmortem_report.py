@@ -155,6 +155,17 @@ def _degraded_data(row) -> Optional[bool]:
     return "degraded" in str(flags).lower()
 
 
+def _fought_the_squeeze(row) -> Optional[bool]:
+    # v46 folded the liquidation max-pain bias into strength as a signed nudge.
+    # A negative adjustment means the trade was taken AGAINST the squeeze — the
+    # engine docked it but published anyway. This asks whether that cost. None
+    # for rows that predate the field or where the bias was balanced (adj 0).
+    adj = _f(_snap(row).get("liquidation_adjustment"))
+    if adj is None or adj == 0:
+        return None
+    return adj < 0
+
+
 def _btc_conflict(row) -> Optional[bool]:
     # The snapshot stores this on market_context as `btc_conflict` (a bool the
     # strategy set when the alt fought BTC's 2H direction). Older/nested shapes
@@ -216,6 +227,11 @@ FEATURES: Dict[str, Dict[str, Any]] = {
     "opposed_btc_direction": {
         "fn": _btc_conflict,
         "meaning": "the trade fought BTC's own 2H direction",
+    },
+    "fought_the_liquidation_squeeze": {
+        "fn": _fought_the_squeeze,
+        "meaning": "the trade was taken against the liquidation max-pain lean "
+                   "(v46 docked its strength for it but published anyway)",
     },
 }
 

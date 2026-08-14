@@ -1060,6 +1060,28 @@ def _squeeze_priming(analysis: Dict) -> Optional[Dict]:
     return None
 
 
+def liquidation_squeeze_delta(direction: str, liq_bias: Dict) -> int:
+    """
+    Signed strength nudge (in score points) from the liquidation max-pain bias.
+
+    ``liq_bias`` is app._liquidation_bias output:
+    ``{direction: upside|downside|balanced, strength: strong|lean|None}``. The
+    delta CONFIRMS a trade aligned with the squeeze and DOCKS one fighting it —
+    ±4 strength points when the bias is strong, ±2 on a lean, 0 when the bias is
+    balanced/absent or the signal has no direction. Small on purpose (the same
+    order as the market-structure nudge it sits beside): this is forward-looking
+    positioning, a corroborator, never enough to publish a trade on its own.
+    Pure so the nudge can be tested without the full generate_signal path.
+    """
+    bias_dir = (liq_bias or {}).get("direction")
+    if direction not in ("LONG", "SHORT") or bias_dir not in ("upside", "downside"):
+        return 0
+    aligned = ((direction == "LONG"  and bias_dir == "upside") or
+               (direction == "SHORT" and bias_dir == "downside"))
+    mag = 4 if (liq_bias or {}).get("strength") == "strong" else 2
+    return mag if aligned else -mag
+
+
 def generate_signal(analysis: Dict) -> Dict:
     score = 0
     # Group contribution tracker — signed (positive = bull, negative = bear)
@@ -2880,6 +2902,27 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.extend(_struct["bear_reasons"])
         g['pattern'] += struct_adj
 
+    # ── Liquidation max-pain squeeze bias (v46 advisory nudge) ────────────────
+    # Same shape and the same place as the two blocks above: a direction-relative
+    # read that moves STRENGTH, never direction. app._liquidation_bias points at
+    # the side price would move to inflict the most forced-position pain (shorts
+    # piling in on a drop → pain UPSIDE, and vice versa). It CONFIRMS a trade
+    # aligned with the squeeze and DOCKS one fighting it, capped at ±4 strength
+    # points so it corroborates but can never manufacture a signal. Reporting-
+    # only before v46. liq_adj/liq_bias_dir are echoed for the snapshot so a
+    # postmortem can score whether fighting the squeeze actually cost anything.
+    _liq_bias = (analysis.get("liquidations") or {}).get("bias") or {}
+    liq_bias_dir = _liq_bias.get("direction")          # upside | downside | balanced
+    liq_adj = liquidation_squeeze_delta(direction, _liq_bias)
+    if liq_adj:
+        strength = max(0, min(100, strength + liq_adj))
+        _lq_reason = _liq_bias.get("reason") or "max-pain squeeze bias"
+        (bull_reasons if liq_adj > 0 else bear_reasons).append(
+            f"💧 Liquidation max-pain leans {liq_bias_dir} — "
+            f"{'confirms' if liq_adj > 0 else 'opposes'} the {direction.lower()} "
+            f"({liq_adj:+d}): {_lq_reason}")
+        g['flow'] += liq_adj
+
     # Strength tiers (strength = score / 220 * 100):
     # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size
     # Moderate (33–50): score  73–110 — several aligned, 50% size
@@ -3483,6 +3526,11 @@ def generate_signal(analysis: Dict) -> Dict:
         # factors, so the card can show WHY conviction was cut or raised.
         "structure_adjustment": struct_adj,
         "structure_factors":    _struct["factors"],
+        # Liquidation max-pain squeeze nudge (v46) — signed score delta applied
+        # once above, plus the direction it leaned, so the card explains it and a
+        # postmortem can measure whether opposing the squeeze cost anything.
+        "liquidation_adjustment": liq_adj,
+        "liquidation_bias_dir":   liq_bias_dir,
         # Whether the stop had to be moved clear of a liquidity pool, or could
         # not be (blocked by the risk cap) and therefore needs smaller size.
         "stop_liquidity":       _sl_liq,

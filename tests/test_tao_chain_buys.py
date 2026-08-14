@@ -214,3 +214,31 @@ def test_a_subnet_without_buy_volume_is_skipped(monkeypatch):
                  "amm_vol_24h_raw": 100_000}}                       # no daily_buys_raw
     out = _run(monkeypatch, subnets, pools)
     assert [r["netuid"] for r in out["chain_buys"]["rows"]] == [1]
+
+
+# ── v46: chain-buy momentum as a strength nudge ──────────────────────────────
+# The leaderboard above was reporting-only. v46 turns the ecosystem-wide daily
+# total vs the trailing 7d pace into a small signed signal_pts contribution via
+# eco.chain_buy_momentum_note (folded into the existing ±12 TAO cap).
+
+def test_a_day_well_above_the_7d_pace_is_bullish_accumulation():
+    note = eco.chain_buy_momentum_note(today_total=3000.0, d7_avg=1000.0)
+    assert note["impact"] == "bullish" and note["pts"] == 3
+    assert "accelerating" in note["text"]
+
+
+def test_a_day_well_below_the_pace_is_bearish_drying_up():
+    note = eco.chain_buy_momentum_note(today_total=300.0, d7_avg=1000.0)
+    assert note["impact"] == "bearish" and note["pts"] == -3
+    assert "drying up" in note["text"]
+
+
+def test_a_day_near_the_pace_is_unremarkable():
+    assert eco.chain_buy_momentum_note(today_total=1100.0, d7_avg=1000.0) is None
+
+
+def test_no_pace_yet_stays_silent():
+    # Under 2 days of history the assembly passes d7_avg=None — no divide, no note.
+    assert eco.chain_buy_momentum_note(today_total=5000.0, d7_avg=None) is None
+    assert eco.chain_buy_momentum_note(today_total=None, d7_avg=1000.0) is None
+    assert eco.chain_buy_momentum_note(today_total=5000.0, d7_avg=0) is None

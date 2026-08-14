@@ -41,7 +41,12 @@ STRATEGY_NAME = "mtf_confluence_top3"
 # than by the composite quality score, which is demoted to the tiebreak. Both the
 # cadence and the ranking change WHICH trades exist, so signals from before this
 # are NOT comparable with signals from after — exactly what this column is for.
-_DEFAULT_STRATEGY_VERSION = "v45_4h_avg"
+# v46: folded two previously reporting-only reads into signal strength as small
+# capped confluence nudges — the liquidation max-pain squeeze bias (all symbols
+# with derivatives) and TAO chain-buy momentum (TAO only). Both change WHICH
+# trades clear the strength gate, so v45 and v46 signals are not comparable and
+# the postmortem cohort restarts here.
+_DEFAULT_STRATEGY_VERSION = "v46_4h_avg"
 STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
                     or _DEFAULT_STRATEGY_VERSION)
 
