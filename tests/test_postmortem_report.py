@@ -269,6 +269,36 @@ def test_the_strategy_version_is_echoed():
         == "v45_4h_avg"
 
 
+def test_opposed_btc_direction_reads_the_btc_conflict_key():
+    """
+    build_snapshot stores this on market_context as `btc_conflict`. The reader
+    used to look for a `conflict` key that never existed, so every row read
+    'unknown' and the flag was blind. With the key aligned, a conflict
+    concentrated in losers is seen and can become a finding.
+    """
+    def _r(ret, conflict):
+        status = "TP_HIT" if ret > 0 else "SL_HIT"
+        return {"status": status, "realized_return_pct": ret, "symbol": "BTC",
+                "direction": "LONG", "mfe_pct": None,
+                "snapshot": {"market_context": {"btc_conflict": conflict}}}
+
+    rows = ([_r(-1.0, True) for _ in range(5)]       # losers all fought BTC
+            + [_r(2.0, False) for _ in range(6)])     # winners all aligned
+    feat = _feature(pm.build_report(rows), "opposed_btc_direction")
+    assert feat["coverage"]["losers_known"] == 5      # no longer 'unknown'
+    assert feat["coverage"]["winners_known"] == 6
+    assert feat["loser_rate"] == 1.0 and feat["winner_rate"] == 0.0
+    assert feat["over_represented_in_losses"] is True
+
+
+def test_btc_conflict_none_is_unknown_not_all_clear():
+    """A row whose btc_conflict was never recorded stays unknown, not False."""
+    row = {"status": "SL_HIT", "realized_return_pct": -1.0, "symbol": "BTC",
+           "direction": "LONG", "mfe_pct": None,
+           "snapshot": {"market_context": {"btc_conflict": None}}}
+    assert pm._btc_conflict(row) is None
+
+
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 def _feature(report, name):

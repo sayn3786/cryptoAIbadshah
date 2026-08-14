@@ -62,6 +62,25 @@ def test_captures_the_indicators_the_strategy_used():
     assert iv["resistance_zone"] == {"price": 110}
 
 
+def test_captures_volatility_regime_from_the_zone_key():
+    """
+    vol_regime() labels the tape under `zone` (extreme/elevated/normal/calm).
+    The snapshot used to read `regime`/`level`, so volatility_regime stored NULL
+    on every signal and the postmortem's violent_volatility_tape flag could
+    never fire. It must now carry the zone through.
+    """
+    a = _analysis(vol_regime={"atr_pct": 3.1, "percentile": 91,
+                              "zone": "extreme", "note": "top 15%"})
+    iv = build_snapshot(a, _signal())["indicator_values"]
+    assert iv["volatility_regime"] == "extreme"
+
+
+def test_volatility_regime_is_null_when_the_tape_is_unknown():
+    """No vol_regime dict (too few candles) stays NULL, not a fabricated zone."""
+    iv = build_snapshot(_analysis(vol_regime=None), _signal())["indicator_values"]
+    assert iv["volatility_regime"] is None
+
+
 def test_captures_flag_pattern_and_breakout_confirmation():
     iv = build_snapshot(_analysis(), _signal())["indicator_values"]
     assert iv["flag_type"] == "bullish_flag"

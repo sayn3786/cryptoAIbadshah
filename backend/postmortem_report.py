@@ -156,7 +156,14 @@ def _degraded_data(row) -> Optional[bool]:
 
 
 def _btc_conflict(row) -> Optional[bool]:
+    # The snapshot stores this on market_context as `btc_conflict` (a bool the
+    # strategy set when the alt fought BTC's 2H direction). Older/nested shapes
+    # kept it under a `btc_context.conflict` key, so both are accepted; the flat
+    # `btc_conflict` is checked first because that is what build_snapshot writes.
     ctx = _market(row)
+    if "btc_conflict" in ctx:
+        val = ctx.get("btc_conflict")
+        return None if val is None else bool(val)
     btc = ctx.get("btc_context") if isinstance(ctx.get("btc_context"), dict) else ctx
     if not isinstance(btc, dict) or "conflict" not in btc:
         return None

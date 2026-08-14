@@ -59,9 +59,21 @@ def test_the_publish_budget_is_not_quietly_widened():
     publish duration afterwards — which is why the assertion is exact rather
     than an upper bound.
     """
-    assert len(appmod.SCAN_SYMBOLS) == 31, (
+    assert len(appmod.SCAN_SYMBOLS) == 30, (
         "the recommendation scan changed size — measure publish duration "
         "against the 60s ceiling before accepting this")
+
+
+def test_gomining_is_dropped_from_trading_but_still_browsable():
+    """
+    Removed from trading 2026-08-14 after going 0-for-6 in the v45 postmortem.
+    It must never publish a signal again (out of SCAN_SYMBOLS) but stays
+    browsable and analysable (in SYMBOLS) so the tokenomics advisor that feeds
+    the BTC mining reward-payout decision keeps working and any open trade can
+    still resolve its exchange pair.
+    """
+    assert "GOMINING" not in appmod.SCAN_SYMBOLS, "GOMINING is back in the trade scan"
+    assert "GOMINING" in appmod.SYMBOLS, "GOMINING must stay browsable for the advisor"
 
 
 # ── The new tokens ──────────────────────────────────────────────────────────

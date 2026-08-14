@@ -268,7 +268,12 @@ def build_snapshot(analysis: Dict[str, Any],
         "bollinger_middle": _num(bollinger.get("middle")),
         "bollinger_lower": _num(bollinger.get("lower")),
         "bollinger_bandwidth": _num(bollinger.get("bandwidth")),
-        "volatility_regime": vol_regime.get("regime") or vol_regime.get("level"),
+        # vol_regime() labels the tape under "zone" (extreme/elevated/normal/
+        # calm); "regime"/"level" are kept as fallbacks for any other shape. The
+        # postmortem's violent_volatility_tape flag read all-unknown until this
+        # pointed at the key the analysis actually populates.
+        "volatility_regime": (vol_regime.get("zone") or vol_regime.get("regime")
+                              or vol_regime.get("level")),
 
         # Volume
         "volume_signal": vol_sig.get("signal"),

@@ -169,8 +169,15 @@ SCAN_SYMBOLS = (
     "BTC", "ETH", "LINK", "SUI", "TAO", "HYPE", "KAS", "ALGO", "XMR", "XRP",
     "GRAM", "SOL", "ONDO", "AAVE", "RENDER", "BNB", "BLUR", "ZEC", "TRX",
     "ADA", "XLM", "AVAX", "HBAR", "QNT", "INJ", "FET", "ICP", "ENJ", "TNSR",
-    "PAXG", "GOMINING",
+    "PAXG",
 )
+# Removed from trading 2026-08-14: GOMINING went 0-for-6 in the v45 postmortem
+# (every closed trade a loss, -4.0% total) with no discriminator explaining it —
+# a symbol-selection loss, not a stop-placement one. Dropping it from SCAN_SYMBOLS
+# stops it from ever being published as a signal again. It is deliberately KEPT in
+# SYMBOLS: the GOMINING tokenomics advisor (burn/mint supply, epoch calendar) still
+# feeds the BTC mining reward-payout decision, the view stays browsable, and any
+# open GOMINING trade still resolves its exchange pair through SYMBOLS.
 
 # Symbols we no longer analyse or publish, but which still have signals on the
 # books. Dropping a symbol from SYMBOLS alone STRANDS its open trades: the
