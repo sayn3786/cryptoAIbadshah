@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '218';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '219';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -365,6 +365,7 @@ function renderAll(a) {
   renderOI(a.open_interest);
   renderOiRotation(a.regime, a.symbol);
   renderLiquidations(a.liquidations);
+  renderSmartMoney(a.smart_money);
   renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels);
   renderRSIChart(a.rsi_series, a.rsi_markers);
@@ -836,6 +837,29 @@ function renderLiquidations(l) {
       bEl.style.display = 'none';
     }
   }
+}
+
+/* ─── Smart money (Hyperliquid whale positioning) ───────────────────────────
+   Reporting only — where the tracked whale wallets are net positioned. Hidden
+   when the watchlist is empty or the token isn't BTC/ETH (backend sends null). */
+function renderSmartMoney(sm) {
+  const card = document.getElementById('smartMoneyCard');
+  if (!card) return;
+  if (!sm || !sm.has_positions) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  const val = document.getElementById('smValue');
+  const lbl = document.getElementById('smLabel');
+  const bull = sm.bias === 'long', bear = sm.bias === 'short';
+  const pct = Math.abs(+sm.net_long_pct || 0);
+  val.textContent = sm.bias === 'neutral' ? 'Neutral / split'
+    : `${pct.toFixed(0)}% net ${bull ? 'long' : 'short'}`;
+  val.style.color = bull ? 'var(--bull)' : bear ? 'var(--bear)' : 'var(--muted)';
+  const money = v => `$${Math.round(v).toLocaleString('en-US')}`;
+  const entry = bull ? sm.avg_long_entry : bear ? sm.avg_short_entry : null;
+  const parts = [`${sm.long_wallets}L / ${sm.short_wallets}S of ${sm.wallets_ok} wallet${sm.wallets_ok === 1 ? '' : 's'}`];
+  if (entry != null) parts.push(`avg entry ${money(entry)}`);
+  if (sm.total_upnl != null) parts.push(`uPnL ${sm.total_upnl >= 0 ? '+' : '−'}${money(Math.abs(sm.total_upnl))}`);
+  lbl.textContent = parts.join(' · ');
 }
 
 /* ─── Main candlestick chart ──────────────────────────────────────────────── */
