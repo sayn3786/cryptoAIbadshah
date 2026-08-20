@@ -3,7 +3,7 @@
 How a recommendation becomes a stored trade, what every column means, and how to
 query it.
 
-Everything here is generated from the live schema (migrations `001`–`006`) and
+Everything here is generated from the live schema (migrations `001`–`007`) and
 the code that writes it. Where a column exists but nothing writes it yet, this
 says so.
 
@@ -322,7 +322,32 @@ flagged rather than mined.
 ### 3.6 `schema_migrations`
 
 `version` (PK), `description`, `applied_at`. Written only by
-`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`.
+`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`.
+
+### 3.7 `etf_flow_daily` — durable spot-ETF net-flow history (migration `007`)
+
+A local record of each day's spot-ETF net flow, so 6-month / 1-year analysis
+reads our own accumulated history instead of the provider's rolling ~300-day
+window (SoSoValue, `backend/etf_flows.py`), which lags a trading day and rolls
+past any longer horizon.
+
+| Column | Type | Null | Meaning |
+|---|---|---|---|
+| `id` | `uuid` | no | Primary key. |
+| `environment` | `text` | no | `production` / `preview` / `local`. Part of the natural key. |
+| `symbol` | `text` | no | Upper-case asset (`BTC`, `ETH`). CHECK enforces upper-case. |
+| `flow_date` | `date` | no | The trading day (UTC) the figure is FOR. Natural key with `environment`+`symbol`. |
+| `net_usd` | `numeric(20,2)` | no | Daily net flow in USD: positive = net inflow (buying), negative = outflow. Stored raw. |
+| `source` | `text` | no | Provider the figure came from (`sosovalue`). |
+| `first_seen_at` | `timestamptz` | no | When we first recorded this day. Never moves. |
+| `updated_at` | `timestamptz` | no | Bumped when a provider revision changes the value. |
+
+Written by the daily cron (`etf_store.snapshot_daily`, folded into
+`/api/cron/daily`), idempotent on `(environment, symbol, flow_date)` — a changed
+value updates, an unchanged one is a no-op. **A record, never an input:** nothing
+in the scoring path reads it; live signals still use the fresh provider figure.
+Read it via `/api/etf/history` (windowed 1m/3m/6m/1y net, total bought, total
+sold). Empty until migration `007` has been run.
 
 ---
 
@@ -395,6 +420,7 @@ mutation endpoints stay **closed**, not open.
 | Method | Route | Auth | Returns |
 |---|---|---|---|
 | GET | `/api/patterns/history` | public | The pattern lifecycle log. `symbol`, `timeframe`, `kind`, `status`, `limit`. Empty until migration 005. |
+| GET | `/api/etf/history` | public | Durable ETF-flow record from `etf_flow_daily` with 1m/3m/6m/1y windows (net, total bought, total sold). `symbol` (BTC/ETH), `days`, `environment`, `limit`. Empty until migration 007. |
 | GET | `/api/recommendations` | public | The set RECORDED for the current 4H slot, read back from `signals`. Never computes, never publishes. `published: false` + `reason` when the slot is empty. |
 | GET/POST | `/api/cron/publish` | internal | The publication driver — computes and persists, sends nothing. Runs at :05 past all six 4H boundaries. |
 | GET | `/api/signals/tracker` | public | The dashboard view. `days` (default 3, max 30), `environment`. |
@@ -512,7 +538,7 @@ SELECT environment, count(*), max(generated_at) FROM signals GROUP BY environmen
 | `backend/signal_monitor.py` | `evaluate` (pure: candles in, actions out) + `run_monitor`. |
 | `backend/signal_tracker.py` | View model. Pure: rows in, table out. |
 | `backend/deploy_context.py` | Which deployment am I. |
-| `database/migrations/` | `001`–`006`, plus review-only rollbacks. |
+| `database/migrations/` | `001`–`007`, plus review-only rollbacks. |
 | `database/migrate.py` | Explicit CLI runner. Never automatic. |
 
 **Deploy order for a migration: deploy the code first, then migrate.** Every
