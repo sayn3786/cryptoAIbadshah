@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '219';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '220';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2871,7 +2871,52 @@ function renderEtfFlows(etf, symbol) {
     </div>
     ${bars.length ? `<div class="etf-barchart">${bars}</div>
     <div class="etf-bar-legend"><span>← ${days.length}d ago</span><span>Today →</span></div>` : ''}
+    <div class="etf-recorded" id="etfRecorded"></div>
   `;
+
+  // 6-month / 1-year cumulative totals from our OWN recorded history
+  // (etf_flow_daily), fetched lazily so the live card paints first. Only BTC/ETH
+  // are recorded; the block stays empty for the rest, or until migration 007 has
+  // run and the first snapshot lands.
+  _renderEtfRecorded(symbol);
+}
+
+function _renderEtfRecorded(symbol) {
+  const el = document.getElementById('etfRecorded');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!['BTC', 'ETH'].includes(symbol)) return;
+
+  const fmtBig = m => {
+    if (m == null) return '—';
+    const s = m > 0 ? '+' : m < 0 ? '−' : '';
+    const a = Math.abs(m);
+    return a >= 1000 ? `${s}$${(a / 1000).toFixed(2)}B` : `${s}$${a.toFixed(0)}M`;
+  };
+  const cls = m => (m == null ? '' : m >= 0 ? 'bull' : 'bear');
+  const col = (label, w) => !w ? '' : `
+    <div style="flex:1;min-width:0">
+      <div style="font-size:12px;font-weight:600;margin-bottom:5px;opacity:.85">${label}</div>
+      <div class="etf-stat"><span class="etf-stat-lbl">Bought</span><span class="etf-stat-val bull">${fmtBig(w.inflow_m)}</span></div>
+      <div class="etf-stat"><span class="etf-stat-lbl">Sold</span><span class="etf-stat-val bear">${fmtBig(w.outflow_m)}</span></div>
+      <div class="etf-stat"><span class="etf-stat-lbl">Net</span><span class="etf-stat-val ${cls(w.net_m)}">${fmtBig(w.net_m)}</span></div>
+    </div>`;
+
+  fetch(`${API}/etf/history?symbol=${symbol}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(h => {
+      const sum = h && h.summary;
+      const w = sum && sum.windows;
+      if (!w || !sum.days_recorded) return;             // nothing recorded yet
+      el.innerHTML = `
+        <div style="font-size:11px;opacity:.6;margin:12px 0 6px;text-transform:uppercase;letter-spacing:.04em">
+          Cumulative · own record (${sum.days_recorded}d)</div>
+        <div style="display:flex;gap:16px">
+          ${col('6 months', w['180d'])}
+          ${col('1 year', w['365d'])}
+        </div>`;
+    })
+    .catch(() => {});
 }
 
 function renderFNGCard(fg) {
