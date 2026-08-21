@@ -3,7 +3,7 @@
 How a recommendation becomes a stored trade, what every column means, and how to
 query it.
 
-Everything here is generated from the live schema (migrations `001`–`007`) and
+Everything here is generated from the live schema (migrations `001`–`008`) and
 the code that writes it. Where a column exists but nothing writes it yet, this
 says so.
 
@@ -322,7 +322,7 @@ flagged rather than mined.
 ### 3.6 `schema_migrations`
 
 `version` (PK), `description`, `applied_at`. Written only by
-`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`.
+`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`, `008`.
 
 ### 3.7 `etf_flow_daily` — durable spot-ETF net-flow history (migration `007`)
 
@@ -348,6 +348,34 @@ value updates, an unchanged one is a no-op. **A record, never an input:** nothin
 in the scoring path reads it; live signals still use the fresh provider figure.
 Read it via `/api/etf/history` (windowed 1m/3m/6m/1y net, total bought, total
 sold). Empty until migration `007` has been run.
+
+### 3.8 `market_metric_daily` — durable market-state history (migration `008`)
+
+A daily record of the market's backdrop — funding, open interest, Fear & Greed,
+and BTC on-chain cycle reads (MVRV, SOPR, realized price) — so the regime a trade
+lived through is a real series, not something recomputed and discarded each
+request. Every signal already snapshots its indicators at decision time; this is
+the CONTINUOUS series, including the days no trade fired.
+
+| Column | Type | Null | Meaning |
+|---|---|---|---|
+| `id` | `uuid` | no | Primary key. |
+| `environment` | `text` | no | `production` / `preview` / `local`. Part of the natural key. |
+| `metric_date` | `date` | no | The day (UTC) the reading is FOR. Natural key with `environment`+`scope`+`metric`. |
+| `scope` | `text` | no | Upper-case asset (`BTC`, `ETH`) or `GLOBAL` for market-wide reads. CHECK enforces upper-case. |
+| `metric` | `text` | no | `funding_rate` / `open_interest` / `fear_greed` / `mvrv` / `sopr` / `realized_price` / … A new metric is a new value here — never a migration. |
+| `value` | `numeric(30,8)` | no | The numeric reading. |
+| `detail` | `jsonb` | no | Bounded context — a label or zone (e.g. F&G `label`, MVRV `zone`). Allow-listed by the writer. |
+| `source` | `text` | yes | Where the figure came from. |
+| `first_seen_at`, `updated_at` | `timestamptz` | no | Recorded / last-revised bookkeeping. |
+
+Long/narrow by design: one row per `(scope, metric, day)`. Written by the daily
+snapshot (`market_metrics_store.snapshot_daily`, ridden on `/api/cron/tao-snapshot`
+with a standalone `/api/cron/market-snapshot`), idempotent on
+`(environment, scope, metric, metric_date)`. **A record, never an input:** nothing
+in the scoring path reads it. Read via `/api/market-metrics` (latest value per
+metric, plus a metric's time series when `scope`+`metric` are given). Empty until
+migration `008` has been run.
 
 ---
 
@@ -421,6 +449,7 @@ mutation endpoints stay **closed**, not open.
 |---|---|---|---|
 | GET | `/api/patterns/history` | public | The pattern lifecycle log. `symbol`, `timeframe`, `kind`, `status`, `limit`. Empty until migration 005. |
 | GET | `/api/etf/history` | public | Durable ETF-flow record from `etf_flow_daily` with 1m/3m/6m/1y windows (net, total bought, total sold). `symbol` (BTC/ETH), `days`, `environment`, `limit`. Empty until migration 007. |
+| GET | `/api/market-metrics` | public | Durable market-state record from `market_metric_daily`: latest value per metric, plus a metric's time series when `scope`+`metric` given. `scope` (BTC/ETH/GLOBAL), `metric`, `days`, `environment`, `limit`. Empty until migration 008. |
 | GET | `/api/recommendations` | public | The set RECORDED for the current 4H slot, read back from `signals`. Never computes, never publishes. `published: false` + `reason` when the slot is empty. |
 | GET/POST | `/api/cron/publish` | internal | The publication driver — computes and persists, sends nothing. Runs at :05 past all six 4H boundaries. |
 | GET | `/api/signals/tracker` | public | The dashboard view. `days` (default 3, max 30), `environment`. |
@@ -538,7 +567,7 @@ SELECT environment, count(*), max(generated_at) FROM signals GROUP BY environmen
 | `backend/signal_monitor.py` | `evaluate` (pure: candles in, actions out) + `run_monitor`. |
 | `backend/signal_tracker.py` | View model. Pure: rows in, table out. |
 | `backend/deploy_context.py` | Which deployment am I. |
-| `database/migrations/` | `001`–`007`, plus review-only rollbacks. |
+| `database/migrations/` | `001`–`008`, plus review-only rollbacks. |
 | `database/migrate.py` | Explicit CLI runner. Never automatic. |
 
 **Deploy order for a migration: deploy the code first, then migrate.** Every

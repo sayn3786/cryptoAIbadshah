@@ -1511,6 +1511,41 @@ def api_etf_history():
         return _db_error_response(exc)
 
 
+@app.get("/api/market-metrics")
+def api_market_metrics():
+    """
+    The durable daily market-state record (from market_metric_daily): the latest
+    value of every metric, and — when `scope`+`metric` are given — that metric's
+    time series for charting. Metrics: funding_rate, open_interest, fear_greed,
+    mvrv, sopr, realized_price. Scopes: BTC / ETH / GLOBAL. Reporting only.
+
+    Query params: `scope`, `metric`, `days` (series lookback), `environment`,
+    `limit`.
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    import market_metrics_store as _mm
+    env = request.args.get("environment")
+    scope = request.args.get("scope")
+    metric = request.args.get("metric")
+    try:
+        out = {"latest": _mm.latest_snapshot(environment=env)}
+        if scope and metric:
+            since = None
+            days = request.args.get("days")
+            if days and str(days).isdigit():
+                from datetime import datetime, timezone, timedelta
+                since = (datetime.now(timezone.utc) - timedelta(days=int(days))).strftime("%Y-%m-%d")
+            out["series"] = {"scope": scope.upper(), "metric": metric,
+                             "points": _mm.series(scope, metric, since=since,
+                                                  environment=env,
+                                                  limit=_int_arg("limit", 400, 1, 5000))}
+        return jsonify(out)
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.get("/api/btc-top")
 def api_btc_top():
     """BTC cycle-top signals; ?debug=1 shows candle-history availability."""
@@ -3223,7 +3258,35 @@ def api_cron_tao_snapshot():
         res = _tao_snapshot_daily()
     except Exception as e:
         res = {"ok": False, "error": str(e)}
-    print(f"[cron/tao-snapshot] {res}")
+    # Daily market-state metrics ride this isolated snapshot cron (not the busy
+    # recs/notification daily cron, and not a third Vercel cron). Guarded so a
+    # market-metrics failure never touches the TAO result.
+    try:
+        import market_metrics_store
+        market = market_metrics_store.snapshot_daily()
+    except Exception as e:
+        market = {"ok": False, "error": str(e)}
+    print(f"[cron/tao-snapshot] tao={res} market={market}")
+    return jsonify({"ok": bool(res.get("ok")), "result": res, "market_metrics": market})
+
+
+@app.get("/api/cron/market-snapshot")
+@app.post("/api/cron/market-snapshot")
+def api_cron_market_snapshot():
+    """
+    Persist today's market-state metrics (funding, OI, Fear & Greed, BTC on-chain
+    MVRV/SOPR/realized price) into market_metric_daily. Standalone entry for a
+    manual run; the scheduled snapshot rides /api/cron/tao-snapshot. Idempotent
+    per UTC day.
+    """
+    if not _cron_authorized():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    try:
+        import market_metrics_store
+        res = market_metrics_store.snapshot_daily()
+    except Exception as e:
+        res = {"ok": False, "error": str(e)}
+    print(f"[cron/market-snapshot] {res}")
     return jsonify({"ok": bool(res.get("ok")), "result": res})
 
 
