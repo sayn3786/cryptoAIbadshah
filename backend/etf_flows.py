@@ -176,18 +176,50 @@ ETF_ASSETS = {
 }
 
 
-def _ssv_api_flows(symbol: str) -> Optional[Dict]:
+def _parse_inflow_rows(rows: List) -> List[Dict]:
+    """SoSoValue historicalInflowChart rows -> [{ts, net_usd}] (unsorted).
+
+    Shared by the live summary path and the full-series persistence path so both
+    read the provider's fields identically.
     """
-    SoSoValue official Open API (free key): POST /openapi/v2/etf/historicalInflowChart
-    with {"type": "<us-xxx-spot>"}. Returns daily totalNetInflow in USD.
+    from datetime import datetime, timezone
+    daily = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        net = (row.get("totalNetInflow") or row.get("netInflow") or
+               row.get("dailyNetInflow") or row.get("totalNetFlow") or
+               row.get("netFlow") or row.get("flow"))
+        ds  = (row.get("date") or row.get("day") or row.get("time") or
+               row.get("timestamp") or 0)
+        if net is None:
+            continue
+        try:
+            if isinstance(ds, str) and "-" in ds:
+                ts = int(datetime.strptime(ds[:10], "%Y-%m-%d")
+                         .replace(tzinfo=timezone.utc).timestamp() * 1000)
+            else:
+                ts = int(ds)
+            daily.append({"ts": ts, "net_usd": float(net)})
+        except (TypeError, ValueError):
+            continue
+    return daily
+
+
+def _ssv_api_daily(symbol: str):
+    """
+    SoSoValue official Open API: the FULL daily series (~300 days), as
+    ``(daily, "sosovalue")`` or ``(None, None)``.
+
+    This is the raw list the summary is built from AND the durable record is
+    snapshotted from — before the summary's 60-day truncation, so history can be
+    persisted in full on the first run.
     """
     if not SSV_API_KEY:
-        return None
+        return None, None
     cfg = ETF_ASSETS.get(symbol) or {}
     if not cfg.get("slug"):
-        return None
-    # Primary slug + alternates — newer listings sometimes use different type
-    # strings on the API than the dashboard URL.
+        return None, None
     type_candidates = [cfg["slug"]] + cfg.get("alt_slugs", [])
     path = "/openapi/v2/etf/historicalInflowChart"
     from datetime import datetime, timezone
@@ -215,35 +247,13 @@ def _ssv_api_flows(symbol: str) -> Optional[Dict]:
             if not rows:
                 _log(symbol, "sosovalue-api", path, f"{etf_type}: code ok, 0 rows returned")
                 continue
-            daily = []
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                net = (row.get("totalNetInflow") or row.get("netInflow") or
-                       row.get("dailyNetInflow") or row.get("totalNetFlow") or
-                       row.get("netFlow") or row.get("flow"))
-                ds  = (row.get("date") or row.get("day") or row.get("time") or
-                       row.get("timestamp") or 0)
-                if net is None:
-                    continue
-                try:
-                    if isinstance(ds, str) and "-" in ds:
-                        ts = int(datetime.strptime(ds[:10], "%Y-%m-%d")
-                                 .replace(tzinfo=timezone.utc).timestamp() * 1000)
-                    else:
-                        ts = int(ds)
-                    daily.append({"ts": ts, "net_usd": float(net)})
-                except (TypeError, ValueError):
-                    continue
+            daily = _parse_inflow_rows(rows)
             if not daily:
-                # Rows exist but fields didn't parse — log the actual row keys
                 rk = (",".join(list(rows[0].keys())[:14])
                       if isinstance(rows[0], dict) else type(rows[0]).__name__)
                 _log(symbol, "sosovalue-api", path,
                      f"{etf_type}: {len(rows)} rows, 0 parsed (row keys: {rk})")
                 continue
-            # Log SoSoValue's newest RAW date + its flow, so debug shows whether
-            # the feed itself stops at a date or we drop newer (e.g. zero) days.
             _mx = max(daily, key=lambda d: d["ts"])
             _nz = [d for d in daily if d["net_usd"] != 0]
             _mxnz = max(_nz, key=lambda d: d["ts"]) if _nz else None
@@ -254,11 +264,45 @@ def _ssv_api_flows(symbol: str) -> Optional[Dict]:
                  f"{etf_type}: 200 ok ({len(daily)} days; newest raw {_d(_mx['ts'])}="
                  f"{_mx['net_usd']/1e6:.0f}M; newest nonzero "
                  f"{_d(_mxnz['ts']) if _mxnz else '-'})")
-            return _build_result(daily, symbol, source="sosovalue")
+            return daily, "sosovalue"
         except Exception as e:
             _log(symbol, "sosovalue-api", path, f"{etf_type}: {type(e).__name__}: {e}"[:150])
             continue
-    return None
+    return None, None
+
+
+def _ssv_api_flows(symbol: str) -> Optional[Dict]:
+    """SoSoValue official Open API → normalised summary (unchanged behaviour)."""
+    daily, src = _ssv_api_daily(symbol)
+    return _build_result(daily, symbol, source=src) if daily else None
+
+
+def get_etf_daily_series(symbol: str) -> Optional[Dict]:
+    """
+    The FULL daily net-flow series for a symbol, for durable persistence.
+
+    Returns ``{"symbol", "source", "daily": [{"date": "YYYY-MM-DD",
+    "net_usd": float}, ...]}`` sorted ascending (one row per day, latest value
+    wins on a duplicate), or None when no source served it. Keeps zero-flow days
+    — a flat day is real information and the snapshot record should hold it.
+
+    Used by the daily snapshot cron, not by the live card. SoSoValue is the
+    working source; CoinGlass ETF is plan-gated, so it is not tried here.
+    """
+    from datetime import datetime, timezone
+    daily, src = _ssv_api_daily(symbol)
+    if not daily:
+        return None
+    by_date: Dict[str, float] = {}
+    for d in sorted(daily, key=lambda x: x["ts"]):
+        try:
+            iso = datetime.fromtimestamp(d["ts"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        except (OverflowError, OSError, ValueError):
+            continue
+        by_date[iso] = float(d["net_usd"])          # last write wins
+    rows = [{"date": k, "net_usd": v} for k, v in sorted(by_date.items())]
+    return {"symbol": symbol, "source": src, "daily": rows} if rows else None
+
 
 
 def _ssv_etf_flows(symbol: str) -> Optional[Dict]:

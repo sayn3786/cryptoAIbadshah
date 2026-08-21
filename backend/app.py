@@ -1477,6 +1477,40 @@ def api_etf():
     return jsonify(data)
 
 
+@app.get("/api/etf/history")
+def api_etf_history():
+    """
+    The DURABLE recorded ETF-flow history for one symbol (from etf_flow_daily),
+    with 1m / 3m / 6m / 1y windowed totals — net flow, total bought (inflow) and
+    total sold (outflow). This reads our own accumulated record, not the live
+    provider window, so 6-month / 1-year buying survives the provider rolling
+    past it. Reporting only.
+
+    Query params: `symbol` (BTC/ETH), `environment`, `limit` (recent days
+    returned, default 400), `days` (inclusive lookback for the series).
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    symbol = request.args.get("symbol", "BTC").upper()
+    import etf_store
+    try:
+        since = None
+        days = request.args.get("days")
+        if days and str(days).isdigit():
+            from datetime import datetime, timezone, timedelta
+            since = (datetime.now(timezone.utc) - timedelta(days=int(days))).strftime("%Y-%m-%d")
+        daily = etf_store.list_daily(
+            symbol, since=since,
+            environment=request.args.get("environment"),
+            limit=_int_arg("limit", 400, 1, 5000))
+        summary = etf_store.summarize(daily)
+        return jsonify({"symbol": symbol, "summary": summary,
+                        "recent": daily[:60]})
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.get("/api/btc-top")
 def api_btc_top():
     """BTC cycle-top signals; ?debug=1 shows candle-history availability."""
@@ -3162,6 +3196,15 @@ def api_cron_daily():
     # Twitter). They run in their own workflow via /api/patterns/alert so neither
     # can time the other out.
 
+    # Durable ETF-flow snapshot — folded in here (not a separate Vercel cron) to
+    # stay within the plan's cron-job limit. Idempotent per UTC day; a failure
+    # here must never affect the recs/notification result above.
+    try:
+        import etf_store
+        results["etf_snapshot"] = etf_store.snapshot_daily()
+    except Exception as e:
+        results["etf_snapshot"] = {"ok": False, "error": str(e)}
+
     print(f"[cron/daily] {results}")
     return jsonify({"ok": True, "results": results})
 
@@ -3181,6 +3224,26 @@ def api_cron_tao_snapshot():
     except Exception as e:
         res = {"ok": False, "error": str(e)}
     print(f"[cron/tao-snapshot] {res}")
+    return jsonify({"ok": bool(res.get("ok")), "result": res})
+
+
+@app.get("/api/cron/etf-snapshot")
+@app.post("/api/cron/etf-snapshot")
+def api_cron_etf_snapshot():
+    """
+    Persist today's BTC/ETH spot-ETF net flows into etf_flow_daily so a durable
+    6-month / 1-year record accumulates independent of the provider's rolling
+    window. Own cron (isolated time budget); idempotent per UTC day — the first
+    run backfills the provider's whole window, later runs keep it current.
+    """
+    if not _cron_authorized():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    try:
+        import etf_store
+        res = etf_store.snapshot_daily()
+    except Exception as e:
+        res = {"ok": False, "error": str(e)}
+    print(f"[cron/etf-snapshot] {res}")
     return jsonify({"ok": bool(res.get("ok")), "result": res})
 
 
