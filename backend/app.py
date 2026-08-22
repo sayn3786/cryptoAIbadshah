@@ -32,7 +32,7 @@ from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
                          fetch_aggregated_futures_cvd)
 from indicators import (calculate_rsi_series, calculate_cvd, calculate_obv, detect_fvg,
     find_volume_spikes, detect_engulfing, detect_cvd_divergence,
-    calculate_macd, calculate_ema_trend, detect_whale_activity,
+    calculate_macd, calculate_ema_trend, detect_whale_activity, bull_market_support_band,
     calculate_supertrend, calculate_ichimoku,
     calculate_bollinger_bands, detect_rsi_divergence,
     calculate_vwap, calculate_stoch_rsi, calculate_volume_signal,
@@ -1299,6 +1299,16 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "generated_at":           int(time.time() * 1000),
     })
     analysis["signal"] = generate_signal(analysis)
+
+    # Bull Market Support Band (20W SMA + 21W EMA) — a WEEKLY macro read, so it
+    # is computed only on the weekly view where `spot` closes are weekly. Free:
+    # reuses candles already fetched, and stays off the scan/publish (2H) path.
+    try:
+        analysis["bmsb"] = (bull_market_support_band([c["close"] for c in spot])
+                            if timeframe == "1W" else None)
+    except Exception:
+        analysis["bmsb"] = None
+
     # Dense market-structure status panel (trend / structure / liquidity),
     # built from data already in `analysis` — no extra fetches.
     try:

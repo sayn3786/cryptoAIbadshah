@@ -957,6 +957,55 @@ def calculate_ema_trend(closes: List[float]) -> Dict:
     }
 
 
+def bull_market_support_band(closes: List[float]) -> Optional[Dict]:
+    """
+    The Bull Market Support Band — the 20-week SMA and the 21-week EMA.
+
+    The line a BTC bull market is expected to hold above: price riding the band
+    is bullish structure, and a weekly CLOSE below it has marked the shift out of
+    every prior bull phase. ``closes`` are WEEKLY closes, oldest first, so this is
+    only meaningful on the weekly timeframe. Returns the two lines, the band they
+    bound, where the last close sits relative to it, and a plain read — or None
+    when there are fewer than 21 weekly closes to seed the 21-week EMA.
+    """
+    vals = [float(c) for c in (closes or []) if c is not None]
+    if len(vals) < 21:
+        return None
+    sma20 = sum(vals[-20:]) / 20.0
+    # 21-week EMA, seeded on the first 21 closes.
+    k = 2.0 / (21 + 1)
+    ema21 = sum(vals[:21]) / 21.0
+    for c in vals[21:]:
+        ema21 = c * k + ema21 * (1 - k)
+
+    price = vals[-1]
+    low, high = min(sma20, ema21), max(sma20, ema21)
+    if price >= high:
+        status = "above"
+        note = "price is holding above the band — bull-market structure intact"
+        dist = (price - high) / price * 100
+    elif price <= low:
+        status = "below"
+        note = ("price is below the band — bull support lost; a weekly close back "
+                "above is needed to repair it")
+        dist = (price - low) / price * 100
+    else:
+        status = "inside"
+        note = "price is testing the band — the level that decides the weekly trend"
+        dist = 0.0
+
+    return {
+        "sma_20w":      round(sma20, 2),
+        "ema_21w":      round(ema21, 2),
+        "band_low":     round(low, 2),
+        "band_high":    round(high, 2),
+        "price":        round(price, 2),
+        "status":       status,          # above | inside | below
+        "distance_pct": round(dist, 2),  # signed % from the nearer edge
+        "note":         note,
+    }
+
+
 def detect_whale_activity(candles: List[Dict], lookback: int = 20,
                            vol_threshold: float = 2.5,
                            taker_threshold: float = 0.65,

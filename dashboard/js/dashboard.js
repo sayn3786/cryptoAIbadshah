@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '220';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '221';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -348,6 +348,7 @@ function renderAll(a) {
   renderVolSignalCard(a.vol_signal);
   renderBtcMiningCard(a.btc_mining, a.symbol);
   renderOnchainMetrics(a.btc_mining, a.symbol, a.lth_supply);
+  renderBmsb(a.bmsb);
   renderGoMiningAdvisor(a.gomining_strategy, a.symbol, a.gomining_token_signal);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
@@ -2917,6 +2918,35 @@ function _renderEtfRecorded(symbol) {
         </div>`;
     })
     .catch(() => {});
+}
+
+function renderBmsb(b) {
+  const sec = document.getElementById('bmsbSection');
+  const body = document.getElementById('bmsbBody');
+  if (!sec || !body) return;
+  if (!b) { sec.style.display = 'none'; return; }         // weekly view only
+  sec.style.display = '';
+
+  const cls = b.status === 'above' ? 'bull' : b.status === 'below' ? 'bear' : '';
+  const label = b.status === 'above' ? '▲ Above band'
+              : b.status === 'below' ? '▼ Below band' : '◆ Testing band';
+  const dist = (b.distance_pct == null || b.status === 'inside')
+    ? '' : ` (${b.distance_pct >= 0 ? '+' : ''}${b.distance_pct}%)`;
+  const fmt = v => v == null ? '—'
+    : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const row = (lbl, val) => `<div style="display:flex;justify-content:space-between">
+      <span style="opacity:.6">${lbl}</span><strong>${val}</strong></div>`;
+
+  body.innerHTML = `
+    <div class="${cls}" style="font-size:15px;font-weight:700;margin-bottom:8px">
+      ${label}<span style="opacity:.7;font-weight:500">${dist}</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:13px">
+      ${row('Price', fmt(b.price))}
+      ${row('Band', `${fmt(b.band_low)}–${fmt(b.band_high)}`)}
+      ${row('20W SMA', fmt(b.sma_20w))}
+      ${row('21W EMA', fmt(b.ema_21w))}
+    </div>
+    <div style="margin-top:8px;font-size:12px;opacity:.7">${b.note || ''}</div>`;
 }
 
 function renderFNGCard(fg) {
