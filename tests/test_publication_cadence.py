@@ -130,7 +130,7 @@ def test_a_day_has_exactly_six_cache_keys(monkeypatch):
 def test_cache_key_carries_the_strategy_generation(monkeypatch):
     # The key is versioned so a strategy bump cannot serve a stale set that was
     # built under the previous rules.
-    assert _key_at(monkeypatch, 16).startswith("v48_4h_avg_")
+    assert _key_at(monkeypatch, 16).startswith("v49_4h_avg_")
 
 
 def test_the_slot_changes_exactly_on_the_boundary(monkeypatch):

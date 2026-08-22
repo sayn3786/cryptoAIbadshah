@@ -42,8 +42,16 @@ __all__ = [
 # than restating them, so changing one moves production and the backtest
 # together or fails the parity suite.
 
-# Minimum conviction after the BTC adjustment. Below this is noise.
-MIN_ADJUSTED_STRENGTH = 32
+# Minimum conviction after the BTC adjustment.
+# Raised 32 → 51 (v49): the strength calibration showed the Moderate tier
+# (33-51) losing money in BOTH powered cohorts — v45 (47.6% win, -0.76%
+# expectancy) and v48 (60% win, -0.54%) — while Strong (51+) and Confirmed were
+# breakeven-or-better across the same regimes. It was the one negative band that
+# did NOT flip with the market, so the floor now clears the whole Moderate tier
+# and only Strong+ publishes. Cuts volume (~30% of candidates sat in that band)
+# in exchange for dropping a consistent loser; the app still serves its
+# top-ranked survivors each slot.
+MIN_ADJUSTED_STRENGTH = 51
 
 # Never publish a trade whose downside is worth more than its upside is.
 # Raised 1.3 → 1.5 (v47): the v45 postmortem's thin_reward_to_risk flag (R/R <
