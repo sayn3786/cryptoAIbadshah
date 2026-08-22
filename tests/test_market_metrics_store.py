@@ -75,6 +75,22 @@ def test_scope_is_upper_cased():
     assert _val(rows, "BTC", "funding_rate") == 0.01
 
 
+def test_funding_is_read_from_current_8h_the_real_provider_shape():
+    # The funding dict has NO top-level `rate`; the normalized rate is current_8h
+    # (this was the gap — funding_rate never recorded because we read `rate`).
+    fr = {"BTC": {"current": 0.018, "current_8h": 0.012, "average": 0.02,
+                  "history": [{"rate": 0.012}], "source": "coinglass"}}
+    rows = mm.build_rows(date="2026-08-18", funding=fr)
+    assert _val(rows, "BTC", "funding_rate") == 0.012           # current_8h, not history
+    src = next(r for r in rows if r["metric"] == "funding_rate")["source"]
+    assert src == "coinglass"
+
+
+def test_a_zero_funding_rate_is_kept_not_dropped():
+    rows = mm.build_rows(date="2026-08-18", funding={"BTC": {"current_8h": 0.0}})
+    assert _val(rows, "BTC", "funding_rate") == 0.0
+
+
 # ── Persistence with a fake session (no database) ────────────────────────────
 
 class _Result:
