@@ -957,51 +957,78 @@ def calculate_ema_trend(closes: List[float]) -> Dict:
     }
 
 
-def bull_market_support_band(closes: List[float]) -> Optional[Dict]:
+def bull_market_support_band(closes: List[float],
+                             live_price: Optional[float] = None) -> Optional[Dict]:
     """
     The Bull Market Support Band — the 20-week SMA and the 21-week EMA.
 
-    The line a BTC bull market is expected to hold above: price riding the band
-    is bullish structure, and a weekly CLOSE below it has marked the shift out of
-    every prior bull phase. ``closes`` are WEEKLY closes, oldest first, so this is
-    only meaningful on the weekly timeframe. Returns the two lines, the band they
-    bound, where the last close sits relative to it, and a plain read — or None
-    when there are fewer than 21 weekly closes to seed the 21-week EMA.
+    The line a BTC bull market is expected to hold above. Two reads, because they
+    can disagree mid-week and the difference is the whole point:
+
+      * ``status`` — where the LIVE price sits relative to the band, the "holding
+        above / lost it" read a chart shows right now.
+      * ``close_status`` — where the last CLOSED weekly candle sits. This is the
+        one that CONFIRMS: a weekly close is what marks a real break or repair, so
+        a live reclaim with the weekly close still pending is not yet confirmed.
+
+    ``closes`` are the CLOSED weekly closes (oldest first); the band's two MAs are
+    built from them, repaint-free. ``live_price`` is the current (forming-week)
+    price — when given, it drives ``status`` and ``weekly_close_pending`` flags
+    the divergence. None until 21 weekly closes exist.
     """
     vals = [float(c) for c in (closes or []) if c is not None]
     if len(vals) < 21:
         return None
     sma20 = sum(vals[-20:]) / 20.0
-    # 21-week EMA, seeded on the first 21 closes.
-    k = 2.0 / (21 + 1)
+    k = 2.0 / (21 + 1)                       # 21-week EMA, seeded on the first 21
     ema21 = sum(vals[:21]) / 21.0
     for c in vals[21:]:
         ema21 = c * k + ema21 * (1 - k)
 
-    price = vals[-1]
     low, high = min(sma20, ema21), max(sma20, ema21)
-    if price >= high:
-        status = "above"
-        note = "price is holding above the band — bull-market structure intact"
+    last_close = vals[-1]
+    price = float(live_price) if live_price else last_close
+
+    def _classify(p):
+        return "above" if p >= high else "below" if p <= low else "inside"
+
+    status = _classify(price)
+    close_status = _classify(last_close)
+    pending = live_price is not None and abs(price - last_close) > 1e-9 \
+        and status != close_status
+
+    if status == "above":
         dist = (price - high) / price * 100
-    elif price <= low:
-        status = "below"
-        note = ("price is below the band — bull support lost; a weekly close back "
-                "above is needed to repair it")
+    elif status == "below":
         dist = (price - low) / price * 100
     else:
-        status = "inside"
-        note = "price is testing the band — the level that decides the weekly trend"
         dist = 0.0
+
+    if pending and status == "above" and close_status != "above":
+        note = ("live price has reclaimed the band, but the last weekly CLOSE was "
+                "below it — a weekly close above the band confirms the repair")
+    elif pending and status == "below" and close_status == "above":
+        note = ("live price has slipped below the band, but the last weekly CLOSE "
+                "held above — the weekly close is what counts, so watch it")
+    elif status == "above":
+        note = "price is holding above the band — bull-market structure intact"
+    elif status == "below":
+        note = ("price is below the band — bull support lost; a weekly close back "
+                "above is needed to repair it")
+    else:
+        note = "price is testing the band — the level that decides the weekly trend"
 
     return {
         "sma_20w":      round(sma20, 2),
         "ema_21w":      round(ema21, 2),
         "band_low":     round(low, 2),
         "band_high":    round(high, 2),
-        "price":        round(price, 2),
-        "status":       status,          # above | inside | below
-        "distance_pct": round(dist, 2),  # signed % from the nearer edge
+        "price":        round(price, 2),          # live
+        "last_close":   round(last_close, 2),     # confirmed weekly close
+        "status":       status,                   # live: above | inside | below
+        "close_status": close_status,             # confirmed weekly-close status
+        "weekly_close_pending": bool(pending),
+        "distance_pct": round(dist, 2),           # signed % from the nearer edge (live)
         "note":         note,
     }
 

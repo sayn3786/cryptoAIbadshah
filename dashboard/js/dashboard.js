@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '221';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '222';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2927,21 +2927,34 @@ function renderBmsb(b) {
   if (!b) { sec.style.display = 'none'; return; }         // weekly view only
   sec.style.display = '';
 
-  const cls = b.status === 'above' ? 'bull' : b.status === 'below' ? 'bear' : '';
-  const label = b.status === 'above' ? '▲ Above band'
-              : b.status === 'below' ? '▼ Below band' : '◆ Testing band';
+  const stCls = s => s === 'above' ? 'bull' : s === 'below' ? 'bear' : '';
+  const stLbl = s => s === 'above' ? '▲ Above band'
+                   : s === 'below' ? '▼ Below band' : '◆ Testing band';
   const dist = (b.distance_pct == null || b.status === 'inside')
     ? '' : ` (${b.distance_pct >= 0 ? '+' : ''}${b.distance_pct}%)`;
   const fmt = v => v == null ? '—'
     : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
-  const row = (lbl, val) => `<div style="display:flex;justify-content:space-between">
-      <span style="opacity:.6">${lbl}</span><strong>${val}</strong></div>`;
+  const row = (lbl, val, extra) => `<div style="display:flex;justify-content:space-between">
+      <span style="opacity:.6">${lbl}</span><strong>${val}${extra || ''}</strong></div>`;
+
+  // The confirmed weekly close, shown with its own colour when it disagrees.
+  const closeTag = (b.last_close != null && b.close_status)
+    ? ` <span class="${stCls(b.close_status)}" style="font-weight:500;font-size:11px">(${b.close_status})</span>`
+    : '';
+  const pending = b.weekly_close_pending
+    ? `<span style="display:inline-block;margin-left:8px;font-size:11px;font-weight:600;
+         padding:1px 7px;border-radius:10px;background:rgba(245,158,11,.15);color:#f59e0b">
+         ⏳ weekly close pending</span>` : '';
 
   body.innerHTML = `
-    <div class="${cls}" style="font-size:15px;font-weight:700;margin-bottom:8px">
-      ${label}<span style="opacity:.7;font-weight:500">${dist}</span></div>
+    <div style="margin-bottom:8px">
+      <span class="${stCls(b.status)}" style="font-size:15px;font-weight:700">
+        ${stLbl(b.status)}<span style="opacity:.7;font-weight:500">${dist}</span></span>
+      ${pending}
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:13px">
-      ${row('Price', fmt(b.price))}
+      ${row('Price (live)', fmt(b.price))}
+      ${row('Last wk close', fmt(b.last_close), closeTag)}
       ${row('Band', `${fmt(b.band_low)}–${fmt(b.band_high)}`)}
       ${row('20W SMA', fmt(b.sma_20w))}
       ${row('21W EMA', fmt(b.ema_21w))}
