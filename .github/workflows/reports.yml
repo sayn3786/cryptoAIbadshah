@@ -7,6 +7,11 @@ name: Dump Signal Reports
 # a strategy_version, else the current default is used alongside v45 for compare.
 
 on:
+  schedule:
+    # Weekly (Sunday 06:17 UTC) — dumps the current cadence/postmortem/analytics
+    # to the run log so the strategy's numbers accrue a persistent archive
+    # without anyone having to remember. Reads only; no writes, no publication.
+    - cron: '17 6 * * 0'
   workflow_dispatch:
     inputs:
       version:
