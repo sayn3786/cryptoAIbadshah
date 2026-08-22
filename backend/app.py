@@ -3231,15 +3231,6 @@ def api_cron_daily():
     # Twitter). They run in their own workflow via /api/patterns/alert so neither
     # can time the other out.
 
-    # Durable ETF-flow snapshot — folded in here (not a separate Vercel cron) to
-    # stay within the plan's cron-job limit. Idempotent per UTC day; a failure
-    # here must never affect the recs/notification result above.
-    try:
-        import etf_store
-        results["etf_snapshot"] = etf_store.snapshot_daily()
-    except Exception as e:
-        results["etf_snapshot"] = {"ok": False, "error": str(e)}
-
     print(f"[cron/daily] {results}")
     return jsonify({"ok": True, "results": results})
 
@@ -3258,16 +3249,8 @@ def api_cron_tao_snapshot():
         res = _tao_snapshot_daily()
     except Exception as e:
         res = {"ok": False, "error": str(e)}
-    # Daily market-state metrics ride this isolated snapshot cron (not the busy
-    # recs/notification daily cron, and not a third Vercel cron). Guarded so a
-    # market-metrics failure never touches the TAO result.
-    try:
-        import market_metrics_store
-        market = market_metrics_store.snapshot_daily()
-    except Exception as e:
-        market = {"ok": False, "error": str(e)}
-    print(f"[cron/tao-snapshot] tao={res} market={market}")
-    return jsonify({"ok": bool(res.get("ok")), "result": res, "market_metrics": market})
+    print(f"[cron/tao-snapshot] {res}")
+    return jsonify({"ok": bool(res.get("ok")), "result": res})
 
 
 @app.get("/api/cron/market-snapshot")

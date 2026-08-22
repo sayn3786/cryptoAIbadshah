@@ -1,0 +1,54 @@
+name: Daily Data Snapshots
+
+# Records the durable daily history — spot-ETF net flows (etf_flow_daily) and
+# market-state metrics (market_metric_daily). Each hits its OWN standalone
+# endpoint, so it is a separate serverless invocation with its own 60s budget:
+# these MUST NOT ride /api/cron/daily, which already runs close to the timeout
+# computing recommendations (folding a snapshot in there is what 504'd it).
+#
+# Both snapshots are idempotent per UTC day, so retries are always safe — there
+# is no dedup concern like the Telegram cron has.
+
+on:
+  schedule:
+    - cron: '30 1 * * *'    # 01:30 UTC daily — after the providers refresh
+  workflow_dispatch:        # allow a manual run from the GitHub UI
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ETF flow snapshot
+        run: |
+          set -u
+          for i in 1 2 3; do
+            echo "--- etf attempt $i of 3 ---"
+            R=$(curl -s -w "\nHTTP:%{http_code}" \
+              -X POST "${{ secrets.APP_URL }}/api/cron/etf-snapshot" \
+              -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+              --max-time 90 || echo "HTTP:000")
+            S=$(echo "$R" | grep "HTTP:" | cut -d: -f2)
+            echo "$R" | sed '/HTTP:/d'
+            [ "$S" = "200" ] && exit 0
+            { [ "$S" = "401" ] || [ "$S" = "404" ]; } && { echo "config error — not retrying"; exit 1; }
+            [ "$i" -lt 3 ] && sleep $((i * 20))
+          done
+          echo "ERROR: ETF snapshot failed after 3 attempts."; exit 1
+
+      - name: Market metrics snapshot
+        if: always()          # independent of the ETF step's outcome
+        run: |
+          set -u
+          for i in 1 2 3; do
+            echo "--- market attempt $i of 3 ---"
+            R=$(curl -s -w "\nHTTP:%{http_code}" \
+              -X POST "${{ secrets.APP_URL }}/api/cron/market-snapshot" \
+              -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+              --max-time 90 || echo "HTTP:000")
+            S=$(echo "$R" | grep "HTTP:" | cut -d: -f2)
+            echo "$R" | sed '/HTTP:/d'
+            [ "$S" = "200" ] && exit 0
+            { [ "$S" = "401" ] || [ "$S" = "404" ]; } && { echo "config error — not retrying"; exit 1; }
+            [ "$i" -lt 3 ] && sleep $((i * 20))
+          done
+          echo "ERROR: market snapshot failed after 3 attempts."; exit 1
