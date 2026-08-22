@@ -46,6 +46,30 @@ def test_price_below_the_band_reads_bear_support_lost():
     assert "below the band" in b["note"]
 
 
+def test_live_reclaim_with_the_weekly_close_still_below_is_pending():
+    # Last weekly CLOSE below the band, but LIVE price back above it: the live
+    # read is bullish, the confirmed read is not, and the close is pending.
+    closes = [100.0] * 25 + [80.0]        # last close 80 → below a ~100 band
+    b = bmsb(closes, live_price=130.0)
+    assert b["price"] == 130.0 and b["last_close"] == 80.0
+    assert b["status"] == "above"          # live
+    assert b["close_status"] == "below"    # confirmed
+    assert b["weekly_close_pending"] is True
+    assert "weekly close above" in b["note"] and "reclaim" in b["note"]
+
+
+def test_no_pending_flag_when_live_and_close_agree():
+    b = bmsb([100.0] * 25 + [130.0], live_price=135.0)
+    assert b["status"] == "above" and b["close_status"] == "above"
+    assert b["weekly_close_pending"] is False
+
+
+def test_without_a_live_price_it_falls_back_to_the_last_close():
+    b = bmsb([100.0] * 25 + [130.0])
+    assert b["price"] == b["last_close"] == 130.0
+    assert b["weekly_close_pending"] is False
+
+
 def test_the_two_lines_are_the_20w_sma_and_21w_ema():
     closes = [float(x) for x in range(1, 40)]     # rising ramp
     b = bmsb(closes)

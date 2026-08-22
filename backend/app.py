@@ -1304,8 +1304,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # is computed only on the weekly view where `spot` closes are weekly. Free:
     # reuses candles already fetched, and stays off the scan/publish (2H) path.
     try:
-        analysis["bmsb"] = (bull_market_support_band([c["close"] for c in spot])
-                            if timeframe == "1W" else None)
+        analysis["bmsb"] = (
+            bull_market_support_band([c["close"] for c in spot], live_price=live_price)
+            if timeframe == "1W" else None)
     except Exception:
         analysis["bmsb"] = None
 
