@@ -42,6 +42,16 @@ def _f(value) -> Optional[float]:
         return None
 
 
+def _first(d: Dict, *keys):
+    """First key present with a non-None value — preserves a legitimate 0.0
+    (a funding rate of exactly zero is real, so `or`-chaining would drop it)."""
+    for k in keys:
+        v = d.get(k)
+        if v is not None:
+            return v
+    return None
+
+
 # ── Row building (pure) ──────────────────────────────────────────────────────
 
 def build_rows(*, date: str,
@@ -80,10 +90,16 @@ def build_rows(*, date: str,
 
     for sym, fr in (funding or {}).items():
         if isinstance(fr, dict):
-            add(sym, "funding_rate", fr.get("rate"), "exchange")
+            # The funding dict carries the rate under `current_8h` (normalized to
+            # an 8h basis, the comparable figure) — NOT a top-level `rate` key,
+            # which only appears on the nested history rows. current/average are
+            # fallbacks; `rate` is kept for any provider that flattens it.
+            add(sym, "funding_rate",
+                _first(fr, "current_8h", "current", "rate", "average"),
+                fr.get("source") or "exchange")
     for sym, oi in (open_interest or {}).items():
         if isinstance(oi, dict):
-            add(sym, "open_interest", oi.get("value"), "exchange",
+            add(sym, "open_interest", oi.get("value"), oi.get("source") or "exchange",
                 {"change_pct": _f(oi.get("change_pct"))})
 
     return rows
@@ -227,16 +243,28 @@ def snapshot_daily(*, environment: Optional[str] = None, session=None) -> Dict[s
             fear = _app._fetch_fear_greed()
         except Exception:                                    # noqa: BLE001
             pass
+        # Source funding/OI the way build_analysis does — CoinGlass first (it
+        # works where Binance futures is geo-blocked on Vercel and flags its
+        # source), the market client as fallback — so the recorded figure matches
+        # what the signals see and is a real read, not a mock.
+        cg = getattr(_app, "cg_client", None)
+        cg_on = bool(cg is not None and getattr(cg, "enabled", False))
         for sym in ("BTC", "ETH"):
             bs = (getattr(_app, "SYMBOLS", {}) or {}).get(sym)
             if not bs:
                 continue
             try:
-                funding[sym] = _app.client.get_funding_rate(bs)
+                fr = (cg.get_funding_rate(bs) if cg_on else None) \
+                    or _app.client.get_funding_rate(bs)
+                if fr:
+                    funding[sym] = fr
             except Exception:                                # noqa: BLE001
                 pass
             try:
-                oi[sym] = _app.client.get_open_interest(bs, "1D")
+                o = (cg.get_open_interest(bs) if cg_on else None) \
+                    or _app.client.get_open_interest(bs, "1D")
+                if o:
+                    oi[sym] = o
             except Exception:                                # noqa: BLE001
                 pass
     try:
