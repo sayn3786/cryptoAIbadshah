@@ -1,0 +1,34 @@
+name: Dump Signal Reports
+
+# On-demand: fetches the public read-only report endpoints (cadence, postmortem,
+# analytics) and prints the JSON to the run log, so the current state can be read
+# without a database client. No secret needed beyond APP_URL — these endpoints
+# are public reads. Trigger from the Actions tab (Run workflow); optionally pass
+# a strategy_version, else the current default is used alongside v45 for compare.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'strategy_version for the "current" block (blank = deployment default)'
+        required: false
+        default: ''
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch reports
+        run: |
+          set -u
+          BASE="${{ secrets.APP_URL }}"
+          V="${{ github.event.inputs.version }}"
+          Q=""; [ -n "$V" ] && Q="?strategy_version=$V"
+          get() { echo "===== $1 ====="; curl -s --max-time 70 "$BASE$2"; echo; echo; }
+
+          get "CADENCE current default"        "/api/signals/cadence$Q"
+          get "CADENCE v45"                    "/api/signals/cadence?strategy_version=v45_4h_avg"
+          get "POSTMORTEM v45"                 "/api/signals/postmortem-report?strategy_version=v45_4h_avg"
+          get "ANALYTICS v45"                  "/api/signals/analytics?strategy_version=v45_4h_avg"
+          get "POSTMORTEM current default"     "/api/signals/postmortem-report$Q"
+          get "ANALYTICS current default"      "/api/signals/analytics$Q"
