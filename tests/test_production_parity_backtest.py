@@ -143,6 +143,24 @@ def test_the_rr_floor_is_1_5_and_the_thin_band_is_rejected():
     assert at_floor["ok"]
 
 
+def test_the_strength_floor_is_51_and_the_moderate_tier_is_rejected():
+    """
+    v49 raised the min-strength floor 32 → 51 after the calibration showed the
+    Moderate tier (33-51) losing money in both the v45 and v48 cohorts. Pins the
+    number and proves a Moderate-band candidate (strength 45) is now rejected as
+    MIN_STRENGTH, while a Strong one (55) clears.
+    """
+    assert rec_policy.MIN_ADJUSTED_STRENGTH == 51
+    moderate = rec_policy.screen_candidate(
+        _tf_read("LONG", 45), _tf_read("LONG", 45), None,
+        corr_factor=1.0, influence=NEUTRAL_BTC)
+    assert (moderate["ok"], moderate["reason"]) == (False, "MIN_STRENGTH")
+    strong = rec_policy.screen_candidate(
+        _tf_read("LONG", 55), _tf_read("LONG", 55), None,
+        corr_factor=1.0, influence=NEUTRAL_BTC)
+    assert strong["ok"]
+
+
 def test_changing_a_gate_constant_moves_the_replay(monkeypatch):
     """
     The parity test with teeth. Raise the R/R floor above the candidate's ratio

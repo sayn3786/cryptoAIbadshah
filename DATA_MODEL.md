@@ -104,7 +104,7 @@ the P/L.
 | `timeframe` | `text` | no | `2H` for published recommendations. |
 | `direction` | `text` | no | `LONG` or `SHORT`. CHECK-constrained. |
 | `strategy_name` | `text` | no | `mtf_confluence_top3`. |
-| `strategy_version` | `text` | no | e.g. `v48_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
+| `strategy_version` | `text` | no | e.g. `v49_4h_avg`. Bumped whenever the maths changes, so old and new signals stay independently analysable. |
 | `candle_open_time` | `timestamptz` | no | Open of the closed candle the decision was made on. |
 | `candle_close_time` | `timestamptz` | no | Close of that candle. **Part of the idempotency key.** |
 | `generated_at` | `timestamptz` | no | When the recommendation was published. Drives the batch/slot grouping. |
@@ -291,7 +291,7 @@ cohorts to fill (≈15 closed for a first qualitative read, ≈30 for a quantita
 one), then:
 
 ```
-GET /api/signals/postmortem-report?strategy_version=v48_4h_avg
+GET /api/signals/postmortem-report?strategy_version=v49_4h_avg
 ```
 
 Check `powered` before reading the discriminators; if it is false the sample is

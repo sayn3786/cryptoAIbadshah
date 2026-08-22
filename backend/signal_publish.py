@@ -48,10 +48,12 @@ STRATEGY_NAME = "mtf_confluence_top3"
 # thin_reward_to_risk flag came out over-represented in the v45 losers.
 # v48: pulled the ATR/RR fallback take-profit ladder in — TP2 3.5→2.6R, TP3
 # 5.5→3.6R — after the analytics showed TP2/TP3 were reached only 5.6%/2.2% of
-# the time, so winners banked only the TP1 tranche. Changes the targets (and so
-# realized returns) of every fallback-laddered trade, so v47 and v48 are not
-# comparable and the postmortem cohort restarts here.
-_DEFAULT_STRATEGY_VERSION = "v48_4h_avg"
+# the time, so winners banked only the TP1 tranche.
+# v49: raised the min-strength floor 32 → 51 (rec_policy.MIN_ADJUSTED_STRENGTH),
+# gating out the Moderate tier — the one strength band that lost money in both
+# the v45 and v48 powered cohorts. Changes WHICH trades clear the gate, so v48
+# and v49 are not comparable and the postmortem cohort restarts here.
+_DEFAULT_STRATEGY_VERSION = "v49_4h_avg"
 STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
                     or _DEFAULT_STRATEGY_VERSION)
 

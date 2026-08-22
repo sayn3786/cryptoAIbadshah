@@ -2834,7 +2834,9 @@ def _rec_cache_key() -> str:
     #       over-represented in the losers and negative-expectancy.
     #   v48 ATR/RR fallback TP ladder pulled in (TP2 3.5→2.6R, TP3 5.5→3.6R) —
     #       TP2/TP3 were almost never reached, so winners banked only TP1.
-    return f"v48_4h_avg_{date}_{slot}"
+    #   v49 min-strength floor raised 32 → 51 — the Moderate tier lost money in
+    #       both the v45 and v48 cohorts; only Strong+ now publishes.
+    return f"v49_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

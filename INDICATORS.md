@@ -847,6 +847,24 @@ v48's own `target_reach` climb in the analytics, or running
 
 ---
 
+### Min-strength floor raised 32 → 51 · *publication gate (v49)*
+
+The strength calibration (`/api/signals/analytics`) showed the **Moderate tier
+(33–51) losing money in BOTH powered cohorts** — v45 (47.6% win, −0.76%
+expectancy) and v48 (60% win, −0.54%) — while Strong (51+) and Confirmed were
+breakeven-or-better across the same regimes. It was the one negative band that
+did NOT flip with the market (unlike the slot and direction effects, which
+reversed week to week), which is what makes it a real read rather than a regime
+artefact. `rec_policy.MIN_ADJUSTED_STRENGTH` moves 32 → 51, so the gate now
+clears the whole Moderate tier and only **Strong+** publishes. It cuts volume
+(~30% of candidates sat in that band) in exchange for dropping a consistent
+loser; the app still serves its top-ranked survivors each slot. A gate, not a
+re-weight — the parity backtest reads the constant, so production and the replay
+moved together. `STRATEGY_VERSION` moved to **v49_4h_avg**; v48 rows are not
+comparable and the cohort restarts.
+
+---
+
 ### Expired Setups · *publication gate, not scoring*
 *Removes a recommendation entirely; never changes a strength number.*
 
