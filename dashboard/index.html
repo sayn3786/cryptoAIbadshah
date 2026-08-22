@@ -337,6 +337,17 @@
     </div>
   </section>
 
+  <!-- Bull Market Support Band (weekly 20W SMA + 21W EMA). Weekly view only. -->
+  <section id="bmsbSection" style="display:none">
+    <div class="card">
+      <div class="card-hdr">
+        <span>🎗️ Bull Market Support Band</span>
+        <span class="card-sub">20W SMA + 21W EMA · weekly</span>
+      </div>
+      <div id="bmsbBody"></div>
+    </div>
+  </section>
+
   <!-- News Sentiment card -->
   <div class="card news-card" id="newsCard">
     <h3 class="card-title">
@@ -848,7 +859,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="/dashboard/js/dashboard.js?v=220"></script>
+<script src="/dashboard/js/dashboard.js?v=221"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
