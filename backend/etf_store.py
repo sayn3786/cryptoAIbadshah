@@ -33,6 +33,10 @@ __all__ = [
 # 1 month / 3 months / 6 months / 1 year — the windows the analysis reports.
 WINDOWS = (30, 90, 180, 365)
 
+# Rows per batched INSERT. A first backfill of ~300 days x two symbols must not
+# become ~600 round-trips inside the 60s function ceiling.
+_UPSERT_CHUNK = 100
+
 # Symbols snapshotted by the daily cron. BTC and ETH have working SoSoValue API
 # coverage; SOL does too and can be added, XRP/HBAR return no API rows yet.
 SNAPSHOT_SYMBOLS = ("BTC", "ETH")
@@ -71,20 +75,31 @@ def upsert_daily(symbol: str, rows: Sequence[Dict[str, Any]], source: str, *,
         if not has_etf_table(s):
             return {"written": 0, "skipped_reason": "MIGRATION_007_NOT_APPLIED",
                     "latest": None}
+        # Batched multi-row upsert. A first backfill is ~300 days x symbol, and
+        # one INSERT per row is ~600 round-trips that blow the 60s function
+        # ceiling; chunked VALUES makes it a handful of statements instead.
+        sym = symbol.upper()
         written = 0
-        for r in rows:
-            res = s.execute(_sql("""
+        for i in range(0, len(rows), _UPSERT_CHUNK):
+            chunk = rows[i:i + _UPSERT_CHUNK]
+            values, params = [], {}
+            for j, r in enumerate(chunk):
+                values.append(f"(:e{j}, :s{j}, :d{j}, :n{j}, :src{j})")
+                params[f"e{j}"] = env
+                params[f"s{j}"] = sym
+                params[f"d{j}"] = str(r["date"])[:10]
+                params[f"n{j}"] = _f(r["net_usd"])
+                params[f"src{j}"] = source
+            res = s.execute(_sql(f"""
                 INSERT INTO etf_flow_daily
                     (environment, symbol, flow_date, net_usd, source)
-                VALUES (:environment, :symbol, :flow_date, :net_usd, :source)
+                VALUES {', '.join(values)}
                 ON CONFLICT (environment, symbol, flow_date) DO UPDATE
                     SET net_usd = EXCLUDED.net_usd,
                         source  = EXCLUDED.source,
                         updated_at = now()
                     WHERE etf_flow_daily.net_usd IS DISTINCT FROM EXCLUDED.net_usd
-            """), {"environment": env, "symbol": symbol.upper(),
-                   "flow_date": str(r["date"])[:10], "net_usd": _f(r["net_usd"]),
-                   "source": source})
+            """), params)
             written += int(res.rowcount or 0)
         return {"written": written, "skipped_reason": None,
                 "latest": max(str(r["date"])[:10] for r in rows)}

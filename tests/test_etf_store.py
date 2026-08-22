@@ -118,19 +118,31 @@ class _Result:
 class _FakeSession:
     def __init__(self, table_exists=True):
         self.table_exists = table_exists
-        self.writes = 0
+        self.statements = 0
     def execute(self, sql, params=None):
-        if "to_regclass" in str(sql):
+        s = str(sql)
+        if "to_regclass" in s:
             return _Result(scalar=self.table_exists)
-        self.writes += 1
-        return _Result(rowcount=1)
+        self.statements += 1
+        # rowcount = number of value tuples in this batched INSERT
+        return _Result(rowcount=max(1, s.count("(:e")))
 
 
-def test_upsert_counts_writes_and_reports_latest():
+def test_upsert_batches_and_counts_rows():
     s = _FakeSession(table_exists=True)
     res = es.upsert_daily("btc", _SERIES, "sosovalue", environment="test", session=s)
     assert res["written"] == 4 and res["latest"] == "2026-08-13"
-    assert s.writes == 4
+    assert s.statements == 1                    # 4 rows → one batched statement
+
+
+def test_a_backfill_is_chunked_not_one_statement_per_row():
+    # 250 days must not become 250 round-trips (that blows the 60s ceiling).
+    big = [{"date": f"2026-{(m % 12) + 1:02d}-{(d % 28) + 1:02d}", "net_usd": d}
+           for m, d in enumerate(range(250))]
+    s = _FakeSession(table_exists=True)
+    res = es.upsert_daily("BTC", big, "sosovalue", environment="test", session=s)
+    assert res["written"] == 250
+    assert s.statements == 3                    # ceil(250 / 100)
 
 
 def test_upsert_skips_cleanly_when_migration_not_applied():
