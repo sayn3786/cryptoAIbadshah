@@ -123,3 +123,35 @@ def test_a_confirmed_divergence_carries_no_countdown():
     assert not div.get("forming")
     assert "closes_to_confirm" not in div
     assert "unconfirmed" not in (div["description"] or "")
+
+
+# ── Played out: the turn already happened before the pivot confirmed ─────────
+
+def _played_out_bullish(closes_since=2):
+    """The forming-bullish setup, but the bounce ALREADY happened: after the
+    provisional low, price CLOSES sharply higher and RSI reclaims 50."""
+    candles, rsi, pw = _forming_bullish(closes_since=closes_since)
+    n = len(candles)
+    ti = n - 1 - closes_since
+    for j in range(ti + 1, n):                    # recovery closes after the low
+        candles[j]["close"] = 108.0
+        candles[j]["high"] = 108.4
+        rsi[j] = 56.0
+    return candles, rsi, pw
+
+
+def test_a_played_out_bullish_divergence_is_labelled_not_forming():
+    div = detect_rsi_divergence(*_played_out_bullish()[:2], pivot_window=3)
+    assert div["type"] == "bullish"
+    assert div["played_out"] is True
+    assert div["status"] == "played_out"
+    assert "closes_to_confirm" not in div          # no countdown on a spent read
+    assert "played out" in div["description"]
+
+
+def test_a_still_forming_divergence_is_not_marked_played_out():
+    # The countdown fixture (price has NOT recovered) must stay forming.
+    div = detect_rsi_divergence(*_forming_bullish(closes_since=1)[:2], pivot_window=3)
+    assert div["forming"] is True
+    assert div.get("played_out") is False
+    assert div["status"] == "forming"

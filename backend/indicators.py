@@ -1575,6 +1575,12 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
     # older one on the opposite side. Regular = reversal; hidden = continuation.
     PX = 0.005   # min 0.5% price move between the two pivots
     RS = 2.0     # min 2-pt RSI move between the two pivots
+    # A forming divergence has "played out" once its predicted turn already
+    # happened before the pivot mechanically confirmed: price recovered this far
+    # off the provisional low (or high) AND momentum reclaimed the RSI midline.
+    # Then it is a spent, confirmed read — not a fresh "⏳ forming" setup.
+    PLAYOUT_PCT = 0.03
+    PLAYOUT_RSI = 50.0
     cands = []
 
     # How long a confirmed divergence stays worth acting on, in CLOSED candles
@@ -1675,28 +1681,45 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
             return ("1 more close holds" if left == 1
                     else f"{left} more closes hold")
 
+        _rsi_now = rsi_v[n - 1]
+        _px_now = closes[n - 1]
         if swing_lows:
             i0, p_price, p_rsi = swing_lows[-1]
             ti = min(tail, key=lambda i: lows[i])
             if (p_price - lows[ti]) / (p_price + 1e-12) > PX and rsi_v[ti] - p_rsi > RS:
                 left = _left(ti)
-                cands.append({"type": "bullish", "forming": True, "_idx": ti,
-                    "points": _pts("low", i0, ti),
+                # "Played out" = price CLOSED back up from the pivot candle's
+                # close (close-to-close, so a lower wick alone never counts) and
+                # RSI reclaimed the midline.
+                played = (closes[ti] > 0 and _px_now > closes[ti] * (1 + PLAYOUT_PCT)
+                          and _rsi_now is not None and _rsi_now >= PLAYOUT_RSI)
+                desc = ((f"✓ Bullish RSI divergence played out — price reclaimed off the low "
+                         f"(+{(_px_now / closes[ti] - 1) * 100:.1f}%) and RSI back above {PLAYOUT_RSI:.0f}; "
+                         f"the turn it flagged has happened (spent, not a fresh setup)")
+                        if played else
+                        (f"⏳ Forming bullish RSI divergence — price lower low but RSI higher "
+                         f"(+{rsi_v[ti] - p_rsi:.1f} pts); unconfirmed until {_wait(left)}"))
+                cands.append({"type": "bullish", "forming": True, "played_out": played,
+                    "_idx": ti, "points": _pts("low", i0, ti),
                     "strength": round(rsi_v[ti] - p_rsi, 1),
-                    "closes_to_confirm": left,
-                    "description": (f"⏳ Forming bullish RSI divergence — price lower low but RSI higher "
-                                    f"(+{rsi_v[ti] - p_rsi:.1f} pts); unconfirmed until {_wait(left)}")})
+                    "closes_to_confirm": left, "description": desc})
         if swing_highs:
             i0, p_price, p_rsi = swing_highs[-1]
             ti = max(tail, key=lambda i: highs[i])
             if (highs[ti] - p_price) / (p_price + 1e-12) > PX and p_rsi - rsi_v[ti] > RS:
                 left = _left(ti)
-                cands.append({"type": "bearish", "forming": True, "_idx": ti,
-                    "points": _pts("high", i0, ti),
+                played = (closes[ti] > 0 and _px_now < closes[ti] * (1 - PLAYOUT_PCT)
+                          and _rsi_now is not None and _rsi_now <= PLAYOUT_RSI)
+                desc = ((f"✓ Bearish RSI divergence played out — price rolled over from the high "
+                         f"({(_px_now / closes[ti] - 1) * 100:.1f}%) and RSI back below {PLAYOUT_RSI:.0f}; "
+                         f"the turn it flagged has happened (spent, not a fresh setup)")
+                        if played else
+                        (f"⏳ Forming bearish RSI divergence — price higher high but RSI lower "
+                         f"(−{p_rsi - rsi_v[ti]:.1f} pts); unconfirmed until {_wait(left)}"))
+                cands.append({"type": "bearish", "forming": True, "played_out": played,
+                    "_idx": ti, "points": _pts("high", i0, ti),
                     "strength": round(p_rsi - rsi_v[ti], 1),
-                    "closes_to_confirm": left,
-                    "description": (f"⏳ Forming bearish RSI divergence — price higher high but RSI lower "
-                                    f"(−{p_rsi - rsi_v[ti]:.1f} pts); unconfirmed until {_wait(left)}")})
+                    "closes_to_confirm": left, "description": desc})
 
     if not cands:
         return empty
@@ -1719,7 +1742,14 @@ def detect_rsi_divergence(candles: List[Dict], rsi_series: List[Optional[float]]
     chosen["age_candles"] = age
     chosen["fresh_bars"] = FRESH_BARS
 
-    if chosen.get("forming"):
+    if chosen.get("forming") and chosen.get("played_out"):
+        # The pivot has not mechanically confirmed (needs `pw` closes each side),
+        # but the move it predicted already happened — price reclaimed and RSI
+        # crossed the midline. By the book that is confirmation-by-price-action:
+        # a spent, resolved read, not a fresh "⏳ forming" one. Say so.
+        chosen["status"] = "played_out"
+        chosen.pop("closes_to_confirm", None)
+    elif chosen.get("forming"):
         # Not yet a fact, so it has no freshness to lose — it is waiting to
         # become one, and `closes_to_confirm` already says how long that takes.
         chosen["status"] = "forming"

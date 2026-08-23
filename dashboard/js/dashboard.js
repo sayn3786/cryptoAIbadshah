@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '223';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '224';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1686,7 +1686,8 @@ function buildDivergencePanel(div, candles, rsiSeries, now) {
 
   const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
   const accent = bull ? '#34d399' : '#f87171';
-  const dash = div.forming ? '5 5' : div.status === 'expired' ? '2 5' : '7 4';
+  const dash = div.status === 'played_out' ? '7 4'      // solid: the turn confirmed
+             : div.forming ? '5 5' : div.status === 'expired' ? '2 5' : '7 4';
   // Faded, because it is history: the turn it called either happened or did not.
   const liveOp = div.status === 'expired' ? '0.45' : '1';
   const uid = `dv${Math.abs((p.curr.timestamp | 0)).toString(36)}`;
@@ -1961,11 +1962,12 @@ function renderRsiDivCard(div, candles, rsiSeries, now) {
   };
   const isBull = div.type === 'bullish' || div.type === 'hidden_bullish';
   let label = LABELS[div.type] || (isBull ? '🔼 Bullish Divergence' : '🔽 Bearish Divergence');
-  if (div.forming) label = label.replace('Divergence', 'Div. · forming ⏳');
+  if (div.status === 'played_out') label = label.replace('Divergence', 'Div. · played out ✓');
+  else if (div.forming) label = label.replace('Divergence', 'Div. · forming ⏳');
   else if (div.status === 'expired') label = label.replace('Divergence', 'Div. · expired');
   typeEl.textContent = label;
   typeEl.style.color = isBull ? 'var(--bull)' : 'var(--bear)';
-  typeEl.style.opacity = div.forming ? '0.85' : '';
+  typeEl.style.opacity = (div.forming && div.status !== 'played_out') ? '0.85' : '';
   descEl.textContent = div.description || '';
   descEl.style.color = 'var(--muted2)';
   renderDivergencePanel(div, candles, rsiSeries, now);
@@ -1993,7 +1995,8 @@ function renderDivergencePanel(div, candles, rsiSeries, now) {
   if (t) {
     t.textContent = `RSI Divergence — ${bull ? 'Bullish' : 'Bearish'}`
       + (hidden ? ' (hidden · continuation)' : '')
-      + (div.forming ? ' · forming ⏳' : '');
+      + (div.status === 'played_out' ? ' · played out ✓'
+         : div.forming ? ' · forming ⏳' : '');
     t.style.color = bull ? 'var(--bull)' : 'var(--bear)';
   }
   if (sub) {

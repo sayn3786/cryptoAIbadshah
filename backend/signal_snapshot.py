@@ -126,6 +126,10 @@ def _divergence_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
         "rsi_divergence_freshness": _num(d.get("freshness")),
         # Provisional second pivot — the divergence was not confirmed yet.
         "rsi_divergence_forming": None if forming is None else bool(forming),
+        # A forming divergence whose predicted turn ALREADY happened (price
+        # reclaimed + RSI crossed the midline) before the pivot mechanically
+        # confirmed — a spent, resolved read rather than a fresh setup.
+        "rsi_divergence_played_out": bool(d.get("played_out")),
     }
 
 
