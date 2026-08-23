@@ -87,6 +87,15 @@ def build_rows(*, date: str,
         add("BTC", "realized_price", onchain.get("realized_price"), "btc_onchain")
         sopr = onchain.get("sopr") if isinstance(onchain.get("sopr"), dict) else {}
         add("BTC", "sopr", sopr.get("value"), "btc_onchain", {"zone": sopr.get("zone")})
+        # Miner economics: gross reward per TH/day. Stored in SATS (× 1e8) so the
+        # tiny BTC figure keeps precision in the numeric(30,8) value column; the
+        # USD figure and the next projected difficulty change ride alongside.
+        _rpt_btc = _f(onchain.get("reward_per_th_btc"))
+        if _rpt_btc is not None:
+            add("BTC", "reward_per_th_sats", _rpt_btc * 1e8, "btc_onchain")
+        add("BTC", "reward_per_th_usd", onchain.get("reward_per_th_usd"), "btc_onchain")
+        add("BTC", "next_difficulty_change_pct", onchain.get("difficulty_change"),
+            "btc_onchain")
 
     for sym, fr in (funding or {}).items():
         if isinstance(fr, dict):

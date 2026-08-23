@@ -363,7 +363,7 @@ the CONTINUOUS series, including the days no trade fired.
 | `environment` | `text` | no | `production` / `preview` / `local`. Part of the natural key. |
 | `metric_date` | `date` | no | The day (UTC) the reading is FOR. Natural key with `environment`+`scope`+`metric`. |
 | `scope` | `text` | no | Upper-case asset (`BTC`, `ETH`) or `GLOBAL` for market-wide reads. CHECK enforces upper-case. |
-| `metric` | `text` | no | `funding_rate` / `open_interest` / `fear_greed` / `mvrv` / `sopr` / `realized_price` / … A new metric is a new value here — never a migration. |
+| `metric` | `text` | no | `funding_rate` / `open_interest` / `fear_greed` / `mvrv` / `sopr` / `realized_price` / `reward_per_th_sats` / `reward_per_th_usd` / `next_difficulty_change_pct` / … A new metric is a new value here — never a migration. |
 | `value` | `numeric(30,8)` | no | The numeric reading. |
 | `detail` | `jsonb` | no | Bounded context — a label or zone (e.g. F&G `label`, MVRV `zone`). Allow-listed by the writer. |
 | `source` | `text` | yes | Where the figure came from. |
