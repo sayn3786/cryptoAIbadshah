@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '222';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '223';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2219,7 +2219,8 @@ function renderBtcMiningCard(mining, symbol) {
     }
     rewardRow = `
     <div class="btcm-row"><span class="btcm-label">Reward / TH / Day</span><span class="btcm-val">${nowStr}</span></div>
-    <div class="btcm-sub">Gross BTC reward at current network hashrate ${afterStr}</div>`;
+    <div class="btcm-sub">Gross BTC reward at current network hashrate ${afterStr}</div>
+    <div id="rptHist"></div>`;
   }
 
   // MVRV Score (90d SMA)
@@ -2333,6 +2334,50 @@ function renderBtcMiningCard(mining, symbol) {
     ${lthRow}
     ${lthData && lthData.history ? histStrip(lthData.history) : ''}
   `;
+
+  // Recorded reward/TH history from our own market_metric_daily (BTC only) —
+  // fetched lazily so the card paints first; empty until snapshots accumulate.
+  if (symbol === 'BTC') _renderRewardHistory();
+}
+
+// Sparkline of recorded reward/TH (sats) from /api/market-metrics. Builds its
+// own history one snapshot a day, so it fills in over time rather than backfilling.
+function _renderRewardHistory() {
+  const el = document.getElementById('rptHist');
+  if (!el) return;
+  el.innerHTML = '';
+  fetch(`${API}/market-metrics?scope=BTC&metric=reward_per_th_sats&days=120`)
+    .then(r => r.ok ? r.json() : null)
+    .then(h => {
+      const pts = ((h && h.series && h.series.points) || [])
+        .map(p => ({ d: p.date, v: p.value }))
+        .filter(p => p.v != null)
+        .sort((a, b) => a.d < b.d ? -1 : 1);          // oldest → newest
+      if (pts.length < 2) return;                     // need a couple of days
+
+      const vals = pts.map(p => p.v);
+      const lo = Math.min(...vals), hi = Math.max(...vals), cur = vals[vals.length - 1];
+      const span = (hi - lo) || 1;
+      const W = 180, H = 34;
+      const step = pts.length > 1 ? W / (pts.length - 1) : W;
+      const path = pts.map((p, i) =>
+        `${i ? 'L' : 'M'}${(i * step).toFixed(1)},${(H - 2 - ((p.v - lo) / span) * (H - 4)).toFixed(1)}`
+      ).join(' ');
+      const up = cur >= vals[0];
+      const stroke = up ? '#22c55e' : '#ef4444';
+      el.innerHTML = `
+        <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
+          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex:none">
+            <path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.6"
+                  stroke-linejoin="round" stroke-linecap="round"/>
+          </svg>
+          <div style="font-size:11px;opacity:.7;line-height:1.4">
+            <div>recorded reward/TH · ${pts.length}d</div>
+            <div>now <b>${cur.toFixed(2)}</b> · range ${lo.toFixed(2)}–${hi.toFixed(2)} sats</div>
+          </div>
+        </div>`;
+    })
+    .catch(() => {});
 }
 
 /* ─── On-Chain Metrics Grid (BTC only) ────────────────────────────────────── */
