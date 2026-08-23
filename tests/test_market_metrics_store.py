@@ -45,6 +45,15 @@ def test_build_rows_extracts_every_seed_metric():
     assert all(r["date"] == "2026-08-18" for r in rows)
 
 
+def test_reward_per_th_is_recorded_in_sats_plus_usd_and_difficulty():
+    onchain = {"reward_per_th_btc": 0.0000004953, "reward_per_th_usd": 0.0377,
+               "difficulty_change": -2.6}
+    rows = mm.build_rows(date="2026-08-22", onchain=onchain)
+    assert abs(_val(rows, "BTC", "reward_per_th_sats") - 49.53) < 0.01   # BTC → sats
+    assert _val(rows, "BTC", "reward_per_th_usd") == 0.0377
+    assert _val(rows, "BTC", "next_difficulty_change_pct") == -2.6
+
+
 def test_labels_and_zones_ride_in_detail():
     rows = mm.build_rows(date="2026-08-18", fear_greed=_FEAR, onchain=_ONCHAIN)
     fng = next(r for r in rows if r["metric"] == "fear_greed")
