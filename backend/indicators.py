@@ -1033,6 +1033,74 @@ def bull_market_support_band(closes: List[float],
     }
 
 
+FIB_RATIOS = (0.236, 0.382, 0.5, 0.618, 0.65, 0.705, 0.786)
+
+
+def fibonacci_retracement(candles: List[Dict], lookback: int = 60) -> Optional[Dict]:
+    """
+    Fib retracement of the most recent dominant swing, with the 0.618–0.786
+    "golden / discount pocket" flagged and whether price is in it right now.
+
+    Picks the highest high and lowest low over the last ``lookback`` closed
+    candles; whichever printed LATER sets the impulse direction — low→high is an
+    up-leg (retracement is a pullback DOWN, the discount favours LONGS), high→low
+    is a down-leg (a bounce UP, the premium favours SHORTS). Reporting only: a
+    context zone (like the sweep/EMA200 confluence a trader waits for), never a
+    strategy input. None when there is not enough range to measure.
+    """
+    cs = candles[-lookback:] if len(candles) > lookback else list(candles or [])
+    if len(cs) < 10:
+        return None
+    highs = [c["high"] for c in cs]
+    lows = [c["low"] for c in cs]
+    ih = max(range(len(cs)), key=lambda i: highs[i])
+    il = min(range(len(cs)), key=lambda i: lows[i])
+    hi, lo = highs[ih], lows[il]
+    rng = hi - lo
+    if rng <= 0:
+        return None
+    up_leg = il < ih                      # low before high → impulse up
+    price = cs[-1]["close"]
+
+    def _lvl(r):                          # retracement price for ratio r
+        return round(hi - r * rng, 10) if up_leg else round(lo + r * rng, 10)
+
+    levels = {f"{r:.3f}": _lvl(r) for r in FIB_RATIOS}
+    gp_lo, gp_hi = sorted((_lvl(0.618), _lvl(0.65)))     # tight golden pocket
+    ez_lo, ez_hi = sorted((_lvl(0.618), _lvl(0.786)))    # deeper 0.618–0.786 band
+    in_gp = gp_lo <= price <= gp_hi
+    in_ez = ez_lo <= price <= ez_hi
+
+    side = "long" if up_leg else "short"
+    if up_leg and price >= hi or (not up_leg and price <= lo):
+        status, note = "extended", "no pullback yet — price still at the extreme of the leg"
+    elif up_leg and price <= lo or (not up_leg and price >= hi):
+        status, note = "void", "price broke the far end of the leg — this Fib is invalidated"
+    elif in_gp:
+        status = "golden_pocket"
+        note = (f"in the 0.618–0.65 golden pocket — the classic {side} entry"
+                f"{' discount' if up_leg else ' premium'}")
+    elif in_ez:
+        status = "entry_zone"
+        note = f"in the 0.618–0.786 {'discount' if up_leg else 'premium'} zone — deep-pullback {side} area"
+    else:
+        status, note = "retracing", "pulling back but not yet into the 0.618+ zone"
+
+    return {
+        "direction": "up_leg" if up_leg else "down_leg",
+        "bias": side,                                     # side the zone favours
+        "swing_high": round(hi, 10), "swing_low": round(lo, 10),
+        "levels": levels,
+        "golden_pocket": [round(gp_lo, 10), round(gp_hi, 10)],
+        "entry_zone": [round(ez_lo, 10), round(ez_hi, 10)],   # 0.618–0.786
+        "price": round(price, 10),
+        "in_golden_pocket": bool(in_gp),
+        "in_entry_zone": bool(in_ez),
+        "status": status,
+        "note": note,
+    }
+
+
 def detect_whale_activity(candles: List[Dict], lookback: int = 20,
                            vol_threshold: float = 2.5,
                            taker_threshold: float = 0.65,
