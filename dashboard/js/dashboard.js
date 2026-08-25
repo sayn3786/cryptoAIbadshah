@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '225';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '226';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -369,7 +369,7 @@ function renderAll(a) {
   renderLiquidations(a.liquidations);
   renderSmartMoney(a.smart_money);
   renderMarketCap(a.market_cap);
-  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels);
+  renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels, a.fib);
   renderRSIChart(a.rsi_series, a.rsi_markers);
   renderCVDCharts(a.spot_cvd, a.agg_cvd || a.futures_cvd, a.futures_available);
   renderCVDDivergence(a.cvd_divergence);
@@ -902,7 +902,7 @@ function _toggleLayer(k) {
   // price-line overlays (FVG / swings / zones / HTF) honour the new state.
   const a = S.lastAnalysis;
   if (a) renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining,
-                         a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels);
+                         a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels, a.fib);
 }
 
 function initLegendToggles() {
@@ -912,7 +912,7 @@ function initLegendToggles() {
   _syncLegendUI();
 }
 
-function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol, trendline, srZones, emaLines, htfLevels) {
+function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol, trendline, srZones, emaLines, htfLevels, fib) {
   if (!candles?.length || !S.candleSeries) return;
 
   // Clear FVG + swing/realized price lines and wave markers from the previous token/TF.
@@ -1137,6 +1137,24 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   if (_layerVisible('zones')) {
     if (srZones?.resistance) drawZone(srZones.resistance, true);
     if (srZones?.support)    drawZone(srZones.support, false);
+  }
+
+  // ── Fibonacci golden pocket — the 0.618 / 0.786 band + 0.5 equilibrium ──
+  // Drawn with the zones layer since it is the same "where does price want to
+  // pull back to" read. Amber, brighter when price is currently inside it.
+  if (fib && _layerVisible('zones')) {
+    const L = fib.levels || {};
+    const inZone = fib.in_golden_pocket || fib.in_entry_zone;
+    const gold = 'rgba(245,158,11,0.85)', goldDim = 'rgba(245,158,11,0.30)';
+    const fibLine = (price, color, title, bold) => {
+      if (price == null) return;
+      S.overlayPriceLines.push(S.candleSeries.createPriceLine({
+        price, color, lineWidth: bold ? 3 : 1, lineStyle: bold ? 3 : 2,
+        title: title || '', axisLabelVisible: !!title }));
+    };
+    fibLine(L['0.500'], 'rgba(148,163,184,0.35)', 'Fib 0.5', false);
+    fibLine(L['0.786'], goldDim, 'Fib 0.786', false);
+    fibLine(L['0.618'], gold, `Golden 0.618${inZone ? ' • IN' : ''}`, true);
   }
 
   S.mainChart.timeScale().fitContent();
