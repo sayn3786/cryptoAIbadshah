@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '224';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '225';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -349,6 +349,7 @@ function renderAll(a) {
   renderBtcMiningCard(a.btc_mining, a.symbol);
   renderOnchainMetrics(a.btc_mining, a.symbol, a.lth_supply);
   renderBmsb(a.bmsb);
+  renderFib(a.fib);
   renderGoMiningAdvisor(a.gomining_strategy, a.symbol, a.gomining_token_signal);
   renderLSCard(a.long_short);
   renderWhaleActivity(a.whale_activity || []);
@@ -2966,6 +2967,49 @@ function _renderEtfRecorded(symbol) {
         </div>`;
     })
     .catch(() => {});
+}
+
+function renderFib(f) {
+  const sec = document.getElementById('fibSection');
+  const body = document.getElementById('fibBody');
+  if (!sec || !body) return;
+  if (!f) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+
+  const inZone = f.in_golden_pocket || f.in_entry_zone;
+  const cls = !inZone ? '' : f.bias === 'long' ? 'bull' : 'bear';
+  const STAT = {
+    golden_pocket: '🎯 In golden pocket',
+    entry_zone: '◆ In entry zone',
+    retracing: '↩ Retracing',
+    extended: '↗ Extended (no pullback)',
+    void: '✕ Invalidated',
+  };
+  const label = STAT[f.status] || f.status;
+  // Tiny prices (BONK-style) need many decimals; big ones don't.
+  const fmt = v => {
+    if (v == null) return '—';
+    const a = Math.abs(v);
+    const dp = a === 0 ? 2 : a < 0.01 ? 8 : a < 1 ? 5 : a < 1000 ? 2 : 0;
+    return '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: dp });
+  };
+  const row = (lbl, val) => `<div style="display:flex;justify-content:space-between">
+      <span style="opacity:.6">${lbl}</span><strong>${val}</strong></div>`;
+  const gp = f.golden_pocket || [], ez = f.entry_zone || [];
+
+  body.innerHTML = `
+    <div style="margin-bottom:8px">
+      <span class="${cls}" style="font-size:15px;font-weight:700">${label}</span>
+      <span style="opacity:.65;font-size:12px;margin-left:6px">
+        ${f.direction === 'up_leg' ? 'up-leg · long side' : 'down-leg · short side'}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:13px">
+      ${row('Price', fmt(f.price))}
+      ${row('Swing', `${fmt(f.swing_low)}–${fmt(f.swing_high)}`)}
+      ${row('Golden 0.618–0.65', `${fmt(gp[0])}–${fmt(gp[1])}`)}
+      ${row('Zone 0.618–0.786', `${fmt(ez[0])}–${fmt(ez[1])}`)}
+    </div>
+    <div style="margin-top:8px;font-size:12px;opacity:.7">${f.note || ''}</div>`;
 }
 
 function renderBmsb(b) {

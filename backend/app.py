@@ -33,7 +33,7 @@ from cvd_sources import (fetch_cvd_from_source, fetch_aggregated_spot_cvd,
 from indicators import (calculate_rsi_series, calculate_cvd, calculate_obv, detect_fvg,
     find_volume_spikes, detect_engulfing, detect_cvd_divergence,
     calculate_macd, calculate_ema_trend, detect_whale_activity, bull_market_support_band,
-    calculate_supertrend, calculate_ichimoku,
+    fibonacci_retracement, calculate_supertrend, calculate_ichimoku,
     calculate_bollinger_bands, detect_rsi_divergence,
     calculate_vwap, calculate_stoch_rsi, calculate_volume_signal,
     candle_direction)
@@ -1309,6 +1309,13 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
             if timeframe == "1W" else None)
     except Exception:
         analysis["bmsb"] = None
+
+    # Fibonacci retracement of the most recent swing + 0.618–0.786 golden pocket
+    # (the "sweep/deviation then buy the discount" confluence). Cheap, any TF.
+    try:
+        analysis["fib"] = fibonacci_retracement(spot)
+    except Exception:
+        analysis["fib"] = None
 
     # Dense market-structure status panel (trend / structure / liquidity),
     # built from data already in `analysis` — no extra fetches.
