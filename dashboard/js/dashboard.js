@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '226';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '227';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3027,7 +3027,21 @@ function renderFib(f) {
       ${row('Golden 0.618–0.65', `${fmt(gp[0])}–${fmt(gp[1])}`)}
       ${row('Zone 0.618–0.786', `${fmt(ez[0])}–${fmt(ez[1])}`)}
     </div>
-    <div style="margin-top:8px;font-size:12px;opacity:.7">${f.note || ''}</div>`;
+    <div style="margin-top:8px;font-size:12px;opacity:.7">${f.note || ''}</div>
+    <details style="margin-top:8px">
+      <summary style="cursor:pointer;font-size:12px;opacity:.7;list-style:none">ℹ️ How to read</summary>
+      <div style="font-size:12px;opacity:.78;margin-top:6px;line-height:1.55">
+        Fib maps where a pullback is likely to stall. This swing is a
+        <b>${f.direction === 'up_leg' ? 'discount (long) read' : 'premium (short) read'}</b>:
+        the <b>0.618–0.786 zone</b> is the entry area — a
+        <b>${f.direction === 'up_leg' ? 'discount to buy' : 'premium to sell'}</b>,
+        with the <b>0.618 golden pocket</b> the highest-probability spot.
+        <b>0.5</b> is the bull/bear pivot; a close through the golden pocket flips the read.
+        Don't act on a level alone — wait for price to <em>reach</em> the zone <em>and</em>
+        confirm (a reclaim / rejection candle, or confluence with a swept low, S/R zone, or
+        EMA). Stop just beyond the zone. Context only — not a trade signal.
+      </div>
+    </details>`;
 }
 
 function renderBmsb(b) {
