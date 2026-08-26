@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '229';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '230';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1139,23 +1139,8 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
     if (srZones?.support)    drawZone(srZones.support, false);
   }
 
-  // ── Fibonacci golden pocket — the 0.618 / 0.786 band + 0.5 equilibrium ──
-  // Drawn with the zones layer since it is the same "where does price want to
-  // pull back to" read. Amber, brighter when price is currently inside it.
-  if (fib && _layerVisible('zones')) {
-    const L = fib.levels || {};
-    const inZone = fib.in_golden_pocket || fib.in_entry_zone;
-    const gold = 'rgba(245,158,11,0.85)', goldDim = 'rgba(245,158,11,0.30)';
-    const fibLine = (price, color, title, bold) => {
-      if (price == null) return;
-      S.overlayPriceLines.push(S.candleSeries.createPriceLine({
-        price, color, lineWidth: bold ? 3 : 1, lineStyle: bold ? 3 : 2,
-        title: title || '', axisLabelVisible: !!title }));
-    };
-    fibLine(L['0.500'], 'rgba(148,163,184,0.35)', 'Fib 0.5', false);
-    fibLine(L['0.786'], goldDim, 'Fib 0.786', false);
-    fibLine(L['0.618'], gold, `Golden 0.618${inZone ? ' • IN' : ''}`, true);
-  }
+  // Fib golden pocket (0.5 / 0.618 / 0.786) lives on the Market Structure chart
+  // now — the main chart was overcrowded. See renderStructureChart().
 
   S.mainChart.timeScale().fitContent();
 }
@@ -3972,6 +3957,26 @@ function renderStructureChart(a) {
     const cl = new ChipLabels(chart, cs);
     cl.setData(chips.sort((x, y) => x.time - y.time));
     try { cs.attachPrimitive(cl); } catch (_) {}
+  }
+
+  // ── Fibonacci golden pocket — 0.5 equilibrium / 0.618 / 0.786 ──
+  // Moved here from the main chart (which was overcrowded). Same "where does
+  // price want to pull back to" read as the liquidity levels above. Amber,
+  // brightest on the 0.618 and brighter still when price is inside the zone.
+  const fib = a.fib;
+  if (fib) {
+    const L = fib.levels || {};
+    const inZone = fib.in_golden_pocket || fib.in_entry_zone;
+    const gold = 'rgba(245,158,11,0.9)', goldDim = 'rgba(245,158,11,0.35)';
+    const fibLine = (price, color, title, bold) => {
+      if (price == null) return;
+      cs.createPriceLine({
+        price: +price, color, lineWidth: bold ? 2 : 1, lineStyle: bold ? 0 : 2,
+        axisLabelVisible: true, title });
+    };
+    fibLine(L['0.500'], 'rgba(148,163,184,0.55)', 'Fib 0.5', false);
+    fibLine(L['0.786'], goldDim, 'Fib 0.786', false);
+    fibLine(L['0.618'], gold, `Golden 0.618${inZone ? ' • IN' : ''}`, true);
   }
 
   chart.timeScale().fitContent();
