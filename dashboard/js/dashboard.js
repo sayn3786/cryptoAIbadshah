@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '228';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '229';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3014,18 +3014,37 @@ function renderFib(f) {
   const row = (lbl, val) => `<div style="display:flex;justify-content:space-between">
       <span style="opacity:.6">${lbl}</span><strong>${val}</strong></div>`;
   const gp = f.golden_pocket || [], ez = f.entry_zone || [];
+  const up = f.direction === 'up_leg';
+  const L = f.levels || {};
+  const zoneStr = `${fmt(ez[0])}–${fmt(ez[1])}`;
+  // Which end is the buy side and which is the sell side flips with the leg.
+  const buyLine = up
+    ? `🟢 <b>BUY zone</b> — dip likely bounces here: <b>${zoneStr}</b>`
+    : `🟢 <b>BUY support</b> — where the drop bounced from: <b>${fmt(f.swing_low)}</b>`;
+  const sellLine = up
+    ? `🔴 <b>SELL resistance</b> — top of the run: <b>${fmt(f.swing_high)}</b>`
+    : `🔴 <b>SELL zone</b> — bounce likely stalls here: <b>${zoneStr}</b>`;
+  const primary = up ? buyLine : sellLine;      // the side this leg favours
+  const secondary = up ? sellLine : buyLine;
+  const pBg = up ? 'rgba(16,185,129,.13)' : 'rgba(239,68,68,.13)';
+  const sBg = up ? 'rgba(239,68,68,.10)'  : 'rgba(16,185,129,.10)';
 
   body.innerHTML = `
-    <div style="margin-bottom:8px">
+    <div style="margin-bottom:10px">
       <span class="${cls}" style="font-size:15px;font-weight:700">${label}</span>
       <span style="opacity:.65;font-size:12px;margin-left:6px">
-        ${f.direction === 'up_leg' ? 'up-leg · long side' : 'down-leg · short side'}</span>
+        ${up ? 'up-leg · buyers’ setup' : 'down-leg · sellers’ setup'}</span>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:13px">
-      ${row('Price', fmt(f.price))}
-      ${row('Swing', `${fmt(f.swing_low)}–${fmt(f.swing_high)}`)}
-      ${row('Golden 0.618–0.65', `${fmt(gp[0])}–${fmt(gp[1])}`)}
-      ${row('Zone 0.618–0.786', `${fmt(ez[0])}–${fmt(ez[1])}`)}
+    <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;margin-bottom:9px">
+      <div style="padding:6px 9px;border-radius:8px;background:${pBg}">${primary}</div>
+      <div style="padding:6px 9px;border-radius:8px;background:${sBg}">${secondary}</div>
+      <div style="opacity:.7;font-size:12px">⚖️ Halfway line <b>${fmt(L['0.500'])}</b> — above it buyers lead, below it sellers lead</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 16px;font-size:12px;opacity:.72">
+      ${row('Price now', fmt(f.price))}
+      ${row('Swing range', `${fmt(f.swing_low)}–${fmt(f.swing_high)}`)}
+      ${row('Golden pocket', `${fmt(gp[0])}–${fmt(gp[1])}`)}
+      ${row('Full zone', zoneStr)}
     </div>
     <div style="margin-top:8px;font-size:12px;opacity:.7">${f.note || ''}</div>
     <details style="margin-top:8px">
