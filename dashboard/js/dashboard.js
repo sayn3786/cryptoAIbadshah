@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '227';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '228';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3029,17 +3029,14 @@ function renderFib(f) {
     </div>
     <div style="margin-top:8px;font-size:12px;opacity:.7">${f.note || ''}</div>
     <details style="margin-top:8px">
-      <summary style="cursor:pointer;font-size:12px;opacity:.7;list-style:none">ℹ️ How to read</summary>
-      <div style="font-size:12px;opacity:.78;margin-top:6px;line-height:1.55">
-        Fib maps where a pullback is likely to stall. This swing is a
-        <b>${f.direction === 'up_leg' ? 'discount (long) read' : 'premium (short) read'}</b>:
-        the <b>0.618–0.786 zone</b> is the entry area — a
-        <b>${f.direction === 'up_leg' ? 'discount to buy' : 'premium to sell'}</b>,
-        with the <b>0.618 golden pocket</b> the highest-probability spot.
-        <b>0.5</b> is the bull/bear pivot; a close through the golden pocket flips the read.
-        Don't act on a level alone — wait for price to <em>reach</em> the zone <em>and</em>
-        confirm (a reclaim / rejection candle, or confluence with a swept low, S/R zone, or
-        EMA). Stop just beyond the zone. Context only — not a trade signal.
+      <summary style="cursor:pointer;font-size:12px;opacity:.7;list-style:none">ℹ️ How to read (plain English)</summary>
+      <div style="font-size:12px;opacity:.8;margin-top:6px;line-height:1.6">
+        <p style="margin:0 0 7px">${f.direction === 'up_leg'
+          ? 'Price ran <b>up</b>, and is now dipping back. These lines mark where the dip is likely to find a floor and turn back up — a <b>cheaper spot to buy</b>. The <b>golden pocket</b> is the sweet spot buyers watch most.'
+          : 'Price <b>dropped</b>, and is now bouncing up. These lines mark where the bounce is likely to run out of steam and turn back down — a <b>spot to sell</b>. The <b>golden pocket</b> is where sellers watch most.'}</p>
+        <p style="margin:0 0 7px">The <b>0.5 line</b> is the halfway mark: above it buyers have the edge, below it sellers do.</p>
+        <p style="margin:0 0 7px"><b>Don't act just because price touches a line.</b> Wait for it to actually turn there, and check it lines up with other support/resistance. Always set a <b>stop-loss</b> just past the zone.</p>
+        <p style="margin:0;opacity:.6">A guide to likely turning points — not a buy or sell command.</p>
       </div>
     </details>`;
 }
