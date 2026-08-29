@@ -37,3 +37,4 @@ jobs:
           get "ANALYTICS v45"                  "/api/signals/analytics?strategy_version=v45_4h_avg"
           get "POSTMORTEM current default"     "/api/signals/postmortem-report$Q"
           get "ANALYTICS current default"      "/api/signals/analytics$Q"
+          get "TIMING REPORT (pooled)"         "/api/signals/timing-report"

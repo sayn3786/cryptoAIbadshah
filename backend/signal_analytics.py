@@ -36,7 +36,8 @@ from postmortem_report import classify_outcome
 __all__ = [
     "build_analytics", "strength_calibration", "excursion_report",
     "target_reach", "timing_report", "fill_funnel",
-    "STRENGTH_TIERS", "MIN_BUCKET",
+    "timeframe_efficiency", "session_performance", "build_timing_report",
+    "STRENGTH_TIERS", "SESSIONS", "MIN_BUCKET",
 ]
 
 # Below this many trades a bucket's rate is noise wearing a decimal point. The
@@ -51,6 +52,18 @@ STRENGTH_TIERS = (
     ("Moderate", 33.0, 51.0),
     ("Strong", 51.0, 69.0),
     ("Confirmed", 69.0, 1e9),
+)
+
+# Trading sessions as NON-OVERLAPPING UTC hour bands, so every trade lands in
+# exactly one. Real sessions overlap (London/US especially); these are the
+# primary-liquidity windows, chosen for a deterministic single assignment rather
+# than to trace an exchange's clock to the minute. A publish hour is bucketed by
+# the band its hour falls in. Labels match the structure chart's session shades.
+SESSIONS = (
+    ("ASIA", 0, 7),      # 00:00–06:59 UTC — Tokyo/HK/Singapore
+    ("LONDON", 7, 13),   # 07:00–12:59 UTC — Europe open into the US pre-market
+    ("US", 13, 21),      # 13:00–20:59 UTC — New York
+    ("LATE", 21, 24),    # 21:00–23:59 UTC — US close into the Asia handover
 )
 
 
@@ -329,6 +342,199 @@ def fill_funnel(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "expired": counts.get("expired", 0),
         "expired_pct": round(counts.get("expired", 0) / total * 100, 1) if total else None,
         "filled": filled,
+    }
+
+
+# ── 5. Timeframe efficiency — which frame earns its risk ─────────────────────
+
+def _hold_hours(row: Dict[str, Any]) -> Optional[float]:
+    """Hours a trade was live, generated_at → closed_at. None if either is missing."""
+    g, c = _to_ms(row.get("generated_at")), _to_ms(row.get("closed_at"))
+    if g is None or c is None or c < g:
+        return None
+    return (c - g) / 3_600_000.0
+
+
+def _timeframe_of(row: Dict[str, Any]) -> Optional[str]:
+    tf = row.get("timeframe")
+    return str(tf).upper() if tf else None
+
+
+def timeframe_efficiency(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Win rate, expectancy, and *capital efficiency* per timeframe.
+
+    The app analyses 1H / 2H / 4H on every publish path but never compares them.
+    A 4H trade that returns 1% over two days ties up risk far longer than a 1H
+    trade returning 0.5% in four hours — so raw expectancy flatters the slow
+    frame. ``expectancy_per_day`` divides a frame's expectancy by its median hold
+    (in days) to put them on the same capital-per-time footing; that, not the
+    headline win rate, is the read on which frame to favour.
+
+    Pools across strategy_versions on purpose: the timeframe is structural, not a
+    property of a particular rule-set, so a per-version split would only starve
+    each bucket.
+    """
+    by_tf: Dict[str, List[Dict]] = {}
+    for r in rows:
+        tf = _timeframe_of(r)
+        if tf:
+            by_tf.setdefault(tf, []).append(r)
+
+    frames: List[Dict[str, Any]] = []
+    for tf, group in sorted(by_tf.items()):
+        stats = _win_expectancy(group)
+        holds = sorted(h for h in (_hold_hours(r) for r in group) if h is not None)
+        median_hold = _pct(holds, 0.5) if holds else None
+        exp = stats["expectancy_pct"]
+        # Normalise expectancy to a per-day figure. A hold under an hour can't
+        # divide sanely, so floor the denominator at 1h to avoid a blow-up.
+        per_day = None
+        if exp is not None and median_hold is not None:
+            per_day = round(exp / (max(median_hold, 1.0) / 24.0), 4)
+        frames.append({
+            "timeframe": tf,
+            "n": stats["n"], "wins": stats["wins"], "losses": stats["losses"],
+            "win_rate_pct": stats["win_rate_pct"],
+            "expectancy_pct": exp,
+            "total_return_pct": stats["total_return_pct"],
+            "median_hold_hours": round(median_hold, 1) if median_hold is not None else None,
+            "expectancy_per_day": per_day,
+            "thin": stats["n"] < MIN_BUCKET,
+        })
+
+    scored = [f for f in frames if not f["thin"] and f["expectancy_per_day"] is not None]
+    best = max(scored, key=lambda f: f["expectancy_per_day"], default=None)
+    if best is None:
+        verdict = (f"no timeframe has >= {MIN_BUCKET} decided trades with a hold "
+                   "time yet — can't rank efficiency")
+    else:
+        verdict = (f"{best['timeframe']} is the most capital-efficient frame so "
+                   f"far ({best['expectancy_per_day']}%/day of risk); compare "
+                   "expectancy_per_day, not the raw win rate, across frames")
+    return {
+        "frames": frames,
+        "most_efficient_timeframe": best["timeframe"] if best else None,
+        "verdict": verdict,
+        "note": ("expectancy_per_day = expectancy_pct / (median_hold_hours/24): "
+                 "return per day of capital at risk, so a faster frame is not "
+                 "penalised for banking less per trade. Thin frames are excluded "
+                 "from the pick."),
+    }
+
+
+# ── 6. Session / hour-of-day performance — when to trade ─────────────────────
+
+def _hour_of(row: Dict[str, Any]) -> Optional[int]:
+    """UTC hour a signal was generated, 0–23."""
+    g = _to_ms(row.get("generated_at"))
+    if g is None:
+        return None
+    return datetime.fromtimestamp(g / 1000.0, tz=timezone.utc).hour
+
+
+def _session_of_hour(hour: int) -> str:
+    for label, lo, hi in SESSIONS:
+        if lo <= hour < hi:
+            return label
+    return "LATE"
+
+
+def session_performance(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Win rate and expectancy by trading session and by UTC hour.
+
+    Answers "when should I be taking these trades". Sessions (4 buckets) are the
+    robust read; the 24-hour breakdown is included but splits a small sample thin,
+    so it is there to eyeball a pattern, not to act on a single hour. Uses the
+    publish time (``generated_at``), which is when the setup appeared — the
+    decision point the recommendation is about.
+
+    Pooled across versions, same reasoning as timeframe_efficiency: the clock is
+    structural.
+    """
+    by_session: Dict[str, List[Dict]] = {}
+    by_hour: Dict[int, List[Dict]] = {}
+    for r in rows:
+        hour = _hour_of(r)
+        if hour is None:
+            continue
+        by_session.setdefault(_session_of_hour(hour), []).append(r)
+        by_hour.setdefault(hour, []).append(r)
+
+    sessions = []
+    for label, lo, hi in SESSIONS:
+        group = by_session.get(label, [])
+        stats = _win_expectancy(group)
+        stats["session"] = label
+        stats["utc_hours"] = f"{lo:02d}:00–{hi - 1:02d}:59"
+        stats["thin"] = stats["n"] < MIN_BUCKET
+        sessions.append(stats)
+
+    hours = {}
+    for h in range(24):
+        group = by_hour.get(h, [])
+        if group:
+            st = _win_expectancy(group)
+            st["thin"] = st["n"] < MIN_BUCKET
+            hours[f"{h:02d}"] = st
+
+    scored = [s for s in sessions
+              if not s["thin"] and s["expectancy_pct"] is not None]
+    best = max(scored, key=lambda s: s["expectancy_pct"], default=None)
+    worst = min(scored, key=lambda s: s["expectancy_pct"], default=None)
+    if best is None:
+        verdict = (f"no session has >= {MIN_BUCKET} decided trades yet — can't "
+                   "recommend a window")
+    elif worst is not None and worst is not best and worst["expectancy_pct"] < 0 <= best["expectancy_pct"]:
+        verdict = (f"{best['session']} ({best['utc_hours']} UTC) is the strongest "
+                   f"window (+{best['expectancy_pct']}% avg); {worst['session']} is "
+                   f"net-negative ({worst['expectancy_pct']}%) — a candidate to skip")
+    else:
+        verdict = (f"{best['session']} ({best['utc_hours']} UTC) is the strongest "
+                   f"window so far ({best['expectancy_pct']}% avg expectancy)")
+    return {
+        "by_session": sessions,
+        "by_hour_utc": hours,
+        "best_session": best["session"] if best else None,
+        "verdict": verdict,
+        "note": ("sessions are non-overlapping UTC bands; expectancy_pct is the "
+                 "average realised return of trades opened in that window. Read "
+                 "the 24-hour breakdown for shape only — a single hour rarely "
+                 "clears a handful of trades."),
+    }
+
+
+def build_timing_report(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    The *when and on what frame* read — pooled across every strategy_version.
+
+    Timeframe and clock are structural, not properties of one rule-set, so unlike
+    ``build_analytics`` this deliberately pools all versions to keep the buckets
+    populated. ``rows`` are ``list_closed_with_snapshots`` dicts (call with no
+    strategy_version filter). Reporting only: a filter this suggests — skip a dead
+    session, favour a frame — is a new strategy_version, backtested and approved.
+    """
+    rows = list(rows or [])
+    versions = sorted({str(r.get("strategy_version")) for r in rows
+                       if r.get("strategy_version")})
+    return {
+        "pooled_across_versions": versions,
+        "cohort": {"closed_rows": len(rows), **{
+            k: _win_expectancy(rows)[k]
+            for k in ("wins", "losses", "win_rate_pct", "expectancy_pct")}},
+        "timeframe_efficiency": timeframe_efficiency(rows),
+        "session_performance": session_performance(rows),
+        "caveats": [
+            "Reporting only. A frame or session filter this suggests is a new "
+            "strategy_version, backtested and human-approved — nothing here moves "
+            "a live parameter.",
+            "Pooled across ALL strategy_versions on purpose: timeframe and time-of"
+            "-day are structural. Strength/stop/target reads stay per-version in "
+            "/api/signals/analytics, which does not pool.",
+            f"Buckets under {MIN_BUCKET} trades are marked thin — noise, not a "
+            "finding.",
+        ],
     }
 
 
