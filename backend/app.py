@@ -3727,6 +3727,37 @@ def api_signals_analytics():
         return _db_error_response(exc)
 
 
+@app.get("/api/signals/timing-report")
+def api_signals_timing_report():
+    """
+    When and on what timeframe the trades work — POOLED across every
+    strategy_version, because timeframe and time-of-day are structural, not a
+    property of one rule-set (pooling per-version would only starve the buckets).
+
+    Two reads: timeframe efficiency (win rate, expectancy, and expectancy per day
+    of capital at risk for 1H / 2H / 4H) and session performance (win rate and
+    expectancy by non-overlapping UTC session and by hour). Read-only; a filter it
+    suggests is a new strategy_version, not a live change.
+
+    Query params:
+      environment   environment scope (defaults to this deployment's)
+      limit         max closed rows to pull (default 500)
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    import signal_analytics as _an
+    try:
+        rows = store.list_closed_with_snapshots(
+            strategy_version=None,          # pool every version on purpose
+            environment=request.args.get("environment"),
+            limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
+        return jsonify(_an.build_timing_report(rows))
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.get("/api/signals/cadence")
 def api_signals_cadence():
     """

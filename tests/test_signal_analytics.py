@@ -162,3 +162,92 @@ def test_empty_input_does_not_raise():
     assert rep["cohort"]["closed_rows"] == 0
     assert rep["cohort"]["win_rate_pct"] is None
     assert rep["strength_calibration"]["monotonic"] is None
+
+
+# ── Timeframe efficiency ─────────────────────────────────────────────────────
+
+# One UTC day = 86_400_000 ms; generated_at=0 is 1970-01-01 00:00 UTC (ASIA).
+_HOUR = 3_600_000
+
+
+def _tf_row(ret, tf, *, hold_hours=4.0, version="v49_4h_avg", gen_hour=0):
+    g = gen_hour * _HOUR
+    r = _row(ret, generated_at=g, closed_at=g + int(hold_hours * _HOUR))
+    r["timeframe"] = tf
+    r["strategy_version"] = version
+    return r
+
+
+def _frame(rep, tf):
+    for f in rep["frames"]:
+        if f["timeframe"] == tf:
+            return f
+    raise AssertionError(f"{tf} not in frames")
+
+
+def test_timeframe_efficiency_splits_by_frame():
+    rows = ([_tf_row(1.0, "1H", hold_hours=1.0) for _ in range(4)]
+            + [_tf_row(-0.5, "1H", hold_hours=1.0) for _ in range(2)]
+            + [_tf_row(2.0, "4H", hold_hours=48.0) for _ in range(4)]
+            + [_tf_row(-1.0, "4H", hold_hours=48.0) for _ in range(2)])
+    rep = an.timeframe_efficiency(rows)
+    assert _frame(rep, "1H")["n"] == 6 and _frame(rep, "4H")["n"] == 6
+    # Same 4:2 win split, but 1H banks it in 1h vs 4H's 48h → far more per day.
+    assert _frame(rep, "1H")["expectancy_per_day"] > _frame(rep, "4H")["expectancy_per_day"]
+    assert rep["most_efficient_timeframe"] == "1H"
+    assert "capital-efficient" in rep["verdict"]
+
+
+def test_timeframe_thin_frame_excluded_from_pick():
+    rows = ([_tf_row(1.0, "1H") for _ in range(6)]
+            + [_tf_row(5.0, "2H") for _ in range(2)])   # 2 trades → thin
+    rep = an.timeframe_efficiency(rows)
+    assert _frame(rep, "2H")["thin"] is True
+    assert rep["most_efficient_timeframe"] == "1H"
+
+
+# ── Session / hour performance ───────────────────────────────────────────────
+
+def _sess(rep, label):
+    for s in rep["by_session"]:
+        if s["session"] == label:
+            return s
+    raise AssertionError(f"{label} not in sessions")
+
+
+def test_session_performance_buckets_by_utc_band():
+    # US window (13–20): winners; ASIA (00–07): losers.
+    rows = ([_tf_row(2.0, "4H", gen_hour=14) for _ in range(5)]
+            + [_tf_row(-1.0, "4H", gen_hour=2) for _ in range(5)])
+    rep = an.session_performance(rows)
+    assert _sess(rep, "US")["expectancy_pct"] == 2.0
+    assert _sess(rep, "ASIA")["expectancy_pct"] == -1.0
+    assert rep["best_session"] == "US"
+    assert "US" in rep["verdict"] and "skip" in rep["verdict"]
+    assert rep["by_hour_utc"]["14"]["n"] == 5
+
+
+def test_session_thin_bucket_flagged():
+    rows = [_tf_row(1.0, "4H", gen_hour=14) for _ in range(3)]  # 3 → thin
+    rep = an.session_performance(rows)
+    assert _sess(rep, "US")["thin"] is True
+    assert rep["best_session"] is None
+
+
+# ── Pooled timing report ─────────────────────────────────────────────────────
+
+def test_build_timing_report_pools_versions():
+    rows = ([_tf_row(1.0, "1H", version="v48_4h_avg") for _ in range(5)]
+            + [_tf_row(-1.0, "1H", version="v49_4h_avg") for _ in range(3)])
+    rep = an.build_timing_report(rows)
+    assert set(rep["pooled_across_versions"]) == {"v48_4h_avg", "v49_4h_avg"}
+    assert rep["cohort"]["closed_rows"] == 8
+    for key in ("timeframe_efficiency", "session_performance", "caveats"):
+        assert key in rep
+
+
+def test_timing_report_empty_does_not_raise():
+    rep = an.build_timing_report([])
+    assert rep["cohort"]["closed_rows"] == 0
+    assert rep["timeframe_efficiency"]["most_efficient_timeframe"] is None
+    assert rep["session_performance"]["best_session"] is None
