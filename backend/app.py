@@ -1298,24 +1298,29 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         "tao_ecosystem":          tao_ecosystem,
         "generated_at":           int(time.time() * 1000),
     })
+    # Fibonacci golden pocket is produced by build_candle_analysis (so the
+    # backtest replays the same input v50 scores as a brake); it is already on
+    # `analysis` here. Falls back to a fresh compute only if the builder omitted
+    # it (older cached analysis shape).
+    if analysis.get("fib") is None:
+        try:
+            analysis["fib"] = fibonacci_retracement(spot)
+        except Exception:
+            analysis["fib"] = None
+
     analysis["signal"] = generate_signal(analysis)
 
     # Bull Market Support Band (20W SMA + 21W EMA) — a WEEKLY macro read, so it
     # is computed only on the weekly view where `spot` closes are weekly. Free:
     # reuses candles already fetched, and stays off the scan/publish (2H) path.
+    # Read-only in scoring: it is None on the 2H publish path, so it can only
+    # ever inform the weekly browse view, never a published signal.
     try:
         analysis["bmsb"] = (
             bull_market_support_band([c["close"] for c in spot], live_price=live_price)
             if timeframe == "1W" else None)
     except Exception:
         analysis["bmsb"] = None
-
-    # Fibonacci retracement of the most recent swing + 0.618–0.786 golden pocket
-    # (the "sweep/deviation then buy the discount" confluence). Cheap, any TF.
-    try:
-        analysis["fib"] = fibonacci_retracement(spot)
-    except Exception:
-        analysis["fib"] = None
 
     # Dense market-structure status panel (trend / structure / liquidity),
     # built from data already in `analysis` — no extra fetches.
@@ -2854,7 +2859,7 @@ def _rec_cache_key() -> str:
     #       TP2/TP3 were almost never reached, so winners banked only TP1.
     #   v49 min-strength floor raised 32 → 51 — the Moderate tier lost money in
     #       both the v45 and v48 cohorts; only Strong+ now publishes.
-    return f"v49_4h_avg_{date}_{slot}"
+    return f"v50_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

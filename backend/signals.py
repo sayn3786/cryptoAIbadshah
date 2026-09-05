@@ -1120,6 +1120,67 @@ def liquidation_squeeze_delta(direction: str, liq_bias: Dict) -> int:
     return mag if aligned else -mag
 
 
+# ── v50 confluence brakes ─────────────────────────────────────────────────────
+# Three reads that were computed and shown but never touched the score before
+# v50. The v49 postmortem found each of them over-represented in losers while
+# the highest-strength tier (69+) lost the most — the score was over-confident.
+# So all three are BRAKES: they only dock a trade fighting the read, never add
+# conviction to one agreeing with it (which would push more trades into the
+# losing top tier). Pure, so each can be tested without the full pipeline.
+
+def rsi_reversal_delta(direction: str, rsi_markers) -> int:
+    """
+    Dock a trade the latest RSI swing-reversal fired AGAINST — an overbought-top
+    marker under a LONG, an oversold-bottom under a SHORT. −6, or 0 when there is
+    no marker or it agrees. Brake only; a marker that CONFIRMS earns nothing,
+    because RSI momentum is already scored on the way in and rewarding it twice
+    is exactly the over-confidence v50 exists to curb.
+    """
+    if direction not in ("LONG", "SHORT") or not isinstance(rsi_markers, list) or not rsi_markers:
+        return 0
+    latest = max(rsi_markers, key=lambda m: (m or {}).get("timestamp") or 0)
+    kind = (latest or {}).get("kind")
+    against = ((direction == "LONG"  and kind == "overbought_top") or
+               (direction == "SHORT" and kind == "oversold_bottom"))
+    return -6 if against else 0
+
+
+def obv_guard_delta(direction: str, obv: Dict, cvd_active: bool) -> int:
+    """
+    Dock a trade OBV diverges against — bearish OBV divergence under a LONG,
+    bullish under a SHORT — but ONLY when CVD is silent (``cvd_active`` False).
+    OBV and CVD answer the same volume question, so scoring both when CVD already
+    spoke would double-count; this fires only to fill CVD's gap. −5, else 0.
+    Brake only.
+    """
+    if cvd_active or direction not in ("LONG", "SHORT"):
+        return 0
+    div = (obv or {}).get("divergence")
+    against = ((direction == "LONG"  and div == "bearish") or
+               (direction == "SHORT" and div == "bullish"))
+    return -5 if against else 0
+
+
+def fib_alignment_delta(direction: str, fib: Dict) -> int:
+    """
+    Dock a trade taken into the WRONG side of the Fibonacci golden pocket: a LONG
+    where the leg is a down-leg (the 0.618–0.786 band is premium/resistance the
+    bounce should stall at) or a SHORT into an up-leg discount. Only when price is
+    actually in the zone (``in_golden_pocket``/``in_entry_zone``) — outside it the
+    fib is not actionable. −5, else 0. Brake only: a trade WITH the zone's bias
+    earns nothing here, it simply is not braked.
+    """
+    if direction not in ("LONG", "SHORT") or not isinstance(fib, dict):
+        return 0
+    if not (fib.get("in_golden_pocket") or fib.get("in_entry_zone")):
+        return 0
+    bias = fib.get("bias")                     # "long" (discount) | "short" (premium)
+    if bias not in ("long", "short"):
+        return 0
+    trade = "long" if direction == "LONG" else "short"
+    return -5 if bias != trade else 0
+
+
 def generate_signal(analysis: Dict) -> Dict:
     score = 0
     # Group contribution tracker — signed (positive = bull, negative = bear)
@@ -2151,6 +2212,12 @@ def generate_signal(analysis: Dict) -> Dict:
     div_desc = rsi_div.get("description", "")
     div_str  = rsi_div.get("strength", 0) or 0
     div_forming = bool(rsi_div.get("forming"))   # provisional 2nd pivot — not confirmed yet
+    # A "played out" divergence already ran its recovery — price reclaimed and
+    # RSI turned — so it is spent, not a fresh turn. It kept scoring full weight
+    # here, which is precisely the stale over-confidence v50 curbs. Zero its
+    # conviction and say so, rather than paint a bull/bear reason off a move that
+    # has already happened.
+    div_played_out = bool(rsi_div.get("played_out"))
     # A divergence is not a permanent fact about the chart. It called a turn on a
     # particular candle, and the further price gets from that candle the less it
     # says about now. This scored the same on candle 1 as on candle 29 and then
@@ -2165,7 +2232,13 @@ def generate_signal(analysis: Dict) -> Dict:
         out = int(round(raw * div_fresh))
         return out if out or div_fresh <= 0 else 1
 
-    if div_type == "bullish":
+    if div_played_out and div_type:
+        # Spent divergence: recovery already ran. Add no points and paint no
+        # bull/bear reason — the whole point is to withhold the conviction it
+        # used to contribute. (No neutral-reason channel is surfaced, so this is
+        # deliberately silent rather than misleading.)
+        pass
+    elif div_type == "bullish":
         pts = _decay(8 if div_forming else (18 if div_str >= 5 else 12))
         score += pts; g['momentum'] += pts
         bull_reasons.append(div_desc or "Bullish RSI divergence — price lower low, RSI higher low")
@@ -2960,6 +3033,37 @@ def generate_signal(analysis: Dict) -> Dict:
             f"{'confirms' if liq_adj > 0 else 'opposes'} the {direction.lower()} "
             f"({liq_adj:+d}): {_lq_reason}")
         g['flow'] += liq_adj
+
+    # ── v50 confluence brakes ─────────────────────────────────────────────────
+    # Three reads that were shown but never scored before v50, each over-
+    # represented in the v49 losers. All brakes: they only dock a trade fighting
+    # the read, matching the direction-relative pattern of the two blocks above.
+    # RSI swing-reversal firing against the trade.
+    rev_adj = rsi_reversal_delta(direction, analysis.get("rsi_markers"))
+    if rev_adj:
+        strength = max(0, min(100, strength + rev_adj))
+        (bear_reasons if direction == "LONG" else bull_reasons).append(
+            f"↩ RSI reversal fired against the {direction.lower()} ({rev_adj})")
+        g['momentum'] += rev_adj
+
+    # OBV divergence against the trade, only when CVD stayed silent (no double-count).
+    _scvd = (analysis.get("spot_cvd") or {}).get("divergence")
+    _fcvd = (analysis.get("futures_cvd") or {}).get("divergence")
+    _cvd_active = bool(_scvd) or bool(_fcvd)
+    obv_adj = obv_guard_delta(direction, analysis.get("obv"), _cvd_active)
+    if obv_adj:
+        strength = max(0, min(100, strength + obv_adj))
+        (bear_reasons if direction == "LONG" else bull_reasons).append(
+            f"📉 OBV diverges against the {direction.lower()} while CVD is silent ({obv_adj})")
+        g['flow'] += obv_adj
+
+    # Fibonacci golden pocket: trading into the wrong side of the entry zone.
+    fib_adj = fib_alignment_delta(direction, analysis.get("fib"))
+    if fib_adj:
+        strength = max(0, min(100, strength + fib_adj))
+        (bear_reasons if direction == "LONG" else bull_reasons).append(
+            f"🔷 Trading against the Fib golden pocket bias ({fib_adj})")
+        g['pattern'] += fib_adj
 
     # Strength tiers (strength = score / 220 * 100):
     # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size

@@ -7,12 +7,12 @@ directly, and this project already asks it properly: CVD splits each candle by
 real taker buy/sell volume instead of assuming a candle closing +0.01% was 100%
 buying.
 
-So OBV is here for one reason — a lot of chart commentary is written in its
-language, and the app should be able to speak to a claim like "OBV has broken
-out". It must never reach the score. Feeding both OBV and CVD into scoring
-would count the same volume twice, which is the exact failure the trend cap
-already exists to prevent, and it would land during a freeze taken to keep v44
-measurable. The last test in this file is that guard.
+So OBV began as a display-only read — a lot of chart commentary is written in
+its language, and the app should be able to speak to a claim like "OBV has
+broken out". v50 lets it into the score under two hard constraints that keep the
+double-count from ever happening: it fires ONLY when CVD stayed silent, and it
+can only DOCK a trade the volume opposes, never add conviction. The last test in
+this file is that guard.
 """
 import os
 import sys
@@ -129,19 +129,26 @@ def test_a_missing_close_does_not_raise():
     assert out["trend"] in ("rising", "falling", "flat")
 
 
-# ── The guard ───────────────────────────────────────────────────────────────
+# ── The guard (v50: OBV scores only as a CVD-guarded brake) ──────────────────
 
-def test_obv_never_reaches_the_score():
+def test_obv_only_ever_docks_and_only_when_cvd_is_silent():
     """
-    CVD already measures buying pressure from real taker volume. Scoring OBV
-    beside it would count the same volume twice — the failure the trend cap
-    exists to prevent — and this landed during a freeze taken to keep v44
-    measurable. It is reporting only, and this is what keeps it that way.
+    Before v50 OBV never touched the score, because CVD already measures buying
+    pressure from real taker volume and scoring both would count the same volume
+    twice. v50 lets OBV in under two hard constraints that preserve that intent:
+    it only fires when CVD stayed silent (so it never double-counts), and it can
+    only DOCK a trade the volume opposes — never add conviction. This pins both.
     """
-    signals_src = open(os.path.join(os.path.dirname(__file__), "..",
-                                    "backend", "signals.py"), encoding="utf-8").read()
-    assert "obv" not in signals_src.lower().replace("observ", ""), \
-        "OBV reached the scoring engine"
+    from signals import obv_guard_delta
+    # Never a bonus: an OBV divergence that AGREES with the trade earns nothing.
+    assert obv_guard_delta("LONG", {"divergence": "bullish"}, False) == 0
+    assert obv_guard_delta("SHORT", {"divergence": "bearish"}, False) == 0
+    # Never double-counts: when CVD already spoke, OBV stays out entirely.
+    assert obv_guard_delta("LONG", {"divergence": "bearish"}, True) == 0
+    assert obv_guard_delta("SHORT", {"divergence": "bullish"}, True) == 0
+    # It only docks (negative), only against the trade, only with CVD silent.
+    assert obv_guard_delta("LONG", {"divergence": "bearish"}, False) == -5
+    assert obv_guard_delta("SHORT", {"divergence": "bullish"}, False) == -5
 
 
 def test_the_analysis_payload_exposes_it_for_display():

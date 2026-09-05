@@ -154,6 +154,28 @@ def _rsi_reversal_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
             "rsi_reversal_count": len(markers)}
 
 
+def _fib_bmsb_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Fibonacci golden-pocket alignment (v50 scores it as a brake) and the weekly
+    Bull-Market-Support-Band status (still read-only — None on the 2H publish
+    path). Recorded so a review can score whether trading against the fib zone
+    bias, or below the band, preceded stops. All-None when absent.
+    """
+    f = analysis.get("fib")
+    f = f if isinstance(f, dict) else {}
+    b = analysis.get("bmsb")
+    b = b if isinstance(b, dict) else {}
+    in_zone = bool(f.get("in_golden_pocket") or f.get("in_entry_zone"))
+    return {
+        "fib_bias": f.get("bias"),                 # long (discount) | short (premium) | None
+        "fib_status": f.get("status"),
+        "fib_in_zone": in_zone if f else None,     # None when no fib at all
+        "fib_in_golden_pocket": bool(f.get("in_golden_pocket")) if f else None,
+        "bmsb_status": b.get("status"),            # weekly-only; None on 2H
+        "bmsb_close_status": b.get("close_status"),
+    }
+
+
 def _pattern_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
     """Flag / breakout measurements — the things a postmortem asks about."""
     flags = analysis.get("flags") or []
@@ -312,6 +334,9 @@ def build_snapshot(analysis: Dict[str, Any],
         # can learn whether an OBV divergence AGAINST the trade preceded a stop.
         "obv_trend": (analysis.get("obv") or {}).get("trend"),
         "obv_divergence": (analysis.get("obv") or {}).get("divergence"),
+
+        # Fibonacci golden-pocket alignment (v50 brake) + weekly BMSB status.
+        **_fib_bmsb_summary(analysis),
 
         # Trend classification
         "supertrend_direction": supertrend.get("direction"),
