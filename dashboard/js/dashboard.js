@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '230';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '231';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2385,6 +2385,79 @@ function _renderRewardHistory() {
         </div>`;
     })
     .catch(() => {});
+}
+
+/* ─── Paper Account — simulated auto-execution of the published signals ─────── */
+// Reporting only: this places no orders and moves no funds. It shows what
+// auto-trading the current strategy_version at a fixed notional WOULD have made
+// or lost, net of fees, with an equity-curve sparkline. Defaults to $10/trade —
+// Hyperliquid's live minimum — so the number on the card is one you could
+// actually trade; $1 is below that floor and only fillable in simulation.
+const PAPER_TRADE_SIZE = 10;
+
+async function loadPaperAccount() {
+  const sec  = document.getElementById('paperSection');
+  const body = document.getElementById('paperBody');
+  const meta = document.getElementById('paperMeta');
+  if (!sec || !body) return;
+  try {
+    const r = await fetch(`${API}/paper/account?trade_size_usd=${PAPER_TRADE_SIZE}`);
+    if (!r.ok) { sec.style.display = 'none'; return; }
+    const a = await r.json();
+    const s = a.summary || {};
+    if (!s.filled_trades) {                          // nothing closed yet on this version
+      sec.style.display = '';
+      if (meta) meta.textContent = a.strategy_version || '';
+      body.innerHTML = `<div style="opacity:.65;font-size:13px">No closed trades yet on
+        <b>${a.strategy_version || 'this version'}</b> — the paper account fills as signals resolve.</div>`;
+      return;
+    }
+    sec.style.display = '';
+    const usd = v => (v < 0 ? '−$' : '$') + Math.abs(Number(v)).toFixed(2);
+    const up  = (s.net_pnl_usd || 0) >= 0;
+    const col = up ? '#22c55e' : '#ef4444';
+    if (meta) meta.textContent = `${a.strategy_version || ''} · $${(a.config||{}).trade_size_usd}/trade · simulated`;
+
+    // Equity-curve sparkline (oldest → newest; the API already returns it forward).
+    const pts = (a.equity_curve || []).map(p => Number(p.balance_usd)).filter(v => !isNaN(v));
+    let spark = '';
+    if (pts.length >= 2) {
+      const lo = Math.min(...pts), hi = Math.max(...pts), span = (hi - lo) || 1;
+      const W = 240, H = 40, step = W / (pts.length - 1);
+      const path = pts.map((v, i) =>
+        `${i ? 'L' : 'M'}${(i*step).toFixed(1)},${(H - 3 - ((v-lo)/span)*(H-6)).toFixed(1)}`).join(' ');
+      spark = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex:none;max-width:100%">
+        <path d="${path}" fill="none" stroke="${col}" stroke-width="1.6"
+              stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+    }
+
+    const lr = a.live_readiness || {};
+    const liveNote = lr.size_meets_live_minimum
+      ? `✅ ${usd((a.config||{}).trade_size_usd)}/trade meets Hyperliquid's live minimum`
+      : `⚠️ below Hyperliquid's $${lr.hyperliquid_min_order_usd} live minimum — simulation only`;
+
+    const cell = (label, val, strong) => `<div style="display:flex;flex-direction:column;gap:1px">
+        <span style="opacity:.55;font-size:11px">${label}</span>
+        <span style="font-size:${strong?'15px':'13px'};font-weight:${strong?'700':'600'}">${val}</span></div>`;
+
+    body.innerHTML = `
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px">
+        ${spark}
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <span style="font-size:22px;font-weight:800;color:${col}">${usd(s.net_pnl_usd)}</span>
+          <span style="opacity:.6;font-size:11px">net P&L · ${s.filled_trades} trades · from $${(a.config||{}).start_balance_usd}</span>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:9px 14px;margin-bottom:9px">
+        ${cell('Win rate', (s.win_rate_pct ?? '—') + '%')}
+        ${cell('Return', (s.net_return_pct ?? 0).toFixed(2) + '%', true)}
+        ${cell('End balance', usd(s.end_balance_usd), true)}
+        ${cell('Max drawdown', usd(-Math.abs(s.max_drawdown_usd || 0)))}
+        ${cell('Fees paid', usd(s.fees_paid_usd) + (s.fees_as_pct_of_gross != null ? ` (${s.fees_as_pct_of_gross}% of gross)` : ''))}
+      </div>
+      <div style="font-size:11px;opacity:.7">${liveNote}</div>
+      <div style="font-size:11px;opacity:.5;margin-top:4px">Simulated — no orders, no funds. Funding not modelled; fills at the signal's tracked entry/exit.</div>`;
+  } catch (_) { sec.style.display = 'none'; }
 }
 
 /* ─── On-Chain Metrics Grid (BTC only) ────────────────────────────────────── */
@@ -6904,6 +6977,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadRecommendations();
   loadTracker();
   loadPatternHistory();
+  loadPaperAccount();
 
   await renderAssetTabs();   // build tabs sorted by live market cap first
   wireSelectors();

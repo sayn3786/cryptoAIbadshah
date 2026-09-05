@@ -116,6 +116,15 @@
   <div id="trackerBody" class="tracker-body"></div>
 </section>
 
+<!-- ── PAPER ACCOUNT (simulated auto-execution) ───────────────────────────── -->
+<section id="paperSection" class="rec-section" style="display:none">
+  <div class="rec-header" style="cursor:default">
+    <span class="rec-title">🧪 Paper Account</span>
+    <span id="paperMeta" class="rec-generated"></span>
+  </div>
+  <div id="paperBody" style="padding:10px 14px 14px"></div>
+</section>
+
 <!-- ── LOADING OVERLAY ────────────────────────────────────────────────────── -->
 <div id="loadingOverlay" class="loading-overlay">
   <div class="spinner"></div>
@@ -870,7 +879,7 @@
 </footer>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="/dashboard/js/dashboard.js?v=230"></script>
+<script src="/dashboard/js/dashboard.js?v=231"></script>
 <script>
   // Unregister any stale service workers, then register the latest one.
   // This runs on every load so old cached SWs can never serve stale JS/HTML.
