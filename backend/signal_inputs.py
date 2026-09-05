@@ -46,9 +46,9 @@ __all__ = [
 
 CANDLE_DERIVED = frozenset({
     "candles", "candle_dirs",
-    "rsi", "rsi_slope", "price_roc", "rsi_divergence",
+    "rsi", "rsi_slope", "rsi_markers", "price_roc", "rsi_divergence",
     "macd", "ema_trend", "supertrend", "ichimoku", "bollinger", "stoch_rsi",
-    "vwap", "vol_signal", "vol_regime",
+    "vwap", "vol_signal", "vol_regime", "obv", "fib",
     "spot_cvd", "cvd_divergence",
     "fvgs", "engulfing", "elliott_wave", "choch", "liq_grab", "acc_setup",
     "trendline", "sr_zones", "flags",

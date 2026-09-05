@@ -9,7 +9,7 @@ the two milestones, so the qualitative (~15 closed) and quantitative (~30 closed
 read dates come from data rather than an estimate.
 
     python -m postmortem_cadence
-    python -m postmortem_cadence --strategy-version v49_4h_avg --json
+    python -m postmortem_cadence --strategy-version v50_4h_avg --json
 
 Read-only. It queries closed and open signals, computes a rate, and prints — no
 writes, no publication, no schema touch, and it changes no live parameter. Run
@@ -61,7 +61,7 @@ def _default_version():
         import signal_publish
         return signal_publish.STRATEGY_VERSION
     except Exception:                                    # noqa: BLE001
-        return "v49_4h_avg"
+        return "v50_4h_avg"
 
 
 def _render(rep) -> str:

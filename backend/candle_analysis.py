@@ -40,8 +40,8 @@ from indicators import (
     calculate_ichimoku, calculate_macd, calculate_obv, calculate_rsi_series,
     calculate_stoch_rsi, calculate_supertrend, calculate_volume_signal,
     calculate_vwap, candle_direction, detect_cvd_divergence, detect_engulfing,
-    detect_fvg, detect_rsi_divergence, detect_whale_activity, find_pivots,
-    find_volume_spikes, flip_close_ts,
+    detect_fvg, detect_rsi_divergence, detect_whale_activity, fibonacci_retracement,
+    find_pivots, find_volume_spikes, flip_close_ts,
 )
 from patterns import (
     analyze_elliott_wave, detect_acc_eql_fvg_setup, detect_bos_streak,
@@ -92,7 +92,7 @@ CANDLE_DERIVED_KEYS = (
     "rsi", "rsi_slope", "rsi_series", "rsi_markers", "price_roc", "candle_dirs",
     "macd", "ema_trend", "ema_lines", "supertrend", "ichimoku", "bollinger",
     "stoch_rsi", "vwap", "vol_signal", "obv", "vol_regime",
-    "spot_cvd", "cvd_divergence",
+    "spot_cvd", "cvd_divergence", "fib",
     "fvgs", "engulfing", "rsi_divergence", "elliott_wave",
     "choch", "liq_grab", "acc_setup",
     "trendline", "sr_zones", "flags", "flag_diagnostics",
@@ -375,6 +375,10 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
         "vol_signal": calculate_volume_signal(candles),
         "obv": calculate_obv(candles),
         "vol_regime": vol_regime(candles),
+        # Fibonacci golden pocket — v50 scores it as a confluence brake, so it is
+        # produced HERE in the shared builder (not app-side) to keep the backtest
+        # replaying the same input production scored.
+        "fib": fibonacci_retracement(candles),
 
         "spot_cvd": _spot_cvd,
         "cvd_divergence": detect_cvd_divergence(_spot_cvd, futures_cvd, candles),

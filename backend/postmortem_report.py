@@ -239,6 +239,33 @@ def _rsi_reversal_against(row) -> Optional[bool]:
             (kind == "oversold_bottom" and d == "SHORT"))
 
 
+def _divergence_played_out(row) -> Optional[bool]:
+    """A scored RSI divergence that had already played out — recovery spent, not a
+    fresh turn. v50 zeroes its conviction; this records whether the spent
+    divergences were preceding stops."""
+    iv = _snap(row)
+    if "rsi_divergence_played_out" not in iv:
+        return None
+    if not iv.get("rsi_divergence_type"):        # no divergence at all → not applicable
+        return False
+    return bool(iv.get("rsi_divergence_played_out"))
+
+
+def _fib_pocket_against(row) -> Optional[bool]:
+    """Trade taken into the WRONG side of the Fibonacci golden pocket — a LONG in a
+    down-leg premium, or a SHORT in an up-leg discount (v50 docks it)."""
+    iv = _snap(row)
+    if "fib_bias" not in iv:
+        return None
+    d = _direction(row)
+    if d is None or not iv.get("fib_in_zone"):
+        return False
+    bias = iv.get("fib_bias")
+    if bias not in ("long", "short"):
+        return False
+    return bias != ("long" if d == "LONG" else "short")
+
+
 # Ordered, named, and each with a one-line reason a reader can act on. Adding a
 # feature here is the intended way to extend the postmortem — it needs a
 # predicate and nothing else.
@@ -302,6 +329,17 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "fn": _obv_divergence_against,
         "meaning": "OBV was diverging against the trade — volume quietly "
                    "distributing under a LONG, or accumulating under a SHORT",
+    },
+    "divergence_played_out_but_scored": {
+        "fn": _divergence_played_out,
+        "meaning": "the RSI divergence had already played out (recovery spent) — "
+                   "v50 now zeroes its conviction; before that it scored full weight",
+    },
+    "traded_against_the_fib_pocket": {
+        "fn": _fib_pocket_against,
+        "meaning": "the trade entered the wrong side of the Fibonacci golden pocket "
+                   "(a LONG into premium/resistance or a SHORT into discount) — v50 "
+                   "docks it",
     },
     "rsi_reversal_opposed_the_trade": {
         "fn": _rsi_reversal_against,
