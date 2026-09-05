@@ -38,3 +38,4 @@ jobs:
           get "POSTMORTEM current default"     "/api/signals/postmortem-report$Q"
           get "ANALYTICS current default"      "/api/signals/analytics$Q"
           get "TIMING REPORT (pooled)"         "/api/signals/timing-report"
+          get "PAPER ACCOUNT (\$1/trade)"       "/api/paper/account?trade_size_usd=1"

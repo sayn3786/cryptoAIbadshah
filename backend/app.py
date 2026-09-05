@@ -3732,6 +3732,48 @@ def api_signals_analytics():
         return _db_error_response(exc)
 
 
+@app.get("/api/paper/account")
+def api_paper_account():
+    """
+    Paper account — what auto-executing the published signals would have made or
+    lost at a fixed notional. Pure preview over the CLOSED-signal feed: no keys,
+    no orders, no exchange. This is the safe first step before any live executor.
+
+    Query params:
+      trade_size_usd    notional per trade (default 1.0). Below Hyperliquid's
+                        ~$10 minimum it models a trade the exchange would reject —
+                        fine for simulation, flagged in live_readiness.
+      start_balance_usd starting paper balance (default 1000)
+      fee_bps           taker fee per side in basis points (default 3.5)
+      strategy_version  which rule-set (default: current). Rows are one version.
+      environment       environment scope (defaults to this deployment's)
+      limit             max closed rows to pull (default 500)
+    """
+    guard = _db_guard()
+    if guard:
+        return guard
+    store = _signal_store()
+    import paper_account as _pa
+    sver = request.args.get("strategy_version") or _strategy_version_for_reports()
+    try:
+        size = float(request.args.get("trade_size_usd", 1.0))
+        start = float(request.args.get("start_balance_usd", 1000.0))
+        fee = float(request.args.get("fee_bps", _pa.DEFAULT_FEE_BPS))
+    except (TypeError, ValueError):
+        return jsonify({"error": "trade_size_usd, start_balance_usd and fee_bps "
+                        "must be numbers"}), 400
+    try:
+        rows = store.list_closed_with_snapshots(
+            strategy_version=sver,
+            environment=request.args.get("environment"),
+            limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
+        return jsonify(_pa.build_paper_account(
+            rows, trade_size_usd=size, start_balance_usd=start,
+            fee_bps=fee, strategy_version=sver))
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.get("/api/signals/timing-report")
 def api_signals_timing_report():
     """
