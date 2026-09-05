@@ -3749,11 +3749,18 @@ def api_signals_timing_report():
     store = _signal_store()
     import signal_analytics as _an
     try:
-        rows = store.list_closed_with_snapshots(
+        # The timing report reads only signal-row fields (timeframe, timestamps,
+        # realized return, version) — never the snapshot JSONB. Pooling every
+        # version through list_closed_with_snapshots pulled ~hundreds of heavy
+        # indicator_values/market_context blobs and timed out; list_signals is
+        # the lean, snapshot-free fetch that carries everything this needs.
+        result = store.list_signals(
+            statuses=sorted(store.TERMINAL_STATUSES),
             strategy_version=None,          # pool every version on purpose
             environment=request.args.get("environment"),
+            with_total=False,
             limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
-        return jsonify(_an.build_timing_report(rows))
+        return jsonify(_an.build_timing_report(result.get("items", [])))
     except Exception as exc:
         return _db_error_response(exc)
 
