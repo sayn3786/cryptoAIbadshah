@@ -38,6 +38,4 @@ jobs:
           get "POSTMORTEM current default"     "/api/signals/postmortem-report$Q"
           get "ANALYTICS current default"      "/api/signals/analytics$Q"
           get "TIMING REPORT (pooled)"         "/api/signals/timing-report"
-          get "PAPER ACCOUNT current \$1/trade" "/api/paper/account?trade_size_usd=1$Q"
-          get "PAPER ACCOUNT v49 \$1/trade"     "/api/paper/account?trade_size_usd=1&strategy_version=v49_4h_avg"
-          get "PAPER ACCOUNT v49 \$10/trade"    "/api/paper/account?trade_size_usd=10&strategy_version=v49_4h_avg"
+          get "PAPER ACCOUNT (\$1/trade)"       "/api/paper/account?trade_size_usd=1$Q"
