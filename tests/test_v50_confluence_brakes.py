@@ -16,32 +16,37 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 import signals                                                        # noqa: E402
 
 
-# ── RSI swing-reversal brake ──────────────────────────────────────────────────
+# ── RSI swing-reversal brake (v51: full penalty only while FRESH) ─────────────
 
-def test_rsi_reversal_docks_a_long_under_an_overbought_top():
-    m = [{"timestamp": 5, "kind": "overbought_top"}, {"timestamp": 1, "kind": "oversold_bottom"}]
-    assert signals.rsi_reversal_delta("LONG", m) == -6          # latest marker opposes
+def test_rsi_reversal_docks_a_long_under_a_fresh_overbought_top():
+    m = [{"timestamp": 5, "kind": "overbought_top", "bars_ago": 3},
+         {"timestamp": 1, "kind": "oversold_bottom", "bars_ago": 8}]
+    assert signals.rsi_reversal_delta("LONG", m) == -6          # fresh latter opposes
 
 
-def test_rsi_reversal_docks_a_short_under_an_oversold_bottom():
-    assert signals.rsi_reversal_delta("SHORT", [{"timestamp": 9, "kind": "oversold_bottom"}]) == -6
+def test_rsi_reversal_docks_a_short_under_a_fresh_oversold_bottom():
+    assert signals.rsi_reversal_delta(
+        "SHORT", [{"timestamp": 9, "kind": "oversold_bottom", "bars_ago": 2}]) == -6
 
 
 def test_rsi_reversal_is_a_brake_not_a_bonus():
     # A marker that AGREES with the trade earns nothing.
-    assert signals.rsi_reversal_delta("LONG", [{"timestamp": 9, "kind": "oversold_bottom"}]) == 0
+    assert signals.rsi_reversal_delta(
+        "LONG", [{"timestamp": 9, "kind": "oversold_bottom", "bars_ago": 2}]) == 0
 
 
 def test_rsi_reversal_uses_only_the_latest_marker():
     # Older opposing marker, newer agreeing one → not braked.
-    m = [{"timestamp": 1, "kind": "overbought_top"}, {"timestamp": 9, "kind": "oversold_bottom"}]
+    m = [{"timestamp": 1, "kind": "overbought_top", "bars_ago": 2},
+         {"timestamp": 9, "kind": "oversold_bottom", "bars_ago": 1}]
     assert signals.rsi_reversal_delta("LONG", m) == 0
 
 
 def test_rsi_reversal_none_or_neutral_is_zero():
     assert signals.rsi_reversal_delta("LONG", None) == 0
     assert signals.rsi_reversal_delta("LONG", []) == 0
-    assert signals.rsi_reversal_delta("NEUTRAL", [{"timestamp": 1, "kind": "overbought_top"}]) == 0
+    assert signals.rsi_reversal_delta(
+        "NEUTRAL", [{"timestamp": 1, "kind": "overbought_top", "bars_ago": 2}]) == 0
 
 
 # ── OBV divergence brake (CVD-guarded) ────────────────────────────────────────

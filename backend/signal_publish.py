@@ -53,7 +53,7 @@ STRATEGY_NAME = "mtf_confluence_top3"
 # gating out the Moderate tier — the one strength band that lost money in both
 # the v45 and v48 powered cohorts. Changes WHICH trades clear the gate, so v48
 # and v49 are not comparable and the postmortem cohort restarts here.
-_DEFAULT_STRATEGY_VERSION = "v50_4h_avg"
+_DEFAULT_STRATEGY_VERSION = "v51_4h_avg"
 STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
                     or _DEFAULT_STRATEGY_VERSION)
 

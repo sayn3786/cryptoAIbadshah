@@ -118,9 +118,18 @@ def _pct(sorted_vals: Sequence[float], q: float) -> Optional[float]:
 
 
 def _win_expectancy(rows: Sequence[Dict]) -> Dict[str, Any]:
-    """Wins/losses, win rate over the DECIDED trades, and expectancy over the
-    returns of every analysable (won/lost/scratch/expired) trade in the group."""
+    """
+    The count breakdown, win rate and expectancy for a group of rows.
+
+    Denominators are kept separate on purpose: a CANCELLED order never filled and
+    an OPEN one has not resolved, so neither is a trade. Win rate is over the
+    DECIDED trades only (wins + losses), expectancy over the trades that recorded
+    a realised return, and ``decided_n`` — never the raw row count — is what
+    ``MIN_BUCKET`` judges, so a bucket of one winner and four cancellations reads
+    as one decided trade (thin), not a five-strong 100% win rate.
+    """
     wins = losses = 0
+    cancelled = scratch = expired = openn = 0
     returns: List[float] = []
     for r in rows:
         oc = classify_outcome(r)
@@ -128,13 +137,31 @@ def _win_expectancy(rows: Sequence[Dict]) -> Dict[str, Any]:
             wins += 1
         elif oc == "loss":
             losses += 1
+        elif oc == "cancelled":
+            cancelled += 1
+        elif oc == "scratch":
+            scratch += 1
+        elif oc == "expired":
+            expired += 1
+        elif oc == "open":
+            openn += 1
         if oc in ("win", "loss", "scratch", "expired"):
             ret = _f(r.get("realized_return_pct"))
             if ret is not None:
                 returns.append(ret)
     decided = wins + losses
+    published = len(rows)
+    filled = published - cancelled - openn        # an order that actually became a trade
     return {
-        "n": len(rows),
+        # ``n`` stays the published row count for backward compatibility, but the
+        # thin/calibration decisions read ``decided_n``.
+        "n": published,
+        "published_n": published,
+        "filled_n": filled,
+        "decided_n": decided,
+        "cancelled_n": cancelled,
+        "scratch_n": scratch,
+        "expired_n": expired,
         "wins": wins,
         "losses": losses,
         "win_rate_pct": round(wins / decided * 100, 1) if decided else None,
@@ -165,7 +192,7 @@ def strength_calibration(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         stats = _win_expectancy(in_tier)
         stats["tier"] = label
         stats["strength_range"] = [lo, hi if hi < 1e9 else None]
-        stats["thin"] = stats["n"] < MIN_BUCKET
+        stats["thin"] = stats["decided_n"] < MIN_BUCKET
         buckets.append(stats)
         rate = stats["win_rate_pct"]
         ordered_rates.append(rate)
@@ -394,13 +421,16 @@ def timeframe_efficiency(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             per_day = round(exp / (max(median_hold, 1.0) / 24.0), 4)
         frames.append({
             "timeframe": tf,
-            "n": stats["n"], "wins": stats["wins"], "losses": stats["losses"],
+            "n": stats["n"], "published_n": stats["published_n"],
+            "filled_n": stats["filled_n"], "decided_n": stats["decided_n"],
+            "cancelled_n": stats["cancelled_n"],
+            "wins": stats["wins"], "losses": stats["losses"],
             "win_rate_pct": stats["win_rate_pct"],
             "expectancy_pct": exp,
             "total_return_pct": stats["total_return_pct"],
             "median_hold_hours": round(median_hold, 1) if median_hold is not None else None,
             "expectancy_per_day": per_day,
-            "thin": stats["n"] < MIN_BUCKET,
+            "thin": stats["decided_n"] < MIN_BUCKET,
         })
 
     scored = [f for f in frames if not f["thin"] and f["expectancy_per_day"] is not None]
@@ -468,7 +498,7 @@ def session_performance(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         stats = _win_expectancy(group)
         stats["session"] = label
         stats["utc_hours"] = f"{lo:02d}:00–{hi - 1:02d}:59"
-        stats["thin"] = stats["n"] < MIN_BUCKET
+        stats["thin"] = stats["decided_n"] < MIN_BUCKET
         sessions.append(stats)
 
     hours = {}
@@ -476,7 +506,7 @@ def session_performance(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         group = by_hour.get(h, [])
         if group:
             st = _win_expectancy(group)
-            st["thin"] = st["n"] < MIN_BUCKET
+            st["thin"] = st["decided_n"] < MIN_BUCKET
             hours[f"{h:02d}"] = st
 
     scored = [s for s in sessions
@@ -522,7 +552,8 @@ def build_timing_report(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "pooled_across_versions": versions,
         "cohort": {"closed_rows": len(rows), **{
             k: _win_expectancy(rows)[k]
-            for k in ("wins", "losses", "win_rate_pct", "expectancy_pct")}},
+            for k in ("published_n", "filled_n", "decided_n", "cancelled_n",
+                      "wins", "losses", "win_rate_pct", "expectancy_pct")}},
         "timeframe_efficiency": timeframe_efficiency(rows),
         "session_performance": session_performance(rows),
         "caveats": [
@@ -558,6 +589,12 @@ def build_analytics(rows: Sequence[Dict[str, Any]], *,
         "strategy_version": strategy_version,
         "cohort": {
             "closed_rows": len(rows),
+            "published_n": overall["published_n"],
+            "filled_n": overall["filled_n"],
+            "decided_n": overall["decided_n"],
+            "cancelled_n": overall["cancelled_n"],
+            "scratch_n": overall["scratch_n"],
+            "expired_n": overall["expired_n"],
             "wins": overall["wins"],
             "losses": overall["losses"],
             "win_rate_pct": overall["win_rate_pct"],

@@ -654,3 +654,75 @@ def test_health_reports_expected_tables_consistently_with_the_migration(engine):
     for table in db.EXPECTED_TABLES:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql, \
             f"{table} is expected by the health probe but not created by the migration"
+
+
+# ── Item 4: archiving must not change analytical history ─────────────────────
+# Archiving is an OPERATIONAL tidy-up: it clears a closed trade off the live
+# board and the default history, but the archive contract keeps the row for
+# analysis. These prove that the postmortem / analytics / paper-account feeds
+# read the archived row exactly as before, while operational views hide it.
+
+def _closed_pair(store):
+    """One winner (TP3) and one loser (SL), both terminal with a realised return."""
+    win = _mk(store, candle_close_time=BASE + timedelta(hours=2))
+    los = _mk(store, candle_close_time=BASE + timedelta(hours=4))
+    t = BASE + timedelta(hours=6)
+    store.record_target_hit(win, 3, "130", t, source_ts=t)            # +% winner
+    store.record_stop_loss_hit(los, "95.25", t, source_ts=t)          # −% loser
+    return win, los
+
+
+def _analytical_rows(store):
+    return store.list_closed_with_snapshots(include_archived=True)
+
+
+def test_archiving_hides_from_operations_but_not_analytics(store):
+    import signal_analytics as an
+    import paper_account as pa
+
+    win, los = _closed_pair(store)
+
+    before_rows = _analytical_rows(store)
+    assert len(before_rows) == 2
+    before_an = an.build_analytics(before_rows)
+    before_pa = pa.build_paper_account(before_rows, trade_size_usd=10.0)
+
+    # Archive the winner.
+    store.archive_signal(win)
+
+    after_rows = _analytical_rows(store)
+    after_an = an.build_analytics(after_rows)
+    after_pa = pa.build_paper_account(after_rows, trade_size_usd=10.0)
+
+    # Analytics are UNCHANGED — the archived row still counts.
+    assert len(after_rows) == 2
+    assert after_an["cohort"] == before_an["cohort"]
+    assert after_pa["summary"]["net_pnl_usd"] == before_pa["summary"]["net_pnl_usd"]
+    assert after_pa["summary"]["filled_trades"] == before_pa["summary"]["filled_trades"] == 2
+
+    # Operational views HIDE the archived row.
+    operational = store.list_closed_with_snapshots(include_archived=False)
+    assert [r["id"] for r in operational] == [los]     # winner is gone from the board
+
+
+def test_archived_and_unarchived_rows_are_never_double_counted(store):
+    win, los = _closed_pair(store)
+    store.archive_signal(win)
+    rows = _analytical_rows(store)
+    ids = [r["id"] for r in rows]
+    assert sorted(ids) == sorted([win, los])           # both present…
+    assert len(ids) == len(set(ids))                   # …each exactly once
+
+
+def test_cadence_and_timing_feeds_keep_archived_rows(store):
+    win, los = _closed_pair(store)
+    before = store.list_signals(statuses=list(store.TERMINAL_STATUSES),
+                                include_archived=True, with_total=False)["items"]
+    store.archive_signal(win)
+    after = store.list_signals(statuses=list(store.TERMINAL_STATUSES),
+                               include_archived=True, with_total=False)["items"]
+    assert len(before) == len(after) == 2
+    # And the default (operational) list_signals drops it.
+    op = store.list_signals(statuses=list(store.TERMINAL_STATUSES),
+                            with_total=False)["items"]
+    assert [r["id"] for r in op] == [los]

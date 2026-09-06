@@ -151,6 +151,8 @@ def _rsi_reversal_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
     latest = max(markers, key=lambda m: (m or {}).get("timestamp") or 0)
     return {"rsi_reversal_latest": latest.get("kind"),
             "rsi_reversal_latest_ts": latest.get("timestamp"),
+            # Age of the latest marker in closed bars — what the v51 brake fades on.
+            "rsi_reversal_latest_bars_ago": latest.get("bars_ago"),
             "rsi_reversal_count": len(markers)}
 
 
@@ -365,6 +367,10 @@ def build_snapshot(analysis: Dict[str, Any],
         # show the strength but not why it was cut.
         "structure_adjustment": _num(signal.get("structure_adjustment")),
         "structure_factors": redact(signal.get("structure_factors")),
+        # RSI swing-reversal brake (v51) — the strength delta applied, faded by
+        # the marker's age, so a postmortem can score the freshness weighting.
+        "rsi_reversal_adjustment": _num(signal.get("rsi_reversal_adjustment")),
+        "rsi_reversal_bars_ago": _num(signal.get("rsi_reversal_bars_ago")),
         # Liquidation max-pain squeeze nudge (v46). The signed delta applied and
         # the side it leaned, so a postmortem can ask whether trades taken
         # AGAINST the squeeze (liquidation_adjustment < 0) lost more often.
