@@ -489,6 +489,46 @@ def test_liquidated_position_retains_its_entry_fee():
     assert s["reconciles"] is True
 
 
+def test_liquidated_position_with_fee_counts_as_a_loss():
+    # W wins and closes first; A's close ruins the account; B is still open and is
+    # liquidated with a retained entry fee (a realized loss of -ent). That wiped
+    # trade must land in `losses`/`decided`, or win_rate_pct reads higher than the
+    # ledger. Before the fix: wins=1, losses=1, win_rate=50%; after: losses=2, 33.3%.
+    w = {"status": "TP_HIT", "realized_return_pct": 1.0, "entry_filled_at": 0,
+         "closed_at": 50, "symbol": "WWW", "direction": "LONG"}
+    a = {"status": "SL_HIT", "realized_return_pct": -100000.0, "entry_filled_at": 0,
+         "closed_at": 100, "symbol": "AAA", "direction": "LONG"}
+    b = {"status": "TP_HIT", "realized_return_pct": 1.0, "entry_filled_at": 0,
+         "closed_at": 200, "symbol": "BBB", "direction": "LONG"}
+    acct = pa.build_paper_account([w, a, b], trade_size_usd=10.0,
+                                  start_balance_usd=100.0, fee_bps=3.5)
+    s = acct["summary"]
+    assert s["account_ruined"] is True
+    assert s["wins"] == 1                       # only W
+    assert s["losses"] == 2                     # A (ruining close) + B (liquidated w/ fee)
+    assert s["win_rate_pct"] == 33.3
+    liq = [row for row in acct["ledger"] if row["liquidated"]]
+    assert len(liq) == 1 and liq[0]["net_usd"] < 0
+    assert s["reconciles"] is True
+
+
+def test_liquidated_position_with_zero_fee_is_not_a_loss():
+    # With no fees the liquidated position's net is exactly 0 (nothing was spent on
+    # it), so it is neither a win nor a loss — same as a zero-net normal close.
+    a = {"status": "SL_HIT", "realized_return_pct": -100000.0, "entry_filled_at": 0,
+         "closed_at": 100, "symbol": "AAA", "direction": "LONG"}
+    b = {"status": "TP_HIT", "realized_return_pct": 1.0, "entry_filled_at": 0,
+         "closed_at": 200, "symbol": "BBB", "direction": "LONG"}
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=100.0, fee_bps=0.0)
+    s = acct["summary"]
+    assert s["account_ruined"] is True
+    assert s["wins"] == 0 and s["losses"] == 1  # A only; B liquidated at net 0
+    liq = [row for row in acct["ledger"] if row["liquidated"]]
+    assert len(liq) == 1 and liq[0]["net_usd"] == 0.0
+    assert s["reconciles"] is True
+
+
 # ── Sixth Codex review: entry-fee debit is observed by the drawdown ──────────
 
 def test_entry_fee_dip_is_recorded_in_drawdown_even_if_recovered():
