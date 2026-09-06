@@ -173,13 +173,10 @@ def build_paper_account(
     lev = _require_finite(leverage, "leverage", minimum=1.0)
 
     fee_frac = fee_bps_v / 10_000.0
-    round_trip_fee = size * fee_frac * 2.0            # entry + exit, taker both sides
+    entry_fee = size * fee_frac                       # taker fee, charged when opening
+    exit_fee = size * fee_frac                        # taker fee, charged when closing
+    round_trip_fee = entry_fee + exit_fee             # both sides
     margin = size / lev
-    # Capital a position ties up while open: its margin PLUS its round-trip fee,
-    # reserved cumulatively so N concurrent positions collectively can fund their
-    # margins and fees (checking only the current candidate's fee let a third+
-    # position slip past the boundary).
-    commit = margin + round_trip_fee
 
     # ── Build the schedulable positions ──────────────────────────────────────
     positions: List[Dict[str, Any]] = []
@@ -282,10 +279,20 @@ def build_paper_account(
             # admitted trades at the capital boundary whose margin+fees exceeded the
             # balance, contradicting "never opens an unfundable trade". A ruined
             # account has no capital at all. Both cases are counted, never silent.
-            if account_ruined or (equity - reserved) + 1e-9 < commit:
+            # Admission needs margin + the ENTRY fee only — the exit fee is paid at
+            # close from the released margin/proceeds, so requiring it up front
+            # would wrongly reject a fundable trade. Cumulative because reserved
+            # already holds earlier positions' margins.
+            if account_ruined or (equity - reserved) + 1e-9 < margin + entry_fee:
                 skipped_insufficient_capital += 1
                 continue
-            reserved += commit                        # margin + this position's fee
+            # The entry fee is spent NOW (so it is retained even if this position is
+            # later liquidated by another trade's ruin); margin is reserved, not spent.
+            equity -= entry_fee
+            net_applied_sum -= entry_fee
+            fees_paid += entry_fee
+            p["entry_fee"] = entry_fee
+            reserved += margin
             filled += 1
             p["fill_index"] = filled
             active[seq] = p
@@ -305,45 +312,50 @@ def build_paper_account(
             if seq not in active:
                 continue                              # was skipped, so nothing to close
             del active[seq]
-            reserved -= commit                        # release margin + fee headroom
+            reserved -= margin                        # release the position's margin
             if p.get("amt") is not None:
                 active_risk -= p["amt"]               # release this position's stop risk
+            ent = p.get("entry_fee", 0.0)             # entry fee already spent at open
             if account_ruined:
-                # Liquidated WITH the account: margin released, no further P&L, so
-                # the reconciliation identity is preserved.
+                # Liquidated WITH the account: margin released, no exit fee and no
+                # further P&L, but the ENTRY fee it already paid is retained (it was
+                # a real cost incurred before the account was wiped).
                 ledger.append({
                     "symbol": r.get("symbol"), "direction": r.get("direction"),
                     "return_pct": round(p["ret"], 4), "notional_usd": round(size, 6),
                     "amount_at_risk_usd": None,
                     "opened_at": r.get("entry_filled_at") or r.get("generated_at"),
                     "closed_at": r.get("closed_at"),
-                    "gross_usd": 0.0, "fee_usd": 0.0, "net_usd": 0.0,
+                    "gross_usd": 0.0, "fee_usd": round(ent, 6),
+                    "net_usd": round(-ent, 6),        # already reflected in equity at open
                     "balance_usd": round(equity, 6), "liquidated": True,
                 })
                 continue
             ret = p["ret"]
-            gross = size * (ret / 100.0)
-            fee = round_trip_fee
-            raw_net = gross - fee
+            close_gross = size * (ret / 100.0)
+            close_delta = close_gross - exit_fee      # this candle's equity movement
             # Ruin at or below zero: a close that lands equity AT zero wipes the
-            # account (it can fund nothing further), and the <= guard also stops a
-            # sub-epsilon negative from leaking through and breaking the
-            # never-negative invariant.
-            if equity + raw_net <= 1e-9:
-                net = -equity                         # lose exactly the remaining equity
-                gross = net + fee                     # cap gross too, so gross − fee == net
+            # account, and the <= guard also stops a sub-epsilon negative from
+            # leaking through and breaking the never-negative invariant.
+            if equity + close_delta <= 1e-9:
+                applied = -equity                     # lose exactly the remaining equity
                 equity = 0.0
                 account_ruined = True
                 ruined_at_trade = p["fill_index"]
             else:
-                net = raw_net
-                equity += net
-            net_applied_sum += net
-            gross_pnl += gross
-            fees_paid += fee
-            if net > 0:
+                applied = close_delta
+                equity += applied
+            net_applied_sum += applied
+            fees_paid += exit_fee
+            # The ledger row is the WHOLE trade: entry fee (spent at open) + this
+            # close. Keep gross − fee == net so the totals reconcile exactly.
+            trade_fee = ent + exit_fee
+            trade_net = -ent + applied
+            trade_gross = trade_net + trade_fee
+            gross_pnl += trade_gross
+            if trade_net > 0:
                 wins += 1
-            elif net < 0:
+            elif trade_net < 0:
                 losses += 1
             amt = p.get("amt")                        # computed at open; risk already tracked there
             ledger.append({
@@ -352,8 +364,8 @@ def build_paper_account(
                 "amount_at_risk_usd": round(amt, 6) if amt is not None else None,
                 "opened_at": r.get("entry_filled_at") or r.get("generated_at"),
                 "closed_at": r.get("closed_at"),
-                "gross_usd": round(gross, 6), "fee_usd": round(fee, 6),
-                "net_usd": round(net, 6), "balance_usd": round(equity, 6),
+                "gross_usd": round(trade_gross, 6), "fee_usd": round(trade_fee, 6),
+                "net_usd": round(trade_net, 6), "balance_usd": round(equity, 6),
                 "liquidated": False,
             })
             curve_dirty = True

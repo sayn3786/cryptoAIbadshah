@@ -454,3 +454,36 @@ def test_three_concurrent_positions_reserve_each_entry_fee():
     s = acct["summary"]
     assert s["filled_trades"] == 2
     assert s["skipped_insufficient_capital"] == 1
+
+
+# ── Fifth Codex review: split entry/exit fees ────────────────────────────────
+
+def test_admission_reserves_only_the_entry_fee_not_the_exit_fee():
+    # Two $10 positions at 1x, 3.5 bps: entry fee $0.0035 each → $20.007 needed at
+    # entry. A $20.01 balance funds BOTH (the exit fee is paid later at close);
+    # requiring the full round-trip up front would wrongly reject the second.
+    a = _ov("BTC", 1.0, 0, 100)
+    b = _ov("ETH", 1.0, 0, 100)
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=20.01, fee_bps=3.5)
+    assert acct["summary"]["filled_trades"] == 2
+
+
+def test_liquidated_position_retains_its_entry_fee():
+    # A [0,100] ruins the account; B [0,200] is still open and gets liquidated at
+    # B's close — but B's entry fee (paid when it opened) must be retained, not
+    # dropped to zero. So fees_paid = A(entry+exit) + B(entry) = 3 fee-sides.
+    a = {"status": "SL_HIT", "realized_return_pct": -300.0, "entry_filled_at": 0,
+         "closed_at": 100, "symbol": "AAA", "direction": "LONG"}
+    b = {"status": "TP_HIT", "realized_return_pct": 1.0, "entry_filled_at": 0,
+         "closed_at": 200, "symbol": "BBB", "direction": "LONG"}
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=21.0, fee_bps=3.5)
+    s = acct["summary"]
+    one_side = 10.0 * 3.5 / 10_000.0                  # $0.0035
+    assert s["account_ruined"] is True
+    assert abs(s["fees_paid_usd"] - one_side * 3) < 1e-9   # A entry+exit, B entry
+    liq = [row for row in acct["ledger"] if row["liquidated"]]
+    assert len(liq) == 1
+    assert abs(liq[0]["fee_usd"] - one_side) < 1e-9        # B's entry fee, not 0
+    assert s["reconciles"] is True
