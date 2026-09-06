@@ -328,6 +328,12 @@ def build_paper_account(
                 # Liquidated WITH the account: margin released, no exit fee and no
                 # further P&L, but the ENTRY fee it already paid is retained (it was
                 # a real cost incurred before the account was wiped).
+                # Its realized net is -ent, so count it as a loss whenever that fee
+                # was non-zero — same rule as a normal close (net < 0 -> loss, net == 0
+                # -> neither). Without this the wiped trades vanished from `decided`
+                # and win_rate_pct read higher than the ledger when fee_bps > 0.
+                if ent > 0:
+                    losses += 1
                 ledger.append({
                     "symbol": r.get("symbol"), "direction": r.get("direction"),
                     "return_pct": round(p["ret"], 4), "notional_usd": round(size, 6),
