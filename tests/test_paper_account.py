@@ -420,3 +420,37 @@ def test_zero_fee_boundary_still_opens_both():
     acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
                                   start_balance_usd=20.0, fee_bps=0.0)
     assert acct["summary"]["filled_trades"] == 2
+
+
+# ── Fourth Codex review: decision-time open priority & cumulative fee reserve ─
+
+def test_open_priority_is_decision_time_not_future_close_order():
+    # Two simultaneous fills, capital for only one. Row order is reversed between
+    # the two calls (as the store's closed_at-DESC ordering would vary); the SAME
+    # trade must be funded both times — chosen by generated_at, not row order.
+    early = {"status": "TP_HIT", "realized_return_pct": 5.0, "generated_at": 10,
+             "entry_filled_at": 100, "closed_at": 200, "symbol": "AAA", "direction": "LONG"}
+    late = {"status": "TP_HIT", "realized_return_pct": 5.0, "generated_at": 90,
+            "entry_filled_at": 100, "closed_at": 150, "symbol": "ZZZ", "direction": "LONG"}
+    out1 = pa.build_paper_account([early, late], trade_size_usd=10.0,
+                                  start_balance_usd=10.0, fee_bps=0.0)
+    out2 = pa.build_paper_account([late, early], trade_size_usd=10.0,
+                                  start_balance_usd=10.0, fee_bps=0.0)
+    # Both fund exactly one, and it's the EARLIER-published trade (AAA) both times.
+    assert out1["summary"]["filled_trades"] == 1
+    assert out2["summary"]["filled_trades"] == 1
+    assert out1["ledger"][0]["symbol"] == "AAA"
+    assert out2["ledger"][0]["symbol"] == "AAA"
+
+
+def test_three_concurrent_positions_reserve_each_entry_fee():
+    # $30.01 account, three simultaneous $10 positions at 1x with a fee: $30 margin
+    # plus three entry fees exceeds the balance, so only two are funded.
+    rows = [{"status": "TP_HIT", "realized_return_pct": 1.0, "generated_at": i,
+             "entry_filled_at": 100, "closed_at": 200, "symbol": s, "direction": "LONG"}
+            for i, s in enumerate(("AAA", "BBB", "CCC"))]
+    acct = pa.build_paper_account(rows, trade_size_usd=10.0,
+                                  start_balance_usd=30.01, fee_bps=3.5)
+    s = acct["summary"]
+    assert s["filled_trades"] == 2
+    assert s["skipped_insufficient_capital"] == 1

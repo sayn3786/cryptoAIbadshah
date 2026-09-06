@@ -175,6 +175,11 @@ def build_paper_account(
     fee_frac = fee_bps_v / 10_000.0
     round_trip_fee = size * fee_frac * 2.0            # entry + exit, taker both sides
     margin = size / lev
+    # Capital a position ties up while open: its margin PLUS its round-trip fee,
+    # reserved cumulatively so N concurrent positions collectively can fund their
+    # margins and fees (checking only the current candidate's fee let a third+
+    # position slip past the boundary).
+    commit = margin + round_trip_fee
 
     # ── Build the schedulable positions ──────────────────────────────────────
     positions: List[Dict[str, Any]] = []
@@ -212,9 +217,20 @@ def build_paper_account(
     # and zero an otherwise-covering winner).
     events = []
     for p in positions:
+        r = p["row"]
         p["raw_net"] = size * (p["ret"] / 100.0) - round_trip_fee
-        events.append((p["open"], 0, 0.0, p["seq"], p))
-        events.append((p["close"], 1, -p["raw_net"], p["seq"], p))
+        # OPEN priority among simultaneous fills is DECISION-TIME — earliest
+        # generated_at (publication order), then a stable id/symbol — never the
+        # future close order the store happens to return rows in. So which trades a
+        # capital-limited account funds does not depend on look-ahead or unstable
+        # database row order.
+        gen = _epoch(r.get("generated_at"))
+        open_key = (gen if gen is not None else float("inf"),
+                    str(r.get("id") or r.get("symbol") or ""), p["seq"])
+        events.append((p["open"], 0, open_key, p["seq"], p))
+        # Among simultaneous CLOSEs the biggest gain settles first (order-independent
+        # ruin); pad to the same key shape so the sort never compares mixed types.
+        events.append((p["close"], 1, (-p["raw_net"], "", p["seq"]), p["seq"], p))
     events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
 
     equity = start_balance
@@ -266,10 +282,10 @@ def build_paper_account(
             # admitted trades at the capital boundary whose margin+fees exceeded the
             # balance, contradicting "never opens an unfundable trade". A ruined
             # account has no capital at all. Both cases are counted, never silent.
-            if account_ruined or (equity - reserved) + 1e-9 < margin + round_trip_fee:
+            if account_ruined or (equity - reserved) + 1e-9 < commit:
                 skipped_insufficient_capital += 1
                 continue
-            reserved += margin
+            reserved += commit                        # margin + this position's fee
             filled += 1
             p["fill_index"] = filled
             active[seq] = p
@@ -284,12 +300,12 @@ def build_paper_account(
                 peak_amount_at_risk = max(peak_amount_at_risk, active_risk)
             actual_max_concurrent = max(actual_max_concurrent, len(active))
             peak_exposure = max(peak_exposure, len(active) * size)
-            peak_reserved = max(peak_reserved, reserved)
+            peak_reserved = max(peak_reserved, len(active) * margin)   # margin only
         else:                                         # CLOSE
             if seq not in active:
                 continue                              # was skipped, so nothing to close
             del active[seq]
-            reserved -= margin
+            reserved -= commit                        # release margin + fee headroom
             if p.get("amt") is not None:
                 active_risk -= p["amt"]               # release this position's stop risk
             if account_ruined:
