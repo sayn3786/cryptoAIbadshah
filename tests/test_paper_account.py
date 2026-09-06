@@ -12,11 +12,28 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 import paper_account as pa                                            # noqa: E402
 
 
-def _row(ret, *, status=None, symbol="BTC", direction="LONG", closed_at=None):
+# A monotonic clock so bare _row() calls get unique, NON-overlapping windows by
+# default (each trade opens and closes before the next opens) — the intuitive
+# "one after another" shape. Tests that care about overlap pass explicit
+# entry_filled_at / closed_at.
+_CLOCK = [1_000_000]
+
+
+def _row(ret, *, status=None, symbol="BTC", direction="LONG", closed_at=None,
+         generated_at=None, entry_filled_at=None):
     if status is None:
         status = "TP_HIT" if (ret or 0) > 0 else "SL_HIT"
+    if closed_at is None and generated_at is None and entry_filled_at is None:
+        t0 = _CLOCK[0]
+        _CLOCK[0] += 1000
+        generated_at = entry_filled_at = t0
+        closed_at = t0 + 100
+    elif closed_at is not None and generated_at is None and entry_filled_at is None:
+        # explicit close only → open just before it, so the window has duration.
+        generated_at = entry_filled_at = closed_at - 1
     return {"status": status, "realized_return_pct": ret, "symbol": symbol,
-            "direction": direction, "closed_at": closed_at}
+            "direction": direction, "closed_at": closed_at,
+            "generated_at": generated_at, "entry_filled_at": entry_filled_at}
 
 
 def test_pnl_is_notional_times_return_minus_round_trip_fees():
@@ -143,7 +160,7 @@ def test_notional_and_amount_at_risk_are_distinct():
     # entry 100, stop 95 → 5% of notional at risk. $100 notional → $5 at risk.
     row = {"status": "SL_HIT", "realized_return_pct": -1.0,
            "entry_price": 100.0, "stop_loss": 95.0, "symbol": "BTC",
-           "direction": "LONG", "closed_at": 1}
+           "direction": "LONG", "entry_filled_at": 0, "closed_at": 100}
     acct = pa.build_paper_account([row], trade_size_usd=100.0, fee_bps=0.0)
     s = acct["summary"]
     assert s["notional_per_trade_usd"] == 100.0
@@ -159,23 +176,126 @@ def test_max_drawdown_pct_is_reported():
     assert acct["summary"]["max_drawdown_pct"] > 0
 
 
-def test_overlapping_trades_are_observed_but_walked_sequentially():
-    # Two trades whose [generated, closed] windows overlap.
-    a = {"status": "TP_HIT", "realized_return_pct": 1.0, "generated_at": 0,
-         "closed_at": 100, "symbol": "BTC", "direction": "LONG"}
-    b = {"status": "TP_HIT", "realized_return_pct": 1.0, "generated_at": 50,
-         "closed_at": 150, "symbol": "ETH", "direction": "LONG"}
-    acct = pa.build_paper_account([a, b], trade_size_usd=10.0)
-    assert acct["concurrency_model"] == "sequential_only"
-    assert acct["summary"]["observed_max_concurrent_positions"] == 2
-    assert acct["summary"]["peak_exposure_usd"] == 10.0            # sequential: one at a time
-    assert acct["summary"]["peak_exposure_if_concurrent_usd"] == 20.0
+def _ov(sym, ret, filled_at, closed_at):
+    return {"status": "TP_HIT" if ret > 0 else "SL_HIT", "realized_return_pct": ret,
+            "entry_filled_at": filled_at, "closed_at": closed_at,
+            "symbol": sym, "direction": "LONG"}
+
+
+def test_two_overlapping_trades_with_capital_for_only_one():
+    # A [0,100] and B [50,150] overlap; $10 balance covers one $10-margin position.
+    a = _ov("BTC", 1.0, 0, 100)
+    b = _ov("ETH", 1.0, 50, 150)
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=10.0, fee_bps=0.0)
+    s = acct["summary"]
+    assert acct["concurrency_model"] == "concurrent_margin"
+    assert s["filled_trades"] == 1
+    assert s["skipped_insufficient_capital"] == 1
+    assert s["actual_max_concurrent_positions"] == 1
+    assert s["observed_max_concurrent_positions"] == 2          # they DO overlap in time
+
+
+def test_two_overlapping_trades_with_sufficient_capital():
+    a = _ov("BTC", 1.0, 0, 100)
+    b = _ov("ETH", 1.0, 50, 150)
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=100.0, fee_bps=0.0)
+    s = acct["summary"]
+    assert s["filled_trades"] == 2 and s["skipped_insufficient_capital"] == 0
+    assert s["actual_max_concurrent_positions"] == 2
+    assert s["peak_exposure_usd"] == 20.0                       # two $10 positions held at once
+
+
+def test_margin_is_released_after_a_trade_closes():
+    # A [0,100] then B [200,300]: B opens AFTER A closes, so $10 covers both in turn.
+    a = _ov("BTC", 1.0, 0, 100)
+    b = _ov("ETH", 1.0, 200, 300)
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=10.0, fee_bps=0.0)
+    s = acct["summary"]
+    assert s["filled_trades"] == 2                              # released margin funded B
+    assert s["actual_max_concurrent_positions"] == 1           # never both at once
+
+
+def test_trades_opening_at_the_same_timestamp():
+    a = _ov("BTC", 1.0, 0, 100)
+    b = _ov("ETH", 1.0, 0, 100)                                 # same open instant
+    both = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=100.0, fee_bps=0.0)
+    assert both["summary"]["actual_max_concurrent_positions"] == 2
+    one = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                 start_balance_usd=10.0, fee_bps=0.0)
+    assert one["summary"]["filled_trades"] == 1                 # capital for only one
+    assert one["summary"]["skipped_insufficient_capital"] == 1
 
 
 def test_not_described_as_live_ready():
     acct = pa.build_paper_account([_row(1.0)], trade_size_usd=10.0)
     lr = acct["live_readiness"]
-    assert lr["live_ready"] is False
-    assert lr["concurrency_modelled"] is False
+    assert lr["live_ready"] is False                            # never, while liq/funding unmodelled
+    assert lr["concurrency_modelled"] is True                  # concurrency IS now modelled
     assert lr["funding_modelled"] is False
     assert lr["liquidation_modelled"] is False
+
+
+# ── Reconciliation, chronology, and invariants ────────────────────────────────
+
+def test_end_balance_reconciles_with_ledger_net_totals():
+    rows = [_row(3.0), _row(-1.0), _row(2.5), _row(-4.0)]
+    acct = pa.build_paper_account(rows, trade_size_usd=50.0,
+                                  start_balance_usd=1000.0, fee_bps=3.5)
+    s = acct["summary"]
+    assert s["reconciles"] is True
+    assert abs((1000.0 + s["ledger_net_total_usd"]) - s["end_balance_usd"]) < 1e-6
+    # gross − fees == net, in aggregate.
+    assert abs((s["gross_pnl_usd"] - s["fees_paid_usd"]) - s["net_pnl_usd"]) < 1e-6
+
+
+def test_loss_and_ruin_reconcile_with_capped_gross():
+    # A −300% glitch on a $10 notional would be −$30 on a $10 account: capped.
+    acct = pa.build_paper_account([_row(-300.0)], trade_size_usd=10.0,
+                                  start_balance_usd=10.0, fee_bps=3.5)
+    s = acct["summary"]
+    assert s["account_ruined"] is True
+    assert s["end_balance_usd"] == 0.0
+    row = acct["ledger"][0]
+    assert row["net_usd"] == -10.0                              # capped at equity, not −30
+    assert abs((row["gross_usd"] - row["fee_usd"]) - row["net_usd"]) < 1e-6  # reconciles
+    assert s["reconciles"] is True
+
+
+def test_balance_never_negative_invariant_across_a_messy_cohort():
+    rows = ([_row(-200.0)] + [_row(r) for r in (5.0, -3.0, 8.0, -50.0, 2.0)])
+    acct = pa.build_paper_account(rows, trade_size_usd=20.0,
+                                  start_balance_usd=30.0, fee_bps=3.5)
+    for e in acct["equity_curve"]:
+        assert e["balance_usd"] >= 0.0
+    assert acct["summary"]["end_balance_usd"] >= 0.0
+
+
+def test_entry_filled_at_is_preferred_over_generated_at():
+    # generated_at is early, but the FILL is late — the position must open at the fill.
+    a = {"status": "TP_HIT", "realized_return_pct": 1.0, "generated_at": 0,
+         "entry_filled_at": 500, "closed_at": 600, "symbol": "BTC", "direction": "LONG"}
+    # Another trade lives [100,400]: it overlaps generated_at(0) but NOT the fill(500).
+    b = {"status": "TP_HIT", "realized_return_pct": 1.0, "entry_filled_at": 100,
+         "closed_at": 400, "symbol": "ETH", "direction": "LONG"}
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=10.0, fee_bps=0.0)
+    # Using entry_filled_at, A(500-600) and B(100-400) do NOT overlap → both fill on $10.
+    assert acct["summary"]["filled_trades"] == 2
+    assert acct["summary"]["actual_max_concurrent_positions"] == 1
+
+
+def test_missing_or_invalid_timestamps_are_skipped_safely():
+    good = _ov("BTC", 1.0, 0, 100)
+    no_open = {"status": "TP_HIT", "realized_return_pct": 1.0, "closed_at": 100,
+               "symbol": "ETH", "direction": "LONG"}                # no fill/generated
+    reversed_ts = {"status": "TP_HIT", "realized_return_pct": 1.0,
+                   "entry_filled_at": 200, "closed_at": 100,        # close before open
+                   "symbol": "SOL", "direction": "LONG"}
+    acct = pa.build_paper_account([good, no_open, reversed_ts],
+                                  trade_size_usd=10.0, start_balance_usd=100.0)
+    assert acct["summary"]["filled_trades"] == 1                   # only the good one
+    assert acct["summary"]["skipped_invalid_timestamp"] == 2

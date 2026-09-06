@@ -2859,7 +2859,7 @@ def _rec_cache_key() -> str:
     #       TP2/TP3 were almost never reached, so winners banked only TP1.
     #   v49 min-strength floor raised 32 → 51 — the Moderate tier lost money in
     #       both the v45 and v48 cohorts; only Strong+ now publishes.
-    return f"v51_4h_avg_{date}_{slot}"
+    return f"v52_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():

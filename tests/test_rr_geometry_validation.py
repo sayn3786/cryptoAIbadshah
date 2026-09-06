@@ -146,3 +146,65 @@ def test_new_rejection_reasons_are_declared():
     assert "INVALID_GEOMETRY" in rp.REJECTION_REASONS
     assert "INVALID_RR" in rp.REJECTION_REASONS
     assert "LOW_RR" in rp.REJECTION_REASONS
+
+
+# ── Fix 3: complete target-ladder geometry (symmetric LONG/SHORT) ─────────────
+
+def test_long_strict_order_required_reversed_is_rejected():
+    # entry 100, sl 90; targets above but DESCENDING → not TP1<TP2<TP3.
+    assert _long(tps=(130.0, 120.0, 110.0))["reason"] == "INVALID_GEOMETRY"
+
+
+def test_short_strict_order_required_reversed_is_rejected():
+    assert _short(tps=(70.0, 80.0, 90.0))["reason"] == "INVALID_GEOMETRY"
+
+
+def test_long_duplicate_targets_are_rejected():
+    assert _long(tps=(110.0, 120.0, 120.0))["reason"] == "INVALID_GEOMETRY"
+    assert _long(tps=(115.0, 115.0, 130.0))["reason"] == "INVALID_GEOMETRY"
+
+
+def test_short_duplicate_targets_are_rejected():
+    assert _short(tps=(90.0, 80.0, 80.0))["reason"] == "INVALID_GEOMETRY"
+
+
+def test_none_mixed_with_valid_targets_is_rejected_not_dropped():
+    # A None among good rungs must invalidate the ladder, never be filtered out.
+    assert _long(tps=(110.0, None, 130.0))["reason"] == "INVALID_GEOMETRY"
+    assert _short(tps=(90.0, None, 70.0))["reason"] == "INVALID_GEOMETRY"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"),
+                                 "120", 0, -120])
+def test_nonfinite_or_nonpositive_targets_are_rejected(bad):
+    assert _long(tps=(110.0, bad, 130.0))["reason"] == "INVALID_GEOMETRY"
+    assert _short(tps=(90.0, bad, 70.0))["reason"] == "INVALID_GEOMETRY"
+
+
+@pytest.mark.parametrize("weird", [None, 42, 3.14, "110,120,130",
+                                   {"tp1": 110}, b"110"])
+def test_non_iterable_or_wrong_type_target_collection_does_not_throw(weird):
+    # Must return a clean INVALID_GEOMETRY, never raise.
+    out = rp.validate_geometry_and_rr("LONG", 100.0, 90.0, weird)
+    assert out["reason"] == "INVALID_GEOMETRY" and out["rr"] is None
+
+
+def test_empty_ladder_is_rejected():
+    assert _long(tps=())["reason"] == "INVALID_GEOMETRY"
+    assert _long(tps=[])["reason"] == "INVALID_GEOMETRY"
+
+
+def test_wrong_side_targets_are_rejected_both_directions():
+    assert _long(tps=(110.0, 95.0, 130.0))["reason"] == "INVALID_GEOMETRY"   # 95 < entry
+    assert _short(tps=(90.0, 105.0, 70.0))["reason"] == "INVALID_GEOMETRY"    # 105 > entry
+
+
+def test_valid_ordered_ladders_pass_both_directions():
+    assert _long(tps=(110.0, 120.0, 130.0))["ok"] is True
+    assert _short(tps=(90.0, 80.0, 70.0))["ok"] is True
+
+
+def test_a_two_rung_ladder_is_accepted_when_well_formed():
+    # The store contract supports fewer than three rungs; a clean 2-rung ladder is fine.
+    v = _long(tps=(110.0, 120.0))
+    assert v["ok"] is True and v["rr"] == pytest.approx(2.0)   # reward = TP2 = 120
