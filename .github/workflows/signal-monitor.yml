@@ -36,30 +36,36 @@ jobs:
   monitor-signals:
     runs-on: ubuntu-latest
     steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Advance open signals against the market
+        env:
+          APP_URL:     ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MAX_AGE:     ${{ inputs.max_age_hours }}
         run: |
           # Scheduled runs send no inputs, so this is empty there and the server
           # default applies.
           QS=""
-          if [ -n "${{ inputs.max_age_hours }}" ]; then
-            QS="?max_age_hours=${{ inputs.max_age_hours }}"
+          if [ -n "$MAX_AGE" ]; then
+            QS="?max_age_hours=$MAX_AGE"
           fi
-          echo "Calling: ${{ secrets.APP_URL }}/api/signals/monitor$QS"
+          # Never echo the URL (it is a secret) or the raw body (it could carry a
+          # DB error string). Capture status and body, then let the sanitizing
+          # gate decide the exit code and print an allow-listed summary.
           RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-            -X POST "${{ secrets.APP_URL }}/api/signals/monitor$QS" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -X POST "$APP_URL/api/signals/monitor$QS" \
+            -H "x-cron-secret: $CRON_SECRET" \
             --max-time 120)
-          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
-          BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS:/d')
-          echo "Status: $HTTP_STATUS"
-          echo "Response: $BODY"
-          # 503 means no database is configured — that is a deployment choice,
-          # not a failure of this job. Anything else non-200 is a real problem.
-          if [ "$HTTP_STATUS" = "503" ]; then
-            echo "Persistence not configured — nothing to monitor."
-            exit 0
-          fi
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: API returned HTTP $HTTP_STATUS"
-            exit 1
-          fi
+          HTTP_STATUS=$(printf '%s' "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(printf '%s' "$RESPONSE" | sed '/HTTP_STATUS:/d')
+          # The gate is fail-closed: only DB_NOT_CONFIGURED is a healthy no-op;
+          # DB_UNAVAILABLE / DB_NOT_MIGRATED / auth / any non-200 / a 200 with a
+          # non-empty errors[] all exit non-zero so the run goes RED and visible.
+          export HTTP_STATUS BODY
+          python backend/monitor_gate.py
+          exit $?

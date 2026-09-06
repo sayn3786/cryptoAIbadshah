@@ -50,11 +50,16 @@ def test_it_calls_the_monitor_endpoint_with_the_shared_secret():
     assert "x-cron-secret" in RAW and "CRON_SECRET" in RAW
 
 
-def test_an_unconfigured_database_is_not_a_failed_job():
-    # 503 means persistence is not configured — a deployment choice, not a fault.
-    # Failing the job would page on a non-problem every hour.
-    assert '"503"' in RAW and "exit 0" in RAW
+def test_it_delegates_the_pass_fail_decision_to_the_gate():
+    # The status/error-code decision now lives in a tested pure module
+    # (backend/monitor_gate.py, see test_monitor_gate.py) rather than inline bash,
+    # so only DB_NOT_CONFIGURED is a no-op and every other failure goes red.
+    assert "backend/monitor_gate.py" in RAW
+    assert "exit $?" in RAW
 
 
-def test_a_real_error_fails_the_job():
-    assert 'if [ "$HTTP_STATUS" != "200" ]' in RAW and "exit 1" in RAW
+def test_it_does_not_echo_the_raw_body_or_url():
+    # Never print the response body (could carry a DB error string) or the URL
+    # (a secret). The gate prints only an allow-listed summary.
+    assert 'echo "Response: $BODY"' not in RAW
+    assert 'echo "Calling:' not in RAW

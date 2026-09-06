@@ -251,3 +251,54 @@ def test_timing_report_empty_does_not_raise():
     assert rep["cohort"]["closed_rows"] == 0
     assert rep["timeframe_efficiency"]["most_efficient_timeframe"] is None
     assert rep["session_performance"]["best_session"] is None
+
+
+# ── Item 7: denominators exclude cancellations from bucket sufficiency ────────
+
+def test_counts_are_reported_separately():
+    rows = ([_row(2.0) for _ in range(3)]                      # 3 wins
+            + [_row(-1.0) for _ in range(2)]                   # 2 losses
+            + [_row(None, status="CANCELLED") for _ in range(4)]
+            + [_row(None, status="EXPIRED")])
+    rep = an.strength_calibration(rows)                        # uses _win_expectancy
+    # all these carry no strength → they land nowhere in the tiers, so read the
+    # cohort helper directly instead:
+    from signal_analytics import _win_expectancy
+    s = _win_expectancy(rows)
+    assert s["published_n"] == 10
+    assert s["decided_n"] == 5
+    assert s["cancelled_n"] == 4
+    assert s["expired_n"] == 1
+    assert s["filled_n"] == 6                                  # 10 − 4 cancelled
+    assert s["win_rate_pct"] == 60.0                           # 3 of 5 decided
+
+
+def test_one_winner_and_four_cancellations_stays_thin():
+    # The exact trap: 1 win + 4 cancels must NOT read as a meaningful 100%.
+    rows = [_row(2.0, strength=60)] + [_row(None, strength=60, status="CANCELLED")
+                                       for _ in range(4)]
+    rep = an.strength_calibration(rows)
+    strong = _tier(rep, "Strong")
+    assert strong["published_n"] == 5
+    assert strong["decided_n"] == 1
+    assert strong["thin"] is True                              # decided, not published
+    assert strong["win_rate_pct"] == 100.0                     # computed, but flagged thin
+
+
+def test_expectancy_ignores_rows_without_a_realized_return():
+    # A cancelled row has no return; it must not drag expectancy toward zero.
+    rows = [_row(4.0), _row(2.0), _row(None, status="CANCELLED")]
+    from signal_analytics import _win_expectancy
+    s = _win_expectancy(rows)
+    assert s["expectancy_pct"] == 3.0                          # mean(4, 2), not mean(4,2,0)
+
+
+def test_timeframe_and_session_use_decided_n_for_thin():
+    # 2 decided + 4 cancels in one frame/session → thin despite 6 published rows.
+    rows = ([_tf_row(1.0, "1H", gen_hour=14) for _ in range(2)]
+            + [dict(_tf_row(1.0, "1H", gen_hour=14), status="CANCELLED",
+                    realized_return_pct=None) for _ in range(4)])
+    tf = an.timeframe_efficiency(rows)
+    assert _frame(tf, "1H")["decided_n"] == 2 and _frame(tf, "1H")["thin"] is True
+    sp = an.session_performance(rows)
+    assert _sess(sp, "US")["decided_n"] == 2 and _sess(sp, "US")["thin"] is True

@@ -25,15 +25,17 @@ change what a reader sees rather than what gets traded.
 """
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional, Sequence, Tuple
 
 __all__ = [
     "MIN_ADJUSTED_STRENGTH", "MIN_RR", "MAX_SIGNAL_LIVE_DIVERGENCE",
     "HIGH_CORR", "PUBLISH_TOP_N", "BTC_BONUS_BASE", "BTC_PENALTY_BASE",
-    "REJECTION_REASONS",
+    "RR_MATCH_TOLERANCE", "REJECTION_REASONS",
     "passes_tf_gates", "onchain_multiplier", "btc_influence",
     "apply_btc_adjustment", "price_divergence_ok", "meets_min_strength",
-    "meets_rr", "targets_behind_live", "rec_quality", "avg_tf_strength",
+    "meets_rr", "recompute_rr", "validate_geometry_and_rr",
+    "targets_behind_live", "rec_quality", "avg_tf_strength",
     "screen_candidate", "rank_candidates", "select_publishable",
 ]
 
@@ -80,12 +82,20 @@ BTC_PENALTY_BASE = 18
 # replay that only reports what WAS published cannot tell you whether a rule is
 # doing anything — a gate that never fires and a gate that fires constantly look
 # identical from the published set alone.
+# Recomputed R/R is compared against the stored rr_ratio to catch a fabricated or
+# stale figure. Production rounds rr to 2 decimals off the same target and risk,
+# so a genuine value matches within rounding; a mismatch beyond this is a
+# different (wrong) number, not a rounding artefact.
+RR_MATCH_TOLERANCE = 0.1
+
 REJECTION_REASONS = (
     "MISSING_TIMEFRAME",     # 1H or 2H analysis absent
     "TF_GATES",              # not tradeable, NEUTRAL, or the two disagree
     "PRICE_DIVERGENCE",      # live price too far from the signal price
     "MIN_STRENGTH",          # below MIN_ADJUSTED_STRENGTH after BTC
-    "LOW_RR",                # below MIN_RR
+    "INVALID_GEOMETRY",      # entry/stop/target missing, non-finite, or wrong side
+    "INVALID_RR",            # R/R unreadable, or stored rr disagrees with recomputed
+    "LOW_RR",                # recomputed R/R below MIN_RR
     "TP1_BEHIND_LIVE",       # the setup expired inside the slot
 )
 
@@ -205,17 +215,96 @@ def meets_min_strength(strength) -> bool:
         return False
 
 
+def _finite(x) -> Optional[float]:
+    """A finite float (rejects None, non-numeric, NaN, ±inf), else None."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _finite_pos(x) -> Optional[float]:
+    """A finite, strictly-positive float, else None."""
+    v = _finite(x)
+    return v if (v is not None and v > 0) else None
+
+
 def meets_rr(rr) -> bool:
     """
-    An unreadable or absent R/R passes, matching production: the gate rejects a
-    ratio it can read and dislikes, not one it cannot read.
+    Fail CLOSED. Only a finite R/R at or above MIN_RR passes; None, a non-numeric
+    string, NaN, ±infinity, zero and negatives all FAIL. An unreadable payoff is
+    not a safe one, and treating it as safe is how a trade with no defined reward
+    used to reach publication.
     """
+    v = _finite(rr)
+    return v is not None and v >= MIN_RR
+
+
+def recompute_rr(entry, stop, target) -> Optional[float]:
+    """
+    Production's reward/risk from validated inputs: |target − entry| / |stop − entry|.
+
+    Entry, stop and target must each be finite and positive, and the risk leg
+    (|stop − entry|) must be non-zero. Returns None on any unusable input — the
+    caller treats None as a rejection, never as a pass.
+    """
+    e, s, t = _finite_pos(entry), _finite_pos(stop), _finite_pos(target)
+    if e is None or s is None or t is None:
+        return None
+    risk = abs(s - e)
+    if risk <= 0 or not math.isfinite(risk):
+        return None
+    rr = abs(t - e) / risk
+    return rr if math.isfinite(rr) else None
+
+
+def validate_geometry_and_rr(direction, entry, stop, tp_targets,
+                             stored_rr=None) -> Dict:
+    """
+    The publish-or-reject geometry check — the single copy production AND the
+    backtest run, so a malformed candidate cannot reach either from the other.
+
+    Passes only when the candidate has: a finite positive entry, a finite
+    positive stop, at least one finite positive target, correct LONG/SHORT price
+    geometry (LONG: stop below entry, every target above; SHORT: the mirror), and
+    a finite recomputed R/R >= MIN_RR. R/R is recomputed from the same reward
+    target production uses (TP2 when present, else TP1) rather than trusting the
+    supplied ``rr_ratio``; if a stored rr is given and disagrees materially with
+    the recomputed value, the candidate is rejected as INVALID_RR — a fabricated
+    or stale ratio must not buy publication.
+
+    Returns {"ok": bool, "reason": Optional[str], "rr": Optional[float]} where
+    reason (when not ok) is INVALID_GEOMETRY, INVALID_RR or LOW_RR.
+    """
+    e, s = _finite_pos(entry), _finite_pos(stop)
+    raw = list(tp_targets or [])
+    finite_targets = [t for t in (_finite_pos(x) for x in raw) if t is not None]
+    if direction not in ("LONG", "SHORT") or e is None or s is None or not finite_targets:
+        return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+
+    if direction == "LONG":
+        good = s < e and all(t > e for t in finite_targets)
+    else:                                              # SHORT
+        good = s > e and all(t < e for t in finite_targets)
+    if not good:
+        return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+
+    # Reward target mirrors production exactly: TP2 if it is a usable level, else
+    # TP1 (line: `tp_targets[1] or tp_targets[0]`).
+    reward = _finite_pos(raw[1]) if len(raw) >= 2 and _finite_pos(raw[1]) else _finite_pos(raw[0])
+    rr = recompute_rr(e, s, reward)
     if rr is None:
-        return True
-    try:
-        return float(rr) >= MIN_RR
-    except (TypeError, ValueError):
-        return True
+        return {"ok": False, "reason": "INVALID_RR", "rr": None}
+
+    if stored_rr is not None:
+        sr = _finite(stored_rr)
+        if sr is None or abs(sr - rr) > max(RR_MATCH_TOLERANCE, RR_MATCH_TOLERANCE * rr):
+            return {"ok": False, "reason": "INVALID_RR", "rr": round(rr, 4)}
+
+    if rr < MIN_RR:
+        return {"ok": False, "reason": "LOW_RR", "rr": round(rr, 4)}
+    return {"ok": True, "reason": None, "rr": round(rr, 4)}
 
 
 def targets_behind_live(direction: str, tp_targets, live_price) -> Dict:
@@ -393,9 +482,16 @@ def screen_candidate(h1: Dict, h2: Dict, h4: Optional[Dict], *,
         out["reason"] = "MIN_STRENGTH"
         return out
 
-    out["rr_ratio"] = sig.get("rr_ratio")
-    if not meets_rr(out["rr_ratio"]):
-        out["reason"] = "LOW_RR"
+    # Geometry + R/R, recomputed from the trade's own entry/stop/targets rather
+    # than trusting the supplied rr_ratio. Fails CLOSED: a missing, malformed,
+    # wrong-sided or sub-MIN_RR structure is rejected with a named reason, and a
+    # stored rr that disagrees with the recomputed value is INVALID_RR.
+    geom = validate_geometry_and_rr(direction, sig.get("entry"), sig.get("sl"),
+                                    sig.get("tp_targets"), sig.get("rr_ratio"))
+    out["rr_ratio"] = geom["rr"] if geom["rr"] is not None else sig.get("rr_ratio")
+    out["rr_recomputed"] = geom["rr"]
+    if not geom["ok"]:
+        out["reason"] = geom["reason"]
         return out
 
     behind = targets_behind_live(direction, sig.get("tp_targets"), live_price)

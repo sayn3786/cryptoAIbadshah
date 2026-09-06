@@ -61,14 +61,34 @@ def _flat(tf, n, price=100.0, base=BASE):
 
 
 def _tf_read(direction, strength, *, tradeable=True, entry=100.0, sl=95.0,
-             tps=(102.0, 104.0, 106.0), rr=2.0, price=100.0):
-    """A (symbol, timeframe) reading in the shape rec_policy consumes."""
+             tps=None, rr=2.0, price=100.0):
+    """A (symbol, timeframe) reading in the shape rec_policy consumes.
+
+    Geometry is kept CONSISTENT with the requested R/R: unless an explicit ``tps``
+    ladder is given, the targets are derived from ``rr`` and the risk leg so the
+    stored ``rr_ratio`` equals what rec_policy recomputes (from entry, stop and
+    TP2). When an explicit ladder IS given, the stored rr is derived from it, so
+    the two never disagree — the whole point of the v51 geometry check.
+    """
+    if direction == "SHORT" and sl < entry:
+        sl = entry + (entry - sl)              # stop above entry for a SHORT
+    risk = abs(entry - sl) or 1.0
+    sign = 1 if direction == "LONG" else -1
+    if tps is None:
+        tps = (entry + sign * 0.6 * rr * risk,
+               entry + sign * 1.0 * rr * risk,   # TP2 sets the recomputed R/R
+               entry + sign * 1.6 * rr * risk)
+        stored_rr = round(rr, 2)
+    else:
+        tps = tuple(tps)
+        _t2 = tps[1] if len(tps) > 1 and tps[1] else tps[0]
+        stored_rr = round(abs(_t2 - entry) / risk, 2)
     return {
         "direction": direction, "strength": strength, "tradeable": tradeable,
         "signal_price": price, "live_price": price, "current_price": price,
         "data_quality": "good", "reversal_radar": {},
-        "sig": {"entry": entry, "sl": sl, "tp_targets": list(tps),
-                "rr_ratio": rr, "current_price": price,
+        "sig": {"entry": entry, "sl": sl, "tp_targets": [round(t, 4) for t in tps],
+                "rr_ratio": stored_rr, "current_price": price,
                 "exhaustion_flag": False, "reversal_count": 0},
     }
 
@@ -319,15 +339,20 @@ def test_a_candidate_whose_tp1_is_behind_price_is_rejected():
     A LONG whose first target sits below the price offers no reward for the
     risk it still carries.
     """
-    read = _tf_read("LONG", 60, price=103.0, tps=(102.0, 104.0, 106.0))
+    # TP1 (102) sits below the live price (103) — behind — while TP2 (110) keeps
+    # the recomputed R/R above the floor, so the candidate clears the R/R gate
+    # and is rejected specifically for the spent first target.
+    read = _tf_read("LONG", 60, price=103.0, tps=(102.0, 110.0, 115.0))
     out = rec_policy.screen_candidate(read, read, None, corr_factor=1.0,
                                       influence=NEUTRAL_BTC)
     assert out["reason"] == "TP1_BEHIND_LIVE"
 
 
 def test_a_short_mirrors_the_tp1_behind_rule():
+    # Mirror: TP1 (98) is at/above live (97) — behind for a SHORT — while TP2 (90)
+    # keeps R/R above the floor.
     read = _tf_read("SHORT", 60, price=97.0, entry=100.0, sl=105.0,
-                    tps=(98.0, 96.0, 94.0))
+                    tps=(98.0, 90.0, 85.0))
     out = rec_policy.screen_candidate(read, read, None, corr_factor=1.0,
                                       influence=NEUTRAL_BTC)
     assert out["reason"] == "TP1_BEHIND_LIVE"

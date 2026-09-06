@@ -894,6 +894,7 @@ def list_published_between(since, until, *,
 def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
                                environment: Optional[str] = None,
                                limit: int = 500,
+                               include_archived: bool = False,
                                session=None) -> List[Dict[str, Any]]:
     """
     Terminal signals with their decision snapshot attached — the postmortem feed.
@@ -904,6 +905,15 @@ def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
     trips — signals, then every snapshot in one ``ANY`` — never one per row,
     because the pool is NullPool and each statement is a fresh connection.
 
+    ``include_archived`` controls whether archived terminal rows are returned.
+    Archiving is an OPERATIONAL action — it only clears a closed trade off the
+    live tracker — and the archive contract says the row stays available for
+    ANALYSIS. So operational callers keep the default (False, archived hidden),
+    while analytical callers (postmortem, analytics, paper account, cadence)
+    pass True so the strategy's history does not silently shrink each time an old
+    trade is tidied away. A row is either archived or not, so widening the query
+    never double-counts it.
+
     Read-only. This never writes, and the report built from it never feeds back
     into live parameters — the same rule the postmortem table itself carries.
     """
@@ -912,7 +922,9 @@ def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
 
     def _work(s):
         env_sql, env_params = _environment_clause(s, environment)
-        where = ["status = ANY(:statuses)", "archived_at IS NULL"]
+        where = ["status = ANY(:statuses)"]
+        if not include_archived:
+            where.append("archived_at IS NULL")
         params: Dict[str, Any] = {"statuses": terminal, "limit": limit,
                                   **env_params}
         if strategy_version:

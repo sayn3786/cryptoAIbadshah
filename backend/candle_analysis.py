@@ -129,6 +129,10 @@ def rsi_swing_markers(candles: Sequence[Dict], rsi_raw: Sequence,
         ts = candles[i].get("timestamp")
         if since_ts is not None and ts is not None and ts < since_ts:
             continue
+        # Age in CLOSED bars from the last candle. Deterministic — a candle count,
+        # not a clock — so the v51 reversal brake can fade a stale marker without
+        # reading wall-clock time and so the backtest reproduces it exactly.
+        bars_ago = (n - 1) - i
         lo, hi = candles[i].get("low"), candles[i].get("high")
         lows = [candles[j].get("low") for j in range(i - window, i + window + 1)]
         highs = [candles[j].get("high") for j in range(i - window, i + window + 1)]
@@ -136,10 +140,10 @@ def rsi_swing_markers(candles: Sequence[Dict], rsi_raw: Sequence,
         highs = [x for x in highs if x is not None]
         if lo is not None and lows and lo == min(lows) and r <= RSI_MARK_OVERSOLD:
             out.append({"timestamp": ts, "kind": "oversold_bottom",
-                        "rsi": round(r, 1), "price": lo})
+                        "rsi": round(r, 1), "price": lo, "bars_ago": bars_ago})
         elif hi is not None and highs and hi == max(highs) and r >= RSI_MARK_OVERBOUGHT:
             out.append({"timestamp": ts, "kind": "overbought_top",
-                        "rsi": round(r, 1), "price": hi})
+                        "rsi": round(r, 1), "price": hi, "bars_ago": bars_ago})
     return out
 
 

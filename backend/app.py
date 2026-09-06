@@ -2859,7 +2859,7 @@ def _rec_cache_key() -> str:
     #       TP2/TP3 were almost never reached, so winners banked only TP1.
     #   v49 min-strength floor raised 32 → 51 — the Moderate tier lost money in
     #       both the v45 and v48 cohorts; only Strong+ now publishes.
-    return f"v50_4h_avg_{date}_{slot}"
+    return f"v51_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
@@ -3505,8 +3505,45 @@ def api_whale_alerts():
     return jsonify(data)
 
 
+# ── Paid-provider generation endpoints (journal / video) ─────────────────────
+# Both call metered third-party providers, so both are gated the same way:
+#   1. internal auth (_require_internal — fails CLOSED when no secret is set),
+#   2. an explicit feature switch defaulting to OFF, so a fresh deploy cannot
+#      spend on a provider until someone turns it on,
+#   3. input caps, and sanitized errors so a provider message or key can never
+#      reach the client.
+def _int_env(name: str, default: int, lo: int, hi: int) -> int:
+    """A bounded integer from the environment, defaulting on anything unparseable."""
+    import os as _os
+    try:
+        return max(lo, min(hi, int(_os.getenv(name, "").strip() or default)))
+    except (TypeError, ValueError):
+        return default
+
+
+MAX_VIDEO_SCRIPT_CHARS = _int_env("MAX_VIDEO_SCRIPT_CHARS", 2000, 1, 20000)
+
+
+def _feature_enabled(name: str) -> bool:
+    """A generation switch. OFF unless explicitly set to 1/true/yes/on."""
+    import os as _os
+    return _os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _feature_disabled_response(name: str):
+    """Controlled 503 for a switched-off generation endpoint. Names the switch,
+    never a provider or a credential."""
+    return jsonify({"error": "This generation endpoint is disabled",
+                    "error_code": "FEATURE_DISABLED", "feature": name}), 503
+
+
 @app.route("/api/journal/<symbol>", methods=["POST"])
 def api_journal(symbol):
+    guard = _require_internal()
+    if guard:
+        return guard
+    if not _feature_enabled("JOURNAL_GENERATION_ENABLED"):
+        return _feature_disabled_response("JOURNAL_GENERATION_ENABLED")
     symbol    = symbol.upper()
     timeframe = request.args.get("timeframe", "1W").upper()
     if symbol not in SYMBOLS:
@@ -3515,8 +3552,11 @@ def api_journal(symbol):
         analysis = build_analysis(symbol, timeframe)
         journal  = generate_journal(symbol, timeframe, analysis)
         return jsonify({"journal": journal, "symbol": symbol, "timeframe": timeframe})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        # Never surface a raw provider/library error — it can carry keys or URLs.
+        app.logger.exception("journal generation failed for %s", symbol)
+        return jsonify({"error": "Journal generation failed",
+                        "error_code": "GENERATION_FAILED"}), 502
 
 
 # ── Persisted signal history (Neon Postgres) ─────────────────────────────────
@@ -3693,6 +3733,7 @@ def api_signals_postmortem_report():
         rows = store.list_closed_with_snapshots(
             strategy_version=sver,
             environment=request.args.get("environment"),
+            include_archived=True,       # analytics keep archived history
             limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
         return jsonify(_pm.build_report(rows, strategy_version=sver))
     except Exception as exc:
@@ -3726,6 +3767,7 @@ def api_signals_analytics():
         rows = store.list_closed_with_snapshots(
             strategy_version=sver,
             environment=request.args.get("environment"),
+            include_archived=True,       # analytics keep archived history
             limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
         return jsonify(_an.build_analytics(rows, strategy_version=sver))
     except Exception as exc:
@@ -3759,19 +3801,24 @@ def api_paper_account():
         size = float(request.args.get("trade_size_usd", 1.0))
         start = float(request.args.get("start_balance_usd", 1000.0))
         fee = float(request.args.get("fee_bps", _pa.DEFAULT_FEE_BPS))
+        lev = float(request.args.get("leverage", 1.0))
     except (TypeError, ValueError):
-        return jsonify({"error": "trade_size_usd, start_balance_usd and fee_bps "
-                        "must be numbers"}), 400
+        return jsonify({"error": "trade_size_usd, start_balance_usd, fee_bps and "
+                        "leverage must be numbers", "error_code": "BAD_REQUEST"}), 400
     try:
         rows = store.list_closed_with_snapshots(
             strategy_version=sver,
             environment=request.args.get("environment"),
+            include_archived=True,       # analytics keep archived history
             limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
-        return jsonify(_pa.build_paper_account(
-            rows, trade_size_usd=size, start_balance_usd=start,
-            fee_bps=fee, strategy_version=sver))
     except Exception as exc:
         return _db_error_response(exc)
+    try:
+        return jsonify(_pa.build_paper_account(
+            rows, trade_size_usd=size, start_balance_usd=start,
+            fee_bps=fee, leverage=lev, strategy_version=sver))
+    except _pa.PaperAccountConfigError as exc:
+        return jsonify({"error": str(exc), "error_code": "BAD_REQUEST"}), 400
 
 
 @app.get("/api/signals/timing-report")
@@ -3805,6 +3852,7 @@ def api_signals_timing_report():
             statuses=sorted(store.TERMINAL_STATUSES),
             strategy_version=None,          # pool every version on purpose
             environment=request.args.get("environment"),
+            include_archived=True,          # timing analytics keep archived history
             with_total=False,
             limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
         return jsonify(_an.build_timing_report(result.get("items", [])))
@@ -3837,6 +3885,7 @@ def api_signals_cadence():
             page = store.list_signals(
                 strategy_version=sver,
                 environment=request.args.get("environment"),
+                include_archived=True,      # cadence analytics keep archived history
                 limit=min(limit - len(got), store.MAX_PAGE_SIZE),
                 offset=offset, with_total=False)
             items = page.get("items") or []
@@ -4251,10 +4300,22 @@ def api_db_usage():
 
 @app.route("/api/video/create", methods=["POST"])
 def api_video_create():
+    guard = _require_internal()
+    if guard:
+        return guard
+    if not _feature_enabled("VIDEO_GENERATION_ENABLED"):
+        return _feature_disabled_response("VIDEO_GENERATION_ENABLED")
     body   = request.get_json(silent=True) or {}
     script = (body.get("script") or "").strip()
     if not script:
-        return jsonify({"error": "No script provided"}), 400
+        return jsonify({"error": "No script provided",
+                        "error_code": "EMPTY_SCRIPT"}), 400
+    if len(script) > MAX_VIDEO_SCRIPT_CHARS:
+        # Cap before the provider call so we never pay to render an oversized job.
+        return jsonify({"error": "Script too long",
+                        "error_code": "SCRIPT_TOO_LONG",
+                        "max_chars": MAX_VIDEO_SCRIPT_CHARS,
+                        "got_chars": len(script)}), 400
     try:
         result = create_talk(script)
         return jsonify({
@@ -4262,10 +4323,12 @@ def api_video_create():
             "status":    result.get("status"),
             "truncated": result.get("truncated", False),
         })
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        # Provider errors can carry the API key, an auth URL or a signed request —
+        # never echo them. Log server-side, return a generic code.
+        app.logger.exception("video generation failed")
+        return jsonify({"error": "Video generation failed",
+                        "error_code": "GENERATION_FAILED"}), 502
 
 
 @app.route("/api/video/status/<talk_id>")
@@ -4277,8 +4340,10 @@ def api_video_status(talk_id):
             "result_url": result.get("result_url"),
             "error":      result.get("error"),
         })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("video status lookup failed")
+        return jsonify({"error": "Video status lookup failed",
+                        "error_code": "STATUS_FAILED"}), 502
 
 
 # ── Static files ──────────────────────────────────────────────────────────────

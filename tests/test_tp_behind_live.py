@@ -153,8 +153,11 @@ def test_expired_candidate_is_dropped_and_reported(engine_stub):
     # its real 1.36 the candidate is now rejected as LOW_RR before this check,
     # which is a separate, correct behaviour. Here we isolate the EXPIRED path —
     # TP1 already behind live — so the R/R must clear the gate to reach it.
+    # rr left to be recomputed from the geometry (TP2 over risk ≈ 3.9, well above
+    # the 1.5 floor) so the candidate clears the R/R gate and reaches the EXPIRED
+    # path — TP1 already behind live.
     trx = _analysis("LONG", 0.32711979, 0.32601000,
-                    [0.32852649, 0.33150000, 0.33520000], 0.32864, 1.86)
+                    [0.32852649, 0.33150000, 0.33520000], 0.32864, None)
     out = engine_stub({"TRX": trx})
 
     assert [r["symbol"] for r in out["recommendations"]] == [], \
@@ -180,11 +183,15 @@ def test_untouched_candidate_still_publishes(engine_stub):
 
 
 def test_a_spent_later_rung_is_surfaced_on_a_published_card(engine_stub):
+    # A publishable SHORT (reward target TP2 = 0.410 is deep, recomputed R/R ≈ 3.4)
+    # whose THIRD rung (0.41950) has already been traded through — surfaced on the
+    # card without expiring the trade. The reward target used for R/R is NOT the
+    # spent one, so the candidate correctly still publishes under the v51 gate.
     ondo = _analysis("SHORT", 0.42002826, 0.42300000,
-                     [0.41700000, 0.41950000, 0.41000000], 0.41892, 1.86)
+                     [0.41700000, 0.41000000, 0.41950000], 0.41892, None)
     out = engine_stub({"ONDO": ondo})
     assert [r["symbol"] for r in out["recommendations"]] == ["ONDO"]
-    assert out["recommendations"][0]["targets_behind_live"] == [2]
+    assert out["recommendations"][0]["targets_behind_live"] == [3]
 
 
 def test_strategy_version_marks_the_new_rules(engine_stub):

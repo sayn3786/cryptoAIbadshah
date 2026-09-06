@@ -1,3 +1,4 @@
+import math
 from typing import Dict, List, Optional
 
 # Shared structure measurements. Imported (not re-implemented) so the numbers the
@@ -1128,21 +1129,68 @@ def liquidation_squeeze_delta(direction: str, liq_bias: Dict) -> int:
 # conviction to one agreeing with it (which would push more trades into the
 # losing top tier). Pure, so each can be tested without the full pipeline.
 
+# The RSI reversal brake fades with the marker's AGE in closed bars (v51). A
+# swing-reversal 3 bars back is a live warning; one ~24h ago (12 bars on the 2H
+# publish cadence) has been overtaken by everything since and should not still
+# dock a trade at full weight — the v50 bug this fixes. The window is measured in
+# bars, never wall-clock, so it is pure and replayable.
+REVERSAL_MAX_PENALTY = 6         # unchanged from v50 — not tuned on the discovery sample
+REVERSAL_FRESH_BARS = 4          # full penalty at or within this age
+REVERSAL_EXPIRE_BARS = 12        # zero penalty at or beyond this age (~24h on 2H)
+
+
+def _reversal_freshness(bars_ago) -> float:
+    """
+    1.0 for a fresh marker, a straight-line fade to 0 across the window, and 0
+    once expired. Deterministic in the marker's bar age; an unknown/negative age
+    reads as 0 (no penalty) rather than guessing it is fresh.
+    """
+    try:
+        b = float(bars_ago)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(b) or b < 0:      # NaN/inf/negative → treat as no penalty
+        return 0.0
+    if b <= REVERSAL_FRESH_BARS:
+        return 1.0
+    if b >= REVERSAL_EXPIRE_BARS:
+        return 0.0
+    return (REVERSAL_EXPIRE_BARS - b) / (REVERSAL_EXPIRE_BARS - REVERSAL_FRESH_BARS)
+
+
+def _latest_reversal_marker(rsi_markers):
+    """The most recent swing-reversal marker (largest timestamp), or None."""
+    if not isinstance(rsi_markers, list) or not rsi_markers:
+        return None
+    return max(rsi_markers, key=lambda m: (m or {}).get("timestamp") or 0)
+
+
 def rsi_reversal_delta(direction: str, rsi_markers) -> int:
     """
     Dock a trade the latest RSI swing-reversal fired AGAINST — an overbought-top
-    marker under a LONG, an oversold-bottom under a SHORT. −6, or 0 when there is
-    no marker or it agrees. Brake only; a marker that CONFIRMS earns nothing,
-    because RSI momentum is already scored on the way in and rewarding it twice
-    is exactly the over-confidence v50 exists to curb.
+    marker under a LONG, an oversold-bottom under a SHORT — with the penalty FADED
+    by how stale the marker is (see ``_reversal_freshness``): the full
+    −REVERSAL_MAX_PENALTY while fresh, tapering to 0 as it ages out. 0 when there
+    is no marker, it agrees, or it has expired. Brake only, symmetrical for LONG
+    and SHORT; a marker that CONFIRMS earns nothing, because RSI momentum is
+    already scored on the way in.
     """
-    if direction not in ("LONG", "SHORT") or not isinstance(rsi_markers, list) or not rsi_markers:
+    if direction not in ("LONG", "SHORT"):
         return 0
-    latest = max(rsi_markers, key=lambda m: (m or {}).get("timestamp") or 0)
-    kind = (latest or {}).get("kind")
+    latest = _latest_reversal_marker(rsi_markers)
+    if not latest:
+        return 0
+    kind = latest.get("kind")
     against = ((direction == "LONG"  and kind == "overbought_top") or
                (direction == "SHORT" and kind == "oversold_bottom"))
-    return -6 if against else 0
+    if not against:
+        return 0
+    fresh = _reversal_freshness(latest.get("bars_ago"))
+    pts = int(round(-REVERSAL_MAX_PENALTY * fresh))
+    # A still-fresh marker must never round away to nothing before it expires.
+    if pts == 0 and fresh > 0:
+        pts = -1
+    return pts
 
 
 def obv_guard_delta(direction: str, obv: Dict, cvd_active: bool) -> int:
@@ -3038,12 +3086,15 @@ def generate_signal(analysis: Dict) -> Dict:
     # Three reads that were shown but never scored before v50, each over-
     # represented in the v49 losers. All brakes: they only dock a trade fighting
     # the read, matching the direction-relative pattern of the two blocks above.
-    # RSI swing-reversal firing against the trade.
+    # RSI swing-reversal firing against the trade, faded by the marker's age.
     rev_adj = rsi_reversal_delta(direction, analysis.get("rsi_markers"))
+    _rev_marker = _latest_reversal_marker(analysis.get("rsi_markers"))
+    rev_bars_ago = _rev_marker.get("bars_ago") if _rev_marker else None
     if rev_adj:
         strength = max(0, min(100, strength + rev_adj))
+        _age = f", {rev_bars_ago} bars ago" if rev_bars_ago is not None else ""
         (bear_reasons if direction == "LONG" else bull_reasons).append(
-            f"↩ RSI reversal fired against the {direction.lower()} ({rev_adj})")
+            f"↩ RSI reversal fired against the {direction.lower()} ({rev_adj}{_age})")
         g['momentum'] += rev_adj
 
     # OBV divergence against the trade, only when CVD stayed silent (no double-count).
@@ -3664,6 +3715,11 @@ def generate_signal(analysis: Dict) -> Dict:
         # postmortem can measure whether opposing the squeeze cost anything.
         "liquidation_adjustment": liq_adj,
         "liquidation_bias_dir":   liq_bias_dir,
+        # RSI swing-reversal brake (v51): the signed strength delta actually
+        # applied (faded by marker age) and that age in closed bars, so a
+        # postmortem can measure whether the freshness-weighted brake helped.
+        "rsi_reversal_adjustment": rev_adj,
+        "rsi_reversal_bars_ago":   rev_bars_ago,
         # Whether the stop had to be moved clear of a liquidity pool, or could
         # not be (blocked by the risk cap) and therefore needs smaller size.
         "stop_liquidity":       _sl_liq,
