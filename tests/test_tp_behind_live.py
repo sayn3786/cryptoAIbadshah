@@ -182,16 +182,24 @@ def test_untouched_candidate_still_publishes(engine_stub):
     assert out["recommendations"][0]["targets_behind_live"] == []
 
 
-def test_a_spent_later_rung_is_surfaced_on_a_published_card(engine_stub):
-    # A publishable SHORT (reward target TP2 = 0.410 is deep, recomputed R/R ≈ 3.4)
-    # whose THIRD rung (0.41950) has already been traded through — surfaced on the
-    # card without expiring the trade. The reward target used for R/R is NOT the
-    # spent one, so the candidate correctly still publishes under the v51 gate.
+def test_a_non_monotonic_target_ladder_is_rejected(engine_stub):
+    # The v52 geometry gate requires a STRICTLY ordered ladder. This SHORT ladder
+    # [0.417, 0.410, 0.4195] is not monotonically decreasing (0.4195 > 0.410), so
+    # it is malformed and must NOT publish. (A "spent later rung on a published
+    # card" needs exactly this crossed ladder — a well-formed monotonic ladder
+    # spends TP1 first, which expires the trade before it can publish.)
     ondo = _analysis("SHORT", 0.42002826, 0.42300000,
                      [0.41700000, 0.41000000, 0.41950000], 0.41892, None)
     out = engine_stub({"ONDO": ondo})
+    assert [r["symbol"] for r in out["recommendations"]] == []       # rejected, not published
+
+
+def test_a_valid_ordered_ladder_still_publishes(engine_stub):
+    # Same setup with a properly ordered SHORT ladder (TP1 > TP2 > TP3) publishes.
+    ondo = _analysis("SHORT", 0.42002826, 0.42300000,
+                     [0.41700000, 0.41000000, 0.40500000], 0.41892, None)
+    out = engine_stub({"ONDO": ondo})
     assert [r["symbol"] for r in out["recommendations"]] == ["ONDO"]
-    assert out["recommendations"][0]["targets_behind_live"] == [3]
 
 
 def test_strategy_version_marks_the_new_rules(engine_stub):

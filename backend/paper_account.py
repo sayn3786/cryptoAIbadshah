@@ -23,6 +23,7 @@ explicitly-armed module.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from postmortem_report import classify_outcome
@@ -80,9 +81,37 @@ def _risk_fraction(row) -> Optional[float]:
     return frac if math.isfinite(frac) else None
 
 
+def _epoch(value) -> Optional[float]:
+    """Epoch-ms from an int/float, a datetime, or an ISO-8601 string. None when
+    unusable. Deterministic — the same value always maps to the same instant."""
+    if value is None or isinstance(value, bool):
+        return None
+    import math
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(float(value)) else None
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.timestamp() * 1000.0
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp() * 1000.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _open_epoch(row) -> Optional[float]:
+    """When the position OPENED. Prefer ``entry_filled_at`` — the moment the order
+    actually filled — and fall back to ``generated_at`` only for LEGACY rows
+    written before entry_filled_at existed (migration 003). None when neither is
+    usable, in which case the trade cannot be placed on the timeline."""
+    t = _epoch(row.get("entry_filled_at"))
+    return t if t is not None else _epoch(row.get("generated_at"))
+
+
 def _max_concurrent(intervals) -> int:
-    """Peak number of trades live at once, from (open, close) epoch pairs. A sweep
-    line over the endpoints; opens before closes at a tie count as overlapping."""
+    """Peak number of trades live at once IGNORING capital, from (open, close)
+    pairs. A sweep line; opens before closes at a tie count as overlapping."""
     events = []
     for a, b in intervals:
         if a is None or b is None or b < a:
@@ -109,27 +138,34 @@ def build_paper_account(
     strategy_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Walk a fixed-notional paper account over closed signal rows (oldest first).
+    Simulate auto-executing every published signal as a CONCURRENT, margin-reserving
+    paper account, processed chronologically.
 
     ``rows`` are closed-signal dicts (``list_closed_with_snapshots`` /
     ``list_signals`` shape): each needs ``status`` and ``realized_return_pct``;
-    ``entry_price``/``stop_loss`` give the amount at risk, and ``closed_at`` /
-    ``generated_at`` / ``symbol`` / ``direction`` enrich the ledger.
+    the OPEN time is ``entry_filled_at`` (fallback ``generated_at`` for legacy
+    rows), the CLOSE time is ``closed_at``, and ``entry_price``/``stop_loss`` give
+    the amount at risk.
 
-    Each filled trade puts ``trade_size_usd`` of NOTIONAL on the book at
-    ``leverage``, so it ties up ``notional / leverage`` of capital as margin. A
-    trade is SKIPPED when the balance cannot cover that margin (counted as
-    ``skipped_insufficient_capital``), the balance is never allowed below zero,
-    and once a loss would wipe it out the account is marked ruined and opens
-    nothing further. P&L is ``notional × realised_return% − round-trip fee``.
+    Each position puts ``trade_size_usd`` of NOTIONAL on the book at ``leverage``,
+    reserving ``notional / leverage`` of capital as margin from OPEN until CLOSE.
+    A signal is SKIPPED (``skipped_insufficient_capital``) when the AVAILABLE
+    balance — equity minus margin already reserved by open positions — cannot
+    cover its margin, so the account never opens a trade it could not fund. Margin
+    is released when the position closes, freeing it for later signals. Events are
+    ordered by time (opens before closes at a tie, the conservative choice), so a
+    genuinely overlapping trade a sequential account could not have entered is
+    only opened when the capital is actually free.
 
-    SEQUENTIAL ONLY: the walk holds one position at a time. It reports the peak
-    number of trades that were actually live simultaneously (from the
-    timestamps) so the reader can see where the sequential model understates the
-    capital a concurrent book would need — but it does not simulate concurrency,
-    liquidation or funding, and says so. Raises PaperAccountConfigError on a
-    non-finite/zero/negative balance, a non-finite/negative size or fee, or
-    leverage below 1.
+    The account balance never goes negative: a loss larger than the remaining
+    equity is CAPPED at that equity (the account is ruined), and gross, fee and
+    net for that trade are reconciled to the capped figure so
+    ``end_balance == start_balance + sum(ledger net P&L)`` holds exactly. On ruin
+    the run stops and any still-open positions are liquidated at zero further P&L.
+
+    Simulation only, NOT live-ready: liquidation mechanics and funding are still
+    unmodelled. Raises PaperAccountConfigError on a non-finite/zero/negative
+    balance, a non-finite/negative size or fee, or leverage below 1.
     """
     start_balance = _require_finite(start_balance_usd, "start_balance_usd", positive=True)
     size = _require_finite(trade_size_usd, "trade_size_usd", positive=True)
@@ -137,17 +173,73 @@ def build_paper_account(
     lev = _require_finite(leverage, "leverage", minimum=1.0)
 
     fee_frac = fee_bps_v / 10_000.0
-    round_trip_fee = size * fee_frac * 2.0            # entry + exit, taker both sides
-    margin_per_trade = size / lev
+    entry_fee = size * fee_frac                       # taker fee, charged when opening
+    exit_fee = size * fee_frac                        # taker fee, charged when closing
+    round_trip_fee = entry_fee + exit_fee             # both sides
+    margin = size / lev
 
-    def _when(r):
-        return (_f(r.get("closed_at")) or _f(r.get("generated_at")) or 0.0)
-    ordered = sorted(rows or [], key=_when)
+    # ── Build the schedulable positions ──────────────────────────────────────
+    positions: List[Dict[str, Any]] = []
+    skipped_invalid_timestamp = 0
+    for i, r in enumerate(rows or []):
+        oc = classify_outcome(r)
+        if oc in ("cancelled", "open"):
+            # This is a retrospective P&L sim over RESOLVED trades: a cancelled
+            # order never filled, and a still-OPEN one has no realised return to
+            # simulate. NOTE (documented limitation): a still-open position that
+            # HAS filled does occupy margin in reality, but the analytical feed
+            # supplies only closed rows, so open-position margin is not reserved
+            # here — modelling it needs an as-of time and open-ended holds, out of
+            # this report's scope.
+            continue
+        ret = _f(r.get("realized_return_pct"))
+        if ret is None:
+            continue                                  # terminal but unpriced
+        ot, ct = _open_epoch(r), _epoch(r.get("closed_at"))
+        if ot is None or ct is None or ct < ot:
+            skipped_invalid_timestamp += 1
+            continue                                  # cannot place on the timeline
+        positions.append({"seq": i, "row": r, "ret": ret, "open": ot, "close": ct})
 
-    balance = start_balance
-    peak = balance
+    observed_max_concurrent = _max_concurrent([(p["open"], p["close"]) for p in positions])
+
+    # Events: (time, phase, tiebreak, seq). phase 0 = OPEN, 1 = CLOSE, so an open
+    # is taken before a close at the same instant (conservative: don't reuse
+    # just-freed margin within the same tick), and a zero-duration trade opens
+    # before it closes. Among CLOSEs at the SAME timestamp — expected, since the
+    # monitor assigns candle timestamps to closes — the biggest GAINS settle
+    # first (tiebreak = −raw_net), so a same-candle winner can absorb a same-candle
+    # loser before the ruin cap applies. Without this the final balance depended
+    # on input row order (a losing close processed first would ruin the account
+    # and zero an otherwise-covering winner).
+    events = []
+    for p in positions:
+        r = p["row"]
+        p["raw_net"] = size * (p["ret"] / 100.0) - round_trip_fee
+        # OPEN priority among simultaneous fills is DECISION-TIME — earliest
+        # generated_at (publication order), then a stable id/symbol — never the
+        # future close order the store happens to return rows in. So which trades a
+        # capital-limited account funds does not depend on look-ahead or unstable
+        # database row order.
+        gen = _epoch(r.get("generated_at"))
+        open_key = (gen if gen is not None else float("inf"),
+                    str(r.get("id") or r.get("symbol") or ""), p["seq"])
+        events.append((p["open"], 0, open_key, p["seq"], p))
+        # Among simultaneous CLOSEs the biggest gain settles first (order-independent
+        # ruin); pad to the same key shape so the sort never compares mixed types.
+        events.append((p["close"], 1, (-p["raw_net"], "", p["seq"]), p["seq"], p))
+    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
+
+    equity = start_balance
+    reserved = 0.0
+    active_risk = 0.0                                  # aggregate stop risk of open positions
+    active: Dict[int, Dict[str, Any]] = {}
+    peak_equity = start_balance
     max_drawdown_usd = 0.0
     max_drawdown_pct = 0.0
+    peak_exposure = 0.0
+    peak_reserved = 0.0
+    actual_max_concurrent = 0
     wins = losses = filled = 0
     skipped_insufficient_capital = 0
     gross_pnl = fees_paid = 0.0
@@ -155,74 +247,147 @@ def build_paper_account(
     peak_amount_at_risk = 0.0
     account_ruined = False
     ruined_at_trade = None
-    curve: List[Dict[str, Any]] = []
+    net_applied_sum = 0.0                             # UNROUNDED, for exact reconciliation
     ledger: List[Dict[str, Any]] = []
-    fill_intervals: List[tuple] = []
+    curve: List[Dict[str, Any]] = []
 
-    for r in ordered:
-        outcome = classify_outcome(r)
-        if outcome in ("cancelled", "open"):
-            continue                                  # never filled / not resolved
-        ret = _f(r.get("realized_return_pct"))
-        if ret is None:
-            continue                                  # terminal but unpriced
-
-        # Capital check BEFORE opening: a ruined or under-margined account cannot
-        # take the trade. Never open on capital that is not there.
-        if account_ruined or balance + 1e-9 < margin_per_trade:
-            skipped_insufficient_capital += 1
-            continue
-
-        gross = size * (ret / 100.0)
-        net = gross - round_trip_fee
-        proposed = balance + net
-        # The account can never go silently negative: a loss larger than the
-        # balance wipes it out and the run is ruined from here.
-        if proposed <= 0:
-            net = -balance                            # lose no more than you have
-            proposed = 0.0
-            if not account_ruined:
-                account_ruined = True
-                ruined_at_trade = filled + 1
-
-        balance = proposed
-        filled += 1
-        gross_pnl += gross
-        fees_paid += round_trip_fee
-        if net > 0:
-            wins += 1
-        elif net < 0:
-            losses += 1
-        peak = max(peak, balance)
-        dd = peak - balance
+    def _record_equity(ts):
+        nonlocal peak_equity, max_drawdown_usd, max_drawdown_pct
+        peak_equity = max(peak_equity, equity)
+        dd = peak_equity - equity
         max_drawdown_usd = max(max_drawdown_usd, dd)
-        if peak > 0:
-            max_drawdown_pct = max(max_drawdown_pct, dd / peak * 100.0)
+        if peak_equity > 0:
+            max_drawdown_pct = max(max_drawdown_pct, dd / peak_equity * 100.0)
+        curve.append({"closed_at": ts, "balance_usd": round(equity, 6)})
 
-        rf = _risk_fraction(r)
-        amt_at_risk = (size * rf) if rf is not None else None
-        if amt_at_risk is not None:
-            risk_sum += amt_at_risk
-            peak_amount_at_risk = max(peak_amount_at_risk, amt_at_risk)
+    # Equity, and therefore the drawdown, is recorded ONCE per timestamp (after
+    # all closes on that candle settle), never after each individual close —
+    # otherwise a same-candle winner then loser prints an artificial peak and
+    # drawdown even though the portfolio's timestamp-level equity never moved.
+    prev_ts = None
+    curve_dirty = False
+    curve_ts = None
+    for ts, phase, _tiebreak, seq, p in events:
+        if prev_ts is not None and ts != prev_ts and curve_dirty:
+            _record_equity(curve_ts)                  # flush the previous candle's equity
+            curve_dirty = False
+        prev_ts = ts
+        r = p["row"]
+        if phase == 0:                                # OPEN
+            # Never admit a trade the free balance cannot FULLY fund: it must cover
+            # the margin AND the position's round-trip fee. Checking margin alone
+            # admitted trades at the capital boundary whose margin+fees exceeded the
+            # balance, contradicting "never opens an unfundable trade". A ruined
+            # account has no capital at all. Both cases are counted, never silent.
+            # Admission needs margin + the ENTRY fee only — the exit fee is paid at
+            # close from the released margin/proceeds, so requiring it up front
+            # would wrongly reject a fundable trade. Cumulative because reserved
+            # already holds earlier positions' margins.
+            if account_ruined or (equity - reserved) + 1e-9 < margin + entry_fee:
+                skipped_insufficient_capital += 1
+                continue
+            # The entry fee is spent NOW (so it is retained even if this position is
+            # later liquidated by another trade's ruin); margin is reserved, not spent.
+            equity -= entry_fee
+            net_applied_sum -= entry_fee
+            fees_paid += entry_fee
+            p["entry_fee"] = entry_fee
+            # A non-zero entry-fee debit lowers equity NOW, so the timestamp-level
+            # equity (and drawdown) must observe it — mark the candle dirty even
+            # though no position closed here. Otherwise a fee dip that later
+            # recovers would report zero drawdown. (Skip when the fee is zero so a
+            # no-fee account's curve is unchanged.)
+            if entry_fee:
+                curve_dirty = True
+                curve_ts = r.get("entry_filled_at") or r.get("generated_at") or ts
+            reserved += margin
+            filled += 1
+            p["fill_index"] = filled
+            active[seq] = p
+            # Stop risk AGGREGATED across concurrent open positions (peaked here on
+            # open), to stay consistent with the concurrent exposure/margin metrics
+            # rather than reporting only the largest single trade's risk.
+            rf = _risk_fraction(r)
+            p["amt"] = (size * rf) if rf is not None else None
+            if p["amt"] is not None:
+                risk_sum += p["amt"]
+                active_risk += p["amt"]
+                peak_amount_at_risk = max(peak_amount_at_risk, active_risk)
+            actual_max_concurrent = max(actual_max_concurrent, len(active))
+            peak_exposure = max(peak_exposure, len(active) * size)
+            peak_reserved = max(peak_reserved, len(active) * margin)   # margin only
+        else:                                         # CLOSE
+            if seq not in active:
+                continue                              # was skipped, so nothing to close
+            del active[seq]
+            reserved -= margin                        # release the position's margin
+            if p.get("amt") is not None:
+                active_risk -= p["amt"]               # release this position's stop risk
+            ent = p.get("entry_fee", 0.0)             # entry fee already spent at open
+            if account_ruined:
+                # Liquidated WITH the account: margin released, no exit fee and no
+                # further P&L, but the ENTRY fee it already paid is retained (it was
+                # a real cost incurred before the account was wiped).
+                ledger.append({
+                    "symbol": r.get("symbol"), "direction": r.get("direction"),
+                    "return_pct": round(p["ret"], 4), "notional_usd": round(size, 6),
+                    "amount_at_risk_usd": None,
+                    "opened_at": r.get("entry_filled_at") or r.get("generated_at"),
+                    "closed_at": r.get("closed_at"),
+                    "gross_usd": 0.0, "fee_usd": round(ent, 6),
+                    "net_usd": round(-ent, 6),        # already reflected in equity at open
+                    "balance_usd": round(equity, 6), "liquidated": True,
+                })
+                continue
+            ret = p["ret"]
+            close_gross = size * (ret / 100.0)
+            close_delta = close_gross - exit_fee      # this candle's equity movement
+            # Ruin at or below zero: a close that lands equity AT zero wipes the
+            # account, and the <= guard also stops a sub-epsilon negative from
+            # leaking through and breaking the never-negative invariant.
+            if equity + close_delta <= 1e-9:
+                applied = -equity                     # lose exactly the remaining equity
+                equity = 0.0
+                account_ruined = True
+                ruined_at_trade = p["fill_index"]
+            else:
+                applied = close_delta
+                equity += applied
+            net_applied_sum += applied
+            fees_paid += exit_fee
+            # The ledger row is the WHOLE trade: entry fee (spent at open) + this
+            # close. Keep gross − fee == net so the totals reconcile exactly.
+            trade_fee = ent + exit_fee
+            trade_net = -ent + applied
+            trade_gross = trade_net + trade_fee
+            gross_pnl += trade_gross
+            if trade_net > 0:
+                wins += 1
+            elif trade_net < 0:
+                losses += 1
+            amt = p.get("amt")                        # computed at open; risk already tracked there
+            ledger.append({
+                "symbol": r.get("symbol"), "direction": r.get("direction"),
+                "return_pct": round(ret, 4), "notional_usd": round(size, 6),
+                "amount_at_risk_usd": round(amt, 6) if amt is not None else None,
+                "opened_at": r.get("entry_filled_at") or r.get("generated_at"),
+                "closed_at": r.get("closed_at"),
+                "gross_usd": round(trade_gross, 6), "fee_usd": round(trade_fee, 6),
+                "net_usd": round(trade_net, 6), "balance_usd": round(equity, 6),
+                "liquidated": False,
+            })
+            curve_dirty = True
+            curve_ts = r.get("closed_at")
 
-        fill_intervals.append((_f(r.get("generated_at")), _f(r.get("closed_at"))))
-        ledger.append({
-            "symbol": r.get("symbol"),
-            "direction": r.get("direction"),
-            "return_pct": round(ret, 4),
-            "notional_usd": round(size, 6),
-            "amount_at_risk_usd": round(amt_at_risk, 6) if amt_at_risk is not None else None,
-            "gross_usd": round(gross, 6),
-            "fee_usd": round(round_trip_fee, 6),
-            "net_usd": round(net, 6),
-            "balance_usd": round(balance, 6),
-            "closed_at": r.get("closed_at"),
-        })
-        curve.append({"closed_at": r.get("closed_at"), "balance_usd": round(balance, 6)})
+    if curve_dirty:                                   # flush the final candle
+        _record_equity(curve_ts)
 
-    net_pnl = balance - start_balance
+    # Reconcile on the UNROUNDED running total, not on the sum of 6dp-rounded
+    # ledger nets (that sum can drift past the tolerance over many trades and
+    # falsely report reconciles=False). equity == start + Σ(applied net) exactly.
+    ledger_net_total = round(net_applied_sum, 6)
+    net_pnl = round(equity - start_balance, 6)
     decided = wins + losses
-    max_concurrent = _max_concurrent(fill_intervals)
     return {
         "strategy_version": strategy_version,
         "config": {
@@ -230,20 +395,24 @@ def build_paper_account(
             "start_balance_usd": round(start_balance, 2),
             "fee_bps": float(fee_bps_v),
             "leverage": round(lev, 4),
-            "margin_per_trade_usd": round(margin_per_trade, 6),
+            "margin_per_trade_usd": round(margin, 6),
             "round_trip_fee_usd": round(round_trip_fee, 6),
         },
         "summary": {
             "filled_trades": filled,
             "skipped_insufficient_capital": skipped_insufficient_capital,
+            "skipped_invalid_timestamp": skipped_invalid_timestamp,
             "wins": wins,
             "losses": losses,
             "win_rate_pct": round(wins / decided * 100, 1) if decided else None,
-            "end_balance_usd": round(balance, 6),
-            "net_pnl_usd": round(net_pnl, 6),
+            "end_balance_usd": round(equity, 6),
+            "net_pnl_usd": net_pnl,
             "net_return_pct": round(net_pnl / start_balance * 100, 4),
             "gross_pnl_usd": round(gross_pnl, 6),
             "fees_paid_usd": round(fees_paid, 6),
+            # end == start + Σ(applied net); exposed so callers can assert it.
+            "ledger_net_total_usd": ledger_net_total,
+            "reconciles": abs((start_balance + net_applied_sum) - equity) < 1e-6,
             "max_drawdown_usd": round(max_drawdown_usd, 6),
             "max_drawdown_pct": round(max_drawdown_pct, 4),
             "account_ruined": account_ruined,
@@ -253,38 +422,37 @@ def build_paper_account(
             "notional_per_trade_usd": round(size, 6),
             "avg_amount_at_risk_usd": round(risk_sum / filled, 6) if filled else None,
             "peak_amount_at_risk_usd": round(peak_amount_at_risk, 6) if filled else None,
-            # Sequential model: one position at a time, so peak exposure is one
-            # notional. The observed overlap shows what a concurrent book would
-            # have carried instead.
-            "peak_exposure_usd": round(size, 6) if filled else 0.0,
-            "observed_max_concurrent_positions": max_concurrent,
-            "peak_exposure_if_concurrent_usd": round(size * max_concurrent, 6),
+            # Concurrent model: exposure and margin scale with positions actually held.
+            "peak_exposure_usd": round(peak_exposure, 6),
+            "peak_reserved_margin_usd": round(peak_reserved, 6),
+            "actual_max_concurrent_positions": actual_max_concurrent,
+            "observed_max_concurrent_positions": observed_max_concurrent,
             "fees_as_pct_of_gross": (round(fees_paid / abs(gross_pnl) * 100, 1)
                                      if gross_pnl else None),
         },
-        "concurrency_model": "sequential_only",
+        "concurrency_model": "concurrent_margin",
         "equity_curve": curve,
         "ledger": ledger,
         "live_readiness": {
             "hyperliquid_min_order_usd": HYPERLIQUID_MIN_ORDER_USD,
             "size_meets_live_minimum": size >= HYPERLIQUID_MIN_ORDER_USD,
-            "concurrency_modelled": False,
+            "concurrency_modelled": True,     # margin-reserving concurrent walk
             "liquidation_modelled": False,
             "funding_modelled": False,
-            "live_ready": False,          # never, until the above are modelled
+            "live_ready": False,              # never, while liquidation + funding are unmodelled
             "note": ("simulation only — no order was placed. NOT live-ready: "
-                     "concurrency, liquidation and funding are not modelled, and a "
+                     "liquidation mechanics and funding are not modelled, and a "
                      f"live Hyperliquid order must be >= ${HYPERLIQUID_MIN_ORDER_USD:.0f} "
                      "(a smaller paper size models a trade the exchange would reject)."),
         },
         "caveats": [
             "Reporting only — this places no orders and moves no funds.",
-            "SEQUENTIAL: one position at a time. observed_max_concurrent_positions "
-            "shows where a concurrent book would have needed more capital than this "
-            "sequential walk assumes.",
+            "CONCURRENT margin model: every open position reserves margin until it "
+            "closes; a signal is skipped when the free balance cannot fund it.",
             "Funding is not modelled; perps pay/earn it every 8h, so paper P&L is "
             "slightly optimistic on trades held long enough to be charged.",
-            "Slippage and liquidation are not modelled; fills are assumed at the "
-            "signal's tracked entry/exit, so live results would be modestly worse.",
+            "Liquidation mechanics and slippage are not modelled; a loss is capped "
+            "at account equity, and fills are assumed at the signal's tracked "
+            "entry/exit, so live results would be modestly worse.",
         ],
     }

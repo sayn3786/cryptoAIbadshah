@@ -266,33 +266,63 @@ def validate_geometry_and_rr(direction, entry, stop, tp_targets,
     backtest run, so a malformed candidate cannot reach either from the other.
 
     Passes only when the candidate has: a finite positive entry, a finite
-    positive stop, at least one finite positive target, correct LONG/SHORT price
-    geometry (LONG: stop below entry, every target above; SHORT: the mirror), and
-    a finite recomputed R/R >= MIN_RR. R/R is recomputed from the same reward
-    target production uses (TP2 when present, else TP1) rather than trusting the
-    supplied ``rr_ratio``; if a stored rr is given and disagrees materially with
-    the recomputed value, the candidate is rejected as INVALID_RR — a fabricated
-    or stale ratio must not buy publication.
+    positive stop, and a target LADDER in which EVERY supplied target is finite,
+    numeric and strictly positive (an invalid target is never silently dropped),
+    on the correct side of entry, and STRICTLY ordered away from it — LONG
+    TP1 < TP2 < TP3 all above entry, SHORT TP1 > TP2 > TP3 all below entry — with
+    no duplicates. The store contract (create_signal) accepts a 1–3 rung ladder,
+    so fewer than three rungs is allowed as long as what IS present is well-formed.
+    Finally the recomputed R/R must be finite and >= MIN_RR. R/R is recomputed
+    from the same reward target production uses (TP2 when present, else TP1)
+    rather than trusting the supplied ``rr_ratio``; a stored rr that disagrees
+    materially is rejected as INVALID_RR.
 
-    Returns {"ok": bool, "reason": Optional[str], "rr": Optional[float]} where
-    reason (when not ok) is INVALID_GEOMETRY, INVALID_RR or LOW_RR.
+    Malformed input never raises: a non-iterable target collection, a string/dict,
+    or an empty ladder is a clean INVALID_GEOMETRY. Returns
+    {"ok", "reason", "rr"} where reason is INVALID_GEOMETRY, INVALID_RR or LOW_RR.
     """
     e, s = _finite_pos(entry), _finite_pos(stop)
-    raw = list(tp_targets or [])
-    finite_targets = [t for t in (_finite_pos(x) for x in raw) if t is not None]
-    if direction not in ("LONG", "SHORT") or e is None or s is None or not finite_targets:
+    if direction not in ("LONG", "SHORT") or e is None or s is None:
         return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
 
+    # A target collection must be an iterable SEQUENCE — reject a scalar, string,
+    # bytes or mapping without throwing.
+    if not isinstance(tp_targets, (list, tuple)):
+        return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+    ladder = list(tp_targets)
+    if not ladder:
+        return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+
+    # EVERY supplied target must be finite, numeric and strictly positive. A None,
+    # NaN, infinity, string or non-positive value invalidates the whole ladder —
+    # it is NOT filtered out (silently dropping it would hide a malformed signal).
+    clean: List[float] = []
+    for t in ladder:
+        # Numeric TYPE required — a string like "120" is not a price, even though
+        # float() would coerce it; bool is not a price either.
+        if isinstance(t, bool) or not isinstance(t, (int, float)):
+            return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+        v = _finite_pos(t)
+        if v is None:
+            return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+        clean.append(v)
+
+    # Correct side of entry, and STRICTLY ordered away from it (strictness also
+    # rejects duplicate levels). Mirrors the store's create_signal contract.
     if direction == "LONG":
-        good = s < e and all(t > e for t in finite_targets)
-    else:                                              # SHORT
-        good = s > e and all(t < e for t in finite_targets)
-    if not good:
-        return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+        if not (s < e and all(t > e for t in clean)):
+            return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+        if any(b <= a for a, b in zip(clean, clean[1:])):      # not TP1 < TP2 < TP3
+            return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+    else:                                                       # SHORT
+        if not (s > e and all(t < e for t in clean)):
+            return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
+        if any(b >= a for a, b in zip(clean, clean[1:])):      # not TP1 > TP2 > TP3
+            return {"ok": False, "reason": "INVALID_GEOMETRY", "rr": None}
 
-    # Reward target mirrors production exactly: TP2 if it is a usable level, else
-    # TP1 (line: `tp_targets[1] or tp_targets[0]`).
-    reward = _finite_pos(raw[1]) if len(raw) >= 2 and _finite_pos(raw[1]) else _finite_pos(raw[0])
+    # Reward target mirrors production exactly: TP2 when the ladder has one, else
+    # TP1 (`tp_targets[1] or tp_targets[0]`). All rungs are finite-positive here.
+    reward = clean[1] if len(clean) >= 2 else clean[0]
     rr = recompute_rr(e, s, reward)
     if rr is None:
         return {"ok": False, "reason": "INVALID_RR", "rr": None}
