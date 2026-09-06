@@ -299,3 +299,34 @@ def test_missing_or_invalid_timestamps_are_skipped_safely():
                                   trade_size_usd=10.0, start_balance_usd=100.0)
     assert acct["summary"]["filled_trades"] == 1                   # only the good one
     assert acct["summary"]["skipped_invalid_timestamp"] == 2
+
+
+# ── Codex review fixes: simultaneous-close ordering & the zero-equity boundary ─
+
+def test_simultaneous_winner_and_loser_are_order_independent():
+    # Two positions closing on the SAME candle: a +150% winner and a −250% loser
+    # on $10 notionals from a $20 account. The loser alone would breach equity,
+    # but the same-candle winner covers it — end balance must be $10 and NOT
+    # ruined, regardless of the input row order (the P1 finding).
+    winner = _ov("BTC", 150.0, 0, 100)
+    loser = _ov("ETH", -250.0, 0, 100)
+    for rows in ([winner, loser], [loser, winner]):
+        acct = pa.build_paper_account(rows, trade_size_usd=10.0,
+                                      start_balance_usd=20.0, fee_bps=0.0)
+        s = acct["summary"]
+        assert s["filled_trades"] == 2
+        assert s["end_balance_usd"] == 10.0          # +15 then −25 from 20 → 10
+        assert s["account_ruined"] is False
+        assert s["reconciles"] is True
+
+
+def test_a_close_consuming_exactly_all_equity_is_ruin():
+    # $10 account, $10 notional, 0 fees, −100% → equity lands EXACTLY at 0. That
+    # is a wipeout: account_ruined must be True, not a silent zero balance (P2).
+    acct = pa.build_paper_account([_row(-100.0)], trade_size_usd=10.0,
+                                  start_balance_usd=10.0, fee_bps=0.0)
+    s = acct["summary"]
+    assert s["end_balance_usd"] == 0.0
+    assert s["account_ruined"] is True
+    assert s["ruined_at_trade"] == 1
+    assert s["reconciles"] is True

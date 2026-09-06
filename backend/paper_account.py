@@ -194,14 +194,21 @@ def build_paper_account(
 
     observed_max_concurrent = _max_concurrent([(p["open"], p["close"]) for p in positions])
 
-    # Events: (time, phase, seq). phase 0 = OPEN, 1 = CLOSE, so an open is taken
-    # before a close at the same instant (conservative: don't reuse just-freed
-    # margin within the same tick), and a zero-duration trade opens before it closes.
+    # Events: (time, phase, tiebreak, seq). phase 0 = OPEN, 1 = CLOSE, so an open
+    # is taken before a close at the same instant (conservative: don't reuse
+    # just-freed margin within the same tick), and a zero-duration trade opens
+    # before it closes. Among CLOSEs at the SAME timestamp — expected, since the
+    # monitor assigns candle timestamps to closes — the biggest GAINS settle
+    # first (tiebreak = −raw_net), so a same-candle winner can absorb a same-candle
+    # loser before the ruin cap applies. Without this the final balance depended
+    # on input row order (a losing close processed first would ruin the account
+    # and zero an otherwise-covering winner).
     events = []
     for p in positions:
-        events.append((p["open"], 0, p["seq"], p))
-        events.append((p["close"], 1, p["seq"], p))
-    events.sort(key=lambda e: (e[0], e[1], e[2]))
+        p["raw_net"] = size * (p["ret"] / 100.0) - round_trip_fee
+        events.append((p["open"], 0, 0.0, p["seq"], p))
+        events.append((p["close"], 1, -p["raw_net"], p["seq"], p))
+    events.sort(key=lambda e: (e[0], e[1], e[2], e[3]))
 
     equity = start_balance
     reserved = 0.0
@@ -231,7 +238,7 @@ def build_paper_account(
             max_drawdown_pct = max(max_drawdown_pct, dd / peak_equity * 100.0)
         curve.append({"closed_at": ts, "balance_usd": round(equity, 6)})
 
-    for ts, phase, seq, p in events:
+    for ts, phase, _tiebreak, seq, p in events:
         r = p["row"]
         if phase == 0:                                # OPEN
             # A ruined account has no capital; a position that would need more
@@ -268,7 +275,11 @@ def build_paper_account(
             gross = size * (ret / 100.0)
             fee = round_trip_fee
             raw_net = gross - fee
-            if equity + raw_net < -1e-9:              # would breach zero → ruin
+            # Ruin at or below zero: a close that lands equity AT zero wipes the
+            # account (it can fund nothing further), and the <= guard also stops a
+            # sub-epsilon negative from leaking through and breaking the
+            # never-negative invariant.
+            if equity + raw_net <= 1e-9:
                 net = -equity                         # lose exactly the remaining equity
                 gross = net + fee                     # cap gross too, so gross − fee == net
                 equity = 0.0
