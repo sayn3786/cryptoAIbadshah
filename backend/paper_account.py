@@ -182,7 +182,14 @@ def build_paper_account(
     for i, r in enumerate(rows or []):
         oc = classify_outcome(r)
         if oc in ("cancelled", "open"):
-            continue                                  # never filled / not resolved
+            # This is a retrospective P&L sim over RESOLVED trades: a cancelled
+            # order never filled, and a still-OPEN one has no realised return to
+            # simulate. NOTE (documented limitation): a still-open position that
+            # HAS filled does occupy margin in reality, but the analytical feed
+            # supplies only closed rows, so open-position margin is not reserved
+            # here — modelling it needs an as-of time and open-ended holds, out of
+            # this report's scope.
+            continue
         ret = _f(r.get("realized_return_pct"))
         if ret is None:
             continue                                  # terminal but unpriced
@@ -226,6 +233,7 @@ def build_paper_account(
     peak_amount_at_risk = 0.0
     account_ruined = False
     ruined_at_trade = None
+    net_applied_sum = 0.0                             # UNROUNDED, for exact reconciliation
     ledger: List[Dict[str, Any]] = []
     curve: List[Dict[str, Any]] = []
 
@@ -238,7 +246,18 @@ def build_paper_account(
             max_drawdown_pct = max(max_drawdown_pct, dd / peak_equity * 100.0)
         curve.append({"closed_at": ts, "balance_usd": round(equity, 6)})
 
+    # Equity, and therefore the drawdown, is recorded ONCE per timestamp (after
+    # all closes on that candle settle), never after each individual close —
+    # otherwise a same-candle winner then loser prints an artificial peak and
+    # drawdown even though the portfolio's timestamp-level equity never moved.
+    prev_ts = None
+    curve_dirty = False
+    curve_ts = None
     for ts, phase, _tiebreak, seq, p in events:
+        if prev_ts is not None and ts != prev_ts and curve_dirty:
+            _record_equity(curve_ts)                  # flush the previous candle's equity
+            curve_dirty = False
+        prev_ts = ts
         r = p["row"]
         if phase == 0:                                # OPEN
             # A ruined account has no capital; a position that would need more
@@ -288,6 +307,7 @@ def build_paper_account(
             else:
                 net = raw_net
                 equity += net
+            net_applied_sum += net
             gross_pnl += gross
             fees_paid += fee
             if net > 0:
@@ -309,9 +329,16 @@ def build_paper_account(
                 "net_usd": round(net, 6), "balance_usd": round(equity, 6),
                 "liquidated": False,
             })
-            _record_equity(r.get("closed_at"))
+            curve_dirty = True
+            curve_ts = r.get("closed_at")
 
-    ledger_net_total = round(sum(e["net_usd"] for e in ledger), 6)
+    if curve_dirty:                                   # flush the final candle
+        _record_equity(curve_ts)
+
+    # Reconcile on the UNROUNDED running total, not on the sum of 6dp-rounded
+    # ledger nets (that sum can drift past the tolerance over many trades and
+    # falsely report reconciles=False). equity == start + Σ(applied net) exactly.
+    ledger_net_total = round(net_applied_sum, 6)
     net_pnl = round(equity - start_balance, 6)
     decided = wins + losses
     return {
@@ -336,9 +363,9 @@ def build_paper_account(
             "net_return_pct": round(net_pnl / start_balance * 100, 4),
             "gross_pnl_usd": round(gross_pnl, 6),
             "fees_paid_usd": round(fees_paid, 6),
-            # end == start + Σ(ledger net); exposed so callers can assert it.
+            # end == start + Σ(applied net); exposed so callers can assert it.
             "ledger_net_total_usd": ledger_net_total,
-            "reconciles": abs((start_balance + ledger_net_total) - equity) < 1e-6,
+            "reconciles": abs((start_balance + net_applied_sum) - equity) < 1e-6,
             "max_drawdown_usd": round(max_drawdown_usd, 6),
             "max_drawdown_pct": round(max_drawdown_pct, 4),
             "account_ruined": account_ruined,

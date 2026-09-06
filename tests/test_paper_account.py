@@ -330,3 +330,44 @@ def test_a_close_consuming_exactly_all_equity_is_ruin():
     assert s["account_ruined"] is True
     assert s["ruined_at_trade"] == 1
     assert s["reconciles"] is True
+
+
+# ── Second Codex review: per-timestamp drawdown & unrounded reconciliation ────
+
+def test_same_timestamp_closes_do_not_print_an_artificial_drawdown():
+    # +100% and −100% on $10 notionals from $20, closing on the SAME candle. The
+    # portfolio's timestamp-level equity is unchanged at $20, so there must be NO
+    # drawdown from an intra-tick +$10 then −$10 wobble.
+    winner = _ov("BTC", 100.0, 0, 100)
+    loser = _ov("ETH", -100.0, 0, 100)
+    acct = pa.build_paper_account([winner, loser], trade_size_usd=10.0,
+                                  start_balance_usd=20.0, fee_bps=0.0)
+    s = acct["summary"]
+    assert s["end_balance_usd"] == 20.0
+    assert s["max_drawdown_usd"] == 0.0
+    assert s["max_drawdown_pct"] == 0.0
+    # One equity-curve point for the shared candle, not two.
+    assert len(acct["equity_curve"]) == 1
+    assert acct["equity_curve"][0]["balance_usd"] == 20.0
+
+
+def test_a_genuine_cross_candle_drawdown_is_still_reported():
+    # Different candles: +10% then −20% → a real peak-to-trough drawdown.
+    up = _ov("BTC", 10.0, 0, 100)
+    down = _ov("ETH", -20.0, 200, 300)
+    acct = pa.build_paper_account([up, down], trade_size_usd=100.0,
+                                  start_balance_usd=1000.0, fee_bps=0.0)
+    assert acct["summary"]["max_drawdown_usd"] > 0
+    assert len(acct["equity_curve"]) == 2
+
+
+def test_reconciliation_survives_many_fractional_trades():
+    # 500 identical small trades with fractional fees: summing 6dp-rounded ledger
+    # nets would drift past 1e-6, but reconciliation is on the unrounded total.
+    rows = [_row(0.137) for _ in range(500)]
+    acct = pa.build_paper_account(rows, trade_size_usd=7.31,
+                                  start_balance_usd=100000.0, fee_bps=3.5)
+    s = acct["summary"]
+    assert s["filled_trades"] == 500
+    assert s["reconciles"] is True
+    assert abs((100000.0 + s["ledger_net_total_usd"]) - s["end_balance_usd"]) < 1e-2
