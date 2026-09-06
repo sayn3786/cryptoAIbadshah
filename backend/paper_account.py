@@ -219,6 +219,7 @@ def build_paper_account(
 
     equity = start_balance
     reserved = 0.0
+    active_risk = 0.0                                  # aggregate stop risk of open positions
     active: Dict[int, Dict[str, Any]] = {}
     peak_equity = start_balance
     max_drawdown_usd = 0.0
@@ -260,15 +261,27 @@ def build_paper_account(
         prev_ts = ts
         r = p["row"]
         if phase == 0:                                # OPEN
-            # A ruined account has no capital; a position that would need more
-            # margin than is free is not opened. Both are counted, never silent.
-            if account_ruined or (equity - reserved) + 1e-9 < margin:
+            # Never admit a trade the free balance cannot FULLY fund: it must cover
+            # the margin AND the position's round-trip fee. Checking margin alone
+            # admitted trades at the capital boundary whose margin+fees exceeded the
+            # balance, contradicting "never opens an unfundable trade". A ruined
+            # account has no capital at all. Both cases are counted, never silent.
+            if account_ruined or (equity - reserved) + 1e-9 < margin + round_trip_fee:
                 skipped_insufficient_capital += 1
                 continue
             reserved += margin
             filled += 1
             p["fill_index"] = filled
             active[seq] = p
+            # Stop risk AGGREGATED across concurrent open positions (peaked here on
+            # open), to stay consistent with the concurrent exposure/margin metrics
+            # rather than reporting only the largest single trade's risk.
+            rf = _risk_fraction(r)
+            p["amt"] = (size * rf) if rf is not None else None
+            if p["amt"] is not None:
+                risk_sum += p["amt"]
+                active_risk += p["amt"]
+                peak_amount_at_risk = max(peak_amount_at_risk, active_risk)
             actual_max_concurrent = max(actual_max_concurrent, len(active))
             peak_exposure = max(peak_exposure, len(active) * size)
             peak_reserved = max(peak_reserved, reserved)
@@ -277,6 +290,8 @@ def build_paper_account(
                 continue                              # was skipped, so nothing to close
             del active[seq]
             reserved -= margin
+            if p.get("amt") is not None:
+                active_risk -= p["amt"]               # release this position's stop risk
             if account_ruined:
                 # Liquidated WITH the account: margin released, no further P&L, so
                 # the reconciliation identity is preserved.
@@ -314,11 +329,7 @@ def build_paper_account(
                 wins += 1
             elif net < 0:
                 losses += 1
-            rf = _risk_fraction(r)
-            amt = (size * rf) if rf is not None else None
-            if amt is not None:
-                risk_sum += amt
-                peak_amount_at_risk = max(peak_amount_at_risk, amt)
+            amt = p.get("amt")                        # computed at open; risk already tracked there
             ledger.append({
                 "symbol": r.get("symbol"), "direction": r.get("direction"),
                 "return_pct": round(ret, 4), "notional_usd": round(size, 6),

@@ -253,14 +253,15 @@ def test_end_balance_reconciles_with_ledger_net_totals():
 
 
 def test_loss_and_ruin_reconcile_with_capped_gross():
-    # A −300% glitch on a $10 notional would be −$30 on a $10 account: capped.
+    # A −300% glitch on a $10 notional is −$30, capped to the $20 account. Start
+    # balance clears margin + fee so the trade opens, then the loss wipes it out.
     acct = pa.build_paper_account([_row(-300.0)], trade_size_usd=10.0,
-                                  start_balance_usd=10.0, fee_bps=3.5)
+                                  start_balance_usd=20.0, fee_bps=3.5)
     s = acct["summary"]
     assert s["account_ruined"] is True
     assert s["end_balance_usd"] == 0.0
     row = acct["ledger"][0]
-    assert row["net_usd"] == -10.0                              # capped at equity, not −30
+    assert row["net_usd"] == -20.0                              # capped at equity, not −30
     assert abs((row["gross_usd"] - row["fee_usd"]) - row["net_usd"]) < 1e-6  # reconciles
     assert s["reconciles"] is True
 
@@ -371,3 +372,51 @@ def test_reconciliation_survives_many_fractional_trades():
     assert s["filled_trades"] == 500
     assert s["reconciles"] is True
     assert abs((100000.0 + s["ledger_net_total_usd"]) - s["end_balance_usd"]) < 1e-2
+
+
+# ── Third Codex review: aggregate stop-risk & fee-aware admission ─────────────
+
+def _ov_risk(sym, ret, filled_at, closed_at, entry, stop):
+    return {"status": "TP_HIT" if ret > 0 else "SL_HIT", "realized_return_pct": ret,
+            "entry_filled_at": filled_at, "closed_at": closed_at,
+            "entry_price": entry, "stop_loss": stop, "symbol": sym, "direction": "LONG"}
+
+
+def test_peak_amount_at_risk_aggregates_concurrent_positions():
+    # Two overlapping $100 positions, each risking 5% ($5) to its stop → the peak
+    # portfolio stop risk is $10, not $5 (the largest single trade).
+    a = _ov_risk("BTC", 1.0, 0, 100, 100.0, 95.0)
+    b = _ov_risk("ETH", 1.0, 0, 100, 100.0, 95.0)
+    acct = pa.build_paper_account([a, b], trade_size_usd=100.0,
+                                  start_balance_usd=1000.0, fee_bps=0.0)
+    assert acct["summary"]["actual_max_concurrent_positions"] == 2
+    assert acct["summary"]["peak_amount_at_risk_usd"] == 10.0
+
+
+def test_a_single_position_peak_risk_is_its_own():
+    a = _ov_risk("BTC", 1.0, 0, 100, 100.0, 95.0)
+    acct = pa.build_paper_account([a], trade_size_usd=100.0,
+                                  start_balance_usd=1000.0, fee_bps=0.0)
+    assert acct["summary"]["peak_amount_at_risk_usd"] == 5.0
+
+
+def test_admission_accounts_for_the_entry_fee_at_the_boundary():
+    # $20 account, two $10 positions at 1x → $20 margin exactly, but with a fee the
+    # pair is unaffordable, so only one opens (checking margin alone would open both).
+    a = _ov("BTC", 1.0, 0, 100)
+    b = _ov("ETH", 1.0, 0, 100)
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=20.0, fee_bps=3.5)
+    s = acct["summary"]
+    assert s["filled_trades"] == 1
+    assert s["skipped_insufficient_capital"] == 1
+
+
+def test_zero_fee_boundary_still_opens_both():
+    # With no fee, $20 funds two $10 positions exactly — the fee change must not
+    # over-tighten the zero-fee case.
+    a = _ov("BTC", 1.0, 0, 100)
+    b = _ov("ETH", 1.0, 0, 100)
+    acct = pa.build_paper_account([a, b], trade_size_usd=10.0,
+                                  start_balance_usd=20.0, fee_bps=0.0)
+    assert acct["summary"]["filled_trades"] == 2
