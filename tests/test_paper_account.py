@@ -487,3 +487,16 @@ def test_liquidated_position_retains_its_entry_fee():
     assert len(liq) == 1
     assert abs(liq[0]["fee_usd"] - one_side) < 1e-9        # B's entry fee, not 0
     assert s["reconciles"] is True
+
+
+# ── Sixth Codex review: entry-fee debit is observed by the drawdown ──────────
+
+def test_entry_fee_dip_is_recorded_in_drawdown_even_if_recovered():
+    # A single trade: the entry fee dips equity at open, then a small profit fully
+    # recovers it. Drawdown must observe the fee dip, not report zero.
+    a = {"status": "TP_HIT", "realized_return_pct": 0.2, "entry_filled_at": 0,
+         "closed_at": 100, "symbol": "BTC", "direction": "LONG"}
+    acct = pa.build_paper_account([a], trade_size_usd=100.0,
+                                  start_balance_usd=1000.0, fee_bps=50.0)  # 0.5%/side
+    assert acct["summary"]["max_drawdown_usd"] > 0     # the entry-fee dip is seen
+    assert acct["summary"]["reconciles"] is True

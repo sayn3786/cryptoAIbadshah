@@ -292,6 +292,14 @@ def build_paper_account(
             net_applied_sum -= entry_fee
             fees_paid += entry_fee
             p["entry_fee"] = entry_fee
+            # A non-zero entry-fee debit lowers equity NOW, so the timestamp-level
+            # equity (and drawdown) must observe it — mark the candle dirty even
+            # though no position closed here. Otherwise a fee dip that later
+            # recovers would report zero drawdown. (Skip when the fee is zero so a
+            # no-fee account's curve is unchanged.)
+            if entry_fee:
+                curve_dirty = True
+                curve_ts = r.get("entry_filled_at") or r.get("generated_at") or ts
             reserved += margin
             filled += 1
             p["fill_index"] = filled
