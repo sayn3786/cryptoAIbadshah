@@ -58,6 +58,15 @@
       <option value="5" selected>Last 5 days</option>
     </select>
   </div>
+  <div id="notifCats" class="notif-panel-cats">
+    <button type="button" class="notif-cat" data-cat="divergence" onclick="toggleNotifCat('divergence')">🔀 Divergence</button>
+    <button type="button" class="notif-cat" data-cat="pattern"    onclick="toggleNotifCat('pattern')">📐 Patterns</button>
+    <button type="button" class="notif-cat" data-cat="flag"       onclick="toggleNotifCat('flag')">🚩 Flags</button>
+    <button type="button" class="notif-cat" data-cat="whale"      onclick="toggleNotifCat('whale')">🐋 Whales</button>
+    <button type="button" class="notif-cat" data-cat="engulf"     onclick="toggleNotifCat('engulf')">🕯️ Engulfing</button>
+    <button type="button" class="notif-cat" data-cat="strength"   onclick="toggleNotifCat('strength')">📈 Strength</button>
+    <button type="button" class="notif-cat" data-cat="rsi_swing"  onclick="toggleNotifCat('rsi_swing')">📊 RSI Swing</button>
+  </div>
   <div id="notifList" class="notif-list">
     <p class="notif-empty">No confirmed 1W engulfing patterns detected.</p>
   </div>

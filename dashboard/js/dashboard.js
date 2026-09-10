@@ -6183,6 +6183,26 @@ function setNotifRange(v) {
   _renderNotifList();
 }
 
+// Event-TYPE view filter for the bell. Each alert item carries a `cat`; a
+// category chip toggles that category on/off. We persist the OFF set (not the
+// ON set) so any category added later defaults to ON without a migration. All
+// categories are on by default. Like the date filter this only hides items —
+// it never marks anything seen and does not change the unseen badge.
+const _NOTIF_CATS_KEY = 'notif_cats_off';
+let   _notifCatsOff   = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(_NOTIF_CATS_KEY) || '[]')); }
+  catch (_) { return new Set(); }
+})();
+
+function _catEnabled(cat) { return !_notifCatsOff.has(cat); }
+
+function toggleNotifCat(cat) {
+  if (_notifCatsOff.has(cat)) _notifCatsOff.delete(cat);
+  else                        _notifCatsOff.add(cat);
+  try { localStorage.setItem(_NOTIF_CATS_KEY, JSON.stringify([..._notifCatsOff])); } catch (_) {}
+  _renderNotifList();
+}
+
 // Stable per-confirmation id for client-side "seen" tracking (in the shared
 // strength-seen store, same as whale alerts).
 function _patternSeenId(a) {
@@ -6275,7 +6295,7 @@ function _renderNotifList() {
     const arrow  = isUp ? `+${a.delta}` : `${a.delta}`;
     const dtStr  = new Date(a.ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
     const isNew  = !strengthSeen[a.id];
-    items.push({ ts: a.ts, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: a.ts, cat: 'strength', html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">Strength Jump — <strong>${a.symbol}/USDT</strong> <span class="notif-dir-tag">${a.dir}</span></div>
@@ -6300,7 +6320,7 @@ function _renderNotifList() {
     const seen = _getStrengthSeen();
     const isNew = !seen[id];
     const when  = a.candles_ago === 1 ? 'Last 1H candle' : `${a.candles_ago} candles ago`;
-    items.push({ ts: a.timestamp, html: `<div class="notif-item notif-item-${m.cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: a.timestamp, cat: 'whale', html: `<div class="notif-item notif-item-${m.cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${m.icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${m.label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6319,7 +6339,7 @@ function _renderNotifList() {
     const when   = a.candles_ago === 1 ? 'last closed 1W candle' : `${a.candles_ago} closed candles ago`;
     const id     = `engulf_${a.symbol}_${a.timestamp}`;
     const isNew  = !engulfSeen[id];
-    items.push({ ts: a.timestamp || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: a.timestamp || 0, cat: 'engulf', html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6337,6 +6357,13 @@ function _renderNotifList() {
     // It has no break direction, level or target, so it needs its own copy —
     // the breakout wording below would claim something that never happened.
     const isDiv = a.kind === 'divergence';
+    // Category for the event-type filter: divergences, flags and RSI swings are
+    // their own toggles; every other chart pattern (reversals, triangles/wedges)
+    // falls under "Patterns".
+    const cat   = a.kind === 'divergence' ? 'divergence'
+                : a.kind === 'flag'       ? 'flag'
+                : a.kind === 'rsi_swing'  ? 'rsi_swing'
+                :                           'pattern';
     const dir   = a.direction;
     const cls   = failed ? 'bear' : dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
     const icon  = failed ? '❌' : isDiv ? '🔀'
@@ -6361,7 +6388,7 @@ function _renderNotifList() {
             : 'Price made a higher high, momentum did not — possible reversal down')
       : dir === 'bullish' ? 'Confirmed bullish break'
       : dir === 'bearish' ? 'Confirmed bearish break' : 'Breakout confirmed';
-    items.push({ ts: a.break_ts || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: a.break_ts || 0, cat, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${a.label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6373,25 +6400,30 @@ function _renderNotifList() {
     </div>` });
   });
 
-  // Reflect the persisted choice on the control (it defaults to "All" in HTML).
+  // Reflect the persisted choices on the controls.
   const sel = document.getElementById('notifRange');
   if (sel && sel.value !== String(_notifRangeDays)) sel.value = String(_notifRangeDays);
+  document.querySelectorAll('#notifCats .notif-cat').forEach(btn => {
+    btn.classList.toggle('notif-cat-on', _catEnabled(btn.dataset.cat));
+  });
+
+  // Event-type view filter: drop items whose category chip is toggled off.
+  let shown = items.filter(i => _catEnabled(i.cat));
 
   // Date-range view filter: keep items whose timestamp is on or after local
   // midnight of (today − (N−1) days), so "Last 5 days" = today + the previous 4.
   // Every alert type's `ts` is an epoch-ms value, matching this ms cutoff.
-  let shown = items;
   if (_notifRangeDays > 0) {
     const cut = new Date();
     cut.setHours(0, 0, 0, 0);
     cut.setDate(cut.getDate() - (_notifRangeDays - 1));
     const cutMs = cut.getTime();
-    shown = items.filter(i => (i.ts || 0) >= cutMs);
+    shown = shown.filter(i => (i.ts || 0) >= cutMs);
   }
 
   if (!shown.length) {
     list.innerHTML = items.length
-      ? '<p class="notif-empty">No alerts in the selected range.</p>'
+      ? '<p class="notif-empty">No alerts match the current filters.</p>'
       : '<p class="notif-empty">No alerts yet. Strength checked hourly.</p>';
     return;
   }
