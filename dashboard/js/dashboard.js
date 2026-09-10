@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '231';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '232';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -6162,20 +6162,56 @@ const _ENGULF_SEEN_KEY = 'engulf_seen_v2';
 let   _engulfAlerts    = [];
 let   _patternAlerts   = [];    // confirmed chart patterns (Double Top/Bottom, H&S, triangles, flags)
 
-// Notification-bell date-range VIEW filter (0 = All). Capped at 5 days: "today
-// through the last 4 days". It only hides items in the list; it never marks
+// Notification-bell date-range VIEW filter. 0 = All; otherwise the last N days.
+// Default is 5 (today through the last 4 days) — the widest, most useful window
+// — and 5 is also the cap. It only hides items in the list; it never marks
 // anything seen and does not affect the unseen badge count. Persisted so the
-// choice survives reloads.
+// choice survives reloads: a stored "0" (All) the user picked is respected, and
+// only a genuinely absent value falls back to the 5-day default.
+const _NOTIF_RANGE_DEFAULT = 5;
 const _NOTIF_RANGE_KEY = 'notif_range_days';
 let   _notifRangeDays  = (() => {
-  try { return parseInt(localStorage.getItem(_NOTIF_RANGE_KEY) || '0', 10) || 0; }
-  catch (_) { return 0; }
+  try {
+    const raw = localStorage.getItem(_NOTIF_RANGE_KEY);
+    return raw == null ? _NOTIF_RANGE_DEFAULT : (parseInt(raw, 10) || 0);
+  } catch (_) { return _NOTIF_RANGE_DEFAULT; }
 })();
 
 function setNotifRange(v) {
   _notifRangeDays = parseInt(v, 10) || 0;
   try { localStorage.setItem(_NOTIF_RANGE_KEY, String(_notifRangeDays)); } catch (_) {}
   _renderNotifList();
+}
+
+// Event-TYPE view filter for the bell. Each alert item carries a `cat`; a
+// category chip toggles that category on/off. We persist the OFF set (not the
+// ON set) so any category added later defaults to ON without a migration. All
+// categories are on by default. Like the date filter this only hides items —
+// it never marks anything seen and does not change the unseen badge.
+const _NOTIF_CATS_KEY = 'notif_cats_off';
+let   _notifCatsOff   = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(_NOTIF_CATS_KEY) || '[]')); }
+  catch (_) { return new Set(); }
+})();
+
+function _catEnabled(cat) { return !_notifCatsOff.has(cat); }
+
+function toggleNotifCat(cat) {
+  if (_notifCatsOff.has(cat)) _notifCatsOff.delete(cat);
+  else                        _notifCatsOff.add(cat);
+  try { localStorage.setItem(_NOTIF_CATS_KEY, JSON.stringify([..._notifCatsOff])); } catch (_) {}
+  _renderNotifList();
+}
+
+// Candle timestamps are OPEN times, but an alert is only KNOWN at the candle's
+// close. On higher timeframes that gap is large — a 1W candle opens ~7 days
+// before it closes — so filtering on the open time would hide a just-confirmed
+// weekly alert (its open is already 7 days old). Recency for both the date
+// filter and the sort is therefore the candle CLOSE = open + the timeframe's
+// span. Strength jumps already carry a detection time, so they pass their own.
+const _TF_SPAN_MS = { '1H': 3600000, '4H': 14400000, '1D': 86400000, '1W': 604800000 };
+function _alertRecencyTs(openTs, tf) {
+  return (openTs || 0) + (_TF_SPAN_MS[tf] || 0);
 }
 
 // Stable per-confirmation id for client-side "seen" tracking (in the shared
@@ -6270,7 +6306,7 @@ function _renderNotifList() {
     const arrow  = isUp ? `+${a.delta}` : `${a.delta}`;
     const dtStr  = new Date(a.ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
     const isNew  = !strengthSeen[a.id];
-    items.push({ ts: a.ts, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: a.ts, cat: 'strength', html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">Strength Jump — <strong>${a.symbol}/USDT</strong> <span class="notif-dir-tag">${a.dir}</span></div>
@@ -6295,7 +6331,7 @@ function _renderNotifList() {
     const seen = _getStrengthSeen();
     const isNew = !seen[id];
     const when  = a.candles_ago === 1 ? 'Last 1H candle' : `${a.candles_ago} candles ago`;
-    items.push({ ts: a.timestamp, html: `<div class="notif-item notif-item-${m.cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: _alertRecencyTs(a.timestamp, '1H'), cat: 'whale', html: `<div class="notif-item notif-item-${m.cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${m.icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${m.label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6314,7 +6350,7 @@ function _renderNotifList() {
     const when   = a.candles_ago === 1 ? 'last closed 1W candle' : `${a.candles_ago} closed candles ago`;
     const id     = `engulf_${a.symbol}_${a.timestamp}`;
     const isNew  = !engulfSeen[id];
-    items.push({ ts: a.timestamp || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: _alertRecencyTs(a.timestamp, '1W'), cat: 'engulf', html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6332,6 +6368,13 @@ function _renderNotifList() {
     // It has no break direction, level or target, so it needs its own copy —
     // the breakout wording below would claim something that never happened.
     const isDiv = a.kind === 'divergence';
+    // Category for the event-type filter: divergences, flags and RSI swings are
+    // their own toggles; every other chart pattern (reversals, triangles/wedges)
+    // falls under "Patterns".
+    const cat   = a.kind === 'divergence' ? 'divergence'
+                : a.kind === 'flag'       ? 'flag'
+                : a.kind === 'rsi_swing'  ? 'rsi_swing'
+                :                           'pattern';
     const dir   = a.direction;
     const cls   = failed ? 'bear' : dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
     const icon  = failed ? '❌' : isDiv ? '🔀'
@@ -6356,7 +6399,7 @@ function _renderNotifList() {
             : 'Price made a higher high, momentum did not — possible reversal down')
       : dir === 'bullish' ? 'Confirmed bullish break'
       : dir === 'bearish' ? 'Confirmed bearish break' : 'Breakout confirmed';
-    items.push({ ts: a.break_ts || 0, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: _alertRecencyTs(a.break_ts, a.timeframe), cat, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${a.label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6368,25 +6411,31 @@ function _renderNotifList() {
     </div>` });
   });
 
-  // Reflect the persisted choice on the control (it defaults to "All" in HTML).
+  // Reflect the persisted choices on the controls.
   const sel = document.getElementById('notifRange');
   if (sel && sel.value !== String(_notifRangeDays)) sel.value = String(_notifRangeDays);
+  document.querySelectorAll('#notifCats .notif-cat').forEach(btn => {
+    btn.classList.toggle('notif-cat-on', _catEnabled(btn.dataset.cat));
+  });
 
-  // Date-range view filter: keep items whose timestamp is on or after local
-  // midnight of (today − (N−1) days), so "Last 5 days" = today + the previous 4.
-  // Every alert type's `ts` is an epoch-ms value, matching this ms cutoff.
-  let shown = items;
+  // Event-type view filter: drop items whose category chip is toggled off.
+  let shown = items.filter(i => _catEnabled(i.cat));
+
+  // Date-range view filter: keep items whose recency (candle-close ts, see
+  // _alertRecencyTs) is on or after local midnight of (today − (N−1) days), so
+  // "Last 5 days" = today + the previous 4. Using close time keeps a
+  // just-confirmed weekly alert visible even though its candle opened ~7d ago.
   if (_notifRangeDays > 0) {
     const cut = new Date();
     cut.setHours(0, 0, 0, 0);
     cut.setDate(cut.getDate() - (_notifRangeDays - 1));
     const cutMs = cut.getTime();
-    shown = items.filter(i => (i.ts || 0) >= cutMs);
+    shown = shown.filter(i => (i.ts || 0) >= cutMs);
   }
 
   if (!shown.length) {
     list.innerHTML = items.length
-      ? '<p class="notif-empty">No alerts in the selected range.</p>'
+      ? '<p class="notif-empty">No alerts match the current filters.</p>'
       : '<p class="notif-empty">No alerts yet. Strength checked hourly.</p>';
     return;
   }
