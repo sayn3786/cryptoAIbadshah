@@ -6162,14 +6162,19 @@ const _ENGULF_SEEN_KEY = 'engulf_seen_v2';
 let   _engulfAlerts    = [];
 let   _patternAlerts   = [];    // confirmed chart patterns (Double Top/Bottom, H&S, triangles, flags)
 
-// Notification-bell date-range VIEW filter (0 = All). Capped at 5 days: "today
-// through the last 4 days". It only hides items in the list; it never marks
+// Notification-bell date-range VIEW filter. 0 = All; otherwise the last N days.
+// Default is 5 (today through the last 4 days) — the widest, most useful window
+// — and 5 is also the cap. It only hides items in the list; it never marks
 // anything seen and does not affect the unseen badge count. Persisted so the
-// choice survives reloads.
+// choice survives reloads: a stored "0" (All) the user picked is respected, and
+// only a genuinely absent value falls back to the 5-day default.
+const _NOTIF_RANGE_DEFAULT = 5;
 const _NOTIF_RANGE_KEY = 'notif_range_days';
 let   _notifRangeDays  = (() => {
-  try { return parseInt(localStorage.getItem(_NOTIF_RANGE_KEY) || '0', 10) || 0; }
-  catch (_) { return 0; }
+  try {
+    const raw = localStorage.getItem(_NOTIF_RANGE_KEY);
+    return raw == null ? _NOTIF_RANGE_DEFAULT : (parseInt(raw, 10) || 0);
+  } catch (_) { return _NOTIF_RANGE_DEFAULT; }
 })();
 
 function setNotifRange(v) {
