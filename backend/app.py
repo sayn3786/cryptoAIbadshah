@@ -3477,8 +3477,13 @@ def api_pattern_alerts():
             closed = _fetch_closed_spot(sym, tf)
         except Exception:
             return []
+        # The bell shows CONFIRMED patterns only. A forming (provisional)
+        # divergence is an early Telegram-only heads-up; it is anchored on its
+        # PRIOR pivot (for dedup), which is weeks old, so it neither renders nor
+        # date-filters sensibly in the bell. Keep it out of this surface.
         return [{"symbol": sym, "timeframe": tf, "detected_at": scan_fmt, **pat}
-                for pat in _confirmed_patterns_for(closed, tf)]
+                for pat in _confirmed_patterns_for(closed, tf)
+                if pat.get("kind") != "divergence_forming"]
 
     pairs = [(sym, tf) for sym in SCAN_SYMBOLS for tf in PATTERN_BELL_TFS]
     alerts: list = []
