@@ -46,7 +46,8 @@ import portfolio_backtest
 import candle_analysis
 from journal import generate_journal
 from telegram import send_daily_recs as _send_telegram_recs, send_pattern_alerts as _send_pattern_alerts
-from kv import claim as _kv_claim, exists as _kv_exists, kv_enabled as _kv_enabled
+from kv import (claim as _kv_claim, exists as _kv_exists, kv_enabled as _kv_enabled,
+                get_value as _kv_get, set_value as _kv_set)
 from twitter import post_daily_signals as _post_twitter_signals
 from video import create_talk, get_talk
 
@@ -555,6 +556,7 @@ RSI_SWING_ALERT_FRESH_BARS = 5
 # second pivot walks forward over the closes before it confirms.
 FORMING_DIVERGENCE_ALERT_FRESH_BARS = 3
 _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
+_PATTERN_SEEN_NS         = "patseen:"   # KV namespace for FIRST-detection timestamps
 
 # The dedicated structure chart draws a deeper window than the main chart's 60
 # bars — past liquidity pools need room to show. Candles AND the SuperTrend
@@ -567,6 +569,41 @@ def _pattern_alert_id(sym: str, tf: str, pat: dict) -> str:
     # so both alert exactly once instead of the failure being swallowed.
     ev = pat.get("event", "confirmed")
     return f"{_PATTERN_ALERT_NS}{sym}:{tf}:{pat['kind']}:{pat.get('type','')}:{ev}:{pat.get('break_ts')}"
+
+
+def _alert_first_seen_ms(kv_key: str, seed_ms: int) -> int:
+    """Persisted first-detection time (epoch ms) for a bell alert.
+
+    The bell endpoints used to stamp `detected_at` with the SCAN time, so the
+    same alert showed a brand-new "Detected" time on every 30-min scan and looked
+    re-detected. We persist the first sighting under a stable per-alert key and
+    return it thereafter, so the displayed detection time stays fixed. `seed_ms`
+    is what to store on the first sighting — pass the confirmation candle's close
+    (bounded to now) so an alert that confirmed before we began persisting still
+    gets a real timestamp rather than the deploy moment. Never raises; returns
+    `seed_ms` when KV is unavailable. Call sequentially (not inside scan threads)
+    — the KV file-fallback write is not concurrency-safe.
+    """
+    try:
+        stored = _kv_get(kv_key)
+        if stored:
+            return int(stored)
+        _kv_set(kv_key, str(seed_ms))
+    except Exception:                                    # noqa: BLE001
+        pass
+    return seed_ms
+
+
+def _confirm_close_ms(open_ts, tf: str, now_ms: int) -> int:
+    """The confirmation candle's CLOSE in epoch ms (open + one timeframe span),
+    bounded to now. The earliest a candle-based alert could have existed, so it
+    seeds a sensible first-detection time. Falls back to now when the timestamp
+    is missing/odd."""
+    try:
+        close_ms = int(open_ts) + int(TF_SECONDS.get(tf, 3600)) * 1000
+    except (TypeError, ValueError):
+        return now_ms
+    return close_ms if 0 < close_ms <= now_ms else now_ms
 
 
 def _fetch_closed_spot(sym: str, tf: str):
@@ -3419,8 +3456,6 @@ def api_engulf_alerts():
             closed, _live = _split_closed(candles, TF_SECONDS["1W"])
             patterns = detect_engulfing(closed, lookback=2)
             results = []
-            scan_ts   = datetime.now(timezone.utc)
-            scan_fmt  = scan_ts.astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
             for p in patterns:
                 if p.get("candles_ago", 99) <= 2:
                     results.append({
@@ -3430,7 +3465,6 @@ def api_engulf_alerts():
                         "body_ratio":  p["body_ratio"],
                         "candles_ago": p["candles_ago"],
                         "timestamp":   p["timestamp"],
-                        "detected_at": scan_fmt,
                         "engulf_open":  p.get("engulf_open"),
                         "engulf_close": p.get("engulf_close"),
                     })
@@ -3444,6 +3478,18 @@ def api_engulf_alerts():
 
     # Most recent first
     alerts.sort(key=lambda x: (-x["candles_ago"], x["symbol"]))
+
+    # Stable first-detection time (persisted), sequentially. Seed with the weekly
+    # candle's close so an engulf that confirmed before we began persisting still
+    # reads its real week-close time rather than the scan moment.
+    now_ms = int(time.time() * 1000)
+    for a in alerts:
+        key  = f"{_PATTERN_SEEN_NS}engulf:{a['symbol']}:{a['timestamp']}"
+        seed = _confirm_close_ms(a.get("timestamp"), "1W", now_ms)
+        ms   = _alert_first_seen_ms(key, seed)
+        a["first_ms"]    = ms
+        a["detected_at"] = (datetime.fromtimestamp(ms / 1000, timezone.utc)
+                            .astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT"))
 
     data = {"alerts": alerts, "scanned_at": int(time.time())}
     with _engulf_lock:
@@ -3460,16 +3506,18 @@ _PATTERN_BELL_TTL   = 1800   # 30 min — confirmations don't change faster than
 def api_pattern_alerts():
     """Scan all tokens on 1H + 4H + 1D + 1W for freshly-CONFIRMED chart patterns
     (flags, reversals, triangles/wedges) for the in-app bell. Same detections that
-    go to Telegram (which stays on the higher TFs), but this endpoint never CLAIMS
-    (no dedup mutation) — the bell tracks 'seen' client-side. Cached 30 min.
-    Parallelized over (symbol, timeframe) pairs for speed across the extra TFs."""
+    go to Telegram (which stays on the higher TFs). Cached 30 min. Parallelized
+    over (symbol, timeframe) pairs for speed across the extra TFs.
+
+    `detected_at` is the FIRST time we saw each alert (persisted, see
+    `_pattern_first_seen_ms`), not the scan time — so a confirmation shows one
+    stable detection timestamp across refreshes instead of looking re-detected."""
     with _pattern_bell_lock:
         if _pattern_bell_cache["data"] is not None and \
                 time.time() - _pattern_bell_cache["ts"] < _PATTERN_BELL_TTL:
             return jsonify(_pattern_bell_cache["data"])
 
-    SGT      = timezone(timedelta(hours=8))
-    scan_fmt = datetime.now(timezone.utc).astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT")
+    SGT = timezone(timedelta(hours=8))
 
     def _scan(pair):
         sym, tf = pair
@@ -3481,7 +3529,7 @@ def api_pattern_alerts():
         # divergence is an early Telegram-only heads-up; it is anchored on its
         # PRIOR pivot (for dedup), which is weeks old, so it neither renders nor
         # date-filters sensibly in the bell. Keep it out of this surface.
-        return [{"symbol": sym, "timeframe": tf, "detected_at": scan_fmt, **pat}
+        return [{"symbol": sym, "timeframe": tf, **pat}
                 for pat in _confirmed_patterns_for(closed, tf)
                 if pat.get("kind") != "divergence_forming"]
 
@@ -3491,6 +3539,20 @@ def api_pattern_alerts():
         for res in ex.map(_scan, pairs):
             alerts.extend(res)
     alerts.sort(key=lambda a: a.get("break_ts") or 0, reverse=True)
+
+    # Stamp each alert with its FIRST-seen time (persisted), sequentially so the
+    # KV file-fallback write stays single-threaded. `first_ms` is the stable
+    # epoch; `detected_at` is that same instant formatted for display. Seed with
+    # the confirmation candle's close so an alert that confirmed before we began
+    # persisting still reads a real past time, not the scan moment.
+    now_ms = int(time.time() * 1000)
+    for a in alerts:
+        key = _PATTERN_SEEN_NS + _pattern_alert_id(a["symbol"], a["timeframe"], a)[len(_PATTERN_ALERT_NS):]
+        seed = _confirm_close_ms(a.get("break_ts"), a["timeframe"], now_ms)
+        ms = _alert_first_seen_ms(key, seed)
+        a["first_ms"] = ms
+        a["detected_at"] = (datetime.fromtimestamp(ms / 1000, timezone.utc)
+                            .astimezone(SGT).strftime("%b %d, %Y · %I:%M %p SGT"))
 
     data = {"alerts": alerts, "scanned_at": int(time.time())}
     with _pattern_bell_lock:
