@@ -6162,6 +6162,22 @@ const _ENGULF_SEEN_KEY = 'engulf_seen_v2';
 let   _engulfAlerts    = [];
 let   _patternAlerts   = [];    // confirmed chart patterns (Double Top/Bottom, H&S, triangles, flags)
 
+// Notification-bell date-range VIEW filter (0 = All). Capped at 5 days: "today
+// through the last 4 days". It only hides items in the list; it never marks
+// anything seen and does not affect the unseen badge count. Persisted so the
+// choice survives reloads.
+const _NOTIF_RANGE_KEY = 'notif_range_days';
+let   _notifRangeDays  = (() => {
+  try { return parseInt(localStorage.getItem(_NOTIF_RANGE_KEY) || '0', 10) || 0; }
+  catch (_) { return 0; }
+})();
+
+function setNotifRange(v) {
+  _notifRangeDays = parseInt(v, 10) || 0;
+  try { localStorage.setItem(_NOTIF_RANGE_KEY, String(_notifRangeDays)); } catch (_) {}
+  _renderNotifList();
+}
+
 // Stable per-confirmation id for client-side "seen" tracking (in the shared
 // strength-seen store, same as whale alerts).
 function _patternSeenId(a) {
@@ -6352,13 +6368,31 @@ function _renderNotifList() {
     </div>` });
   });
 
-  if (!items.length) {
-    list.innerHTML = '<p class="notif-empty">No alerts yet. Strength checked hourly.</p>';
+  // Reflect the persisted choice on the control (it defaults to "All" in HTML).
+  const sel = document.getElementById('notifRange');
+  if (sel && sel.value !== String(_notifRangeDays)) sel.value = String(_notifRangeDays);
+
+  // Date-range view filter: keep items whose timestamp is on or after local
+  // midnight of (today − (N−1) days), so "Last 5 days" = today + the previous 4.
+  // Every alert type's `ts` is an epoch-ms value, matching this ms cutoff.
+  let shown = items;
+  if (_notifRangeDays > 0) {
+    const cut = new Date();
+    cut.setHours(0, 0, 0, 0);
+    cut.setDate(cut.getDate() - (_notifRangeDays - 1));
+    const cutMs = cut.getTime();
+    shown = items.filter(i => (i.ts || 0) >= cutMs);
+  }
+
+  if (!shown.length) {
+    list.innerHTML = items.length
+      ? '<p class="notif-empty">No alerts in the selected range.</p>'
+      : '<p class="notif-empty">No alerts yet. Strength checked hourly.</p>';
     return;
   }
 
-  items.sort((a, b) => b.ts - a.ts);
-  list.innerHTML = items.map(i => i.html).join('');
+  shown.sort((a, b) => b.ts - a.ts);
+  list.innerHTML = shown.map(i => i.html).join('');
 }
 
 async function loadEngulfAlerts() {

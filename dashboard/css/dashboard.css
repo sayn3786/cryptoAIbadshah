@@ -1662,6 +1662,18 @@ a:hover { color: var(--gold2); }
 }
 .notif-close-btn:hover { color: var(--text); }
 
+.notif-panel-filter {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.notif-filter-label { font-size: .7rem; color: var(--muted); }
+.notif-filter-select {
+  font-size: .72rem; color: var(--text); background: var(--card2);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 6px; cursor: pointer;
+}
+
 .notif-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .notif-empty { font-size: .78rem; color: var(--muted); text-align: center; padding: 24px 0; }
 

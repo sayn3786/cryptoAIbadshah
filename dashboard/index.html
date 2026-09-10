@@ -49,6 +49,15 @@
     <button class="notif-clear-btn" onclick="clearAllAlerts()">Clear all</button>
     <button class="notif-close-btn" onclick="toggleNotifPanel()">✕</button>
   </div>
+  <div class="notif-panel-filter">
+    <label class="notif-filter-label" for="notifRange">📅 Show</label>
+    <select id="notifRange" class="notif-filter-select" onchange="setNotifRange(this.value)">
+      <option value="0">All</option>
+      <option value="1">Today</option>
+      <option value="3">Last 3 days</option>
+      <option value="5">Last 5 days</option>
+    </select>
+  </div>
   <div id="notifList" class="notif-list">
     <p class="notif-empty">No confirmed 1W engulfing patterns detected.</p>
   </div>

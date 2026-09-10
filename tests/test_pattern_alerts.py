@@ -83,6 +83,33 @@ def test_pattern_alerts_endpoint_returns_confirmed(monkeypatch):
     assert any(a["symbol"] == "BTC" and a["type"] in ("double_top", "triple_top") for a in alerts)
 
 
+def test_pattern_alerts_endpoint_excludes_forming_divergence(monkeypatch):
+    # The bell is a CONFIRMED-only surface. A forming (provisional) divergence is
+    # a Telegram-only early heads-up — anchored on its prior pivot for dedup — so
+    # it must not appear in the bell feed even though it shares the scan function.
+    pytest.importorskip("flask")
+    import app
+    monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC",))
+    monkeypatch.setattr(app, "PATTERN_BELL_TFS", ["1D"])
+    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT))
+    monkeypatch.setattr(app, "_confirmed_patterns_for", lambda closed, tf: [
+        {"kind": "reversal", "type": "double_top", "label": "Double Top",
+         "direction": "bearish", "break_dir": "down", "level": 100.0,
+         "target": 70.0, "break_ts": 123},
+        {"kind": "divergence_forming", "event": "forming", "type": "bearish",
+         "label": "Forming Bearish RSI Divergence", "direction": "bearish",
+         "break_dir": None, "level": None, "target": None, "break_ts": 99,
+         "rsi_gap": 6.4, "age_candles": 0, "closes_to_confirm": 3},
+    ])
+    app._pattern_bell_cache["data"] = None
+    app._pattern_bell_cache["ts"] = 0
+    resp = app.app.test_client().get("/api/pattern-alerts")
+    assert resp.status_code == 200
+    kinds = [a["kind"] for a in resp.get_json()["alerts"]]
+    assert "reversal" in kinds
+    assert "divergence_forming" not in kinds, "forming divergence must stay out of the bell"
+
+
 def test_scan_confirmed_patterns_parallel_and_claims(monkeypatch):
     # The cron/endpoint scan runs fetches in parallel and returns only newly
     # KV-claimed confirmations (exact-once). Mock the fetch + claim (no network).
