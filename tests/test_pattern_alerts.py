@@ -83,6 +83,89 @@ def test_pattern_alerts_endpoint_returns_confirmed(monkeypatch):
     assert any(a["symbol"] == "BTC" and a["type"] in ("double_top", "triple_top") for a in alerts)
 
 
+def test_bell_detection_time_is_persisted_not_scan_time(monkeypatch):
+    # `detected_at` must be the FIRST time we saw the alert, held stable across
+    # scans — not re-stamped with the scan time on every refresh.
+    pytest.importorskip("flask")
+    import app
+    monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC",))
+    monkeypatch.setattr(app, "PATTERN_BELL_TFS", ["1D"])
+    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT + [97, 93, 89, 87]))
+    store = {}
+    monkeypatch.setattr(app, "_kv_get", lambda k: store.get(k))
+    monkeypatch.setattr(app, "_kv_set", lambda k, v, *a, **kw: (store.__setitem__(k, v), True)[1])
+
+    app._pattern_bell_cache["data"] = None
+    app._pattern_bell_cache["ts"] = 0
+    first = app.app.test_client().get("/api/pattern-alerts").get_json()["alerts"]
+    assert first, "expected a confirmed alert"
+    a0 = first[0]
+    assert a0.get("first_ms", 0) > 0
+    assert store, "the first sighting must be persisted"
+
+    # A later scan (cache cleared) reuses the STORED time, so detection stays put.
+    app._pattern_bell_cache["data"] = None
+    app._pattern_bell_cache["ts"] = 0
+    second = app.app.test_client().get("/api/pattern-alerts").get_json()["alerts"]
+    a1 = next(x for x in second
+              if x["symbol"] == a0["symbol"] and x.get("break_ts") == a0.get("break_ts"))
+    assert a1["first_ms"] == a0["first_ms"]
+    assert a1["detected_at"] == a0["detected_at"]
+
+
+def test_bell_detection_time_falls_back_when_kv_unavailable(monkeypatch):
+    # KV down (get/set raise) must not break the bell — it still returns a
+    # timestamp (now), just not persisted.
+    pytest.importorskip("flask")
+    import app
+
+    def _boom(*a, **k):
+        raise RuntimeError("kv down")
+    monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC",))
+    monkeypatch.setattr(app, "PATTERN_BELL_TFS", ["1D"])
+    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT + [97, 93, 89, 87]))
+    monkeypatch.setattr(app, "_kv_get", _boom)
+    monkeypatch.setattr(app, "_kv_set", _boom)
+    app._pattern_bell_cache["data"] = None
+    app._pattern_bell_cache["ts"] = 0
+    resp = app.app.test_client().get("/api/pattern-alerts")
+    assert resp.status_code == 200
+    a = resp.get_json()["alerts"][0]
+    assert a.get("first_ms", 0) > 0 and a.get("detected_at")
+
+
+def test_engulf_endpoint_detection_time_is_persisted(monkeypatch):
+    # The engulf bell shares the first-seen persistence: its `detected_at` must be
+    # a stable first sighting (seeded from the weekly close), not the scan time.
+    pytest.importorskip("flask")
+    import app
+    now_ms = int(__import__("time").time() * 1000)
+    open_ms = now_ms - 10 * 86400 * 1000        # opened 10d ago → weekly close 3d ago
+    monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC",))
+    monkeypatch.setattr(app, "SYMBOLS", {"BTC": "BTCUSDT"})
+    monkeypatch.setattr(app.client, "get_spot_klines", lambda *a, **k: [{"x": 1}])
+    monkeypatch.setattr(app, "_split_closed", lambda candles, secs: (candles, None))
+    monkeypatch.setattr(app, "detect_engulfing", lambda closed, lookback=2: [
+        {"direction": "bullish", "body_ratio": 2.0, "candles_ago": 1,
+         "timestamp": open_ms, "engulf_open": 1.0, "engulf_close": 2.0}])
+    store = {}
+    monkeypatch.setattr(app, "_kv_get", lambda k: store.get(k))
+    monkeypatch.setattr(app, "_kv_set", lambda k, v, *a, **kw: (store.__setitem__(k, v), True)[1])
+
+    app._engulf_cache["data"] = None
+    app._engulf_cache["ts"] = 0
+    a0 = app.app.test_client().get("/api/engulf-alerts").get_json()["alerts"][0]
+    assert a0.get("first_ms", 0) > 0
+    # Seeded from the weekly close (open + 7d), which is in the past here.
+    assert a0["first_ms"] == open_ms + 7 * 86400 * 1000
+    assert store, "engulf first sighting must be persisted"
+
+    app._engulf_cache["data"] = None
+    app._engulf_cache["ts"] = 0
+    a1 = app.app.test_client().get("/api/engulf-alerts").get_json()["alerts"][0]
+    assert a1["first_ms"] == a0["first_ms"] and a1["detected_at"] == a0["detected_at"]
+
+
 def test_pattern_alerts_endpoint_excludes_forming_divergence(monkeypatch):
     # The bell is a CONFIRMED-only surface. A forming (provisional) divergence is
     # a Telegram-only early heads-up — anchored on its prior pivot for dedup — so
