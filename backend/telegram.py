@@ -221,6 +221,39 @@ def build_divergence_alert_message(alerts: List[Dict], date_label: str = "") -> 
     return "\n".join(lines)
 
 
+def build_forming_divergence_alert_message(alerts: List[Dict], date_label: str = "") -> str:
+    """Format FORMING (provisional) RSI divergences as their OWN ⏳ heads-up.
+
+    The confirmed divergence feed is always ~pivot_window closes behind the
+    second pivot. This message exists to surface the divergence EARLY, before the
+    pivot mechanically confirms — so the header, body and disclaimer all say
+    provisional, and it carries a countdown (`closes_to_confirm`) rather than an
+    age. It is a separate message from the confirmed feed on purpose: a reader
+    must never mistake a forming read for a confirmed one.
+    """
+    lines = ["⏳ *CryptoMonk — Forming RSI Divergence*",
+             "_Provisional — not yet confirmed, may still invalidate_"]
+    if date_label:
+        lines.append(f"🗓 {date_label}")
+    lines.append("")
+    for a in alerts:
+        gap = a.get("rsi_gap")
+        gap_s = f" by {abs(gap):.1f} RSI pts" if isinstance(gap, (int, float)) else ""
+        left = a.get("closes_to_confirm")
+        wait_s = ("" if not isinstance(left, int)
+                  else "  ·  1 more close confirms" if left == 1
+                  else f"  ·  {left} more closes confirm")
+        lines.append(
+            f"{_pat_dot(a.get('direction'))} *{a.get('symbol')}/USDT "
+            f"{a.get('timeframe')}* — {a.get('label')}")
+        lines.append(f"   Price and momentum diverging{gap_s}{wait_s}")
+        lines.append("")
+    lines += ["⚠️ _Not financial advice. FORMING = unconfirmed — it can invalidate "
+              "before it confirms. A heads-up to watch, not a trigger._",
+              "🌟 @CryptoMonk1560"]
+    return "\n".join(lines)
+
+
 def build_rsi_swing_alert_message(alerts: List[Dict], date_label: str = "") -> str:
     """Format RSI oversold-bottom / overbought-top swing markers as their OWN
     message. Like a divergence, this is a momentum turning-point read — no level
@@ -261,6 +294,8 @@ def _post_message(token: str, chat_id: str, text: str) -> bool:
 # Anything matching none of these falls through to the breakout 'Pattern' message.
 _DEDICATED = [
     (lambda a: a.get("kind") == "divergence", build_divergence_alert_message, "divergence"),
+    (lambda a: a.get("kind") == "divergence_forming",
+     build_forming_divergence_alert_message, "forming divergence"),
     (lambda a: a.get("kind") == "rsi_swing",  build_rsi_swing_alert_message,  "RSI reversal"),
 ]
 

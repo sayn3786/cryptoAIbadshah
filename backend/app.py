@@ -542,6 +542,18 @@ DIVERGENCE_ALERT_FRESH_BARS = 5
 # candles on its right to be a confirmed pivot, so — like a divergence — it is
 # already a few bars old the moment it confirms. Same 5-close observation window.
 RSI_SWING_ALERT_FRESH_BARS = 5
+# A FORMING (provisional, not-yet-confirmed) divergence — the EARLY heads-up.
+# The confirmed feed above is always ~pivot_window closes behind the second
+# pivot (a swing high/low is only knowable once enough later candles close), so
+# a real divergence is invisible to Telegram until then. The detector already
+# spots the provisional pivot the instant it prints; this sends it as its own
+# clearly-provisional ⏳ message so the setup is visible early. The detector only
+# returns a forming divergence while its provisional pivot is within the last
+# pivot_window closes, so it is structurally fresh; this window is a defensive
+# bound. Deduped on the CONFIRMED prior pivot (see the forming block below), not
+# the provisional one, so a setup yields ONE heads-up even as the provisional
+# second pivot walks forward over the closes before it confirms.
+FORMING_DIVERGENCE_ALERT_FRESH_BARS = 3
 _PATTERN_ALERT_NS        = "patalert:"  # KV key namespace
 
 # The dedicated structure chart draws a deeper window than the main chart's 60
@@ -579,7 +591,12 @@ def _fetch_closed_spot(sym: str, tf: str):
 
 def _confirmed_patterns_for(closed: list, tf: str) -> list:
     """All CONFIRMED + FRESH flags/reversals/triangles in one candle set, as
-    normalized alert dicts (symbol added by the caller)."""
+    normalized alert dicts (symbol added by the caller).
+
+    One deliberate exception: a FORMING (provisional) RSI divergence is also
+    emitted, as its own kind ("divergence_forming") so it routes to a separate,
+    clearly-provisional message and never mingles with the confirmed feed. Every
+    other item here is confirmed."""
     if not closed:
         return []
     ts_list = [c.get("timestamp") for c in closed]
@@ -664,6 +681,36 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
                 "rsi_gap": div.get("strength"),
                 "age_candles": div.get("age_candles"),
             })
+        # FORMING divergence — the early heads-up. Mutually exclusive with the
+        # confirmed block above (a forming read has forming=True, a confirmed one
+        # does not). Suppress a "played_out" forming read: its predicted turn has
+        # already happened, so an early "watch this" alert would be misleading.
+        # Dedup on the CONFIRMED PRIOR pivot (prev_ts), not the provisional second
+        # pivot: the provisional pivot walks forward over the closes before it
+        # confirms, and keying on it would re-fire each time it moves. Keyed on the
+        # stable prior pivot, one setup sends exactly one ⏳ heads-up; the later
+        # confirmed alert has a different kind + ts, so it still fires on its own.
+        elif (div.get("forming") is True and not div.get("played_out")
+                and curr_ts is not None
+                and _fresh(curr_ts, FORMING_DIVERGENCE_ALERT_FRESH_BARS)):
+            prev_ts = (((div.get("points") or {}).get("prev") or {})
+                       .get("timestamp"))
+            if prev_ts is not None:       # need a stable anchor to dedup on
+                kind_s = str(div.get("type") or "")
+                bullish = kind_s.endswith("bullish")
+                hidden = kind_s.startswith("hidden")
+                out.append({
+                    "kind": "divergence_forming", "event": "forming",
+                    "type": div.get("type"),
+                    "label": (f"Forming {'Hidden ' if hidden else ''}"
+                              f"{'Bullish' if bullish else 'Bearish'} RSI Divergence"),
+                    "direction": "bullish" if bullish else "bearish",
+                    "break_dir": None, "level": None, "target": None,
+                    "break_ts": prev_ts,
+                    "rsi_gap": div.get("strength"),
+                    "age_candles": div.get("age_candles"),
+                    "closes_to_confirm": div.get("closes_to_confirm"),
+                })
     except Exception:
         pass
     # RSI swing markers — an oversold bottom at a price swing low, or an
