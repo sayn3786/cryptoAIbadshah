@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '232';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '233';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4047,9 +4047,18 @@ function renderStructureChart(a) {
         price: +price, color, lineWidth: bold ? 2 : 1, lineStyle: bold ? 0 : 2,
         axisLabelVisible: true, title });
     };
+    // Make the golden-pocket line say the buy-vs-sell intent, so it doesn't have
+    // to be inferred from which end the levels sit on. An up-leg's pocket is a
+    // DISCOUNT (long); a down-leg's is a PREMIUM (short). A `void` leg means
+    // price broke the far end — the Fib is invalidated, so claim no side.
+    const bias = fib.bias === 'short' ? 'short' : 'long';
+    const zoneWord = bias === 'long' ? 'discount' : 'premium';
+    const gpTitle = fib.status === 'void'
+      ? 'Golden 0.618 · invalidated'
+      : `Golden 0.618 · ${zoneWord} (${bias})${inZone ? ' • IN' : ''}`;
     fibLine(L['0.500'], 'rgba(148,163,184,0.55)', 'Fib 0.5', false);
     fibLine(L['0.786'], goldDim, 'Fib 0.786', false);
-    fibLine(L['0.618'], gold, `Golden 0.618${inZone ? ' • IN' : ''}`, true);
+    fibLine(L['0.618'], gold, gpTitle, true);
   }
 
   chart.timeScale().fitContent();
