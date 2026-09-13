@@ -269,10 +269,14 @@ def build_rsi_swing_alert_message(alerts: List[Dict], date_label: str = "") -> s
         rsi = a.get("rsi")
         rsi_s = f"RSI {rsi:g}" if isinstance(rsi, (int, float)) else "RSI"
         where = "a swing low" if os_ else "a swing high"
+        age = a.get("age_candles")
+        age_s = ("on the last close" if not age
+                 else f"{age} candle{'s' if age != 1 else ''} ago")
         lines.append(
             f"{_pat_dot(a.get('direction'))} *{a.get('symbol')}/USDT "
             f"{a.get('timeframe')}* — {a.get('label')}")
-        lines.append(f"   {rsi_s} at {where} — momentum {'bottomed' if os_ else 'topped'}")
+        lines.append(f"   {rsi_s} at {where} — momentum {'bottomed' if os_ else 'topped'}"
+                     f"  ·  {age_s}")
         lines.append("")
     lines += ["⚠️ _Not financial advice. A momentum extreme is a heads-up, not a "
               "trigger — wait for confirmation._",
