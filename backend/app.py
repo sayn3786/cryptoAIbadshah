@@ -769,6 +769,10 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
                     "direction": "bullish" if _os else "bearish",
                     "break_dir": None, "level": None, "target": None,
                     "break_ts": m_ts,
+                    # Closed candles since the swing pivot — the pivot needs a few
+                    # closes on its right to confirm, so like a divergence it is a
+                    # few bars old the moment it fires. Shown as "N candles ago".
+                    "age_candles": last_i - ts_list.index(m_ts),
                     "rsi": m.get("rsi"), "price": m.get("price"),
                 })
     except Exception:

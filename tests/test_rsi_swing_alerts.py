@@ -51,6 +51,7 @@ def test_a_fresh_oversold_bottom_becomes_a_bullish_alert(monkeypatch):
     a = got[0]
     assert a["label"] == "RSI Oversold Bottom" and a["direction"] == "bullish"
     assert a["rsi"] == 32.0 and a["level"] is None and a["target"] is None
+    assert a["age_candles"] == 1          # marker sat 2 bars back → 1 closed since
 
 
 def test_an_overbought_top_is_bearish(monkeypatch):
@@ -97,6 +98,18 @@ def test_the_message_has_its_own_header():
     assert "RSI Reversal" in msg and "RSI Oversold Bottom" in msg
     assert "swing low" in msg
     assert "Broke" not in msg and "🎯" not in msg
+
+
+def test_the_message_shows_how_many_candles_ago():
+    def _msg(age):
+        return build_rsi_swing_alert_message([{
+            "kind": "rsi_swing", "type": "overbought_top", "symbol": "LINK",
+            "timeframe": "1D", "label": "RSI Overbought Top", "direction": "bearish",
+            "rsi": 68.2, "age_candles": age}])
+    assert "3 candles ago" in _msg(3)
+    assert "1 candle ago" in _msg(1)          # singular
+    assert "on the last close" in _msg(0)     # 0 / None → just closed
+    assert "on the last close" in _msg(None)
 
 
 def _capture_sends(monkeypatch):
