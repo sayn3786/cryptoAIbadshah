@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '233';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '234';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -6377,6 +6377,7 @@ function _renderNotifList() {
     // It has no break direction, level or target, so it needs its own copy —
     // the breakout wording below would claim something that never happened.
     const isDiv = a.kind === 'divergence';
+    const isSwing = a.kind === 'rsi_swing';
     // Category for the event-type filter: divergences, flags and RSI swings are
     // their own toggles; every other chart pattern (reversals, triangles/wedges)
     // falls under "Patterns".
@@ -6386,17 +6387,27 @@ function _renderNotifList() {
                 :                           'pattern';
     const dir   = a.direction;
     const cls   = failed ? 'bear' : dir === 'bullish' ? 'bull' : dir === 'bearish' ? 'bear' : '';
-    const icon  = failed ? '❌' : isDiv ? '🔀'
+    const icon  = failed ? '❌' : isDiv ? '🔀' : isSwing ? '📊'
                 : dir === 'bullish' ? '🟢' : dir === 'bearish' ? '🔴' : '⚪';
     const arrow = a.break_dir === 'up' ? '↑' : a.break_dir === 'down' ? '↓' : '•';
     const tgt   = a.target != null ? ` · 🎯 ${fmtPrice(a.target)}` : '';
     const isNew = !strengthSeen[_patternSeenId(a)];
     const age   = a.age_candles;
+    const ageStr = !age ? 'last close' : `${age} candle${age === 1 ? '' : 's'} ago`;
     const gap   = (typeof a.rsi_gap === 'number') ? ` · ${Math.abs(a.rsi_gap).toFixed(1)} RSI pts` : '';
+    // Live relevance of an RSI reversal — is it still worth acting on now?
+    const SWING_STATUS = {
+      active:      { tag: '🟡 active',       note: '' },
+      played_out:  { tag: '⚪ played out',    note: ' · the move already happened' },
+      invalidated: { tag: '✕ invalidated',   note: ' · extreme broken — void' },
+    };
+    const st = isSwing ? (SWING_STATUS[a.status] || SWING_STATUS.active) : null;
     const sub   = failed
       ? `${a.timeframe} · pattern FAILED${a.level != null ? ` @ ${fmtPrice(a.level)}` : ''}`
       : isDiv
-        ? `${a.timeframe} confirmed${gap} · ${!age ? 'last close' : `${age} candle${age === 1 ? '' : 's'} ago`}`
+        ? `${a.timeframe} confirmed${gap} · ${ageStr}`
+      : isSwing
+        ? `${a.timeframe} · ${ageStr} · ${st.tag}`
         : `${a.timeframe} confirmed · broke ${arrow}${tgt}`;
     const msg   = failed
       ? (a.retest === 'retest_failed'
@@ -6406,6 +6417,10 @@ function _renderNotifList() {
         ? (dir === 'bullish'
             ? 'Price made a lower low, momentum did not — possible reversal up'
             : 'Price made a higher high, momentum did not — possible reversal down')
+      : isSwing
+        ? ((dir === 'bullish'
+              ? 'RSI oversold at a swing low — momentum bottomed'
+              : 'RSI overbought at a swing high — momentum topped') + st.note)
       : dir === 'bullish' ? 'Confirmed bullish break'
       : dir === 'bearish' ? 'Confirmed bearish break' : 'Breakout confirmed';
     items.push({ ts: _alertRecencyTs(a.break_ts, a.timeframe), cat, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">

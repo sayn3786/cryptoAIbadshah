@@ -37,9 +37,9 @@ def _scan(monkeypatch, marker, candles=None):
     return [p for p in pats if p.get("kind") == "rsi_swing"]
 
 
-def _mk(candles, *, kind="oversold_bottom", bars_back=2, rsi=32.0):
+def _mk(candles, *, kind="oversold_bottom", bars_back=2, rsi=32.0, status="active"):
     return {"timestamp": candles[-bars_back]["timestamp"], "kind": kind,
-            "rsi": rsi, "price": 99}
+            "rsi": rsi, "price": 99, "status": status}
 
 
 # ── When it fires ────────────────────────────────────────────────────────────
@@ -52,6 +52,7 @@ def test_a_fresh_oversold_bottom_becomes_a_bullish_alert(monkeypatch):
     assert a["label"] == "RSI Oversold Bottom" and a["direction"] == "bullish"
     assert a["rsi"] == 32.0 and a["level"] is None and a["target"] is None
     assert a["age_candles"] == 1          # marker sat 2 bars back → 1 closed since
+    assert a["status"] == "active"        # relevance carried onto the alert
 
 
 def test_an_overbought_top_is_bearish(monkeypatch):
@@ -137,3 +138,59 @@ def test_a_mixed_batch_sends_three_separate_messages(monkeypatch):
     assert any("Bullish Flag" in m and "RSI" not in m for m in sent)
     assert any("RSI Divergence" in m for m in sent)
     assert any("RSI Reversal" in m for m in sent)
+
+
+# ── Relevance status: active / played_out / invalidated ──────────────────────
+
+import candle_analysis as ca                                          # noqa: E402
+
+
+def _status_series(last_close, *, kind="overbought_top"):
+    """A clean swing pivot at index 7, then a tail whose last close drives the
+    status. Overbought top: high 110 / close 108; oversold bottom: low 90 / 92."""
+    if kind == "overbought_top":
+        s = [(100, 101, 99)] * 7 + [(108, 110, 107)] + [(105, 106, 104)] * 3
+    else:
+        s = [(100, 101, 99)] * 7 + [(92, 93, 90)] + [(95, 96, 94)] * 3
+    s[-1] = (last_close, last_close + 1, last_close - 1)
+    candles = [{"timestamp": i, "open": c, "close": c, "high": h, "low": l}
+               for i, (c, h, l) in enumerate(s)]
+    rsi = [65.0 if kind == "overbought_top" else 35.0] * len(candles)
+    marks = [m for m in ca.rsi_swing_markers(candles, rsi) if m["kind"] == kind]
+    return marks[-1]["status"]
+
+
+def test_top_status_active_playedout_invalidated():
+    assert _status_series(105) == "active"        # still near the top
+    assert _status_series(104) == "played_out"    # fell ~3.7% from the 108 close
+    assert _status_series(111) == "invalidated"   # closed above the 110 high → void
+
+
+def test_bottom_status_active_playedout_invalidated():
+    k = "oversold_bottom"
+    assert _status_series(93, kind=k) == "active"        # still near the low
+    assert _status_series(95, kind=k) == "played_out"    # rose ~3.3% from the 92 close
+    assert _status_series(89, kind=k) == "invalidated"   # closed below the 90 low → void
+
+
+# ── Telegram suppresses a spent / void reversal (bell still shows it) ─────────
+
+def test_telegram_scan_drops_played_out_and_invalidated_swings(monkeypatch):
+    import app
+    monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC",))
+    monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
+    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _candles())
+    monkeypatch.setattr(app, "_confirmed_patterns_for", lambda closed, tf: [
+        {"kind": "rsi_swing", "type": "overbought_top", "label": "RSI Overbought Top",
+         "direction": "bearish", "break_ts": 1, "status": "active"},
+        {"kind": "rsi_swing", "type": "overbought_top", "label": "RSI Overbought Top",
+         "direction": "bearish", "break_ts": 2, "status": "played_out"},
+        {"kind": "rsi_swing", "type": "oversold_bottom", "label": "RSI Oversold Bottom",
+         "direction": "bullish", "break_ts": 3, "status": "invalidated"},
+        {"kind": "flag", "type": "bull", "label": "Bullish Flag", "break_ts": 4},
+    ])
+    monkeypatch.setattr(app, "_kv_claim", lambda key: True)
+    out = app._scan_confirmed_patterns()
+    swings = [a for a in out if a["kind"] == "rsi_swing"]
+    assert len(swings) == 1 and swings[0]["status"] == "active"   # only the live one
+    assert any(a["kind"] == "flag" for a in out)                  # non-swings untouched

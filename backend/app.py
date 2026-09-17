@@ -773,6 +773,10 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
                     # closes on its right to confirm, so like a divergence it is a
                     # few bars old the moment it fires. Shown as "N candles ago".
                     "age_candles": last_i - ts_list.index(m_ts),
+                    # Live relevance: active / played_out / invalidated — lets the
+                    # bell say whether it still matters and lets Telegram skip a
+                    # spent or void one.
+                    "status": m.get("status", "active"),
                     "rsi": m.get("rsi"), "price": m.get("price"),
                 })
     except Exception:
@@ -810,8 +814,17 @@ def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
             closed = _fetch_closed_spot(sym, tf)
         except Exception:
             return []
-        return [{"symbol": sym, "timeframe": tf, **pat}
-                for pat in _confirmed_patterns_for(closed, tf)]
+        out = []
+        for pat in _confirmed_patterns_for(closed, tf):
+            # Telegram is a one-shot notification that can't update, so skip an
+            # RSI reversal whose reversal has already played out or been
+            # invalidated — don't ping about a spent or void signal. The in-app
+            # bell still shows it (labelled with that status). Everything else,
+            # and any active reversal, alerts as before.
+            if pat.get("kind") == "rsi_swing" and pat.get("status") not in (None, "active"):
+                continue
+            out.append({"symbol": sym, "timeframe": tf, **pat})
+        return out
 
     pairs = [(sym, tf) for sym in symbols for tf in tfs]
     found: list = []
