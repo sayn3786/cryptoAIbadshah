@@ -3690,6 +3690,30 @@ def api_journal(symbol):
                         "error_code": "GENERATION_FAILED"}), 502
 
 
+# ── Hyperliquid — read-only account state (Phase 1 of live execution) ─────────
+# INTERNAL only and fail-closed. Reads OUR balance + open perp positions from
+# Hyperliquid's public info endpoint — no signing, no orders, no agent key.
+# Testnet vs mainnet is chosen by HYPERLIQUID_ENV. This is the proof-of-
+# connection / reconcile foundation; it can place nothing.
+@app.get("/api/hl/account")
+def api_hl_account():
+    guard = _require_internal()
+    if guard:
+        return guard
+    import hl_account as _hl
+    if not _hl.configured():
+        return jsonify({"ok": False, "configured": False,
+                        "error_code": "HL_NOT_CONFIGURED",
+                        "error": "HYPERLIQUID_ACCOUNT_ADDRESS is not set"}), 503
+    try:
+        return jsonify({"ok": True, **_hl.account_state()})
+    except Exception:
+        # Sanitized — never echo the raw upstream error.
+        app.logger.exception("hyperliquid account read failed")
+        return jsonify({"ok": False, "error_code": "HL_READ_FAILED",
+                        "error": "Hyperliquid account read failed"}), 502
+
+
 # ── Persisted signal history (Neon Postgres) ─────────────────────────────────
 # Reads are public (the dashboard shows them). Every MUTATION requires the
 # project's existing CRON_SECRET, the same protection the alert endpoints use —
