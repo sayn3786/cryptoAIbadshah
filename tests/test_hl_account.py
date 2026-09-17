@@ -215,3 +215,23 @@ def test_public_status_endpoint_is_public(monkeypatch):
     resp = app.app.test_client().get("/api/hl/status")
     assert resp.status_code == 200
     assert resp.get_json()["connected"] is True
+
+
+def test_public_status_endpoint_caches_within_ttl(monkeypatch):
+    # Single-flight cache: a second call within the TTL is served from the cache,
+    # so the upstream is queried once, not per request.
+    app = _client()
+    app._hl_status_cache["data"] = None
+    app._hl_status_cache["ts"] = 0
+    calls = {"n": 0}
+
+    def _counted(**k):
+        calls["n"] += 1
+        return {"configured": True, "connected": True, "env": "testnet",
+                "funded": True, "open_position_count": 0}
+    import hl_account
+    monkeypatch.setattr(hl_account, "public_status", _counted)
+    c = app.app.test_client()
+    c.get("/api/hl/status")
+    c.get("/api/hl/status")
+    assert calls["n"] == 1                       # second served from cache

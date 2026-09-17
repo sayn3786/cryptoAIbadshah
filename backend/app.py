@@ -3724,16 +3724,18 @@ _HL_STATUS_TTL   = 20
 
 @app.get("/api/hl/status")
 def api_hl_status():
-    with _hl_status_lock:
-        if _hl_status_cache["data"] is not None and \
-                time.time() - _hl_status_cache["ts"] < _HL_STATUS_TTL:
-            return jsonify(_hl_status_cache["data"])
     import hl_account as _hl
-    data = _hl.public_status()          # never raises
+    # Single-flight: hold the lock across the refresh (double-checked), so a
+    # burst of concurrent misses on a cold / just-expired cache makes ONE
+    # upstream call — the rest wait and read the value it stored, instead of all
+    # stampeding Hyperliquid. public_status never raises and is bounded by its
+    # own timeout, so the wait is short.
     with _hl_status_lock:
-        _hl_status_cache["ts"]   = time.time()
-        _hl_status_cache["data"] = data
-    return jsonify(data)
+        if _hl_status_cache["data"] is None or \
+                time.time() - _hl_status_cache["ts"] >= _HL_STATUS_TTL:
+            _hl_status_cache["data"] = _hl.public_status()
+            _hl_status_cache["ts"]   = time.time()
+        return jsonify(_hl_status_cache["data"])
 
 
 # ── Persisted signal history (Neon Postgres) ─────────────────────────────────
