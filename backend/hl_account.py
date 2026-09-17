@@ -117,3 +117,41 @@ def account_state(address: Optional[str] = None, *, env: Optional[str] = None,
     data = _post_info({"type": "clearinghouseState", "user": addr},
                       env=env, session=session)
     return parse_state(data, addr, env)
+
+
+def _mask(addr: str) -> str:
+    """0x1234…ABCD — enough to recognise the account without printing it whole."""
+    a = addr or ""
+    return f"{a[:6]}…{a[-4:]}" if len(a) >= 12 else a
+
+
+def public_status(*, env: Optional[str] = None,
+                  session: Optional[Any] = None) -> Dict[str, Any]:
+    """A SAFE, public-facing connection summary for the dashboard / a browser.
+
+    Hyperliquid account state is already public on-chain, so a read view leaks
+    nothing new — but we still (a) mask the address and (b) show the exact
+    balance only on TESTNET; on mainnet we report funded/not without the figure,
+    so a public page never advertises real-money position size. Never raises.
+    """
+    e = _env(env)
+    if not configured():
+        return {"configured": False, "connected": False, "env": e}
+    try:
+        st = account_state(env=env, session=session)
+    except Exception:                                    # noqa: BLE001
+        return {"configured": True, "connected": False, "env": e,
+                "address": _mask(account_address())}
+    is_testnet = e != "mainnet"
+    val = st.get("account_value_usd")
+    return {
+        "configured": True,
+        "connected": True,
+        "env": st.get("env", e),
+        "address": _mask(st.get("address", "")),
+        # Exact balance on testnet only; on mainnet report funded, not the size.
+        "account_value_usd": val if is_testnet else None,
+        "funded": bool(val and val > 0),
+        "open_position_count": st.get("open_position_count", 0),
+        "live_ready": False,
+    }

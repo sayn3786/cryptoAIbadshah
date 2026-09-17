@@ -159,3 +159,79 @@ def test_endpoint_returns_state_when_authed_and_configured(monkeypatch):
     body = resp.get_json()
     assert body["ok"] is True and body["open_position_count"] == 2
     assert body["live_ready"] is False
+
+
+# ── public_status: safe summary, testnet shows the number, mainnet redacts ────
+
+class _RaisingSession:
+    def post(self, *a, **k):
+        raise RuntimeError("upstream down")
+
+
+def test_public_status_not_configured(monkeypatch):
+    monkeypatch.delenv("HYPERLIQUID_ACCOUNT_ADDRESS", raising=False)
+    s = hl.public_status()
+    assert s["configured"] is False and s["connected"] is False
+
+
+def test_public_status_testnet_shows_balance(monkeypatch):
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS",
+                       "0xEDb48353268B05c66A5E0dE3B50A3DE271008C7F")
+    monkeypatch.setenv("HYPERLIQUID_ENV", "testnet")
+    s = hl.public_status(session=_FakeSession(SAMPLE))
+    assert s["connected"] is True and s["funded"] is True
+    assert s["account_value_usd"] == 1000.0          # full figure on testnet
+    assert s["open_position_count"] == 2
+    assert s["address"] == "0xEDb4…8C7F"             # masked
+    assert s["live_ready"] is False
+
+
+def test_public_status_mainnet_redacts_balance(monkeypatch):
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xABCDEF0123456789")
+    monkeypatch.setenv("HYPERLIQUID_ENV", "mainnet")
+    s = hl.public_status(session=_FakeSession(SAMPLE))
+    assert s["connected"] is True
+    assert s["account_value_usd"] is None            # hidden on mainnet
+    assert s["funded"] is True and s["open_position_count"] == 2
+
+
+def test_public_status_survives_upstream_error(monkeypatch):
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xABCDEF0123456789")
+    monkeypatch.setenv("HYPERLIQUID_ENV", "testnet")
+    s = hl.public_status(session=_RaisingSession())
+    assert s["configured"] is True and s["connected"] is False
+
+
+def test_public_status_endpoint_is_public(monkeypatch):
+    app = _client()
+    monkeypatch.delenv("CRON_SECRET", raising=False)          # no auth needed
+    app._hl_status_cache["data"] = None
+    app._hl_status_cache["ts"] = 0
+    import hl_account
+    monkeypatch.setattr(hl_account, "public_status",
+                        lambda **k: {"configured": True, "connected": True,
+                                     "env": "testnet", "funded": True,
+                                     "open_position_count": 0})
+    resp = app.app.test_client().get("/api/hl/status")
+    assert resp.status_code == 200
+    assert resp.get_json()["connected"] is True
+
+
+def test_public_status_endpoint_caches_within_ttl(monkeypatch):
+    # Single-flight cache: a second call within the TTL is served from the cache,
+    # so the upstream is queried once, not per request.
+    app = _client()
+    app._hl_status_cache["data"] = None
+    app._hl_status_cache["ts"] = 0
+    calls = {"n": 0}
+
+    def _counted(**k):
+        calls["n"] += 1
+        return {"configured": True, "connected": True, "env": "testnet",
+                "funded": True, "open_position_count": 0}
+    import hl_account
+    monkeypatch.setattr(hl_account, "public_status", _counted)
+    c = app.app.test_client()
+    c.get("/api/hl/status")
+    c.get("/api/hl/status")
+    assert calls["n"] == 1                       # second served from cache

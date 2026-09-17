@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '234';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '235';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2460,7 +2460,39 @@ async function loadPaperAccount() {
   } catch (_) { sec.style.display = 'none'; }
 }
 
-/* ─── On-Chain Metrics Grid (BTC only) ────────────────────────────────────── */
+// Hyperliquid read-only connection status (Phase 1 diagnostic). Public, safe
+// summary from /api/hl/status — hidden entirely until the account is configured.
+async function loadHlStatus() {
+  const sec  = document.getElementById('hlStatusCard');
+  const body = document.getElementById('hlStatusBody');
+  const meta = document.getElementById('hlStatusMeta');
+  if (!sec || !body) return;
+  try {
+    const r = await fetch(`${API}/hl/status`);
+    if (!r.ok) { sec.style.display = 'none'; return; }
+    const s = await r.json();
+    if (!s.configured) { sec.style.display = 'none'; return; }   // not set up yet
+    sec.style.display = '';
+    const isTest = s.env !== 'mainnet';
+    if (meta) meta.textContent = `${s.env || ''} · read-only`;
+    if (!s.connected) {
+      body.innerHTML = `<div style="color:#ef4444;font-size:13px">⚠️ Not connected —
+        could not read <b>${s.address || 'account'}</b>. Check HYPERLIQUID_ENV /
+        address and that the account is funded on ${isTest ? 'testnet' : 'mainnet'}.</div>`;
+      return;
+    }
+    const bal = (s.account_value_usd != null)
+      ? `$${Number(s.account_value_usd).toFixed(2)}`
+      : (s.funded ? 'funded (balance hidden on mainnet)' : 'not funded');
+    const dot = s.funded ? '🟢' : '🟡';
+    body.innerHTML = `<div style="font-size:13px;line-height:1.8">
+      ${dot} <b>Connected</b> · <span style="opacity:.7">${s.address}</span>
+      <span style="opacity:.55">(${isTest ? 'testnet' : 'mainnet'})</span><br>
+      Balance: <b>${bal}</b> &nbsp;·&nbsp; Open positions: <b>${s.open_position_count}</b>
+      <div style="font-size:11px;opacity:.55;margin-top:4px">Read-only — no orders, no signing.</div>
+    </div>`;
+  } catch (_) { sec.style.display = 'none'; }
+}
 function renderOnchainMetrics(mining, symbol, lth) {
   const section = document.getElementById('onchainMetricsSection');
   const grid    = document.getElementById('ocmGrid');
@@ -7085,6 +7117,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadTracker();
   loadPatternHistory();
   loadPaperAccount();
+  loadHlStatus();
 
   await renderAssetTabs();   // build tabs sorted by live market cap first
   wireSelectors();

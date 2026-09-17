@@ -3714,6 +3714,30 @@ def api_hl_account():
                         "error": "Hyperliquid account read failed"}), 502
 
 
+# PUBLIC connection status — a safe summary the dashboard (or a browser) can read
+# without the internal secret. Account state is already public on-chain; the
+# balance figure is shown only on testnet (redacted on mainnet). Cached briefly
+# so public traffic cannot hammer the upstream Hyperliquid info endpoint.
+_hl_status_cache: Dict = {"ts": 0.0, "data": None}
+_hl_status_lock  = _threading.Lock()
+_HL_STATUS_TTL   = 20
+
+@app.get("/api/hl/status")
+def api_hl_status():
+    import hl_account as _hl
+    # Single-flight: hold the lock across the refresh (double-checked), so a
+    # burst of concurrent misses on a cold / just-expired cache makes ONE
+    # upstream call — the rest wait and read the value it stored, instead of all
+    # stampeding Hyperliquid. public_status never raises and is bounded by its
+    # own timeout, so the wait is short.
+    with _hl_status_lock:
+        if _hl_status_cache["data"] is None or \
+                time.time() - _hl_status_cache["ts"] >= _HL_STATUS_TTL:
+            _hl_status_cache["data"] = _hl.public_status()
+            _hl_status_cache["ts"]   = time.time()
+        return jsonify(_hl_status_cache["data"])
+
+
 # ── Persisted signal history (Neon Postgres) ─────────────────────────────────
 # Reads are public (the dashboard shows them). Every MUTATION requires the
 # project's existing CRON_SECRET, the same protection the alert endpoints use —
