@@ -112,6 +112,38 @@ CANDLE_DERIVED_KEYS = (
 RSI_MARK_OVERSOLD = 40
 RSI_MARK_OVERBOUGHT = 60
 
+# How far price must travel in the called direction for the reversal to count as
+# already "played out" (spent), matching the RSI-divergence detector's threshold.
+RSI_MARK_PLAYOUT_PCT = 0.03
+
+
+def _rsi_mark_status(candles, i, kind):
+    """Current relevance of a swing marker, judged from where price sits NOW
+    relative to the pivot (close-to-close, so a lone wick never flips it):
+
+      invalidated — a top whose high price has since CLOSED above, or a bottom
+                    whose low has since CLOSED below → the read is void.
+      played_out  — price has moved >= RSI_MARK_PLAYOUT_PCT in the called
+                    direction (a top that fell, a bottom that rose) → spent.
+      active      — neither yet → still a live reversal to watch.
+    """
+    last_close = candles[-1].get("close")
+    piv_close = candles[i].get("close")
+    piv_hi, piv_lo = candles[i].get("high"), candles[i].get("low")
+    if last_close is None or piv_close is None or piv_close == 0:
+        return "active"
+    if kind == "overbought_top":
+        if piv_hi is not None and last_close > piv_hi:
+            return "invalidated"
+        if last_close <= piv_close * (1 - RSI_MARK_PLAYOUT_PCT):
+            return "played_out"
+    else:                                       # oversold_bottom
+        if piv_lo is not None and last_close < piv_lo:
+            return "invalidated"
+        if last_close >= piv_close * (1 + RSI_MARK_PLAYOUT_PCT):
+            return "played_out"
+    return "active"
+
 
 def rsi_swing_markers(candles: Sequence[Dict], rsi_raw: Sequence,
                       *, window: int = 3, since_ts=None) -> List[Dict]:
@@ -119,6 +151,10 @@ def rsi_swing_markers(candles: Sequence[Dict], rsi_raw: Sequence,
     Green markers at price swing LOWS where RSI was oversold, red at swing HIGHS
     where RSI was overbought — the recurring "RSI bottomed here" reads traders
     circle on a chart. Pure; ``rsi_raw`` is index-aligned with ``candles``.
+
+    Each marker also carries a ``status`` — active / played_out / invalidated —
+    read from where price sits now, so a caller can tell whether the reversal is
+    still live or already spent/void (see ``_rsi_mark_status``).
     """
     out: List[Dict] = []
     n = len(candles)
@@ -140,10 +176,12 @@ def rsi_swing_markers(candles: Sequence[Dict], rsi_raw: Sequence,
         highs = [x for x in highs if x is not None]
         if lo is not None and lows and lo == min(lows) and r <= RSI_MARK_OVERSOLD:
             out.append({"timestamp": ts, "kind": "oversold_bottom",
-                        "rsi": round(r, 1), "price": lo, "bars_ago": bars_ago})
+                        "rsi": round(r, 1), "price": lo, "bars_ago": bars_ago,
+                        "status": _rsi_mark_status(candles, i, "oversold_bottom")})
         elif hi is not None and highs and hi == max(highs) and r >= RSI_MARK_OVERBOUGHT:
             out.append({"timestamp": ts, "kind": "overbought_top",
-                        "rsi": round(r, 1), "price": hi, "bars_ago": bars_ago})
+                        "rsi": round(r, 1), "price": hi, "bars_ago": bars_ago,
+                        "status": _rsi_mark_status(candles, i, "overbought_top")})
     return out
 
 
