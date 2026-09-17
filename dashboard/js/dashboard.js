@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '235';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '236';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2481,14 +2481,22 @@ async function loadHlStatus() {
         address and that the account is funded on ${isTest ? 'testnet' : 'mainnet'}.</div>`;
       return;
     }
-    const bal = (s.account_value_usd != null)
-      ? `$${Number(s.account_value_usd).toFixed(2)}`
-      : (s.funded ? 'funded (balance hidden on mainnet)' : 'not funded');
+    const fmt = v => (v != null) ? `$${Number(v).toFixed(2)}` : '—';
+    const perps = (s.account_value_usd != null) ? fmt(s.account_value_usd)
+                : (s.perps_funded ? 'funded' : '$0.00');
+    const spot  = (s.spot_usdc_usd != null) ? fmt(s.spot_usdc_usd)
+                : (s.spot_funded ? 'funded' : '$0.00');
     const dot = s.funded ? '🟢' : '🟡';
+    const hint = s.needs_spot_to_perp_transfer
+      ? `<div style="color:#f59e0b;font-size:12px;margin-top:5px">⚠️ Funds are in
+         <b>Spot</b> — transfer USDC <b>Spot → Perps</b> to trade perps.</div>`
+      : '';
     body.innerHTML = `<div style="font-size:13px;line-height:1.8">
       ${dot} <b>Connected</b> · <span style="opacity:.7">${s.address}</span>
       <span style="opacity:.55">(${isTest ? 'testnet' : 'mainnet'})</span><br>
-      Balance: <b>${bal}</b> &nbsp;·&nbsp; Open positions: <b>${s.open_position_count}</b>
+      Perps: <b>${perps}</b> &nbsp;·&nbsp; Spot: <b>${spot}</b>
+      &nbsp;·&nbsp; Open positions: <b>${s.open_position_count}</b>
+      ${hint}
       <div style="font-size:11px;opacity:.55;margin-top:4px">Read-only — no orders, no signing.</div>
     </div>`;
   } catch (_) { sec.style.display = 'none'; }

@@ -125,14 +125,36 @@ def _mask(addr: str) -> str:
     return f"{a[:6]}…{a[-4:]}" if len(a) >= 12 else a
 
 
+def _spot_usdc(data: Any) -> Optional[float]:
+    """USDC total from a spotClearinghouseState payload, or None."""
+    for b in (data or {}).get("balances") or []:
+        if (b.get("coin") or "").upper() == "USDC":
+            return _num(b.get("total"))
+    return None
+
+
+def spot_usdc(address: Optional[str] = None, *, env: Optional[str] = None,
+              session: Optional[Any] = None) -> Optional[float]:
+    """Our SPOT-wallet USDC balance (the drip lands here; perps collateral is a
+    separate balance). None when unconfigured. Reads spotClearinghouseState."""
+    addr = account_address(address)
+    if not addr:
+        return None
+    data = _post_info({"type": "spotClearinghouseState", "user": addr},
+                      env=env, session=session)
+    return _spot_usdc(data)
+
+
 def public_status(*, env: Optional[str] = None,
                   session: Optional[Any] = None) -> Dict[str, Any]:
     """A SAFE, public-facing connection summary for the dashboard / a browser.
 
-    Hyperliquid account state is already public on-chain, so a read view leaks
-    nothing new — but we still (a) mask the address and (b) show the exact
-    balance only on TESTNET; on mainnet we report funded/not without the figure,
-    so a public page never advertises real-money position size. Never raises.
+    Reports BOTH the perps collateral (accountValue) and the spot USDC balance —
+    the testnet drip lands in spot, so a zero perps value with spot USDC means
+    "transfer spot → perps to trade". Hyperliquid account state is already public
+    on-chain, but we still (a) mask the address and (b) show the exact figures
+    only on TESTNET; on mainnet we report funded/not without the numbers, so a
+    public page never advertises real-money size. Never raises.
     """
     e = _env(env)
     if not configured():
@@ -142,16 +164,28 @@ def public_status(*, env: Optional[str] = None,
     except Exception:                                    # noqa: BLE001
         return {"configured": True, "connected": False, "env": e,
                 "address": _mask(account_address())}
+    spot = None                                          # best-effort; never fails the status
+    try:
+        spot = spot_usdc(env=env, session=session)
+    except Exception:                                    # noqa: BLE001
+        pass
     is_testnet = e != "mainnet"
-    val = st.get("account_value_usd")
+    perp_val = st.get("account_value_usd")
+    perps_funded = bool(perp_val and perp_val > 0)
+    spot_funded = bool(spot and spot > 0)
     return {
         "configured": True,
         "connected": True,
         "env": st.get("env", e),
         "address": _mask(st.get("address", "")),
-        # Exact balance on testnet only; on mainnet report funded, not the size.
-        "account_value_usd": val if is_testnet else None,
-        "funded": bool(val and val > 0),
+        # Exact figures on testnet only; on mainnet report funded, not the size.
+        "account_value_usd": perp_val if is_testnet else None,
+        "spot_usdc_usd": spot if is_testnet else None,
+        "perps_funded": perps_funded,
+        "spot_funded": spot_funded,
+        "funded": perps_funded or spot_funded,
+        # A hint the UI can show: money is in spot, not usable as perp collateral.
+        "needs_spot_to_perp_transfer": spot_funded and not perps_funded,
         "open_position_count": st.get("open_position_count", 0),
         "live_ready": False,
     }

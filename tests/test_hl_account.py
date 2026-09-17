@@ -44,11 +44,24 @@ class _FakeResp:
 
 
 class _FakeSession:
-    """Records the last POST and returns a canned payload."""
+    """Records the last POST and returns a canned payload (any request type)."""
     def __init__(self, payload): self.payload, self.calls = payload, []
     def post(self, url, json=None, timeout=None):
         self.calls.append({"url": url, "json": json, "timeout": timeout})
         return _FakeResp(self.payload)
+
+
+# Spot wallet: 999 USDC (where the testnet drip lands) plus a token balance.
+SPOT = {"balances": [{"coin": "USDC", "total": "999.0", "hold": "0.0"},
+                     {"coin": "HYPE", "total": "5.0"}]}
+
+
+class _RouteSession:
+    """Returns a different payload per request `type` (perps vs spot)."""
+    def __init__(self, by_type): self.by_type, self.calls = by_type, []
+    def post(self, url, json=None, timeout=None):
+        self.calls.append(json)
+        return _FakeResp(self.by_type.get((json or {}).get("type"), {}))
 
 
 # ── host selection: testnet is the safe default ──────────────────────────────
@@ -178,20 +191,52 @@ def test_public_status_testnet_shows_balance(monkeypatch):
     monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS",
                        "0xEDb48353268B05c66A5E0dE3B50A3DE271008C7F")
     monkeypatch.setenv("HYPERLIQUID_ENV", "testnet")
-    s = hl.public_status(session=_FakeSession(SAMPLE))
+    sess = _RouteSession({"clearinghouseState": SAMPLE, "spotClearinghouseState": SPOT})
+    s = hl.public_status(session=sess)
     assert s["connected"] is True and s["funded"] is True
-    assert s["account_value_usd"] == 1000.0          # full figure on testnet
+    assert s["account_value_usd"] == 1000.0          # perps figure on testnet
+    assert s["spot_usdc_usd"] == 999.0               # spot USDC read too
+    assert s["perps_funded"] is True and s["spot_funded"] is True
+    assert s["needs_spot_to_perp_transfer"] is False
     assert s["open_position_count"] == 2
     assert s["address"] == "0xEDb4…8C7F"             # masked
     assert s["live_ready"] is False
 
 
+def test_public_status_funds_in_spot_flags_transfer(monkeypatch):
+    # The user's actual case: 0 perps collateral, 999 sitting in spot → connected
+    # and funded, but flagged as needing a spot→perp transfer to trade.
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xABCDEF0123456789")
+    monkeypatch.setenv("HYPERLIQUID_ENV", "testnet")
+    perps_empty = {"marginSummary": {"accountValue": "0.0", "totalMarginUsed": "0.0"},
+                   "assetPositions": []}
+    sess = _RouteSession({"clearinghouseState": perps_empty,
+                          "spotClearinghouseState": SPOT})
+    s = hl.public_status(session=sess)
+    assert s["connected"] is True
+    assert s["account_value_usd"] == 0.0 and s["spot_usdc_usd"] == 999.0
+    assert s["perps_funded"] is False and s["spot_funded"] is True
+    assert s["funded"] is True
+    assert s["needs_spot_to_perp_transfer"] is True
+
+
+def test_spot_usdc_reads_balance(monkeypatch):
+    monkeypatch.setenv("HYPERLIQUID_ENV", "testnet")
+    sess = _RouteSession({"spotClearinghouseState": SPOT})
+    assert hl.spot_usdc("0xABC", session=sess) == 999.0
+    # a payload with no USDC leg → None, never raises
+    assert hl.spot_usdc("0xABC",
+                        session=_RouteSession({"spotClearinghouseState": {}})) is None
+
+
 def test_public_status_mainnet_redacts_balance(monkeypatch):
     monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xABCDEF0123456789")
     monkeypatch.setenv("HYPERLIQUID_ENV", "mainnet")
-    s = hl.public_status(session=_FakeSession(SAMPLE))
+    sess = _RouteSession({"clearinghouseState": SAMPLE, "spotClearinghouseState": SPOT})
+    s = hl.public_status(session=sess)
     assert s["connected"] is True
     assert s["account_value_usd"] is None            # hidden on mainnet
+    assert s["spot_usdc_usd"] is None                # spot hidden too
     assert s["funded"] is True and s["open_position_count"] == 2
 
 
