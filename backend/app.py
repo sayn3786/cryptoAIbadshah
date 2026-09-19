@@ -2672,7 +2672,12 @@ def _compute_recommendations() -> dict:
             "mtf_counter":      False,
             "mtf_confirm":      False,
             "score":            sig.get("score", 0),
-            "tier":             sig.get("tier"),
+            # Tier LABEL follows the PUBLISHED strength (BTC-adjusted + v53
+            # calibration), not the raw 2H sig tier — otherwise a v53-demoted
+            # setup (e.g. capped to 68) would still read "Confirmed" while its
+            # confidence_score says Strong. Keeps the card and the stored
+            # signal_tier consistent with the number the postmortem buckets on.
+            "tier":             rec_policy.strength_tier(strength) or sig.get("tier"),
             "entry":            sig.get("entry"),
             "detected_at":      now_sgt.strftime("%b %d · %I:%M %p SGT"),
             "sl":               sig.get("sl"),
@@ -2960,7 +2965,10 @@ def _rec_cache_key() -> str:
     #       TP2/TP3 were almost never reached, so winners banked only TP1.
     #   v49 min-strength floor raised 32 → 51 — the Moderate tier lost money in
     #       both the v45 and v48 cohorts; only Strong+ now publishes.
-    return f"v52_4h_avg_{date}_{slot}"
+    #   v53 strength recalibration — chased entries and wide 1H/2H splits are
+    #       capped below the Confirmed floor (they were over-promoted and
+    #       anti-predictive in the v52 top tier); demotes them into Strong.
+    return f"v53_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
