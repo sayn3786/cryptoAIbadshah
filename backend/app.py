@@ -3697,7 +3697,7 @@ def api_journal(symbol):
 # connection / reconcile foundation; it can place nothing.
 @app.get("/api/hl/account")
 def api_hl_account():
-    guard = _require_internal()
+    guard = _require_hl_admin()
     if guard:
         return guard
     import hl_account as _hl
@@ -3757,7 +3757,7 @@ def api_hl_meta():
 # Fail-closed (it reads our collateral). Places NOTHING; pure can_place preview.
 @app.get("/api/hl/plan")
 def api_hl_plan():
-    guard = _require_internal()
+    guard = _require_hl_admin()
     if guard:
         return guard
     import hl_meta as _hm
@@ -3790,7 +3790,7 @@ def api_hl_plan():
 # exists yet regardless of the switches, so this always reads live_ready:false.
 @app.get("/api/hl/arm-status")
 def api_hl_arm_status():
-    guard = _require_internal()
+    guard = _require_hl_admin()
     if guard:
         return guard
     import hl_execution as _hx
@@ -3810,7 +3810,7 @@ _hl_execute_lock = _threading.Lock()
 
 @app.post("/api/hl/execute")
 def api_hl_execute():
-    guard = _require_internal()
+    guard = _require_hl_admin()
     if guard:
         return guard
     import hl_exchange as _hx, hl_account as _ha
@@ -3885,6 +3885,30 @@ def _internal_auth_ok() -> bool:
 
 def _require_internal():
     if not _internal_auth_ok():
+        return jsonify({"error": "Unauthorized", "error_code": "FORBIDDEN"}), 401
+    return None
+
+
+def _hl_admin_ok() -> bool:
+    """Auth for the Hyperliquid admin endpoints. Accepts EITHER the existing
+    internal CRON_SECRET or a DEDICATED HL_ADMIN_TOKEN (via Bearer or the
+    x-hl-token header). The dedicated token lets an operator drive these
+    endpoints with a value they set themselves, without touching the shared cron
+    secret (which is also used by the GitHub workflows). Fail-closed: when
+    neither secret is configured or matches, deny."""
+    import os as _os
+    if _internal_auth_ok():                              # CRON_SECRET path unchanged
+        return True
+    token = _os.getenv("HL_ADMIN_TOKEN", "")
+    if not token:
+        return False
+    auth = request.headers.get("authorization", "")
+    hdr = request.headers.get("x-hl-token", "")
+    return auth == f"Bearer {token}" or hdr == token
+
+
+def _require_hl_admin():
+    if not _hl_admin_ok():
         return jsonify({"error": "Unauthorized", "error_code": "FORBIDDEN"}), 401
     return None
 
