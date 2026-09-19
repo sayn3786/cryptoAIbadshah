@@ -3797,6 +3797,40 @@ def api_hl_arm_status():
     return jsonify(_hx.arm_status())
 
 
+# INTERNAL — manually place ONE live open for a symbol (the human-in-the-loop
+# first-order path). Fail-closed AND only acts when armed; still testnet-only
+# unless HL_ALLOW_MAINNET. Every guard (sizing, exposure/order caps, reconcile,
+# exact-once) runs in hl_exchange.open_position. A business reject returns 200
+# with ok:false and the reason; only an internal error is a 5xx.
+@app.post("/api/hl/execute")
+def api_hl_execute():
+    guard = _require_internal()
+    if guard:
+        return guard
+    import hl_exchange as _hx, hl_account as _ha
+    symbol = (request.args.get("symbol") or "").upper()
+    direction = (request.args.get("direction") or "LONG").upper()
+    ref = request.args.get("ref") or f"manual:{symbol}"
+    try:
+        entry = float(request.args.get("entry") or 0)
+        candle_ts = int(request.args.get("candle_ts") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS"}), 400
+    if not symbol or entry <= 0 or direction not in ("LONG", "SHORT"):
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "symbol, positive entry, direction LONG|SHORT required"}), 400
+    try:
+        acct = _ha.account_state()
+        result = _hx.open_position(
+            {"symbol": symbol, "entry": entry, "direction": direction,
+             "id": ref, "candle_ts": candle_ts}, account_state=acct)
+        return jsonify(result)
+    except Exception:
+        app.logger.exception("hyperliquid execute failed")
+        return jsonify({"ok": False, "error_code": "HL_EXECUTE_FAILED",
+                        "error": "Hyperliquid execute failed"}), 502
+
+
 # ── Persisted signal history (Neon Postgres) ─────────────────────────────────
 # Reads are public (the dashboard shows them). Every MUTATION requires the
 # project's existing CRON_SECRET, the same protection the alert endpoints use —
