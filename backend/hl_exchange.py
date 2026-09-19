@@ -101,6 +101,36 @@ def send_market_close(coin: str, cloid_str: str, env: Optional[str] = None) -> A
     return _exchange(env).market_close(coin, cloid=Cloid.from_str(cloid_str))
 
 
+def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
+                     sl_px: Optional[float], tp_px: Optional[float],
+                     *, env: Optional[str] = None,
+                     sl_cloid: Optional[str] = None,
+                     tp_cloid: Optional[str] = None) -> Dict[str, Any]:
+    """Place REDUCE-ONLY stop-loss + take-profit trigger orders for an open
+    position. `is_buy_exit` is the side that CLOSES the position — the opposite
+    of the entry (a LONG exits by selling). Both are market-trigger orders
+    (isMarket True) so they fill when price crosses the level; reduce_only means
+    they can only shrink the position, never flip or add to it. Impure (SDK);
+    each order is placed independently so a rejected stop does not abort the TP.
+    Returns {"sl": resp?, "tp": resp?}."""
+    from hyperliquid.utils.signing import Cloid
+    ex = _exchange(env)
+    out: Dict[str, Any] = {}
+    if sl_px and sl_px > 0:
+        ot = {"trigger": {"triggerPx": float(sl_px), "isMarket": True, "tpsl": "sl"}}
+        kw: Dict[str, Any] = {"reduce_only": True}
+        if sl_cloid:
+            kw["cloid"] = Cloid.from_str(sl_cloid)
+        out["sl"] = ex.order(coin, is_buy_exit, float(size), float(sl_px), ot, **kw)
+    if tp_px and tp_px > 0:
+        ot = {"trigger": {"triggerPx": float(tp_px), "isMarket": True, "tpsl": "tp"}}
+        kw = {"reduce_only": True}
+        if tp_cloid:
+            kw["cloid"] = Cloid.from_str(tp_cloid)
+        out["tp"] = ex.order(coin, is_buy_exit, float(size), float(tp_px), ot, **kw)
+    return out
+
+
 def order_accepted(resp: Any):
     """(accepted, detail) for a Hyperliquid order response. The exchange returns
     order-level rejections — IOC non-fills, insufficient margin — INSIDE a 200
