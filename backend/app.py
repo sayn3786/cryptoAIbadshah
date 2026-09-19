@@ -3294,6 +3294,18 @@ def api_cron_publish():
         with _rec_lock:
             _rec_cache_save(_rec_cache_key(), result)
 
+    # ── Phase 4b: auto-execute the Confirmed tier on the publish run ─────────
+    # Best-effort and OFF by default (arm gate + HL_AUTO_EXECUTE + testnet-only
+    # inside open_position). A Hyperliquid failure must never fail publishing —
+    # the signals are already persisted; execution is a downstream side effect.
+    hl_auto = None
+    if persistence.get("persisted"):
+        try:
+            hl_auto = _hl_auto_execute_run()
+        except Exception:
+            app.logger.exception("publish-run auto-execute failed")
+            hl_auto = {"ok": False, "error_code": "HL_AUTO_EXECUTE_FAILED"}
+
     return jsonify({
         "ok": bool(result.get("actionable", True)),
         "slot": result.get("slot"),
@@ -3304,6 +3316,7 @@ def api_cron_publish():
         "error_code": persistence.get("error_code"),
         "slot_current": result.get("slot_current"),
         "source_candle_close": result.get("source_candle_close"),
+        "hl_auto_execute": hl_auto,
     })
 
 
@@ -3854,6 +3867,98 @@ def api_hl_execute():
         app.logger.exception("hyperliquid execute failed")
         return jsonify({"ok": False, "error_code": "HL_EXECUTE_FAILED",
                         "error": "Hyperliquid execute failed"}), 502
+
+
+def _hl_confirmed_published(store, sver, *, limit=30):
+    """The latest published slot's Confirmed-tier signals, ladder attached.
+
+    Reads OPEN/PENDING rows of the CURRENT strategy_version (newest first),
+    attaches their TP ladders, and lets hl_autoexec keep only the newest slot's
+    Confirmed cohort. Scoped to this deployment's environment.
+    """
+    import hl_autoexec as _ax
+    page = store.list_signals(
+        statuses=["OPEN", "PENDING"], strategy_version=sver,
+        environment=_deploy_env(), limit=limit, with_total=False)
+    rows = page.get("items") or []
+    store.attach_targets(rows)
+    return _ax.select_confirmed(rows)
+
+
+def _hl_auto_execute_run():
+    """Run one auto-execute pass over the latest Confirmed-tier published set.
+
+    Returns a summary dict (never raises). Gated on the arm switch AND the
+    dedicated HL_AUTO_EXECUTE switch; the per-order guards (mainnet block, caps,
+    exact-once, reconcile) live in open_position. Serialised on the same lock as
+    the manual endpoint so the two can never place concurrently.
+    """
+    import hl_autoexec as _ax, hl_account as _ha, hl_execution as _hx
+    import signal_publish as _sp
+    gate = _ax.gate_status()
+    if not gate["ready"]:
+        return {"ok": True, "ran": False, "reason": "NOT_READY", "gate": gate}
+    import db as _db
+    if not _db.db_configured():
+        return {"ok": False, "ran": False, "reason": "DB_NOT_CONFIGURED"}
+    store = _signal_store()
+    rows = _hl_confirmed_published(store, _sp.strategy_version())
+    signals = [_ax.to_signal(r) for r in rows]
+    if not signals:
+        return {"ok": True, "ran": True, "attempted": 0, "executed": 0,
+                "reason": "NO_CONFIRMED_SIGNALS", "results": []}
+    with _hl_execute_lock:
+        acct = _ha.account_state()
+        try:
+            acct["spot_usdc_usd"] = _ha.spot_usdc()
+        except Exception:
+            pass
+        out = _ax.execute(signals, account_state=acct)
+    out["ok"] = True
+    out["ran"] = True
+    out["min_strength"] = gate["min_strength"]
+    return out
+
+
+@app.get("/api/hl/auto-status")
+def api_hl_auto_status():
+    """Would auto-execute run right now, and over how many Confirmed signals —
+    without placing anything. Internal (admin token or CRON_SECRET)."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    import hl_autoexec as _ax
+    import signal_publish as _sp
+    body = _ax.gate_status()
+    try:
+        import db as _db
+        if _db.db_configured():
+            rows = _hl_confirmed_published(_signal_store(), _sp.strategy_version())
+            body["confirmed_pending"] = [
+                {"symbol": (r.get("symbol") or "").upper(),
+                 "direction": r.get("direction"),
+                 "confidence_score": r.get("confidence_score")}
+                for r in rows]
+    except Exception:
+        body["confirmed_pending"] = None
+    return jsonify(body)
+
+
+@app.post("/api/hl/auto-execute")
+def api_hl_auto_execute():
+    """Execute the latest Confirmed-tier published set (Phase 4b). POST-only;
+    internal (admin token or CRON_SECRET). Safe to call repeatedly — the
+    exact-once claim and reconcile in open_position make a re-run a no-op for
+    anything already placed."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    try:
+        return jsonify(_hl_auto_execute_run())
+    except Exception:
+        app.logger.exception("hyperliquid auto-execute failed")
+        return jsonify({"ok": False, "error_code": "HL_AUTO_EXECUTE_FAILED",
+                        "error": "Hyperliquid auto-execute failed"}), 502
 
 
 # ── Persisted signal history (Neon Postgres) ─────────────────────────────────
