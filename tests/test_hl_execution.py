@@ -137,3 +137,21 @@ def test_arm_status_endpoint_reports_disarmed(monkeypatch):
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["armed"] is False and body["live_ready"] is False
+
+
+def test_arm_status_endpoint_accepts_dedicated_admin_token(monkeypatch):
+    # Operators can drive the HL admin endpoints with a self-set HL_ADMIN_TOKEN,
+    # without needing the shared CRON_SECRET.
+    app = _app()
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    monkeypatch.setenv("HL_ADMIN_TOKEN", "hl-token-123")
+    ok = app.app.test_client().get("/api/hl/arm-status",
+                                   headers={"x-hl-token": "hl-token-123"})
+    assert ok.status_code == 200
+    # a wrong token is refused; with neither secret set it is fail-closed
+    bad = app.app.test_client().get("/api/hl/arm-status",
+                                    headers={"x-hl-token": "nope"})
+    assert bad.status_code == 401
+    monkeypatch.delenv("HL_ADMIN_TOKEN", raising=False)
+    closed = app.app.test_client().get("/api/hl/arm-status")
+    assert closed.status_code == 401
