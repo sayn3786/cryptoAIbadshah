@@ -5,4 +5,7 @@ python-dotenv==1.0.1
 # so no local libpq/compiler is needed on Vercel.
 SQLAlchemy>=2.0,<3.0
 psycopg[binary]>=3.1,<4.0
+# Hyperliquid order signing/placement (live execution, gated OFF by default).
+# Pulls in eth-account for the agent-wallet EIP-712 signing.
+hyperliquid-python-sdk==0.24.0
 # waitress is only needed for local Windows deployment — install manually: pip install waitress
