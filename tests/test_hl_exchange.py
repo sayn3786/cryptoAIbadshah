@@ -38,18 +38,22 @@ def _arm(monkeypatch, *, env="testnet"):
 
 
 class _Sender:
-    def __init__(self, raises=False): self.calls, self.raises = [], raises
-    def __call__(self, coin, is_buy, size, cloid, env):
-        self.calls.append((coin, is_buy, size, cloid, env))
+    def __init__(self, raises=False, resp=None):
+        self.calls, self.raises = [], raises
+        self.resp = resp if resp is not None else {"status": "ok", "oid": 123}
+    def __call__(self, coin, is_buy, size, cloid, env, leverage=None):
+        self.calls.append((coin, is_buy, size, cloid, env, leverage))
         if self.raises:
             raise RuntimeError("exchange down")
-        return {"status": "ok", "oid": 123}
+        return self.resp
 
 
 def _open(monkeypatch, sig=SIG, account=FUNDED, **kw):
     kw.setdefault("table", TABLE)
+    kw.setdefault("mark_px", 60000)                # live price for sizing
     kw.setdefault("claim_fn", lambda *a: True)     # claim wins by default
     kw.setdefault("send_fn", _Sender())
+    kw.setdefault("release_fn", lambda key: None)
     return hx.open_position(sig, account_state=account, **kw)
 
 
@@ -112,10 +116,11 @@ def test_happy_path_sends_signed_open(monkeypatch):
     r = _open(monkeypatch, send_fn=sender)
     assert r["ok"] is True and r["coin"] == "BTC" and r["side"] == "buy"
     assert r["size"] == 0.0002 and r["notional_usd"] == 12.0 and r["leverage"] == 3.0
+    assert r["mark_px"] == 60000
     assert r["cloid"] == hex_.client_order_id("sig1", "open", 1000)
-    coin, is_buy, size, cloid, env = sender.calls[0]
+    coin, is_buy, size, cloid, env, leverage = sender.calls[0]
     assert coin == "BTC" and is_buy is True and size == 0.0002
-    assert cloid == r["cloid"]
+    assert cloid == r["cloid"] and leverage == 3.0     # planned leverage passed to the sender
 
 
 def test_short_sends_a_sell(monkeypatch):
@@ -125,6 +130,27 @@ def test_short_sends_a_sell(monkeypatch):
     assert sender.calls[0][1] is False              # is_buy False for SHORT
 
 
+def test_stale_entry_rejected(monkeypatch):
+    _arm(monkeypatch)
+    # entry $600 while the live mark is $60000 → ~99% off → refuse (mistyped/stale)
+    r = _open(monkeypatch, sig={**SIG, "entry": 600}, mark_px=60000)
+    assert r["ok"] is False and r["reason"] == "STALE_ENTRY"
+
+
+def test_no_mark_price_rejected(monkeypatch):
+    _arm(monkeypatch)
+    r = _open(monkeypatch, mark_px=None, mark_fn=lambda coin, **k: None)
+    assert r["ok"] is False and r["reason"] == "NO_MARK_PRICE"
+
+
+def test_sizes_from_live_mark_not_entry(monkeypatch):
+    _arm(monkeypatch)
+    sender = _Sender()
+    # entry says 50000 but the live mark is 60000 → size must come from 60000
+    _open(monkeypatch, sig={**SIG, "entry": 55000}, mark_px=60000, send_fn=sender)
+    assert sender.calls[0][2] == 0.0002             # 12 / 60000, not 12 / 55000
+
+
 def test_send_failure_releases_the_claim(monkeypatch):
     _arm(monkeypatch)
     released = []
@@ -132,6 +158,32 @@ def test_send_failure_releases_the_claim(monkeypatch):
               release_fn=lambda key: released.append(key))
     assert r["ok"] is False and r["reason"] == "SEND_FAILED"
     assert released == [hex_.order_ledger_key("sig1", "open", 1000)]   # retry can re-attempt
+
+
+def test_exchange_rejection_in_200_releases_claim(monkeypatch):
+    _arm(monkeypatch)
+    released = []
+    rejected = {"status": "ok", "response": {"type": "order", "data":
+                {"statuses": [{"error": "Insufficient margin to place order"}]}}}
+    r = _open(monkeypatch, send_fn=_Sender(resp=rejected),
+              release_fn=lambda key: released.append(key))
+    assert r["ok"] is False and r["reason"] == "SEND_REJECTED"
+    assert "Insufficient margin" in r["detail"]
+    assert released == [hex_.order_ledger_key("sig1", "open", 1000)]
+
+
+# ── order_accepted parsing ───────────────────────────────────────────────────
+
+def test_order_accepted_parsing():
+    assert hx.order_accepted({"status": "ok"})[0] is True
+    ok_fill = {"status": "ok", "response": {"type": "order", "data":
+               {"statuses": [{"filled": {"oid": 1, "totalSz": "0.0002"}}]}}}
+    assert hx.order_accepted(ok_fill)[0] is True
+    err = {"status": "ok", "response": {"type": "order", "data":
+           {"statuses": [{"error": "Order could not immediately match"}]}}}
+    assert hx.order_accepted(err)[0] is False
+    assert hx.order_accepted({"status": "err", "response": "bad"})[0] is False
+    assert hx.order_accepted("nope")[0] is False
 
 
 # ── the execute endpoint ─────────────────────────────────────────────────────

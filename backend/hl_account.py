@@ -119,6 +119,18 @@ def account_state(address: Optional[str] = None, *, env: Optional[str] = None,
     return parse_state(data, addr, env)
 
 
+def all_mids(*, env: Optional[str] = None, session: Optional[Any] = None) -> Dict[str, Any]:
+    """Every perp coin's current mid price, as returned by the info endpoint."""
+    return _post_info({"type": "allMids"}, env=env, session=session) or {}
+
+
+def mid_price(coin: str, *, env: Optional[str] = None,
+              session: Optional[Any] = None) -> Optional[float]:
+    """The live mid price for one coin — what a MARKET order will fill near, so
+    order size and exposure must be computed from this, not a stale signal price."""
+    return _num(all_mids(env=env, session=session).get(coin))
+
+
 def _mask(addr: str) -> str:
     """0x1234…ABCD — enough to recognise the account without printing it whole."""
     a = addr or ""
