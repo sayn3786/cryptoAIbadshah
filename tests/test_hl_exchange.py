@@ -286,3 +286,23 @@ def test_execute_endpoint_reports_disarmed(monkeypatch):
                                       headers={"x-cron-secret": "s3cret"})
     assert resp.status_code == 200
     assert resp.get_json()["reason"] == "DISARMED"
+
+
+# ── unified/portfolio-margin: spot USDC backs the perp ───────────────────────
+
+def test_unified_account_spot_counts_as_collateral(monkeypatch):
+    # Perps accountValue is 0 but spot USDC backs the perp (unified account) —
+    # the order must NOT be rejected for margin; spot is counted as collateral.
+    _arm(monkeypatch)
+    unified = {"account_value_usd": 0.0, "spot_usdc_usd": 999.0, "open_positions": []}
+    sender = _Sender()
+    r = _open(monkeypatch, account=unified, send_fn=sender)
+    assert r["ok"] is True and r["coin"] == "BTC"
+    assert len(sender.calls) == 1
+
+
+def test_neither_perps_nor_spot_funded_still_rejects(monkeypatch):
+    _arm(monkeypatch)
+    empty = {"account_value_usd": 0.0, "spot_usdc_usd": 0.0, "open_positions": []}
+    r = _open(monkeypatch, account=empty)
+    assert r["ok"] is False and r["reason"] == "INSUFFICIENT_MARGIN"

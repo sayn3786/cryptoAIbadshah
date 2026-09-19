@@ -181,10 +181,18 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
                 "entry": float(entry), "mark_px": mark,
                 "max_entry_deviation": cfg["max_entry_deviation"]}
 
+    # Collateral available to back a perp. In a UNIFIED / portfolio-margin
+    # account (Hyperliquid's default) the perps accountValue reads 0 / "not
+    # meaningful" and the spot USDC is the usable margin, so take the larger of
+    # the two. Unknown (both None) leaves the margin check to the exchange.
+    perps_free = account_state.get("account_value_usd")
+    spot_free = account_state.get("spot_usdc_usd")
+    free = None if (perps_free is None and spot_free is None) \
+        else max(perps_free or 0.0, spot_free or 0.0)
     plan = hl_meta.can_place(
         signal.get("symbol"), mark,
         notional_usd=cfg["notional_usd"], leverage=cfg["leverage"],
-        free_collateral_usd=account_state.get("account_value_usd"), table=table)
+        free_collateral_usd=free, table=table)
     if not plan.get("ok"):
         return {"ok": False, "reason": plan.get("reason"), "plan": plan}
 

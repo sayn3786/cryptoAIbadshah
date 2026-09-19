@@ -3832,6 +3832,12 @@ def api_hl_execute():
     try:
         with _hl_execute_lock:
             acct = _ha.account_state()
+            # Include spot USDC: in a unified account it is the usable perp
+            # collateral (perps accountValue reads 0), so the margin check needs it.
+            try:
+                acct["spot_usdc_usd"] = _ha.spot_usdc()
+            except Exception:
+                pass
             result = _hx.open_position(
                 {"symbol": symbol, "entry": entry, "direction": direction,
                  "id": ref, "candle_ts": candle_ts}, account_state=acct)
