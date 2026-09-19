@@ -3738,6 +3738,53 @@ def api_hl_status():
         return jsonify(_hl_status_cache["data"])
 
 
+# PUBLIC perp metadata for our tradeable symbols — szDecimals, max leverage and
+# the numeric asset id order payloads use. Public reference data; cached in
+# hl_meta. Lets you see which symbols are even listed on Hyperliquid.
+@app.get("/api/hl/meta")
+def api_hl_meta():
+    import hl_meta as _hm
+    table = _hm.asset_table()
+    ours = {}
+    for sym in SCAN_SYMBOLS:
+        coin = _hm.resolve_coin(sym, table)
+        ours[sym] = table.get(coin) if coin else None
+    return jsonify({"count": len(table), "min_order_usd": _hm.HL_MIN_ORDER_USD,
+                    "symbols": ours})
+
+
+# INTERNAL dry sizing preview — "if we placed this signal, what size / can we?".
+# Fail-closed (it reads our collateral). Places NOTHING; pure can_place preview.
+@app.get("/api/hl/plan")
+def api_hl_plan():
+    guard = _require_internal()
+    if guard:
+        return guard
+    import hl_meta as _hm
+    symbol = (request.args.get("symbol") or "").upper()
+    try:
+        entry = float(request.args.get("entry") or 0)
+    except (TypeError, ValueError):
+        entry = 0.0
+    notional = _hm._num_env("HL_TRADE_NOTIONAL_USD", 12.0)
+    leverage = _hm._num_env("HL_LEVERAGE", 3.0)
+    try:
+        notional = float(request.args.get("notional") or notional)
+        leverage = float(request.args.get("leverage") or leverage)
+    except (TypeError, ValueError):
+        pass
+    if not symbol or entry <= 0:
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "symbol and a positive entry are required"}), 400
+    try:
+        return jsonify(_hm.plan_order(symbol, entry, notional_usd=notional,
+                                      leverage=leverage))
+    except Exception:
+        app.logger.exception("hyperliquid plan preview failed")
+        return jsonify({"ok": False, "error_code": "HL_PLAN_FAILED",
+                        "error": "Hyperliquid plan preview failed"}), 502
+
+
 # ── Persisted signal history (Neon Postgres) ─────────────────────────────────
 # Reads are public (the dashboard shows them). Every MUTATION requires the
 # project's existing CRON_SECRET, the same protection the alert endpoints use —
