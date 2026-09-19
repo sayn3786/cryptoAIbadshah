@@ -242,6 +242,37 @@ def test_postmortem_defaults_the_strategy_version(client, fake, monkeypatch):
 
 def test_usage_report_is_internal_only(client, fake, monkeypatch):
     assert client.get("/api/db/usage").status_code == 401
+
+
+def test_postmortem_report_strength_band_filters_rows(client, fake, monkeypatch):
+    # The within-tier diagnostic: min_strength/max_strength filter the closed rows
+    # by confidence_score BEFORE the discriminators run, so the same report can be
+    # scoped to just the 69+ ("Confirmed") cohort. build_report is stubbed so the
+    # test asserts the ENDPOINT's filtering, not the report internals.
+    rows = [{"confidence_score": 40}, {"confidence_score": 55},
+            {"confidence_score": 75}, {"confidence_score": None}]
+    fake.list_closed_with_snapshots = lambda **kw: list(rows)
+    import postmortem_report as pm
+    monkeypatch.setattr(pm, "build_report",
+                        lambda r, **kw: {"n": len(r),
+                                         "cs": [x.get("confidence_score") for x in r]})
+
+    # No band → all rows (including the None-strength one) pass through.
+    assert client.get("/api/signals/postmortem-report").get_json()["n"] == 4
+
+    # 69+ tier only.
+    r1 = client.get("/api/signals/postmortem-report?min_strength=69").get_json()
+    assert r1["n"] == 1 and r1["cs"] == [75]
+    assert r1["strength_band"] == {"min": 69.0, "max": None, "rows": 1}
+
+    # Strong band 51–69 (max exclusive).
+    r2 = client.get(
+        "/api/signals/postmortem-report?min_strength=51&max_strength=69").get_json()
+    assert r2["n"] == 1 and r2["cs"] == [55]
+
+    # A None confidence_score is excluded whenever a band is applied.
+    r3 = client.get("/api/signals/postmortem-report?min_strength=0").get_json()
+    assert r3["n"] == 3
     monkeypatch.setenv("CRON_SECRET", "right")
     assert client.get("/api/db/usage",
                       headers={"x-cron-secret": "right"}).status_code == 200

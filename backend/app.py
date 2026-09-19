@@ -4035,6 +4035,10 @@ def api_signals_postmortem_report():
                          comparable.
       environment        environment scope (defaults to this deployment's)
       limit              max closed rows to pull (default 500)
+      min_strength       only trades with confidence_score >= this (e.g. 69 to
+                         inspect the "Confirmed" tier in isolation)
+      max_strength       only trades with confidence_score < this (e.g. pair with
+                         min_strength=51, max_strength=69 for the "Strong" tier)
     """
     guard = _db_guard()
     if guard:
@@ -4042,13 +4046,36 @@ def api_signals_postmortem_report():
     store = _signal_store()
     import postmortem_report as _pm
     sver = request.args.get("strategy_version") or _strategy_version_for_reports()
+
+    def _farg(name):
+        try:
+            v = request.args.get(name)
+            return float(v) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+    lo, hi = _farg("min_strength"), _farg("max_strength")
+
     try:
         rows = store.list_closed_with_snapshots(
             strategy_version=sver,
             environment=request.args.get("environment"),
             include_archived=True,       # analytics keep archived history
             limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
-        return jsonify(_pm.build_report(rows, strategy_version=sver))
+        if lo is not None or hi is not None:
+            # Same discriminators, but over only a strength band — so we can see
+            # what separates winners from losers WITHIN the 69+ cohort rather
+            # than across all trades. build_report splits win/loss itself.
+            def _in_band(r):
+                cs = r.get("confidence_score")
+                if cs is None:
+                    return False
+                cs = float(cs)
+                return (lo is None or cs >= lo) and (hi is None or cs < hi)
+            rows = [r for r in rows if _in_band(r)]
+        report = _pm.build_report(rows, strategy_version=sver)
+        if lo is not None or hi is not None:
+            report["strength_band"] = {"min": lo, "max": hi, "rows": len(rows)}
+        return jsonify(report)
     except Exception as exc:
         return _db_error_response(exc)
 
