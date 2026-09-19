@@ -4047,13 +4047,27 @@ def api_signals_postmortem_report():
     import postmortem_report as _pm
     sver = request.args.get("strategy_version") or _strategy_version_for_reports()
 
+    import math as _math
+
     def _farg(name):
-        try:
-            v = request.args.get(name)
-            return float(v) if v not in (None, "") else None
-        except (TypeError, ValueError):
+        """Parse a strength bound. Absent/empty -> None. A malformed or
+        non-finite value (e.g. 'oops', 'NaN', 'Infinity') is REJECTED rather
+        than silently dropped, so a typo'd bound can never masquerade as an
+        unfiltered tier analysis (or echo non-standard JSON numbers)."""
+        v = request.args.get(name)
+        if v is None or v == "":
             return None
-    lo, hi = _farg("min_strength"), _farg("max_strength")
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(name)
+        if not _math.isfinite(f):
+            raise ValueError(name)
+        return f
+    try:
+        lo, hi = _farg("min_strength"), _farg("max_strength")
+    except ValueError as bad:
+        return jsonify({"error": f"invalid {bad} (expected a finite number)"}), 400
 
     try:
         rows = store.list_closed_with_snapshots(
