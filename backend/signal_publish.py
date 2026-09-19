@@ -53,7 +53,15 @@ STRATEGY_NAME = "mtf_confluence_top3"
 # gating out the Moderate tier — the one strength band that lost money in both
 # the v45 and v48 powered cohorts. Changes WHICH trades clear the gate, so v48
 # and v49 are not comparable and the postmortem cohort restarts here.
-_DEFAULT_STRATEGY_VERSION = "v52_4h_avg"
+# v53: strength recalibration (rec_policy.apply_tier_calibration). The v52
+# postmortem, split by strength band, showed the Confirmed tier (>= 69)
+# anti-predictive — 50% win / -0.94% expectancy vs the Strong tier's (51-69)
+# 65.9% / -0.19%. Two traits were over-promoted into the top tier: chased
+# entries (top/bottom fifth of range) and wide 1H/2H strength splits (>= 20). v53
+# CAPS both below the Confirmed floor so they land in the better-performing
+# Strong tier — a tier demotion, not a volume cut. Changes the published
+# strength of those setups, so the postmortem cohort restarts here.
+_DEFAULT_STRATEGY_VERSION = "v53_4h_avg"
 STRATEGY_VERSION = (os.getenv("STRATEGY_VERSION", "").strip()
                     or _DEFAULT_STRATEGY_VERSION)
 

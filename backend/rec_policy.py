@@ -37,6 +37,8 @@ __all__ = [
     "meets_rr", "recompute_rr", "validate_geometry_and_rr",
     "targets_behind_live", "rec_quality", "avg_tf_strength",
     "screen_candidate", "rank_candidates", "select_publishable",
+    "CONFIRMED_TIER_FLOOR", "TIER_DEMOTE_CAP", "TF_SPLIT_GAP",
+    "TF_SPLIT_DOCK_SLOPE", "apply_tier_calibration", "candidate_is_chased",
 ]
 
 # ── The gate constants ───────────────────────────────────────────────────────
@@ -72,6 +74,29 @@ HIGH_CORR = 0.7
 
 # How many recommendations a slot publishes.
 PUBLISH_TOP_N = 3
+
+# ── v53 strength calibration (the anti-predictive Confirmed tier) ─────────────
+# The v52 postmortem, split by strength band, showed the tiers INVERTED: the
+# Confirmed tier (>= 69) won 50% at -0.94% expectancy while the Strong tier
+# (51-69) won 65.9% at -0.19%. A higher published number was making outcomes
+# WORSE. The band diff pinned the two traits the score was over-rewarding into
+# the top tier:
+#   · chase — 69% of the Confirmed cohort entered in the top/bottom fifth of
+#     range (vs 57% of Strong), and even Confirmed WINNERS were 58% chased, so
+#     within the top tier chase barely discriminated (it was near-universal).
+#   · timeframe split — 67% of the Confirmed cohort had 1H and 2H strength >= 20
+#     apart, and it was perfectly non-predictive there (lift 1.00) because it was
+#     so common; the published (2H) strength hid a weak 1H leg.
+# Strip the chased trades out of the Confirmed cohort and the remainder ran
+# ~10W/5L (67%) — a genuinely predictive top tier exists, buried under promoted
+# chased/divergent setups. v53 does not invent a signal or cut volume: it CAPS
+# the published strength of those two cohorts below the Confirmed floor so they
+# land in the (better-performing) Strong tier instead. Applied inside
+# screen_candidate, so production and the backtest replay demote identically.
+CONFIRMED_TIER_FLOOR = 69.0                 # signal_analytics tier edge: Confirmed >= 69
+TIER_DEMOTE_CAP      = CONFIRMED_TIER_FLOOR - 1.0   # 68.0 — top of the Strong tier
+TF_SPLIT_GAP         = 20.0                 # |1H - 2H| >= this is the postmortem's split
+TF_SPLIT_DOCK_SLOPE  = 0.5                  # extra strength docked per point beyond the gap
 
 # Points moved by agreement or disagreement with BTC's own 2H direction, before
 # the on-chain multiplier and the token's correlation are applied.
@@ -450,6 +475,71 @@ def rec_quality(cand: Dict, htf_dir: str) -> Tuple[float, List[str]]:
     return round(max(0.0, score), 1), factors
 
 
+def candidate_is_chased(sig) -> bool:
+    """Did this signal's own structure read flag a chased entry?
+
+    The generate_signal output carries `structure_factors`, a list of the
+    market-structure factors that scored. A `range_chase` factor is recorded
+    whenever the entry sits in the top/bottom fifth of the range — the exact
+    condition the postmortem's `entered_on_a_chase` discriminator reads off the
+    stored snapshot, so production, the snapshot and this gate all agree on what
+    "chased" means. Absence of the field (an older read) is treated as not
+    chased, never as unknown — the cap simply does not fire.
+    """
+    factors = (sig or {}).get("structure_factors")
+    if not isinstance(factors, (list, tuple)):
+        return False
+    for f in factors:
+        name = f.get("factor") if isinstance(f, dict) else f
+        if "chase" in str(name).lower():
+            return True
+    return False
+
+
+def apply_tier_calibration(strength, *, h1_strength=None, h2_strength=None,
+                           chased=False, min_floor=MIN_ADJUSTED_STRENGTH) -> Dict:
+    """v53: demote chased / timeframe-split setups out of the Confirmed tier.
+
+    Returns ``{"strength", "notes"}``. Pure, and only ever LOWERS the strength —
+    a calibration that could raise it would be manufacturing conviction. Two
+    independent demotions, both landing the setup in the Strong tier rather than
+    Confirmed:
+
+      * chased      → cap at TIER_DEMOTE_CAP (68): a top/bottom-fifth entry can
+                      no longer publish as Confirmed.
+      * 1H/2H split → cap at TIER_DEMOTE_CAP AND dock further, proportional to
+                      how far the spread exceeds TF_SPLIT_GAP, so a wider split
+                      lands deeper in Strong.
+
+    A publishable trade (original strength >= min_floor) is never docked BELOW
+    the publication floor — v53 demotes the tier, it does not cut volume. A
+    signal already under the floor is left under it (it will be rejected by
+    meets_min_strength anyway), never rescued upward.
+    """
+    orig = float(strength)
+    s = orig
+    notes: List[str] = []
+
+    if chased and s > TIER_DEMOTE_CAP:
+        s = TIER_DEMOTE_CAP
+        notes.append("chase_capped_to_strong")
+
+    h1, h2 = _finite(h1_strength), _finite(h2_strength)
+    if h1 is not None and h2 is not None:
+        spread = abs(h1 - h2)
+        if spread >= TF_SPLIT_GAP:
+            if s > TIER_DEMOTE_CAP:
+                s = TIER_DEMOTE_CAP
+            s -= (spread - TF_SPLIT_GAP) * TF_SPLIT_DOCK_SLOPE
+            notes.append("tf_split_docked")
+
+    # Never raise, and never demote a would-publish trade below the floor.
+    s = min(s, orig)
+    if orig >= min_floor:
+        s = max(s, float(min_floor))
+    return {"strength": round(s, 1), "notes": notes}
+
+
 def avg_tf_strength(h1_strength, h2_strength) -> float:
     """
     The ranking key: the average of the two timeframes that had to agree.
@@ -500,6 +590,22 @@ def screen_candidate(h1: Dict, h2: Dict, h4: Optional[Dict], *,
 
     sig = h2.get("sig") or {}
     out["sig"] = sig
+
+    # ── v53 strength calibration ──────────────────────────────────────────────
+    # Demote chased entries and wide 1H/2H splits out of the Confirmed tier (the
+    # v52 postmortem showed both were over-promoted and anti-predictive at the
+    # top). This LOWERS the published strength before the min-strength gate and
+    # everything downstream (confidence_score, quality tiebreak), so production
+    # and the backtest replay demote identically. It only ever lowers, and never
+    # below the publication floor for a would-publish trade.
+    cal = apply_tier_calibration(adj["strength"],
+                                 h1_strength=h1.get("strength"),
+                                 h2_strength=h2.get("strength"),
+                                 chased=candidate_is_chased(sig))
+    adj["strength"] = cal["strength"]
+    out["strength"] = cal["strength"]
+    out["calibration_notes"] = cal["notes"]
+
     sig_price = h2.get("signal_price") or sig.get("current_price") or sig.get("entry")
     live_price = h2.get("live_price") or sig_price
     out["signal_price"], out["live_price"] = sig_price, live_price

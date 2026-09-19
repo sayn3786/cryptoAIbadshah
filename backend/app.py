@@ -2960,7 +2960,10 @@ def _rec_cache_key() -> str:
     #       TP2/TP3 were almost never reached, so winners banked only TP1.
     #   v49 min-strength floor raised 32 → 51 — the Moderate tier lost money in
     #       both the v45 and v48 cohorts; only Strong+ now publishes.
-    return f"v52_4h_avg_{date}_{slot}"
+    #   v53 strength recalibration — chased entries and wide 1H/2H splits are
+    #       capped below the Confirmed floor (they were over-promoted and
+    #       anti-predictive in the v52 top tier); demotes them into Strong.
+    return f"v53_4h_avg_{date}_{slot}"
 
 
 def _daily_rec_scheduler():
