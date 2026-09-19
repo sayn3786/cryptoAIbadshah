@@ -3785,6 +3785,18 @@ def api_hl_plan():
                         "error": "Hyperliquid plan preview failed"}), 502
 
 
+# INTERNAL — whether live order placement is armed, and why not. Fail-closed.
+# Reveals only presence booleans (never the agent key). No signer/placement path
+# exists yet regardless of the switches, so this always reads live_ready:false.
+@app.get("/api/hl/arm-status")
+def api_hl_arm_status():
+    guard = _require_internal()
+    if guard:
+        return guard
+    import hl_execution as _hx
+    return jsonify(_hx.arm_status())
+
+
 # ── Persisted signal history (Neon Postgres) ─────────────────────────────────
 # Reads are public (the dashboard shows them). Every MUTATION requires the
 # project's existing CRON_SECRET, the same protection the alert endpoints use —
