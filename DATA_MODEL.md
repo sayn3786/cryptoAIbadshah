@@ -3,7 +3,7 @@
 How a recommendation becomes a stored trade, what every column means, and how to
 query it.
 
-Everything here is generated from the live schema (migrations `001`–`008`) and
+Everything here is generated from the live schema (migrations `001`–`009`) and
 the code that writes it. Where a column exists but nothing writes it yet, this
 says so.
 
@@ -322,7 +322,7 @@ flagged rather than mined.
 ### 3.6 `schema_migrations`
 
 `version` (PK), `description`, `applied_at`. Written only by
-`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`, `008`.
+`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`, `008`, `009`.
 
 ### 3.7 `etf_flow_daily` — durable spot-ETF net-flow history (migration `007`)
 
@@ -376,6 +376,26 @@ with a standalone `/api/cron/market-snapshot`), idempotent on
 in the scoring path reads it. Read via `/api/market-metrics` (latest value per
 metric, plus a metric's time series when `scope`+`metric` are given). Empty until
 migration `008` has been run.
+
+### 3.9 `app_users` — dashboard login accounts (migration `009`)
+
+Accounts for the dashboard's username/password login. Passwords are stored only
+as a `werkzeug` PBKDF2 hash — never plaintext, never returned by any endpoint.
+
+| Column | Type | Null | Meaning |
+|---|---|---|---|
+| `id` | `uuid` | no | Primary key. |
+| `username` | `text` | no | Login name. Case-insensitive and unique via a `lower(username)` index. |
+| `password_hash` | `text` | no | `werkzeug.security` PBKDF2 hash. Never leaves `user_store`. |
+| `role` | `text` | no | `user` (view only) or `admin` (manage users, drive the Hyperliquid controls). CHECK-constrained. |
+| `disabled` | `boolean` | no | A disabled account cannot sign in. |
+| `created_at` | `timestamptz` | no | When the account was created. |
+| `last_login_at` | `timestamptz` | yes | Last successful sign-in (best-effort). |
+
+Written by `backend/user_store.py`. Login is a signed-cookie session (`backend/auth.py`);
+enforcement is the default-OFF `AUTH_REQUIRED` switch, so this table can exist
+before the app gates on it. Endpoints: `/api/auth/{login,logout,me,users}`. Empty
+until migration `009` has been run.
 
 ---
 

@@ -59,7 +59,9 @@ def test_the_helper_sees_the_real_assets_and_ignores_navigation():
     refs = _local_asset_refs(_html())
     urls = {u for _t, u in refs}
     assert any("dashboard.css" in u for u in urls)
-    assert any("dashboard.js" in u for u in urls)
+    # dashboard.js is no longer a static <script src> — the login gate injects it
+    # only after auth (see the deferred-loader assertion below) — so it is NOT
+    # expected among the static asset refs.
     assert "/" not in urls, "an <a href='/'> link is navigation, not an asset"
 
 
@@ -67,8 +69,14 @@ def test_stylesheet_and_script_are_root_absolute():
     html = _html()
     assert re.search(r'<link rel="stylesheet" href="/dashboard/css/dashboard\.css', html), \
         "the stylesheet must be /dashboard/... or it 404s when the page is served at /"
-    assert re.search(r'<script src="/dashboard/js/dashboard\.js', html), \
-        "the script must be /dashboard/... or it 404s when the page is served at /"
+    # The login gate defers dashboard.js and injects it via JS. It must still be a
+    # ROOT-ABSOLUTE URL, or it 404s when the page is served at / — the same bug
+    # this file guards, just for the dynamically-loaded script.
+    assert re.search(r'"/dashboard/js/dashboard\.js', html), \
+        "the deferred script URL must be /dashboard/... or it 404s when served at /"
+    # And it must not appear in a RELATIVE form ("dashboard/js/..." or "./...").
+    assert not re.search(r'"\.?/?(?<!/)dashboard/js/dashboard\.js', html), \
+        "dashboard.js must be referenced root-absolute, never relative"
 
 
 def test_no_local_asset_reference_is_relative():
