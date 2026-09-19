@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
-import hyperliquid as hl                                               # noqa: E402
+import hl_whales as hl                                               # noqa: E402
 
 
 def _state(*positions):

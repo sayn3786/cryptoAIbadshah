@@ -44,7 +44,8 @@ def caps() -> Dict[str, float]:
     return {
         "notional_usd": hl_execution._num_env("HL_TRADE_NOTIONAL_USD",
                                               hl_execution.DEFAULT_NOTIONAL_USD),
-        "leverage": hl_execution._num_env("HL_LEVERAGE", hl_execution.DEFAULT_LEVERAGE),
+        "leverage": max(1, int(hl_execution._num_env("HL_LEVERAGE",
+                                                     hl_execution.DEFAULT_LEVERAGE))),
         "max_orders_per_run": int(hl_execution._num_env("HL_MAX_ORDERS_PER_RUN",
                                                         DEFAULT_MAX_ORDERS_PER_RUN)),
         "max_exposure_usd": hl_execution._num_env("HL_MAX_EXPOSURE_USD",
@@ -52,6 +53,17 @@ def caps() -> Dict[str, float]:
         "max_entry_deviation": hl_execution._num_env("HL_MAX_ENTRY_DEVIATION",
                                                      DEFAULT_MAX_ENTRY_DEVIATION),
     }
+
+
+def action_ok(resp: Any):
+    """(ok, detail) for a Hyperliquid ACTION response (updateLeverage, etc.).
+    The exchange returns application-level rejections inside a 200 as
+    status != 'ok', never as an exception."""
+    if not isinstance(resp, dict):
+        return False, "non-dict response"
+    if resp.get("status") != "ok":
+        return False, str(resp.get("response") or resp.get("status") or resp)[:200]
+    return True, None
 
 
 # ── impure: sign + send via the SDK (agent key). Imported lazily. ────────────
@@ -72,11 +84,15 @@ def send_market_open(coin: str, is_buy: bool, size: float, cloid_str: str,
     """Set the coin's leverage to the PLANNED value, then market-open. Without
     the leverage update the order would inherit whatever per-coin leverage the
     account already has (e.g. a leftover 20x), so the realised risk would not
-    match what was planned/sized."""
+    match what was planned/sized. The leverage update can be REJECTED inside a
+    200 (e.g. cross margin on an isolated-only coin) — abort if so, rather than
+    place under the old leverage."""
     from hyperliquid.utils.signing import Cloid
     ex = _exchange(env)
     if leverage:
-        ex.update_leverage(int(leverage), coin, True)     # cross margin
+        ok, detail = action_ok(ex.update_leverage(int(leverage), coin, True))
+        if not ok:
+            raise RuntimeError(f"leverage update rejected: {detail}")
     return ex.market_open(coin, is_buy, size, cloid=Cloid.from_str(cloid_str))
 
 
