@@ -1227,7 +1227,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # (reporting only, cached, watchlist-driven). Guarded — None when the
     # watchlist is empty or the fetch fails, never breaks the analysis.
     try:
-        import hyperliquid as _hl
+        import hl_whales as _hl
         smart_money = _hl.get_smart_money_for(symbol)
     except Exception:
         smart_money = None
@@ -3586,7 +3586,7 @@ def api_smart_money():
     the card simply hides. Configure via the HYPERLIQUID_WATCHLIST env.
     """
     try:
-        import hyperliquid as _hl
+        import hl_whales as _hl
         data = _hl.get_smart_money(("BTC", "ETH"))
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 200
@@ -3802,15 +3802,25 @@ def api_hl_arm_status():
 # unless HL_ALLOW_MAINNET. Every guard (sizing, exposure/order caps, reconcile,
 # exact-once) runs in hl_exchange.open_position. A business reject returns 200
 # with ok:false and the reason; only an internal error is a 5xx.
+#
+# Serialized by a lock so two concurrent requests on the same warm instance
+# reconcile-then-place one at a time and cannot both pass the exposure cap.
+# (Full cross-instance atomic reservation lands with the Phase 4b executor.)
+_hl_execute_lock = _threading.Lock()
+
 @app.post("/api/hl/execute")
 def api_hl_execute():
     guard = _require_internal()
     if guard:
         return guard
     import hl_exchange as _hx, hl_account as _ha
+    import uuid as _uuid
     symbol = (request.args.get("symbol") or "").upper()
     direction = (request.args.get("direction") or "LONG").upper()
-    ref = request.args.get("ref") or f"manual:{symbol}"
+    # An explicit ref makes the intent idempotent (a retry no-ops); when omitted
+    # each call gets a UNIQUE ref so distinct manual orders don't collide on one
+    # ledger key (which would wrongly report ALREADY_PLACED until the TTL).
+    ref = request.args.get("ref") or f"manual:{symbol}:{_uuid.uuid4().hex[:8]}"
     try:
         entry = float(request.args.get("entry") or 0)
         candle_ts = int(request.args.get("candle_ts") or 0)
@@ -3820,10 +3830,11 @@ def api_hl_execute():
         return jsonify({"ok": False, "error_code": "BAD_PARAMS",
                         "error": "symbol, positive entry, direction LONG|SHORT required"}), 400
     try:
-        acct = _ha.account_state()
-        result = _hx.open_position(
-            {"symbol": symbol, "entry": entry, "direction": direction,
-             "id": ref, "candle_ts": candle_ts}, account_state=acct)
+        with _hl_execute_lock:
+            acct = _ha.account_state()
+            result = _hx.open_position(
+                {"symbol": symbol, "entry": entry, "direction": direction,
+                 "id": ref, "candle_ts": candle_ts}, account_state=acct)
         return jsonify(result)
     except Exception:
         app.logger.exception("hyperliquid execute failed")

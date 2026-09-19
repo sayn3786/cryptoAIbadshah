@@ -186,6 +186,71 @@ def test_order_accepted_parsing():
     assert hx.order_accepted("nope")[0] is False
 
 
+# ── leverage: integer only, and a rejected update aborts the order ───────────
+
+def test_caps_leverage_is_integer(monkeypatch):
+    monkeypatch.setenv("HL_LEVERAGE", "3.9")            # fractional config
+    assert hx.caps()["leverage"] == 3                   # floored to int, so plan == sent
+    monkeypatch.setenv("HL_LEVERAGE", "0")
+    assert hx.caps()["leverage"] == 1                   # never below 1
+
+
+def test_action_ok_parsing():
+    assert hx.action_ok({"status": "ok"})[0] is True
+    ok, detail = hx.action_ok({"status": "err", "response": "onlyIsolated"})
+    assert ok is False and "onlyIsolated" in detail
+    assert hx.action_ok("nope")[0] is False
+
+
+class _FakeEx:
+    def __init__(self, lev_ok=True):
+        self.lev_ok, self.opened = lev_ok, False
+    def update_leverage(self, lev, coin, cross):
+        return {"status": "ok"} if self.lev_ok else {"status": "err",
+                                                     "response": "onlyIsolated"}
+    def market_open(self, *a, **k):
+        self.opened = True
+        return {"status": "ok"}
+
+
+def test_send_market_open_aborts_on_leverage_rejection(monkeypatch):
+    fake = _FakeEx(lev_ok=False)
+    monkeypatch.setattr(hx, "_exchange", lambda env=None: fake)
+    with pytest.raises(RuntimeError):
+        hx.send_market_open("BTC", True, 0.001, "0x" + "0" * 32, None, leverage=3)
+    assert fake.opened is False                         # never placed at the wrong leverage
+
+
+def test_send_market_open_places_when_leverage_ok(monkeypatch):
+    fake = _FakeEx(lev_ok=True)
+    monkeypatch.setattr(hx, "_exchange", lambda env=None: fake)
+    hx.send_market_open("BTC", True, 0.001, "0x" + "0" * 32, None, leverage=3)
+    assert fake.opened is True
+
+
+# ── the execute endpoint: unique default ref, explicit ref stable ───────────
+
+def test_execute_endpoint_default_ref_is_unique(monkeypatch):
+    app = _app()
+    monkeypatch.setenv("CRON_SECRET", "s3cret")
+    import hl_account, hl_exchange
+    monkeypatch.setattr(hl_account, "account_state",
+                        lambda *a, **k: {"account_value_usd": 100, "open_positions": []})
+    seen = []
+    monkeypatch.setattr(hl_exchange, "open_position",
+                        lambda sig, **k: (seen.append(sig["id"]),
+                                          {"ok": False, "reason": "DISARMED"})[1])
+    c = app.app.test_client()
+    hdr = {"x-cron-secret": "s3cret"}
+    c.post("/api/hl/execute?symbol=BTC&entry=60000", headers=hdr)
+    c.post("/api/hl/execute?symbol=BTC&entry=60000", headers=hdr)
+    assert seen[0] != seen[1] and seen[0].startswith("manual:BTC:")   # unique default
+    # an explicit ref stays stable → idempotent retry
+    c.post("/api/hl/execute?symbol=BTC&entry=60000&ref=fixed", headers=hdr)
+    c.post("/api/hl/execute?symbol=BTC&entry=60000&ref=fixed", headers=hdr)
+    assert seen[2] == seen[3] == "fixed"
+
+
 # ── the execute endpoint ─────────────────────────────────────────────────────
 
 def _app():
