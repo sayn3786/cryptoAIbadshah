@@ -273,6 +273,14 @@ def test_postmortem_report_strength_band_filters_rows(client, fake, monkeypatch)
     # A None confidence_score is excluded whenever a band is applied.
     r3 = client.get("/api/signals/postmortem-report?min_strength=0").get_json()
     assert r3["n"] == 3
+
+    # A malformed or non-finite bound is REJECTED (400), not silently dropped —
+    # so a typo can't masquerade as an unfiltered tier analysis.
+    for bad in ("min_strength=oops", "max_strength=NaN", "min_strength=Infinity"):
+        resp = client.get(f"/api/signals/postmortem-report?{bad}")
+        assert resp.status_code == 400, bad
+        assert "invalid" in resp.get_json()["error"]
+
     monkeypatch.setenv("CRON_SECRET", "right")
     assert client.get("/api/db/usage",
                       headers={"x-cron-secret": "right"}).status_code == 200
