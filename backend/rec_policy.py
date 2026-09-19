@@ -39,6 +39,7 @@ __all__ = [
     "screen_candidate", "rank_candidates", "select_publishable",
     "CONFIRMED_TIER_FLOOR", "TIER_DEMOTE_CAP", "TF_SPLIT_GAP",
     "TF_SPLIT_DOCK_SLOPE", "apply_tier_calibration", "candidate_is_chased",
+    "STRENGTH_TIERS", "strength_tier",
 ]
 
 # ── The gate constants ───────────────────────────────────────────────────────
@@ -538,6 +539,32 @@ def apply_tier_calibration(strength, *, h1_strength=None, h2_strength=None,
     if orig >= min_floor:
         s = max(s, float(min_floor))
     return {"strength": round(s, 1), "notes": notes}
+
+
+# The published strength tiers, matching signals.py's own boundaries and
+# signal_analytics.STRENGTH_TIERS. The tier LABEL a signal carries must be
+# derived from the SAME number the postmortem buckets on (the calibrated,
+# published strength), or a v53-demoted setup could read confidence_score=68
+# while still labelled "Confirmed".
+STRENGTH_TIERS = (("Weak", 0.0, 33.0), ("Moderate", 33.0, 51.0),
+                  ("Strong", 51.0, CONFIRMED_TIER_FLOOR),
+                  ("Confirmed", CONFIRMED_TIER_FLOOR, 1e9))
+
+
+def strength_tier(strength) -> Optional[str]:
+    """The tier label for a published strength, on the same edges as signals.py.
+
+    Returns None for an unreadable strength (never a tier it did not earn).
+    Direction is not needed: a NEUTRAL reading never becomes a candidate, so
+    everything reaching publication has a real direction.
+    """
+    s = _finite(strength)
+    if s is None:
+        return None
+    for label, lo, hi in STRENGTH_TIERS:
+        if lo <= s < hi:
+            return label
+    return "Confirmed" if s >= CONFIRMED_TIER_FLOOR else None
 
 
 def avg_tf_strength(h1_strength, h2_strength) -> float:

@@ -109,6 +109,32 @@ def test_candidate_is_chased_reads_structure_factors():
     assert rp.candidate_is_chased(None) is False
 
 
+# ── tier label follows the calibrated strength (Codex P2) ────────────────────
+
+def test_strength_tier_boundaries():
+    assert rp.strength_tier(32) == "Weak"
+    assert rp.strength_tier(33) == "Moderate"
+    assert rp.strength_tier(50.9) == "Moderate"
+    assert rp.strength_tier(51) == "Strong"
+    assert rp.strength_tier(68) == "Strong"          # a v53-demoted setup
+    assert rp.strength_tier(68.9) == "Strong"
+    assert rp.strength_tier(69) == "Confirmed"
+    assert rp.strength_tier(95) == "Confirmed"
+
+
+def test_strength_tier_of_a_demoted_setup_is_strong_not_confirmed():
+    # The whole point: a chased 90 (Confirmed) capped to 68 must now READ Strong,
+    # so the card and stored signal_tier agree with confidence_score.
+    cal = rp.apply_tier_calibration(90, h1_strength=88, h2_strength=90, chased=True)
+    assert cal["strength"] == 68.0
+    assert rp.strength_tier(cal["strength"]) == "Strong"
+
+
+def test_strength_tier_none_for_unreadable():
+    assert rp.strength_tier(None) is None
+    assert rp.strength_tier("nope") is None
+
+
 # ── screen_candidate applies it to the published strength ─────────────────────
 
 def _long_leg(strength, *, chased=False):

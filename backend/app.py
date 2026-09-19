@@ -2672,7 +2672,12 @@ def _compute_recommendations() -> dict:
             "mtf_counter":      False,
             "mtf_confirm":      False,
             "score":            sig.get("score", 0),
-            "tier":             sig.get("tier"),
+            # Tier LABEL follows the PUBLISHED strength (BTC-adjusted + v53
+            # calibration), not the raw 2H sig tier — otherwise a v53-demoted
+            # setup (e.g. capped to 68) would still read "Confirmed" while its
+            # confidence_score says Strong. Keeps the card and the stored
+            # signal_tier consistent with the number the postmortem buckets on.
+            "tier":             rec_policy.strength_tier(strength) or sig.get("tier"),
             "entry":            sig.get("entry"),
             "detected_at":      now_sgt.strftime("%b %d · %I:%M %p SGT"),
             "sl":               sig.get("sl"),
