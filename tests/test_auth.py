@@ -206,10 +206,10 @@ def test_admin_can_reset_role_disable_delete(monkeypatch):
     monkeypatch.setattr(us, "set_disabled", lambda uid, d: {"id": uid, "disabled": d})
     monkeypatch.setattr(us, "delete_user", lambda uid: True)
 
-    assert c.post("/api/auth/users/u2/password", json={"password": "abcdefgh"}).status_code == 200
-    assert c.post("/api/auth/users/u2/role", json={"role": "admin"}).get_json()["user"]["role"] == "admin"
-    assert c.post("/api/auth/users/u2/disable", json={"disabled": True}).get_json()["user"]["disabled"] is True
-    assert c.delete("/api/auth/users/u2").get_json()["deleted"] is True
+    assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/password", json={"password": "abcdefgh"}).status_code == 200
+    assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/role", json={"role": "admin"}).get_json()["user"]["role"] == "admin"
+    assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/disable", json={"disabled": True}).get_json()["user"]["disabled"] is True
+    assert c.delete("/api/auth/users/11111111-1111-1111-1111-111111111111").get_json()["deleted"] is True
 
 
 def test_disable_requires_a_real_boolean(monkeypatch):
@@ -219,13 +219,13 @@ def test_disable_requires_a_real_boolean(monkeypatch):
     called = {"n": 0}
     monkeypatch.setattr(us, "set_disabled",
                         lambda uid, d: called.__setitem__("n", called["n"] + 1) or {"id": uid})
-    bad = c.post("/api/auth/users/u2/disable", json={"disabled": "false"})
+    bad = c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/disable", json={"disabled": "false"})
     assert bad.status_code == 400 and bad.get_json()["error_code"] == "BAD_PARAMS"
     # a MISSING key must also 400 — no destructive default to disable
-    assert c.post("/api/auth/users/u2/disable", json={}).status_code == 400
-    assert c.post("/api/auth/users/u2/disable", json=[1]).status_code == 400
+    assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/disable", json={}).status_code == 400
+    assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/disable", json=[1]).status_code == 400
     assert called["n"] == 0                               # never reached the store
-    ok = c.post("/api/auth/users/u2/disable", json={"disabled": True})
+    ok = c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/disable", json={"disabled": True})
     assert ok.status_code == 200 and called["n"] == 1
 
 
@@ -238,8 +238,8 @@ def test_non_string_fields_are_400_not_500(monkeypatch):
     monkeypatch.setattr(us, "set_password", lambda uid, pw: {"id": uid})
     monkeypatch.setattr(us, "create_user",
                         lambda u, p, role="user": {"id": "x", "username": u, "role": role})
-    assert c.post("/api/auth/users/u2/role", json={"role": 1}).status_code == 400
-    assert c.post("/api/auth/users/u2/password", json={"password": 123}).status_code == 400
+    assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/role", json={"role": 1}).status_code == 400
+    assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/password", json={"password": 123}).status_code == 400
     assert c.post("/api/auth/users", json={"username": 1, "password": "abcdefgh"}).status_code == 400
     assert c.post("/api/auth/password",
                   json={"current_password": "x", "new_password": 9}).status_code == 400
@@ -251,11 +251,25 @@ def test_non_object_json_body_is_400_not_500(monkeypatch):
     app = _app()
     c = _admin_client(app, monkeypatch)
     for bad in ([1], "password", 1):
-        assert c.post("/api/auth/users/u2/role", json=bad).status_code == 400
+        assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/role", json=bad).status_code == 400
         assert c.post("/api/auth/password", json=bad).status_code == 400
     # login with a non-object body is a clean 400 too
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-123456")
     assert app.app.test_client().post("/api/auth/login", json=[1]).status_code == 400
+
+
+def test_malformed_user_id_is_400_not_500(monkeypatch):
+    # A non-UUID path segment must be rejected before it reaches the UUID column.
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+    called = {"n": 0}
+    for fn in ("set_password", "set_role", "set_disabled", "delete_user"):
+        monkeypatch.setattr(us, fn, lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    assert c.post("/api/auth/users/not-a-uuid/password", json={"password": "abcdefgh"}).status_code == 400
+    assert c.post("/api/auth/users/not-a-uuid/role", json={"role": "user"}).status_code == 400
+    assert c.post("/api/auth/users/not-a-uuid/disable", json={"disabled": True}).status_code == 400
+    assert c.delete("/api/auth/users/not-a-uuid").status_code == 400
+    assert called["n"] == 0                               # never reached the store
 
 
 def test_last_admin_guard_returns_409(monkeypatch):
@@ -265,7 +279,7 @@ def test_last_admin_guard_returns_409(monkeypatch):
     def boom(*_a, **_k):
         raise us.LastAdminError("cannot demote the last enabled admin")
     monkeypatch.setattr(us, "set_role", boom)
-    r = c.post("/api/auth/users/me/role", json={"role": "user"})
+    r = c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/role", json={"role": "user"})
     assert r.status_code == 409 and r.get_json()["error_code"] == "LAST_ADMIN"
 
 
@@ -297,7 +311,7 @@ def test_password_reset_refused_without_migration_010(monkeypatch):
     def _raise(*_a, **_k):
         raise us.MigrationRequired("run migration 010")
     monkeypatch.setattr(us, "set_password", _raise)
-    r = c.post("/api/auth/users/u2/password", json={"password": "abcdefgh"})
+    r = c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/password", json={"password": "abcdefgh"})
     assert r.status_code == 503 and r.get_json()["error_code"] == "MIGRATION_REQUIRED"
 
 

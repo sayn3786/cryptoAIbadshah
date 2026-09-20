@@ -4193,6 +4193,19 @@ def _json_body():
     return body if isinstance(body, dict) else {}
 
 
+def _bad_uuid(uid):
+    """A 400 response when `uid` is not a valid UUID, else None. The app_users id
+    is a UUID column, so a malformed path segment would otherwise reach Postgres
+    and raise an invalid-text-representation error surfaced as a 500."""
+    import uuid as _uuid
+    try:
+        _uuid.UUID(str(uid))
+        return None
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "invalid user id"}), 400
+
+
 def _require_admin_session():
     """Admin-session gate for user management. Returns an error response or None.
     Unlike creation, these mutate EXISTING accounts, so the bootstrap token is not
@@ -4231,6 +4244,9 @@ def api_auth_user_reset_password(uid):
     guard = _require_admin_session()
     if guard:
         return guard
+    bad = _bad_uuid(uid)
+    if bad:
+        return bad
     import user_store as _us
     pw = _req_str(_json_body().get("password"))
     if pw is None:
@@ -4244,6 +4260,9 @@ def api_auth_user_set_role(uid):
     guard = _require_admin_session()
     if guard:
         return guard
+    bad = _bad_uuid(uid)
+    if bad:
+        return bad
     import user_store as _us
     role = _req_str(_json_body().get("role"))
     if role is None:
@@ -4257,6 +4276,9 @@ def api_auth_user_set_disabled(uid):
     guard = _require_admin_session()
     if guard:
         return guard
+    bad = _bad_uuid(uid)
+    if bad:
+        return bad
     import user_store as _us
     body = _json_body()
     disabled = body.get("disabled")
@@ -4274,6 +4296,9 @@ def api_auth_user_delete(uid):
     guard = _require_admin_session()
     if guard:
         return guard
+    bad = _bad_uuid(uid)
+    if bad:
+        return bad
     import user_store as _us
     return _user_mgmt(lambda: _us.delete_user(uid), ok_key="deleted")
 
