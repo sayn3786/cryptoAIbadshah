@@ -20,7 +20,10 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from db import session_scope
 
-VALID_ROLES = ("user", "admin")
+# user       — dashboard charts/analysis only
+# user_admin — manages user accounts ONLY (no charts, trades, HL)
+# admin      — the operator: trades, publish, Hyperliquid (no user management)
+VALID_ROLES = ("user", "user_admin", "admin")
 
 
 class AuthUnavailable(RuntimeError):
@@ -209,28 +212,39 @@ def _get_row(s, user_id: str):
         {"id": str(user_id)}).mappings().first()
 
 
-def _lock_admins_then_target(s, user_id: str):
+def _lock_privileged_then_target(s, user_id: str):
     """For a guarded mutation, acquire locks in a CONSISTENT global order to avoid
-    deadlocks: first every enabled-admin row (ordered by id), THEN the target row.
+    deadlocks: first every enabled PRIVILEGED row (admin + user_admin, ordered by
+    id), THEN the target row.
 
     Two concurrent disable/demote/delete transactions therefore contend on the
-    same first admin row before either touches a target, so they serialize
+    same first privileged row before either touches a target, so they serialize
     instead of each grabbing its own target and then dead-locking on the other's.
-    Returns (enabled_admin_count, target_row). The count and the target are both
-    read under the lock, so the last-admin decision cannot race a commit.
+    Returns (enabled_admin_count, enabled_user_admin_count, target_row), all read
+    under the lock so the last-of-role decision cannot race a commit.
     """
-    admin_ids = s.execute(text(
-        "SELECT id FROM app_users WHERE role='admin' AND disabled=FALSE "
-        "ORDER BY id FOR UPDATE")).all()
-    row = s.execute(text(
+    rows = s.execute(text(
+        "SELECT role FROM app_users WHERE role IN ('admin','user_admin') "
+        "AND disabled=FALSE ORDER BY id FOR UPDATE")).mappings().all()
+    admins = sum(1 for r in rows if r["role"] == "admin")
+    user_admins = sum(1 for r in rows if r["role"] == "user_admin")
+    target = s.execute(text(
         "SELECT id, username, role, disabled FROM app_users WHERE id=:id FOR UPDATE"),
         {"id": str(user_id)}).mappings().first()
-    return len(admin_ids), row
+    return admins, user_admins, target
 
 
-def _would_strand(count: int, row) -> bool:
-    """True when acting on `row` (an enabled admin) would remove the last one."""
-    return bool(row and row["role"] == "admin" and not row["disabled"] and count <= 1)
+def _stranded_role(admins: int, user_admins: int, row):
+    """The privileged role that acting on `row` would leave with zero enabled
+    members, or None. Never strand the last operator (admin) or the last account
+    manager (user_admin)."""
+    if not row or row["disabled"]:
+        return None
+    if row["role"] == "admin" and admins <= 1:
+        return "admin"
+    if row["role"] == "user_admin" and user_admins <= 1:
+        return "user_admin"
+    return None
 
 
 def revalidate(user_id: str):
@@ -355,11 +369,13 @@ def set_disabled(user_id: str, disabled: bool) -> Dict[str, Any]:
     def _work(s):
         if not _table_exists(s):
             raise AuthUnavailable("app_users table is missing (run migration 009)")
-        count, row = _lock_admins_then_target(s, user_id)
+        admins, user_admins, row = _lock_privileged_then_target(s, user_id)
         if not row:
             raise UserValidationError("no such user")
-        if disabled and _would_strand(count, row):
-            raise LastAdminError("cannot disable the last enabled admin")
+        if disabled:
+            stranded = _stranded_role(admins, user_admins, row)
+            if stranded:
+                raise LastAdminError(f"cannot disable the last enabled {stranded}")
         s.execute(text("UPDATE app_users SET disabled=:d WHERE id=:id"),
                   {"d": bool(disabled), "id": str(user_id)})
         return _public(dict(_get_row(s, user_id)))
@@ -376,11 +392,15 @@ def set_role(user_id: str, role: str) -> Dict[str, Any]:
     def _work(s):
         if not _table_exists(s):
             raise AuthUnavailable("app_users table is missing (run migration 009)")
-        count, row = _lock_admins_then_target(s, user_id)
+        admins, user_admins, row = _lock_privileged_then_target(s, user_id)
         if not row:
             raise UserValidationError("no such user")
-        if role != "admin" and _would_strand(count, row):
-            raise LastAdminError("cannot demote the last enabled admin")
+        # Changing to a different role removes the target from its current role;
+        # refuse if that would strand the last operator or the last manager.
+        if role != row["role"]:
+            stranded = _stranded_role(admins, user_admins, row)
+            if stranded:
+                raise LastAdminError(f"cannot change the role of the last enabled {stranded}")
         s.execute(text("UPDATE app_users SET role=:r WHERE id=:id"),
                   {"r": role, "id": str(user_id)})
         return _public(dict(_get_row(s, user_id)))
@@ -395,11 +415,12 @@ def delete_user(user_id: str) -> bool:
     def _work(s):
         if not _table_exists(s):
             raise AuthUnavailable("app_users table is missing (run migration 009)")
-        count, row = _lock_admins_then_target(s, user_id)
+        admins, user_admins, row = _lock_privileged_then_target(s, user_id)
         if not row:
             return False
-        if _would_strand(count, row):
-            raise LastAdminError("cannot delete the last enabled admin")
+        stranded = _stranded_role(admins, user_admins, row)
+        if stranded:
+            raise LastAdminError(f"cannot delete the last enabled {stranded}")
         s.execute(text("DELETE FROM app_users WHERE id=:id"), {"id": str(user_id)})
         return True
 

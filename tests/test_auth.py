@@ -159,19 +159,61 @@ def test_create_user_endpoint_bootstraps_with_token(monkeypatch):
     assert created == {"username": "bob", "role": "admin"}
 
 
+SESSION_UID = "22222222-2222-2222-2222-222222222222"   # a valid-UUID session id
+
+
 def _admin_client(app, monkeypatch, role="admin"):
     """A test client with a signed-in session of the given role. Stubs revalidate
     to 'ok' so the DB-backed session check (fail-closed) passes; tests that want a
-    revoked/changed session override us.revalidate afterwards."""
+    revoked/changed session override us.revalidate afterwards. The session id is a
+    real UUID so the self-mutation guard can be exercised."""
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-123456")
     monkeypatch.setattr(us, "verify_credentials",
-                        lambda u, p: {"id": "me", "username": "admin", "role": role})
+                        lambda u, p: {"id": SESSION_UID, "username": "admin", "role": role})
     monkeypatch.setattr(us, "touch_login", lambda *_a, **_k: None)
     monkeypatch.setattr(us, "revalidate",
-                        lambda uid: ("ok", {"id": "me", "username": "admin", "role": role}))
+                        lambda uid: ("ok", {"id": SESSION_UID, "username": "admin", "role": role}))
     c = app.app.test_client()
     c.post("/api/auth/login", json={"username": "admin", "password": "x"})
     return c
+
+
+# ── separation of duties: who may manage users / see trades ──────────────────
+
+def test_admin_cannot_manage_users(monkeypatch):
+    # The OPERATOR admin is not an account manager — user mgmt is user_admin only.
+    app = _app()
+    c = _admin_client(app, monkeypatch, role="admin")
+    U = "11111111-1111-1111-1111-111111111111"
+    assert c.get("/api/auth/users").status_code == 403
+    assert c.post("/api/auth/users", json={"username": "x", "password": "abcdefgh"}).status_code == 403
+    assert c.post("/api/auth/users/" + U + "/role", json={"role": "user"}).status_code == 403
+    assert c.delete("/api/auth/users/" + U).status_code == 403
+
+
+def test_user_admin_cannot_change_own_role(monkeypatch):
+    # No self-escalation: a user_admin cannot promote/alter their own account.
+    app = _app()
+    c = _admin_client(app, monkeypatch, role="user_admin")
+    r = c.post("/api/auth/users/" + SESSION_UID + "/role", json={"role": "admin"})
+    assert r.status_code == 403 and r.get_json()["error_code"] == "FORBIDDEN_SELF"
+    assert c.post("/api/auth/users/" + SESSION_UID + "/disable",
+                  json={"disabled": True}).status_code == 403
+    assert c.delete("/api/auth/users/" + SESSION_UID).status_code == 403
+
+
+def test_trades_paths_are_admin_only_when_enforced(monkeypatch):
+    # With AUTH_REQUIRED on, a user_admin session is refused on trade/HL paths
+    # server-side (not merely hidden), while an admin session passes.
+    app = _app()
+    monkeypatch.setenv("AUTH_REQUIRED", "1")
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    monkeypatch.delenv("HL_ADMIN_TOKEN", raising=False)
+    ua = _admin_client(app, monkeypatch, role="user_admin")
+    r = ua.get("/api/hl/auto-status")
+    assert r.status_code == 403 and r.get_json()["error_code"] == "FORBIDDEN_ROLE"
+    adm = _admin_client(app, monkeypatch, role="admin")
+    assert adm.get("/api/hl/auto-status").status_code == 200   # operator passes
 
 
 # ── user management: reset / role / disable / delete ─────────────────────────
@@ -200,7 +242,7 @@ def test_management_bootstrap_token_is_NOT_accepted(monkeypatch):
 
 def test_admin_can_reset_role_disable_delete(monkeypatch):
     app = _app()
-    c = _admin_client(app, monkeypatch)
+    c = _admin_client(app, monkeypatch, role="user_admin")
     monkeypatch.setattr(us, "set_password", lambda uid, pw: {"id": uid, "username": "bob"})
     monkeypatch.setattr(us, "set_role", lambda uid, role: {"id": uid, "role": role})
     monkeypatch.setattr(us, "set_disabled", lambda uid, d: {"id": uid, "disabled": d})
@@ -215,7 +257,7 @@ def test_admin_can_reset_role_disable_delete(monkeypatch):
 def test_disable_requires_a_real_boolean(monkeypatch):
     # A truthy string like "false" must be rejected, not silently disable.
     app = _app()
-    c = _admin_client(app, monkeypatch)
+    c = _admin_client(app, monkeypatch, role="user_admin")
     called = {"n": 0}
     monkeypatch.setattr(us, "set_disabled",
                         lambda uid, d: called.__setitem__("n", called["n"] + 1) or {"id": uid})
@@ -233,7 +275,7 @@ def test_non_string_fields_are_400_not_500(monkeypatch):
     # Syntactically valid JSON with a non-string role/password must be a clean
     # 400, never an AttributeError-driven 500.
     app = _app()
-    c = _admin_client(app, monkeypatch)
+    c = _admin_client(app, monkeypatch, role="user_admin")
     monkeypatch.setattr(us, "set_role", lambda uid, role: {"id": uid, "role": role})
     monkeypatch.setattr(us, "set_password", lambda uid, pw: {"id": uid})
     monkeypatch.setattr(us, "create_user",
@@ -249,7 +291,7 @@ def test_non_object_json_body_is_400_not_500(monkeypatch):
     # A truthy non-object JSON body ([1], "x", 1) must not crash .get() → 500;
     # a field-required endpoint returns a clean 400 instead.
     app = _app()
-    c = _admin_client(app, monkeypatch)
+    c = _admin_client(app, monkeypatch, role="user_admin")
     for bad in ([1], "password", 1):
         assert c.post("/api/auth/users/11111111-1111-1111-1111-111111111111/role", json=bad).status_code == 400
         assert c.post("/api/auth/password", json=bad).status_code == 400
@@ -261,7 +303,7 @@ def test_non_object_json_body_is_400_not_500(monkeypatch):
 def test_malformed_user_id_is_400_not_500(monkeypatch):
     # A non-UUID path segment must be rejected before it reaches the UUID column.
     app = _app()
-    c = _admin_client(app, monkeypatch)
+    c = _admin_client(app, monkeypatch, role="user_admin")
     called = {"n": 0}
     for fn in ("set_password", "set_role", "set_disabled", "delete_user"):
         monkeypatch.setattr(us, fn, lambda *a, **k: called.__setitem__("n", called["n"] + 1))
@@ -274,7 +316,7 @@ def test_malformed_user_id_is_400_not_500(monkeypatch):
 
 def test_last_admin_guard_returns_409(monkeypatch):
     app = _app()
-    c = _admin_client(app, monkeypatch)
+    c = _admin_client(app, monkeypatch, role="user_admin")
 
     def boom(*_a, **_k):
         raise us.LastAdminError("cannot demote the last enabled admin")
@@ -306,7 +348,7 @@ def test_password_reset_refused_without_migration_010(monkeypatch):
     # If session_version is unavailable the reset cannot revoke sessions, so it is
     # refused (503) rather than falsely reporting success.
     app = _app()
-    c = _admin_client(app, monkeypatch)
+    c = _admin_client(app, monkeypatch, role="user_admin")
 
     def _raise(*_a, **_k):
         raise us.MigrationRequired("run migration 010")

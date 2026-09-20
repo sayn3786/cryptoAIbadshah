@@ -94,8 +94,26 @@ def current_user() -> Optional[Dict[str, Any]]:
 
 
 def is_admin() -> bool:
+    """The OPERATOR role: trades, publish, Hyperliquid. NOT user management."""
     u = current_user()
     return bool(u and u.get("role") == "admin")
+
+
+def is_user_admin() -> bool:
+    """The ACCOUNT-MANAGER role: manages users only (no charts, trades, HL)."""
+    u = current_user()
+    return bool(u and u.get("role") == "user_admin")
+
+
+def can_manage_users() -> bool:
+    """Who may manage accounts. Per separation of duties this is user_admin ONLY
+    — the operator admin cannot manage users."""
+    return is_user_admin()
+
+
+def can_view_trades() -> bool:
+    """Who may see trades / tracker / publish / Hyperliquid — the operator only."""
+    return is_admin()
 
 
 # ── decorators ───────────────────────────────────────────────────────────────

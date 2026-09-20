@@ -3,7 +3,7 @@
 How a recommendation becomes a stored trade, what every column means, and how to
 query it.
 
-Everything here is generated from the live schema (migrations `001`–`010`) and
+Everything here is generated from the live schema (migrations `001`–`011`) and
 the code that writes it. Where a column exists but nothing writes it yet, this
 says so.
 
@@ -322,7 +322,7 @@ flagged rather than mined.
 ### 3.6 `schema_migrations`
 
 `version` (PK), `description`, `applied_at`. Written only by
-`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`, `008`, `009`, `010`.
+`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`, `008`, `009`, `010`, `011`.
 
 ### 3.7 `etf_flow_daily` — durable spot-ETF net-flow history (migration `007`)
 
@@ -387,7 +387,7 @@ as a `werkzeug` PBKDF2 hash — never plaintext, never returned by any endpoint.
 | `id` | `uuid` | no | Primary key. |
 | `username` | `text` | no | Login name. Case-insensitive and unique via a `lower(username)` index. |
 | `password_hash` | `text` | no | `werkzeug.security` PBKDF2 hash. Never leaves `user_store`. |
-| `role` | `text` | no | `user` (view only) or `admin` (manage users, drive the Hyperliquid controls). CHECK-constrained. |
+| `role` | `text` | no | `user` (charts/analysis only), `user_admin` (manages user accounts only — migration `011`), or `admin` (the operator: trades, publish, Hyperliquid; not user management). CHECK-constrained. Separation of duties. |
 | `disabled` | `boolean` | no | A disabled account cannot sign in. |
 | `created_at` | `timestamptz` | no | When the account was created. |
 | `last_login_at` | `timestamptz` | yes | Last successful sign-in (best-effort). |

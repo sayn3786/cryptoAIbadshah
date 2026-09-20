@@ -4022,30 +4022,33 @@ def _require_internal():
     return None
 
 
-def _hl_admin_ok() -> bool:
-    """Auth for the Hyperliquid admin endpoints. Accepts EITHER the existing
-    internal CRON_SECRET or a DEDICATED HL_ADMIN_TOKEN (via Bearer or the
-    x-hl-token header). The dedicated token lets an operator drive these
-    endpoints with a value they set themselves, without touching the shared cron
-    secret (which is also used by the GitHub workflows). Fail-closed: when
-    neither secret is configured or matches, deny."""
+def _server_token_ok() -> bool:
+    """A SERVER-SIDE secret only: the internal CRON_SECRET or the dedicated
+    HL_ADMIN_TOKEN (Bearer or x-hl-token). No session is consulted. This is the
+    headless/bootstrap credential — it does NOT accept a signed-in user of any
+    role. Fail-closed when neither secret is configured or matches."""
     import os as _os
-    if _internal_auth_ok():                              # CRON_SECRET path unchanged
+    if _internal_auth_ok():                              # CRON_SECRET path
         return True
-    # A signed-in ADMIN may drive these from the dashboard UI (session cookie),
-    # so the HL buttons work without exposing the token to the browser.
-    try:
-        import auth as _auth
-        if _auth.is_admin():
-            return True
-    except Exception:                                    # noqa: BLE001
-        pass
     token = _os.getenv("HL_ADMIN_TOKEN", "")
     if not token:
         return False
     auth = request.headers.get("authorization", "")
     hdr = request.headers.get("x-hl-token", "")
     return auth == f"Bearer {token}" or hdr == token
+
+
+def _hl_admin_ok() -> bool:
+    """Auth for the Hyperliquid admin endpoints: a server token (CRON_SECRET or
+    HL_ADMIN_TOKEN) OR a signed-in OPERATOR admin (session cookie), so the HL
+    buttons work from the UI without exposing the token to the browser."""
+    if _server_token_ok():
+        return True
+    try:
+        import auth as _auth
+        return _auth.is_admin()
+    except Exception:                                    # noqa: BLE001
+        return False
 
 
 def _require_hl_admin():
@@ -4080,10 +4083,31 @@ def _enforce_dashboard_auth():
     # when CRON_SECRET is unset) so a missing secret can never open the gate.
     if _internal_auth_ok() or _hl_admin_ok():
         return None
-    if _auth.current_user() is not None:
-        return None
-    return jsonify({"error": "Authentication required",
-                    "error_code": "AUTH_REQUIRED"}), 401
+    u = _auth.current_user()
+    if u is None:
+        return jsonify({"error": "Authentication required",
+                        "error_code": "AUTH_REQUIRED"}), 401
+    # Role visibility (separation of duties): trades / tracker / publish /
+    # Hyperliquid are the OPERATOR's (admin) — a user or user_admin session is
+    # refused server-side, not merely hidden in the UI. Internal-token callers
+    # already returned above, so this only restricts browser sessions.
+    if _is_trades_path(p) and u.get("role") != "admin":
+        return jsonify({"error": "Not permitted for this role",
+                        "error_code": "FORBIDDEN_ROLE"}), 403
+    return None
+
+
+# Trades / tracker / publish / Hyperliquid surfaces — admin-only for a session.
+# (User management lives under /api/auth/users and is gated to user_admin in its
+# own handlers; /api/auth/* is never a trades path.)
+_TRADES_PREFIXES = ("/api/recommendations", "/api/paper", "/api/hl", "/api/telegram")
+
+
+def _is_trades_path(p: str) -> bool:
+    if p.startswith("/api/signals"):
+        return True
+    return any(p == pre or p.startswith(pre + "/") or p.startswith(pre + "?")
+               for pre in _TRADES_PREFIXES)
 
 
 @app.post("/api/auth/login")
@@ -4136,8 +4160,8 @@ def api_auth_me():
 def api_auth_users_list():
     import auth as _auth
     import user_store as _us
-    if not _auth.is_admin():
-        return jsonify({"error": "Admin only", "error_code": "FORBIDDEN"}), 403
+    if not _auth.can_manage_users():
+        return jsonify({"error": "User admin only", "error_code": "FORBIDDEN"}), 403
     try:
         return jsonify({"users": _us.list_users()})
     except Exception:
@@ -4147,12 +4171,14 @@ def api_auth_users_list():
 
 @app.post("/api/auth/users")
 def api_auth_users_create():
-    """Create an account. An admin SESSION may create users from the UI; to
-    BOOTSTRAP the very first admin (before any account exists) the internal
+    """Create an account. A user_admin SESSION may create users from the UI; to
+    BOOTSTRAP the first accounts (before any user_admin exists) the internal
     CRON_SECRET or HL_ADMIN_TOKEN is accepted instead."""
     import auth as _auth
     import user_store as _us
-    if not (_auth.is_admin() or _hl_admin_ok()):
+    # user_admin session, or the SERVER token for bootstrap. Not an admin session
+    # (the operator does not manage users) — _server_token_ok excludes sessions.
+    if not (_auth.can_manage_users() or _server_token_ok()):
         return jsonify({"error": "Forbidden", "error_code": "FORBIDDEN"}), 403
     body = _json_body()
     username = _req_str(body.get("username"))
@@ -4206,13 +4232,26 @@ def _bad_uuid(uid):
                         "error": "invalid user id"}), 400
 
 
-def _require_admin_session():
-    """Admin-session gate for user management. Returns an error response or None.
-    Unlike creation, these mutate EXISTING accounts, so the bootstrap token is not
-    accepted — only a signed-in admin."""
+def _require_user_admin_session():
+    """User-management gate. Returns an error response or None. These mutate
+    EXISTING accounts, so the bootstrap token is NOT accepted — only a signed-in
+    user_admin (the account-manager role; the operator admin cannot manage
+    users)."""
     import auth as _auth
-    if not _auth.is_admin():
-        return jsonify({"error": "Admin only", "error_code": "FORBIDDEN"}), 403
+    if not _auth.can_manage_users():
+        return jsonify({"error": "User admin only", "error_code": "FORBIDDEN"}), 403
+    return None
+
+
+def _forbid_self(uid):
+    """Block a user_admin from changing their OWN role/status/existence — prevents
+    self-escalation (e.g. promoting oneself to admin) and self-lockout. Returns an
+    error response or None. (Changing one's own password uses /api/auth/password.)"""
+    import auth as _auth
+    u = _auth.current_user()
+    if u and str(u.get("id")) == str(uid):
+        return jsonify({"error": "cannot change your own account here; ask another user_admin",
+                        "error_code": "FORBIDDEN_SELF"}), 403
     return None
 
 
@@ -4241,7 +4280,7 @@ def _user_mgmt(fn, *, ok_key="user"):
 
 @app.post("/api/auth/users/<uid>/password")
 def api_auth_user_reset_password(uid):
-    guard = _require_admin_session()
+    guard = _require_user_admin_session()
     if guard:
         return guard
     bad = _bad_uuid(uid)
@@ -4257,12 +4296,15 @@ def api_auth_user_reset_password(uid):
 
 @app.post("/api/auth/users/<uid>/role")
 def api_auth_user_set_role(uid):
-    guard = _require_admin_session()
+    guard = _require_user_admin_session()
     if guard:
         return guard
     bad = _bad_uuid(uid)
     if bad:
         return bad
+    mine = _forbid_self(uid)                              # no self-promotion
+    if mine:
+        return mine
     import user_store as _us
     role = _req_str(_json_body().get("role"))
     if role is None:
@@ -4273,12 +4315,15 @@ def api_auth_user_set_role(uid):
 
 @app.post("/api/auth/users/<uid>/disable")
 def api_auth_user_set_disabled(uid):
-    guard = _require_admin_session()
+    guard = _require_user_admin_session()
     if guard:
         return guard
     bad = _bad_uuid(uid)
     if bad:
         return bad
+    mine = _forbid_self(uid)                              # no self-disable (lockout)
+    if mine:
+        return mine
     import user_store as _us
     body = _json_body()
     disabled = body.get("disabled")
@@ -4293,12 +4338,15 @@ def api_auth_user_set_disabled(uid):
 
 @app.delete("/api/auth/users/<uid>")
 def api_auth_user_delete(uid):
-    guard = _require_admin_session()
+    guard = _require_user_admin_session()
     if guard:
         return guard
     bad = _bad_uuid(uid)
     if bad:
         return bad
+    mine = _forbid_self(uid)                              # no self-delete (lockout)
+    if mine:
+        return mine
     import user_store as _us
     return _user_mgmt(lambda: _us.delete_user(uid), ok_key="deleted")
 
