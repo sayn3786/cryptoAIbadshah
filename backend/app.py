@@ -4171,6 +4171,94 @@ def api_auth_users_create():
     return jsonify({"ok": True, "user": user})
 
 
+def _require_admin_session():
+    """Admin-session gate for user management. Returns an error response or None.
+    Unlike creation, these mutate EXISTING accounts, so the bootstrap token is not
+    accepted — only a signed-in admin."""
+    import auth as _auth
+    if not _auth.is_admin():
+        return jsonify({"error": "Admin only", "error_code": "FORBIDDEN"}), 403
+    return None
+
+
+def _user_mgmt(fn, *, ok_key="user"):
+    """Run a user_store mutation and map its errors to responses uniformly."""
+    import user_store as _us
+    try:
+        result = fn()
+    except _us.LastAdminError as exc:
+        return jsonify({"ok": False, "error_code": "LAST_ADMIN",
+                        "error": str(exc)}), 409
+    except _us.UserValidationError as exc:
+        return jsonify({"ok": False, "error_code": "INVALID_USER",
+                        "error": str(exc)}), 400
+    except _us.AuthUnavailable as exc:
+        return jsonify({"ok": False, "error_code": "AUTH_NOT_MIGRATED",
+                        "error": str(exc)}), 503
+    except Exception:
+        app.logger.exception("user management op failed")
+        return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
+    return jsonify({"ok": True, ok_key: result})
+
+
+@app.post("/api/auth/users/<uid>/password")
+def api_auth_user_reset_password(uid):
+    guard = _require_admin_session()
+    if guard:
+        return guard
+    import user_store as _us
+    pw = (request.get_json(silent=True) or {}).get("password") or ""
+    return _user_mgmt(lambda: _us.set_password(uid, pw))
+
+
+@app.post("/api/auth/users/<uid>/role")
+def api_auth_user_set_role(uid):
+    guard = _require_admin_session()
+    if guard:
+        return guard
+    import user_store as _us
+    role = ((request.get_json(silent=True) or {}).get("role") or "").strip().lower()
+    return _user_mgmt(lambda: _us.set_role(uid, role))
+
+
+@app.post("/api/auth/users/<uid>/disable")
+def api_auth_user_set_disabled(uid):
+    guard = _require_admin_session()
+    if guard:
+        return guard
+    import user_store as _us
+    disabled = bool((request.get_json(silent=True) or {}).get("disabled", True))
+    return _user_mgmt(lambda: _us.set_disabled(uid, disabled))
+
+
+@app.delete("/api/auth/users/<uid>")
+def api_auth_user_delete(uid):
+    guard = _require_admin_session()
+    if guard:
+        return guard
+    import user_store as _us
+    return _user_mgmt(lambda: _us.delete_user(uid), ok_key="deleted")
+
+
+@app.post("/api/auth/password")
+def api_auth_change_own_password():
+    """Any signed-in user changes their OWN password after confirming the current
+    one. Not admin-gated — it only ever touches the caller's account."""
+    import auth as _auth
+    import user_store as _us
+    u = _auth.current_user()
+    if not u:
+        return jsonify({"error": "Authentication required",
+                        "error_code": "AUTH_REQUIRED"}), 401
+    body = request.get_json(silent=True) or {}
+    current = body.get("current_password") or ""
+    new = body.get("new_password") or ""
+    if not _us.verify_password(u["id"], current):
+        return jsonify({"ok": False, "error_code": "INVALID_CREDENTIALS",
+                        "error": "current password is incorrect"}), 401
+    return _user_mgmt(lambda: _us.set_password(u["id"], new))
+
+
 def _int_arg(name, default, lo, hi):
     """Bounded integer query parameter — never trust the client's number."""
     try:

@@ -157,6 +157,89 @@ def test_create_user_endpoint_bootstraps_with_token(monkeypatch):
     assert created == {"username": "bob", "role": "admin"}
 
 
+def _admin_client(app, monkeypatch, role="admin"):
+    """A test client with a signed-in session of the given role."""
+    monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-123456")
+    monkeypatch.setattr(us, "verify_credentials",
+                        lambda u, p: {"id": "me", "username": "admin", "role": role})
+    monkeypatch.setattr(us, "touch_login", lambda *_a, **_k: None)
+    c = app.app.test_client()
+    c.post("/api/auth/login", json={"username": "admin", "password": "x"})
+    return c
+
+
+# ── user management: reset / role / disable / delete ─────────────────────────
+
+def test_management_requires_admin_session(monkeypatch):
+    app = _app()
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    monkeypatch.delenv("HL_ADMIN_TOKEN", raising=False)
+    c = app.app.test_client()   # signed out
+    assert c.post("/api/auth/users/x/password", json={"password": "abcdefgh"}).status_code == 403
+    assert c.post("/api/auth/users/x/role", json={"role": "user"}).status_code == 403
+    assert c.post("/api/auth/users/x/disable", json={"disabled": True}).status_code == 403
+    assert c.delete("/api/auth/users/x").status_code == 403
+
+
+def test_management_bootstrap_token_is_NOT_accepted(monkeypatch):
+    # Mutating existing accounts needs a real admin SESSION — the bootstrap token
+    # only creates the first admin, it does not manage users.
+    app = _app()
+    monkeypatch.setenv("HL_ADMIN_TOKEN", "hl-token-123")
+    r = app.app.test_client().post("/api/auth/users/x/password",
+                                   headers={"x-hl-token": "hl-token-123"},
+                                   json={"password": "abcdefgh"})
+    assert r.status_code == 403
+
+
+def test_admin_can_reset_role_disable_delete(monkeypatch):
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+    monkeypatch.setattr(us, "set_password", lambda uid, pw: {"id": uid, "username": "bob"})
+    monkeypatch.setattr(us, "set_role", lambda uid, role: {"id": uid, "role": role})
+    monkeypatch.setattr(us, "set_disabled", lambda uid, d: {"id": uid, "disabled": d})
+    monkeypatch.setattr(us, "delete_user", lambda uid: True)
+
+    assert c.post("/api/auth/users/u2/password", json={"password": "abcdefgh"}).status_code == 200
+    assert c.post("/api/auth/users/u2/role", json={"role": "admin"}).get_json()["user"]["role"] == "admin"
+    assert c.post("/api/auth/users/u2/disable", json={"disabled": True}).get_json()["user"]["disabled"] is True
+    assert c.delete("/api/auth/users/u2").get_json()["deleted"] is True
+
+
+def test_last_admin_guard_returns_409(monkeypatch):
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+
+    def boom(*_a, **_k):
+        raise us.LastAdminError("cannot demote the last enabled admin")
+    monkeypatch.setattr(us, "set_role", boom)
+    r = c.post("/api/auth/users/me/role", json={"role": "user"})
+    assert r.status_code == 409 and r.get_json()["error_code"] == "LAST_ADMIN"
+
+
+def test_change_own_password_checks_current(monkeypatch):
+    app = _app()
+    c = _admin_client(app, monkeypatch, role="user")
+    monkeypatch.setattr(us, "verify_password", lambda uid, pw: pw == "right-now")
+    monkeypatch.setattr(us, "set_password", lambda uid, pw: {"id": uid})
+
+    wrong = c.post("/api/auth/password",
+                   json={"current_password": "nope", "new_password": "abcdefgh"})
+    assert wrong.status_code == 401 and wrong.get_json()["error_code"] == "INVALID_CREDENTIALS"
+
+    ok = c.post("/api/auth/password",
+                json={"current_password": "right-now", "new_password": "abcdefgh"})
+    assert ok.status_code == 200 and ok.get_json()["ok"] is True
+
+
+def test_change_own_password_requires_login(monkeypatch):
+    app = _app()
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    r = app.app.test_client().post("/api/auth/password",
+                                   json={"current_password": "a", "new_password": "abcdefgh"})
+    assert r.status_code == 401
+
+
 def test_hl_admin_accepts_an_admin_session(monkeypatch):
     # An admin session authorizes the HL endpoints (so the UI buttons work),
     # even without the token.
