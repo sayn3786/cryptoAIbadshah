@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '243';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '244';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -278,8 +278,30 @@ async function loadLivePrices() {
 }
 
 /* ─── Main data load ──────────────────────────────────────────────────────── */
+// Instant-render cache: the analysis endpoint is slow on a cold serverless start
+// (~20-30s to fetch candles + derivatives + on-chain). We stash the last result
+// per symbol+timeframe in localStorage and paint it IMMEDIATELY on open, so the
+// dashboard is usable in <1s and only shows a subtle "Refreshing…" while fresh
+// data loads in the background — instead of a full-screen block. Keyed by build
+// so a deploy that changes the shape never renders stale/incompatible data.
+function _analysisCacheKey() { return `cm_an_${CODE_BUILD}_${S.symbol}_${S.timeframe}`; }
+
 async function loadAnalysis() {
-  setLoading(true);
+  let hadCache = false;
+  try {
+    const cached = localStorage.getItem(_analysisCacheKey());
+    if (cached) {
+      const data = JSON.parse(cached);
+      S.analysis = data;
+      renderAll(data);
+      renderMyTrades();
+      hadCache = true;
+      setLoading(false);                                    // usable instantly
+      document.getElementById('lastUpdated').textContent = 'Refreshing…';
+    }
+  } catch (_) { hadCache = false; }                         // bad/absent cache → normal load
+
+  if (!hadCache) setLoading(true);                          // first-ever load: show the overlay once
   try {
     const url = `${API}/analysis/${S.symbol}?timeframe=${S.timeframe}`;
     const res = await fetch(url);
@@ -297,12 +319,16 @@ async function loadAnalysis() {
         : `HTTP ${res.status}`);
     }
     S.analysis = await res.json();
+    try { localStorage.setItem(_analysisCacheKey(), JSON.stringify(S.analysis)); } catch (_) {}
     renderAll(S.analysis);
     renderMyTrades();
     document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     console.error('Analysis failed:', e);
-    showError(e.message);
+    // Only hard-error when there's nothing on screen; if we painted from cache,
+    // keep it and note the refresh failed.
+    if (hadCache) document.getElementById('lastUpdated').textContent = 'Update failed — showing cached';
+    else showError(e.message);
   } finally {
     setLoading(false);
   }
