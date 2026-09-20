@@ -938,13 +938,24 @@
     border-radius:7px;padding:5px 9px;cursor:pointer;font-size:.72rem;white-space:nowrap}
   #cm-admin button.run{background:#16351f;border-color:#1f5130}
   #cm-admin .who{opacity:.75;margin-right:2px;font-weight:600}
-  /* Mobile: let the header wrap so the toolbar drops onto its own line instead
-     of overflowing (bell / Log out were getting truncated off the right edge). */
+  /* Mobile: a clean, intentional header instead of ragged wrapping — brand on
+     its own row, the standard controls in a tidy row, and the admin controls
+     grouped into a full-width card with evenly-sized buttons. */
   @media (max-width: 760px){
-    header.hdr{flex-wrap:wrap !important;row-gap:8px}
-    .hdr-right{flex-wrap:wrap !important;justify-content:flex-end;gap:6px;width:100%}
-    #cm-admin{flex-wrap:wrap;justify-content:flex-end;margin-right:0;width:100%}
-    #cm-admin button,#cm-admin .who{font-size:.7rem}
+    header.hdr{flex-wrap:wrap !important;row-gap:10px;align-items:center}
+    .hdr-left{flex:1 1 auto}
+    .hdr-right{width:100%;flex-wrap:wrap;gap:8px;justify-content:flex-end;align-items:center}
+    /* admin toolbar as its own full-width card */
+    #cm-admin{width:100%;box-sizing:border-box;display:flex;flex-wrap:wrap;
+      gap:8px;margin:0;padding:10px;background:#0f141c;border:1px solid #222a36;
+      border-radius:12px;order:-1}
+    #cm-admin.show{display:flex}
+    #cm-admin .who{flex:1 1 100%;opacity:.7;font-weight:600;padding:0 2px 2px;font-size:.72rem}
+    #cm-admin button{flex:1 1 30%;text-align:center;padding:9px 8px;font-size:.74rem}
+    /* standard controls (bell / refresh / home) even and roomy */
+    .hdr-right > .btn-icon,.hdr-right > .btn-outline{flex:0 0 auto;height:40px;
+      display:inline-flex;align-items:center;justify-content:center}
+    .hdr-right > .last-updated{flex:1 1 100%;text-align:right;order:-2}
   }
   /* ── Role-based visibility (separation of duties) ──────────────────────────
      Cosmetic layer only — the server also gates these by role. */
@@ -1057,7 +1068,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=245";
+  var DJS = "/dashboard/js/dashboard.js?v=246";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;
