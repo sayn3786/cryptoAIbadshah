@@ -44,6 +44,10 @@ def test_btc_lagging_buys_th_directly():
     r = _run(g30=30.0, b30=4.0)                 # BTC behind, token extended
     assert r["reinvest_to"] == "btc"
     assert "BTC lagging GOMINING" in r["reinvest_reason"]
+    # The whole card must agree: banner + reasons follow the BTC target, not the
+    # default "BUY GOMINING TOKENS" copy.
+    assert "TH" in r["phase_label"] and "GOMINING TOKENS" not in r["phase_label"]
+    assert not any("good entry for buying tokens" in x for x in r["reasons"])
 
 
 def test_in_step_falls_back_to_token_trend():
@@ -65,6 +69,8 @@ def test_no_perf_data_uses_token_trend_gate():
           "change_30d_pct": None, "btc_change_30d_pct": None}
     r = get_gomining_strategy(_COMPOUND, gm, {"signal_pts": 1})
     assert r["reinvest_to"] == "tokens" and r["reinvest_divergence"] is None
+    # Fallback must still carry a reason (no None → no contradictory card copy).
+    assert r["reinvest_reason"] and "unavailable" in r["reinvest_reason"]
 
 
 def test_non_compound_phase_does_not_reinvest():

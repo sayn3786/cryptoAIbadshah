@@ -1335,32 +1335,46 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     if symbol == "BTC" and "GOMINING" in SYMBOLS:
         try:
             _gm_candles = client.get_spot_klines("GOMININGUSDT", "1d", 35) or []
+            _gm_src = client.data_source                  # source of THIS klines call
             if _gm_candles and len(_gm_candles) >= 5:
                 _closes = [c["close"] for c in _gm_candles]
                 _price_now = _closes[-1]
-                _price_30d = _closes[0] if len(_closes) >= 30 else _closes[0]
                 # EMA20 direction
                 _ema_dir = _quick_tf_dir("GOMINING", "1D")
                 # RSI-like strength proxy: % above/below 20-candle mean
                 _mean = sum(_closes[-20:]) / min(20, len(_closes))
                 _strength = round(abs(_price_now - _mean) / _mean * 100, 1) if _mean else 0
-                # BTC's own 30d change, for the reinvestment divergence (buy the
-                # laggard of BTC vs GOMINING). Cheap: one 1D klines call.
+
+                # 30-day % change over a MATCHED window (close 30 spans back =
+                # index -31), requiring >=31 real daily closes. Synthetic/demo
+                # candles must NOT drive the reinvestment divergence — a random
+                # return could steer real funds — so a demo source yields None.
+                def _chg_30d(closes, src):
+                    if src == "demo" or len(closes) < 31:
+                        return None
+                    base = closes[-31]
+                    return round((closes[-1] - base) / base * 100, 1) if base and base > 0 else None
+
+                _gm_30d_pct = _chg_30d(_closes, _gm_src)
+                # BTC's own 30d change over the same window, for the divergence.
                 _btc_30d_pct = None
                 try:
                     _btc_c = client.get_spot_klines("BTCUSDT", "1d", 35) or []
-                    if len(_btc_c) >= 30:
-                        _bc = [c["close"] for c in _btc_c]
-                        if _bc[0] and _bc[0] > 0:
-                            _btc_30d_pct = round((_bc[-1] - _bc[0]) / _bc[0] * 100, 1)
+                    _btc_src = client.data_source
+                    _btc_30d_pct = _chg_30d([c["close"] for c in _btc_c], _btc_src)
+                    # Divergence needs BOTH series from real, matched data; if the
+                    # GOMINING side was demo, void the BTC side too so the strategy
+                    # falls back to the token-trend gate instead of comparing noise.
+                    if _gm_src == "demo":
+                        _btc_30d_pct = None
                 except Exception:
                     _btc_30d_pct = None
+
                 gomining_token_signal = {
                     "direction":      _ema_dir,
                     "strength":       _strength,
                     "price":          _price_now,
-                    "change_30d_pct": round((_price_now - _price_30d) / _price_30d * 100, 1)
-                        if _price_30d and _price_30d > 0 else None,
+                    "change_30d_pct": _gm_30d_pct,
                     "btc_change_30d_pct": _btc_30d_pct,
                 }
         except Exception:

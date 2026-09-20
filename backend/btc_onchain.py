@@ -1238,8 +1238,15 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
                                       if _token_ok else
                                       "GOMINING trend weak/SHORT — reinvest into TH / BTC directly"))
         else:
-            # No 30d performance data — fall back to the token-trend gate.
+            # No 30d performance data (missing or demo source) — fall back to the
+            # token-trend gate, with a reason for BOTH targets so the card never
+            # says "auto-converts tokens → TH" while the toggle reads "BTC / TH".
             reinvest_to = "tokens" if _token_ok else "btc"
+            reinvest_reason = ("Mining profitable + Hash Ribbon bullish — "
+                               + ("token trend supports buying GOMINING (Greedy Machine → TH)"
+                                  if _token_ok else
+                                  "GOMINING trend weak/SHORT — reinvest into TH / BTC directly")
+                               + "; BTC/GOMINING 30d divergence unavailable")
 
     # ── Reward payout currency — take mining rewards in BTC or GOMINING? ──────
     # Default is BTC (the asset the farm produces; accumulation thesis).
@@ -1438,6 +1445,15 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
         },
     }
     meta = PHASE_META.get(phase, PHASE_META["hold"])
+    # In compound the banner defaults to "BUY GOMINING TOKENS", but when the
+    # divergence (or the SHORT guard) routes the reinvestment to TH/BTC, that copy
+    # contradicts the toggle. Reflect the actual target so the whole card agrees.
+    if phase == "compound" and reinvest_to == "btc":
+        meta = {**meta,
+                "label": "COMPOUND — ADD TH / HASHPOWER",
+                "desc":  "Mining is profitable. BTC has lagged GOMINING (or the token "
+                         "is in a downtrend), so reinvest profits into TH / hashpower "
+                         "directly rather than buying the extended token."}
 
     # ── Reasons ────────────────────────────────────────────────────────────────
     reasons = []
@@ -1524,7 +1540,13 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
         price_note = f" at ${float(gm_p):.4f}" if gm_p else ""
         chg_note   = f", {gm_30d:+.1f}% (30d)" if gm_30d is not None else ""
         if gm_dir == "LONG":
-            reasons.append(f"GOMINING token {gm_dir} ({gm_str}%){price_note}{chg_note} — good entry for buying tokens to compound TH via Greedy Machine")
+            # Only call it a token-buy entry when the reinvestment target IS the
+            # token; when BTC is the laggard we're adding TH directly, so don't
+            # instruct buying the token in the same breath.
+            if reinvest_to == "tokens":
+                reasons.append(f"GOMINING token {gm_dir} ({gm_str}%){price_note}{chg_note} — good entry for buying tokens to compound TH via Greedy Machine")
+            else:
+                reasons.append(f"GOMINING token {gm_dir} ({gm_str}%){price_note}{chg_note} — trending up, but BTC is the 30d laggard, so reinvest into TH directly this cycle")
         elif gm_dir == "SHORT":
             reasons.append(f"GOMINING token {gm_dir} ({gm_str}%){price_note}{chg_note} — token in downtrend, wait for reversal before buying")
         else:
