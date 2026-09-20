@@ -929,15 +929,15 @@
     background:#3b82f6;color:#fff;font-weight:600;font-size:.9rem;cursor:pointer}
   #cm-auth button:disabled{opacity:.6;cursor:default}
   #cm-auth .err{color:#f87171;font-size:.78rem;margin-top:12px;min-height:1em}
-  #cm-admin{position:fixed;right:14px;bottom:14px;z-index:9998;display:none;
-    gap:8px;align-items:center;background:#141922cc;backdrop-filter:blur(6px);
-    border:1px solid #232a36;border-radius:10px;padding:8px 10px;
-    font-family:inherit;font-size:.75rem;color:#c8cfdb}
-  #cm-admin.show{display:flex}
+  /* Admin toolbar — injected into the header's right cluster (top of page), so it
+     never overlaps the right-side notifications panel. */
+  #cm-admin{display:none;gap:6px;align-items:center;margin-right:10px;
+    font-family:inherit;font-size:.72rem;color:#c8cfdb}
+  #cm-admin.show{display:inline-flex}
   #cm-admin button{border:1px solid #2a3240;background:#1b2230;color:#dbe2ee;
-    border-radius:7px;padding:6px 9px;cursor:pointer;font-size:.72rem}
+    border-radius:7px;padding:5px 9px;cursor:pointer;font-size:.72rem;white-space:nowrap}
   #cm-admin button.run{background:#16351f;border-color:#1f5130}
-  #cm-admin .who{opacity:.7;margin-right:2px}
+  #cm-admin .who{opacity:.75;margin-right:2px;font-weight:600}
   /* ── Role-based visibility (separation of duties) ──────────────────────────
      Cosmetic layer only — the server also gates these by role. */
   /* A normal user: hide trades / tracker / paper / Hyperliquid sections. */
@@ -945,11 +945,13 @@
   body[data-role="user"] #trackerSection,
   body[data-role="user"] #paperSection,
   body[data-role="user"] #hlStatusCard { display:none !important; }
-  /* A user_admin manages accounts ONLY — hide the entire dashboard, leaving just
-     the admin toolbar and the user-management / password / auth dialogs. */
-  body[data-role="user_admin"] > *:not(#cm-admin):not(#cm-users-modal):not(#cm-pw-modal):not(#cm-auth){
+  /* A user_admin manages accounts ONLY — hide everything but the HEADER (which
+     carries the toolbar) and the dialogs; and hide the header's ticker too. */
+  body[data-role="user_admin"] > *:not(header):not(#cm-users-modal):not(#cm-pw-modal):not(#cm-auth){
     display:none !important;
   }
+  body[data-role="user_admin"] .hdr-center,
+  body[data-role="user_admin"] .notif-bell { display:none !important; }
 </style>
 
 <div id="cm-auth" role="dialog" aria-modal="true">
@@ -1047,7 +1049,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=242";
+  var DJS = "/dashboard/js/dashboard.js?v=243";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;
@@ -1085,6 +1087,10 @@
     document.getElementById("cm-hl-status").style.display = isAdmin ? "" : "none";
     document.getElementById("cm-hl-run").style.display = isAdmin ? "" : "none";
     document.getElementById("cm-users").style.display = isUserAdmin ? "" : "none";
+    // Dock the toolbar into the header's right cluster (top of the page) so it
+    // sits inline with the other controls and never covers the notifications.
+    var hr = document.querySelector(".hdr-right");
+    if (hr && admin.parentNode !== hr) hr.insertBefore(admin, hr.firstChild);
     admin.classList.add("show");                          // toolbar (at least Log out)
     if (isUserAdmin) {                                    // manager lands straight in user mgmt
       uModal.classList.add("show");
@@ -1118,6 +1124,8 @@
     var err = document.getElementById("cm-err");
     err.textContent = "";
     btn.disabled = true;
+    btn.textContent = "Signing in…";                       // visible progress feedback
+    function reset() { btn.disabled = false; btn.textContent = "Sign in"; }
     api("/api/auth/login", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1126,12 +1134,9 @@
       })
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
-        if (res.ok && res.j.ok) { location.reload(); }        // session set → reload into app
-        else {
-          err.textContent = (res.j && res.j.error) || "Sign in failed";
-          btn.disabled = false;
-        }
-      }).catch(function () { err.textContent = "Network error"; btn.disabled = false; });
+        if (res.ok && res.j.ok) { btn.textContent = "Signed in ✓"; location.reload(); }
+        else { err.textContent = (res.j && res.j.error) || "Sign in failed"; reset(); }
+      }).catch(function () { err.textContent = "Network error"; reset(); });
   });
 
   // ── admin toolbar ──────────────────────────────────────────────────────────
