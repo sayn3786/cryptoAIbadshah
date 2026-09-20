@@ -1192,19 +1192,54 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
     maintenance_on    = True                          # ALWAYS on — free discount
     reward_protection = prof < 1.15                  # ON when near/below break-even
 
-    # Reinvest into GOMINING tokens (Greedy Machine auto-converts to TH).
-    # Refined with tokenomics: strong on-chain burns / supply contraction can
-    # green-light a NEUTRAL token; a SHORT token always suppresses.
+    # ── Reinvestment target — buy the LAGGARD of BTC vs GOMINING ──────────────
+    # In the COMPOUND phase we reinvest profits into more hashpower; WHICH asset
+    # to buy is chosen by the 30-day divergence between BTC and the GOMINING
+    # token. Buying the laggard is a mean-reversion bet — whichever has fallen
+    # behind is relatively cheaper and tends to catch up:
+    #   • GOMINING lagging BTC  → buy GOMINING tokens (Greedy Machine → TH)
+    #   • BTC lagging GOMINING  → add TH / hashpower directly (the token is
+    #                             extended; don't chase it)
+    # Safety override: never buy the GOMINING token while it is in a confirmed
+    # downtrend (SHORT), even if it is the laggard — reinvest into TH instead
+    # (a laggard that is actively dumping is a falling knife, not a discount).
     _gm_dir  = (gm_token or {}).get("direction", "NEUTRAL")
     _tk      = gm_tokenomics or {}
     _tk_pts  = _tk.get("signal_pts", 0) or 0
     _tk_bull = _tk_pts > 0        # supply contracting / burns strong
-    _gm_override_off = _gm_dir == "SHORT" and phase == "compound"
-    reinvestment = (phase == "compound" and not _gm_override_off
-                    and (_gm_dir == "LONG" or (_gm_dir == "NEUTRAL" and _tk_bull)))
-    # Compound phase with SHORT/weak token: still compound, but via BTC → TH
-    # directly rather than buying the token.
-    reinvest_to  = "tokens" if reinvestment else None
+    _g30     = (gm_token or {}).get("change_30d_pct")
+    _b30     = (gm_token or {}).get("btc_change_30d_pct")
+    _token_ok = _gm_dir != "SHORT" and (_gm_dir == "LONG" or (_gm_dir == "NEUTRAL" and _tk_bull))
+    _LAG_PP  = 3.0                # minimum 30d divergence (percentage points) to act on
+    _gm_override_off = _gm_dir == "SHORT" and phase == "compound"   # for the watch_for note
+
+    reinvestment    = (phase == "compound")
+    reinvest_to     = None
+    reinvest_reason = None
+    if reinvestment:
+        if _g30 is not None and _b30 is not None:
+            gap = round(_b30 - _g30, 1)          # > 0 → GOMINING lagging BTC
+            if gap >= _LAG_PP and _gm_dir != "SHORT":
+                reinvest_to = "tokens"
+                reinvest_reason = (f"GOMINING lagging BTC by {gap:.1f}pp over 30d "
+                                   f"(GOMINING {_g30:+.1f}% vs BTC {_b30:+.1f}%) — buy the laggard; "
+                                   f"Greedy Machine auto-converts tokens → TH")
+            elif gap <= -_LAG_PP:
+                reinvest_to = "btc"
+                reinvest_reason = (f"BTC lagging GOMINING by {abs(gap):.1f}pp over 30d "
+                                   f"(BTC {_b30:+.1f}% vs GOMINING {_g30:+.1f}%) — reinvest into "
+                                   f"TH / hashpower (the laggard), not the extended token")
+            else:
+                reinvest_to = "tokens" if _token_ok else "btc"
+                reinvest_reason = ("Mining profitable + Hash Ribbon bullish — "
+                                   + (f"no strong BTC/GOMINING 30d divergence (GOMINING {_g30:+.1f}% vs "
+                                      f"BTC {_b30:+.1f}%); token trend supports buying GOMINING "
+                                      f"(Greedy Machine → TH)"
+                                      if _token_ok else
+                                      "GOMINING trend weak/SHORT — reinvest into TH / BTC directly"))
+        else:
+            # No 30d performance data — fall back to the token-trend gate.
+            reinvest_to = "tokens" if _token_ok else "btc"
 
     # ── Reward payout currency — take mining rewards in BTC or GOMINING? ──────
     # Default is BTC (the asset the farm produces; accumulation thesis).
@@ -1608,6 +1643,10 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
         "reward_protection": reward_protection,
         "reinvestment":      reinvestment,
         "reinvest_to":       reinvest_to,
+        "reinvest_reason":   reinvest_reason,
+        "reinvest_divergence": ({"gomining_30d_pct": _g30, "btc_30d_pct": _b30,
+                                 "gap_pp": round((_b30 - _g30), 1)}
+                                if (_g30 is not None and _b30 is not None) else None),
         "reward_currency":   reward_currency,
         "th_purchase":       th_purchase,
         "th_sell":           th_sell,

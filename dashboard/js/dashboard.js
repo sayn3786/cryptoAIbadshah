@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '247';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '248';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2701,7 +2701,7 @@ function renderGoMiningAdvisor(strategy, symbol, gmTokenSignal) {
   section.style.display = '';
 
   const { phase_label, phase_cls, phase_icon, phase_desc,
-          maintenance_on, reward_protection, reinvestment, reinvest_to,
+          maintenance_on, reward_protection, reinvestment, reinvest_to, reinvest_reason,
           reasons = [], watch_for = [], metrics = {} } = strategy;
 
   // Phase banner
@@ -2742,9 +2742,11 @@ function renderGoMiningAdvisor(strategy, symbol, gmTokenSignal) {
   const chgNote = gm30d != null ? ` (${gm30d > 0 ? '+' : ''}${gm30d}% 30d)` : '';
 
   if (reinvestment) {
+    // Target is the LAGGARD of BTC vs GOMINING (buy what's fallen behind).
     reinvEl.className = 'gm-toggle on';
-    reinvEl.textContent = 'ON → GOMINING tokens ✓';
-    reinvReason.textContent = `Mining profitable + Hash Ribbon bullish + GOMINING ${gmDir} ${gmStr}%${priceNote}${chgNote} — Greedy Machine auto-converts tokens → TH`;
+    reinvEl.textContent = reinvest_to === 'btc' ? 'ON → BTC / TH ✓' : 'ON → GOMINING tokens ✓';
+    reinvReason.textContent = reinvest_reason
+      || `Mining profitable + Hash Ribbon bullish + GOMINING ${gmDir} ${gmStr}%${priceNote}${chgNote} — Greedy Machine auto-converts tokens → TH`;
   } else if (phase_cls === 'gold') {
     reinvEl.className = 'gm-toggle warn';
     reinvEl.textContent = 'OFF ⚠';

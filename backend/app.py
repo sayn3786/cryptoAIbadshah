@@ -1344,12 +1344,24 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
                 # RSI-like strength proxy: % above/below 20-candle mean
                 _mean = sum(_closes[-20:]) / min(20, len(_closes))
                 _strength = round(abs(_price_now - _mean) / _mean * 100, 1) if _mean else 0
+                # BTC's own 30d change, for the reinvestment divergence (buy the
+                # laggard of BTC vs GOMINING). Cheap: one 1D klines call.
+                _btc_30d_pct = None
+                try:
+                    _btc_c = client.get_spot_klines("BTCUSDT", "1d", 35) or []
+                    if len(_btc_c) >= 30:
+                        _bc = [c["close"] for c in _btc_c]
+                        if _bc[0] and _bc[0] > 0:
+                            _btc_30d_pct = round((_bc[-1] - _bc[0]) / _bc[0] * 100, 1)
+                except Exception:
+                    _btc_30d_pct = None
                 gomining_token_signal = {
                     "direction":      _ema_dir,
                     "strength":       _strength,
                     "price":          _price_now,
                     "change_30d_pct": round((_price_now - _price_30d) / _price_30d * 100, 1)
                         if _price_30d and _price_30d > 0 else None,
+                    "btc_change_30d_pct": _btc_30d_pct,
                 }
         except Exception:
             pass
