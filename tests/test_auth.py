@@ -226,6 +226,22 @@ def test_disable_requires_a_real_boolean(monkeypatch):
     assert ok.status_code == 200 and called["n"] == 1
 
 
+def test_non_string_fields_are_400_not_500(monkeypatch):
+    # Syntactically valid JSON with a non-string role/password must be a clean
+    # 400, never an AttributeError-driven 500.
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+    monkeypatch.setattr(us, "set_role", lambda uid, role: {"id": uid, "role": role})
+    monkeypatch.setattr(us, "set_password", lambda uid, pw: {"id": uid})
+    monkeypatch.setattr(us, "create_user",
+                        lambda u, p, role="user": {"id": "x", "username": u, "role": role})
+    assert c.post("/api/auth/users/u2/role", json={"role": 1}).status_code == 400
+    assert c.post("/api/auth/users/u2/password", json={"password": 123}).status_code == 400
+    assert c.post("/api/auth/users", json={"username": 1, "password": "abcdefgh"}).status_code == 400
+    assert c.post("/api/auth/password",
+                  json={"current_password": "x", "new_password": 9}).status_code == 400
+
+
 def test_last_admin_guard_returns_409(monkeypatch):
     app = _app()
     c = _admin_client(app, monkeypatch)

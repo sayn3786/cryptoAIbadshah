@@ -4093,11 +4093,12 @@ def api_auth_login():
         return jsonify({"ok": False, "error_code": "AUTH_NOT_CONFIGURED",
                         "error": "APP_SECRET_KEY is not set"}), 503
     body = request.get_json(silent=True) or {}
-    username = (body.get("username") or request.form.get("username") or "").strip()
-    password = body.get("password") or request.form.get("password") or ""
+    username = _req_str(body.get("username")) or _req_str(request.form.get("username"))
+    password = _req_str(body.get("password")) or _req_str(request.form.get("password"))
     if not username or not password:
         return jsonify({"ok": False, "error_code": "BAD_PARAMS",
                         "error": "username and password required"}), 400
+    username = username.strip()
     try:
         user = _auth.do_login(username, password)
     except Exception:
@@ -4154,9 +4155,14 @@ def api_auth_users_create():
     if not (_auth.is_admin() or _hl_admin_ok()):
         return jsonify({"error": "Forbidden", "error_code": "FORBIDDEN"}), 403
     body = request.get_json(silent=True) or {}
-    username = (body.get("username") or "").strip()
-    password = body.get("password") or ""
-    role = (body.get("role") or "user").strip().lower()
+    username = _req_str(body.get("username"))
+    password = _req_str(body.get("password"))
+    role = _req_str(body.get("role"))
+    if username is None or password is None or (body.get("role") is not None and role is None):
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "username, password (and role, if given) must be strings"}), 400
+    username = username.strip()
+    role = (role or "user").strip().lower()
     try:
         user = _us.create_user(username, password, role=role)
     except _us.UserValidationError as exc:
@@ -4169,6 +4175,13 @@ def api_auth_users_create():
         app.logger.exception("create user failed")
         return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
     return jsonify({"ok": True, "user": user})
+
+
+def _req_str(value):
+    """A JSON field coerced to str, or None when it is missing or a non-string
+    (a JSON number/bool/list). Callers treat None as a 400 rather than letting a
+    later .strip()/len() raise and surface as a 500."""
+    return value if isinstance(value, str) else None
 
 
 def _require_admin_session():
@@ -4210,7 +4223,10 @@ def api_auth_user_reset_password(uid):
     if guard:
         return guard
     import user_store as _us
-    pw = (request.get_json(silent=True) or {}).get("password") or ""
+    pw = _req_str((request.get_json(silent=True) or {}).get("password"))
+    if pw is None:
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "password must be a string"}), 400
     return _user_mgmt(lambda: _us.set_password(uid, pw))
 
 
@@ -4220,8 +4236,11 @@ def api_auth_user_set_role(uid):
     if guard:
         return guard
     import user_store as _us
-    role = ((request.get_json(silent=True) or {}).get("role") or "").strip().lower()
-    return _user_mgmt(lambda: _us.set_role(uid, role))
+    role = _req_str((request.get_json(silent=True) or {}).get("role"))
+    if role is None:
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "role must be a string"}), 400
+    return _user_mgmt(lambda: _us.set_role(uid, role.strip().lower()))
 
 
 @app.post("/api/auth/users/<uid>/disable")
@@ -4259,8 +4278,11 @@ def api_auth_change_own_password():
         return jsonify({"error": "Authentication required",
                         "error_code": "AUTH_REQUIRED"}), 401
     body = request.get_json(silent=True) or {}
-    current = body.get("current_password") or ""
-    new = body.get("new_password") or ""
+    current = _req_str(body.get("current_password"))
+    new = _req_str(body.get("new_password"))
+    if current is None or new is None:
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "current_password and new_password must be strings"}), 400
     # Verify-and-replace happen in ONE row-locked transaction (user_store), so an
     # admin reset cannot interleave between the check and the write.
     try:
