@@ -1047,7 +1047,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=241";
+  var DJS = "/dashboard/js/dashboard.js?v=242";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;
@@ -1057,6 +1057,16 @@
     appLoaded = true;
     var s = document.createElement("script");
     s.src = DJS;
+    // dashboard.js wires its init to DOMContentLoaded. We inject it AFTER that
+    // event has already fired (auth check is async), so those handlers would
+    // never run and the app would sit on the loading overlay forever. Once the
+    // script has registered its listeners, re-dispatch the event so init runs.
+    s.onload = function () {
+      if (document.readyState !== "loading") {
+        try { document.dispatchEvent(new Event("DOMContentLoaded")); } catch (e) {}
+        try { window.dispatchEvent(new Event("load")); } catch (e) {}
+      }
+    };
     document.body.appendChild(s);
   }
   function showLogin() { overlay.classList.add("show"); }
