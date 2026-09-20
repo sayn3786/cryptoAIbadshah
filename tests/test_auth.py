@@ -221,6 +221,9 @@ def test_disable_requires_a_real_boolean(monkeypatch):
                         lambda uid, d: called.__setitem__("n", called["n"] + 1) or {"id": uid})
     bad = c.post("/api/auth/users/u2/disable", json={"disabled": "false"})
     assert bad.status_code == 400 and bad.get_json()["error_code"] == "BAD_PARAMS"
+    # a MISSING key must also 400 — no destructive default to disable
+    assert c.post("/api/auth/users/u2/disable", json={}).status_code == 400
+    assert c.post("/api/auth/users/u2/disable", json=[1]).status_code == 400
     assert called["n"] == 0                               # never reached the store
     ok = c.post("/api/auth/users/u2/disable", json={"disabled": True})
     assert ok.status_code == 200 and called["n"] == 1

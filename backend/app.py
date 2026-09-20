@@ -4258,12 +4258,14 @@ def api_auth_user_set_disabled(uid):
     if guard:
         return guard
     import user_store as _us
-    disabled = _json_body().get("disabled", True)
-    # Require a real JSON boolean — a truthy string like "false" must NOT enable
-    # a disable (it would silently do the opposite of what was asked).
-    if not isinstance(disabled, bool):
+    body = _json_body()
+    disabled = body.get("disabled")
+    # Require the key to be PRESENT and a real JSON boolean — no default. A
+    # missing key (e.g. a non-object body coerced to {}) or a truthy string must
+    # not silently disable the target; that is a destructive action.
+    if "disabled" not in body or not isinstance(disabled, bool):
         return jsonify({"ok": False, "error_code": "BAD_PARAMS",
-                        "error": "disabled must be true or false (boolean)"}), 400
+                        "error": "disabled must be present and true or false (boolean)"}), 400
     return _user_mgmt(lambda: _us.set_disabled(uid, disabled))
 
 
