@@ -242,6 +242,19 @@ def test_non_string_fields_are_400_not_500(monkeypatch):
                   json={"current_password": "x", "new_password": 9}).status_code == 400
 
 
+def test_non_object_json_body_is_400_not_500(monkeypatch):
+    # A truthy non-object JSON body ([1], "x", 1) must not crash .get() → 500;
+    # a field-required endpoint returns a clean 400 instead.
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+    for bad in ([1], "password", 1):
+        assert c.post("/api/auth/users/u2/role", json=bad).status_code == 400
+        assert c.post("/api/auth/password", json=bad).status_code == 400
+    # login with a non-object body is a clean 400 too
+    monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-123456")
+    assert app.app.test_client().post("/api/auth/login", json=[1]).status_code == 400
+
+
 def test_last_admin_guard_returns_409(monkeypatch):
     app = _app()
     c = _admin_client(app, monkeypatch)

@@ -4092,7 +4092,7 @@ def api_auth_login():
     if not _auth.secret_configured():
         return jsonify({"ok": False, "error_code": "AUTH_NOT_CONFIGURED",
                         "error": "APP_SECRET_KEY is not set"}), 503
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     username = _req_str(body.get("username")) or _req_str(request.form.get("username"))
     password = _req_str(body.get("password")) or _req_str(request.form.get("password"))
     if not username or not password:
@@ -4154,7 +4154,7 @@ def api_auth_users_create():
     import user_store as _us
     if not (_auth.is_admin() or _hl_admin_ok()):
         return jsonify({"error": "Forbidden", "error_code": "FORBIDDEN"}), 403
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     username = _req_str(body.get("username"))
     password = _req_str(body.get("password"))
     role = _req_str(body.get("role"))
@@ -4182,6 +4182,15 @@ def _req_str(value):
     (a JSON number/bool/list). Callers treat None as a 400 rather than letting a
     later .strip()/len() raise and surface as a 500."""
     return value if isinstance(value, str) else None
+
+
+def _json_body():
+    """The request's JSON as a MAPPING. request.get_json() can return a list,
+    string or number for a truthy non-object body (e.g. `[1]`), on which `.get()`
+    would raise — so anything that is not a dict becomes {} and the field checks
+    turn it into a clean 400."""
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
 
 
 def _require_admin_session():
@@ -4223,7 +4232,7 @@ def api_auth_user_reset_password(uid):
     if guard:
         return guard
     import user_store as _us
-    pw = _req_str((request.get_json(silent=True) or {}).get("password"))
+    pw = _req_str(_json_body().get("password"))
     if pw is None:
         return jsonify({"ok": False, "error_code": "BAD_PARAMS",
                         "error": "password must be a string"}), 400
@@ -4236,7 +4245,7 @@ def api_auth_user_set_role(uid):
     if guard:
         return guard
     import user_store as _us
-    role = _req_str((request.get_json(silent=True) or {}).get("role"))
+    role = _req_str(_json_body().get("role"))
     if role is None:
         return jsonify({"ok": False, "error_code": "BAD_PARAMS",
                         "error": "role must be a string"}), 400
@@ -4249,7 +4258,7 @@ def api_auth_user_set_disabled(uid):
     if guard:
         return guard
     import user_store as _us
-    disabled = (request.get_json(silent=True) or {}).get("disabled", True)
+    disabled = _json_body().get("disabled", True)
     # Require a real JSON boolean — a truthy string like "false" must NOT enable
     # a disable (it would silently do the opposite of what was asked).
     if not isinstance(disabled, bool):
@@ -4277,7 +4286,7 @@ def api_auth_change_own_password():
     if not u:
         return jsonify({"error": "Authentication required",
                         "error_code": "AUTH_REQUIRED"}), 401
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     current = _req_str(body.get("current_password"))
     new = _req_str(body.get("new_password"))
     if current is None or new is None:
