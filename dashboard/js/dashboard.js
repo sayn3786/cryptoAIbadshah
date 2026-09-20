@@ -6266,6 +6266,19 @@ function setNotifRange(v) {
   _renderNotifList();
 }
 
+// Timeframe view filter for the bell. 'all' shows every timeframe; otherwise
+// keep only alerts on that exact timeframe. Each alert item carries a `tf`.
+const _NOTIF_TF_KEY = 'notif_tf';
+let   _notifTf = (() => {
+  try { return localStorage.getItem(_NOTIF_TF_KEY) || 'all'; } catch (_) { return 'all'; }
+})();
+
+function setNotifTf(v) {
+  _notifTf = (v || 'all');
+  try { localStorage.setItem(_NOTIF_TF_KEY, _notifTf); } catch (_) {}
+  _renderNotifList();
+}
+
 // Event-TYPE view filter for the bell. Each alert item carries a `cat`; a
 // category chip toggles that category on/off. We persist the OFF set (not the
 // ON set) so any category added later defaults to ON without a migration. All
@@ -6389,7 +6402,7 @@ function _renderNotifList() {
     const arrow  = isUp ? `+${a.delta}` : `${a.delta}`;
     const dtStr  = new Date(a.ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
     const isNew  = !strengthSeen[a.id];
-    items.push({ ts: a.ts, cat: 'strength', html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: a.ts, cat: 'strength', tf: '1H', html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">Strength Jump — <strong>${a.symbol}/USDT</strong> <span class="notif-dir-tag">${a.dir}</span></div>
@@ -6414,7 +6427,7 @@ function _renderNotifList() {
     const seen = _getStrengthSeen();
     const isNew = !seen[id];
     const when  = a.candles_ago === 1 ? 'Last 1H candle' : `${a.candles_ago} candles ago`;
-    items.push({ ts: _alertRecencyTs(a.timestamp, '1H'), cat: 'whale', html: `<div class="notif-item notif-item-${m.cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: _alertRecencyTs(a.timestamp, '1H'), cat: 'whale', tf: '1H', html: `<div class="notif-item notif-item-${m.cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${m.icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${m.label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6433,7 +6446,7 @@ function _renderNotifList() {
     const when   = a.candles_ago === 1 ? 'last closed 1W candle' : `${a.candles_ago} closed candles ago`;
     const id     = `engulf_${a.symbol}_${a.timestamp}`;
     const isNew  = !engulfSeen[id];
-    items.push({ ts: _alertRecencyTs(a.timestamp, '1W'), cat: 'engulf', html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: _alertRecencyTs(a.timestamp, '1W'), cat: 'engulf', tf: '1W', html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6497,7 +6510,7 @@ function _renderNotifList() {
               : 'RSI overbought at a swing high — momentum topped') + st.note)
       : dir === 'bullish' ? 'Confirmed bullish break'
       : dir === 'bearish' ? 'Confirmed bearish break' : 'Breakout confirmed';
-    items.push({ ts: _alertRecencyTs(a.break_ts, a.timeframe), cat, html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
+    items.push({ ts: _alertRecencyTs(a.break_ts, a.timeframe), cat, tf: (a.timeframe||''), html: `<div class="notif-item notif-item-${cls}${isNew ? ' notif-item-new' : ''}">
       <span class="notif-item-icon">${icon}</span>
       <div class="notif-item-body">
         <div class="notif-item-title">${a.label} — <strong>${a.symbol}/USDT</strong></div>
@@ -6512,12 +6525,19 @@ function _renderNotifList() {
   // Reflect the persisted choices on the controls.
   const sel = document.getElementById('notifRange');
   if (sel && sel.value !== String(_notifRangeDays)) sel.value = String(_notifRangeDays);
+  const tfSel = document.getElementById('notifTf');
+  if (tfSel && tfSel.value !== _notifTf) tfSel.value = _notifTf;
   document.querySelectorAll('#notifCats .notif-cat').forEach(btn => {
     btn.classList.toggle('notif-cat-on', _catEnabled(btn.dataset.cat));
   });
 
   // Event-type view filter: drop items whose category chip is toggled off.
   let shown = items.filter(i => _catEnabled(i.cat));
+
+  // Timeframe view filter: keep only alerts on the chosen timeframe ('all' = any).
+  if (_notifTf && _notifTf !== 'all') {
+    shown = shown.filter(i => (i.tf || '').toUpperCase() === _notifTf.toUpperCase());
+  }
 
   // Date-range view filter: keep items whose recency (candle-close ts, see
   // _alertRecencyTs) is on or after local midnight of (today − (N−1) days), so
