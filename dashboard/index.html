@@ -938,6 +938,18 @@
     border-radius:7px;padding:6px 9px;cursor:pointer;font-size:.72rem}
   #cm-admin button.run{background:#16351f;border-color:#1f5130}
   #cm-admin .who{opacity:.7;margin-right:2px}
+  /* ── Role-based visibility (separation of duties) ──────────────────────────
+     Cosmetic layer only — the server also gates these by role. */
+  /* A normal user: hide trades / tracker / paper / Hyperliquid sections. */
+  body[data-role="user"] #recSection,
+  body[data-role="user"] #trackerSection,
+  body[data-role="user"] #paperSection,
+  body[data-role="user"] #hlStatusCard { display:none !important; }
+  /* A user_admin manages accounts ONLY — hide the entire dashboard, leaving just
+     the admin toolbar and the user-management / password / auth dialogs. */
+  body[data-role="user_admin"] > *:not(#cm-admin):not(#cm-users-modal):not(#cm-pw-modal):not(#cm-auth){
+    display:none !important;
+  }
 </style>
 
 <div id="cm-auth" role="dialog" aria-modal="true">
@@ -974,7 +986,7 @@
     <form id="cm-adduser" class="add">
       <input id="cm-nu" placeholder="new username" autocomplete="off" />
       <input id="cm-np" type="password" placeholder="password (8+)" autocomplete="new-password" />
-      <select id="cm-nr"><option value="user">user</option><option value="admin">admin</option></select>
+      <select id="cm-nr"><option value="user">user</option><option value="user_admin">user_admin</option><option value="admin">admin</option></select>
       <button type="submit">Add user</button>
     </form>
     <div class="msg" id="cm-users-msg"></div>
@@ -1008,6 +1020,8 @@
   #cm-users-table button{border:1px solid #2a3240;background:#1b2230;color:#dbe2ee;
     border-radius:6px;padding:4px 7px;cursor:pointer;font-size:.7rem;margin:0 2px 2px 0}
   #cm-users-table button.danger{background:#351717;border-color:#5a2020;color:#f3b7b7}
+  #cm-users-table select{background:#1b2230;color:#dbe2ee;border:1px solid #2a3240;
+    border-radius:6px;padding:3px 5px;font-size:.7rem;margin:0 2px 2px 0}
   #cm-users-modal .add{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
   #cm-users-modal .add input,#cm-users-modal .add select{padding:8px 10px;border-radius:8px;
     border:1px solid #2a3240;background:#0e1219;color:#e6e9ef;font-size:.82rem}
@@ -1033,7 +1047,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=240";
+  var DJS = "/dashboard/js/dashboard.js?v=241";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;
@@ -1048,10 +1062,24 @@
   function showLogin() { overlay.classList.add("show"); }
   function hideLogin() { overlay.classList.remove("show"); }
 
-  function showAdminBar(user) {
-    if (!user || user.role !== "admin") return;
-    document.getElementById("cm-who").textContent = user.username;
-    admin.classList.add("show");
+  function applyRole(user) {
+    // Separation of duties, reflected in the UI (the server enforces it too):
+    //   admin      → trades / tracker / publish / HL (no user mgmt)
+    //   user_admin → ONLY the user-management panel (no charts/trades)
+    //   user       → charts / analysis only
+    var role = (user && user.role) || "user";
+    try { document.body.setAttribute("data-role", role); } catch (e) {}
+    var isAdmin = role === "admin";
+    var isUserAdmin = role === "user_admin";
+    document.getElementById("cm-who").textContent = (user && user.username) || "";
+    document.getElementById("cm-hl-status").style.display = isAdmin ? "" : "none";
+    document.getElementById("cm-hl-run").style.display = isAdmin ? "" : "none";
+    document.getElementById("cm-users").style.display = isUserAdmin ? "" : "none";
+    admin.classList.add("show");                          // toolbar (at least Log out)
+    if (isUserAdmin) {                                    // manager lands straight in user mgmt
+      uModal.classList.add("show");
+      loadUsers();
+    }
   }
 
   function api(path, opts) {
@@ -1064,7 +1092,7 @@
   api("/api/auth/me").then(function (r) {
     if (r.ok) {
       return r.json().then(function (j) {
-        hideLogin(); loadApp(); showAdminBar(j && j.user);
+        hideLogin(); loadApp(); applyRole(j && j.user);
       });
     }
     return r.json().then(function (j) {
@@ -1146,10 +1174,17 @@
           b.addEventListener("click", fn); cell.appendChild(b);
         }
         mk("Reset pw", false, function () { openPwReset(u); });
-        mk(u.role === "admin" ? "Make user" : "Make admin", false, function () {
-          uPost("/api/auth/users/" + u.id + "/role",
-                { role: u.role === "admin" ? "user" : "admin" }, "Role updated.");
+        // Role selector (three roles): user / user_admin / admin.
+        var sel = document.createElement("select");
+        ["user", "user_admin", "admin"].forEach(function (r) {
+          var o = document.createElement("option");
+          o.value = r; o.textContent = r; if (r === u.role) o.selected = true;
+          sel.appendChild(o);
         });
+        sel.addEventListener("change", function () {
+          uPost("/api/auth/users/" + u.id + "/role", { role: sel.value }, "Role updated.");
+        });
+        cell.appendChild(sel);
         mk(u.disabled ? "Enable" : "Disable", false, function () {
           uPost("/api/auth/users/" + u.id + "/disable", { disabled: !u.disabled },
                 u.disabled ? "Enabled." : "Disabled.");
