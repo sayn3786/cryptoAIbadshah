@@ -274,6 +274,18 @@ def test_role_change_takes_effect_from_the_db_not_the_cookie(monkeypatch):
     assert c.post("/api/auth/users/x/disable", json={"disabled": True}).status_code == 403
 
 
+def test_password_reset_revokes_existing_sessions(monkeypatch):
+    # After a password reset the DB session_version is bumped; a cookie minted
+    # before the reset (sv=0) no longer matches and the session is revoked.
+    app = _app()
+    c = _admin_client(app, monkeypatch)                       # cookie sv=0
+    assert c.get("/api/auth/me").status_code == 200
+    monkeypatch.setattr(us, "revalidate",
+                        lambda uid: ("ok", {"id": "me", "username": "admin",
+                                            "role": "admin", "session_version": 1}))
+    assert c.get("/api/auth/me").status_code == 401           # stale version → revoked
+
+
 def test_hl_admin_accepts_an_admin_session(monkeypatch):
     # An admin session authorizes the HL endpoints (so the UI buttons work),
     # even without the token.

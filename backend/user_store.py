@@ -39,6 +39,22 @@ def _table_exists(s) -> bool:
     return bool(s.execute(text("SELECT to_regclass('app_users') IS NOT NULL")).scalar())
 
 
+def _has_session_version(s) -> bool:
+    """Whether migration 010 (the session-revocation counter) has run. Read
+    defensively so the app works before AND after the migration: when the column
+    is absent, every session_version reads as 0 and revocation is simply a no-op
+    until the migration lands."""
+    return bool(s.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='app_users' AND column_name='session_version'")).first())
+
+
+def _sv_expr(s) -> str:
+    """A SELECT fragment that always yields a `session_version` column, whether or
+    not the underlying column exists yet."""
+    return "session_version" if _has_session_version(s) else "0 AS session_version"
+
+
 def _public(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """A user dict safe to return/serialise — never the password hash."""
     if not row:
@@ -116,13 +132,16 @@ def verify_credentials(username: str, password: str) -> Optional[Dict[str, Any]]
             return None
         row = s.execute(text(
             "SELECT id, username, password_hash, role, disabled, created_at, "
-            "last_login_at FROM app_users WHERE lower(username)=lower(:u)"),
+            f"last_login_at, {_sv_expr(s)} FROM app_users "
+            "WHERE lower(username)=lower(:u)"),
             {"u": u}).mappings().first()
         if not row or row["disabled"]:
             return None
         if not check_password_hash(row["password_hash"], password):
             return None
-        return _public(dict(row))
+        out = _public(dict(row))
+        out["session_version"] = int(row["session_version"] or 0)
+        return out
 
     with session_scope() as s:
         return _work(s)
@@ -221,11 +240,14 @@ def revalidate(user_id: str):
             if not _table_exists(s):
                 return ("unknown", None)
             row = s.execute(text(
-                "SELECT id, username, role, disabled, created_at, last_login_at "
-                "FROM app_users WHERE id=:id"), {"id": str(user_id)}).mappings().first()
+                "SELECT id, username, role, disabled, created_at, last_login_at, "
+                f"{_sv_expr(s)} FROM app_users WHERE id=:id"),
+                {"id": str(user_id)}).mappings().first()
             if not row or row["disabled"]:
                 return ("revoked", None)
-            return ("ok", _public(dict(row)))
+            out = _public(dict(row))
+            out["session_version"] = int(row["session_version"] or 0)
+            return ("ok", out)
     except Exception:                                    # noqa: BLE001
         return ("unknown", None)
 
@@ -256,8 +278,15 @@ def set_password(user_id: str, new_password: str) -> Dict[str, Any]:
         row = _get_row(s, user_id)
         if not row:
             raise UserValidationError("no such user")
-        s.execute(text("UPDATE app_users SET password_hash=:h WHERE id=:id"),
-                  {"h": pw_hash, "id": str(user_id)})
+        # Bump the session version (when the column exists) so every cookie issued
+        # before this reset stops matching — a reset revokes existing sessions.
+        if _has_session_version(s):
+            s.execute(text("UPDATE app_users SET password_hash=:h, "
+                           "session_version = session_version + 1 WHERE id=:id"),
+                      {"h": pw_hash, "id": str(user_id)})
+        else:
+            s.execute(text("UPDATE app_users SET password_hash=:h WHERE id=:id"),
+                      {"h": pw_hash, "id": str(user_id)})
         return _public(dict(_get_row(s, user_id)))
 
     with session_scope() as s:

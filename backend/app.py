@@ -4256,7 +4256,24 @@ def api_auth_change_own_password():
     if not _us.verify_password(u["id"], current):
         return jsonify({"ok": False, "error_code": "INVALID_CREDENTIALS",
                         "error": "current password is incorrect"}), 401
-    return _user_mgmt(lambda: _us.set_password(u["id"], new))
+    try:
+        _us.set_password(u["id"], new)
+    except _us.UserValidationError as exc:
+        return jsonify({"ok": False, "error_code": "INVALID_USER",
+                        "error": str(exc)}), 400
+    except _us.AuthUnavailable as exc:
+        return jsonify({"ok": False, "error_code": "AUTH_NOT_MIGRATED",
+                        "error": str(exc)}), 503
+    except Exception:
+        app.logger.exception("self password change failed")
+        return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
+    # The reset bumped the session version, which would revoke THIS cookie too.
+    # Re-issue the caller's session at the new version so they stay logged in
+    # while any OTHER sessions (the point of the change) are invalidated.
+    state, fresh = _us.revalidate(u["id"])
+    if state == "ok":
+        _auth.set_session(fresh)
+    return jsonify({"ok": True})
 
 
 def _int_arg(name, default, lo, hi):

@@ -3,7 +3,7 @@
 How a recommendation becomes a stored trade, what every column means, and how to
 query it.
 
-Everything here is generated from the live schema (migrations `001`–`009`) and
+Everything here is generated from the live schema (migrations `001`–`010`) and
 the code that writes it. Where a column exists but nothing writes it yet, this
 says so.
 
@@ -322,7 +322,7 @@ flagged rather than mined.
 ### 3.6 `schema_migrations`
 
 `version` (PK), `description`, `applied_at`. Written only by
-`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`, `008`, `009`.
+`database/migrate.py`. Current: `001`, `002`, `003`, `004`, `005`, `006`, `007`, `008`, `009`, `010`.
 
 ### 3.7 `etf_flow_daily` — durable spot-ETF net-flow history (migration `007`)
 
@@ -391,6 +391,7 @@ as a `werkzeug` PBKDF2 hash — never plaintext, never returned by any endpoint.
 | `disabled` | `boolean` | no | A disabled account cannot sign in. |
 | `created_at` | `timestamptz` | no | When the account was created. |
 | `last_login_at` | `timestamptz` | yes | Last successful sign-in (best-effort). |
+| `session_version` | `integer` | no | Bumped on every password change (migration `010`). Baked into the session cookie at login and revalidated each request, so a reset invalidates all previously issued cookies. Read defensively — 0 everywhere until migration `010` runs. |
 
 Written by `backend/user_store.py`. Login is a signed-cookie session (`backend/auth.py`);
 enforcement is the default-OFF `AUTH_REQUIRED` switch, so this table can exist
