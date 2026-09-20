@@ -938,6 +938,14 @@
     border-radius:7px;padding:5px 9px;cursor:pointer;font-size:.72rem;white-space:nowrap}
   #cm-admin button.run{background:#16351f;border-color:#1f5130}
   #cm-admin .who{opacity:.75;margin-right:2px;font-weight:600}
+  /* Mobile: let the header wrap so the toolbar drops onto its own line instead
+     of overflowing (bell / Log out were getting truncated off the right edge). */
+  @media (max-width: 760px){
+    header.hdr{flex-wrap:wrap !important;row-gap:8px}
+    .hdr-right{flex-wrap:wrap !important;justify-content:flex-end;gap:6px;width:100%}
+    #cm-admin{flex-wrap:wrap;justify-content:flex-end;margin-right:0;width:100%}
+    #cm-admin button,#cm-admin .who{font-size:.7rem}
+  }
   /* ── Role-based visibility (separation of duties) ──────────────────────────
      Cosmetic layer only — the server also gates these by role. */
   /* A normal user: hide trades / tracker / paper / Hyperliquid sections. */
@@ -1049,7 +1057,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=244";
+  var DJS = "/dashboard/js/dashboard.js?v=245";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;
