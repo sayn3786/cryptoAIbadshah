@@ -212,6 +212,20 @@ def test_admin_can_reset_role_disable_delete(monkeypatch):
     assert c.delete("/api/auth/users/u2").get_json()["deleted"] is True
 
 
+def test_disable_requires_a_real_boolean(monkeypatch):
+    # A truthy string like "false" must be rejected, not silently disable.
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+    called = {"n": 0}
+    monkeypatch.setattr(us, "set_disabled",
+                        lambda uid, d: called.__setitem__("n", called["n"] + 1) or {"id": uid})
+    bad = c.post("/api/auth/users/u2/disable", json={"disabled": "false"})
+    assert bad.status_code == 400 and bad.get_json()["error_code"] == "BAD_PARAMS"
+    assert called["n"] == 0                               # never reached the store
+    ok = c.post("/api/auth/users/u2/disable", json={"disabled": True})
+    assert ok.status_code == 200 and called["n"] == 1
+
+
 def test_last_admin_guard_returns_409(monkeypatch):
     app = _app()
     c = _admin_client(app, monkeypatch)

@@ -4230,7 +4230,12 @@ def api_auth_user_set_disabled(uid):
     if guard:
         return guard
     import user_store as _us
-    disabled = bool((request.get_json(silent=True) or {}).get("disabled", True))
+    disabled = (request.get_json(silent=True) or {}).get("disabled", True)
+    # Require a real JSON boolean — a truthy string like "false" must NOT enable
+    # a disable (it would silently do the opposite of what was asked).
+    if not isinstance(disabled, bool):
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "disabled must be true or false (boolean)"}), 400
     return _user_mgmt(lambda: _us.set_disabled(uid, disabled))
 
 
