@@ -57,6 +57,20 @@
       <option value="3">Last 3 days</option>
       <option value="5" selected>Last 5 days</option>
     </select>
+    <label class="notif-filter-label" for="notifTf">⏱ TF</label>
+    <select id="notifTf" class="notif-filter-select" onchange="setNotifTf(this.value)">
+      <option value="all" selected>All</option>
+      <option value="1H">1H</option>
+      <option value="2H">2H</option>
+      <option value="4H">4H</option>
+      <option value="8H">8H</option>
+      <option value="12H">12H</option>
+      <option value="1D">1D</option>
+      <option value="1W">1W</option>
+      <option value="2W">2W</option>
+      <option value="3W">3W</option>
+      <option value="1M">1M</option>
+    </select>
   </div>
   <div id="notifCats" class="notif-panel-cats">
     <button type="button" class="notif-cat" data-cat="divergence" onclick="toggleNotifCat('divergence')">🔀 Divergence</button>
