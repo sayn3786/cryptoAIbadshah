@@ -62,8 +62,14 @@ def current_user() -> Optional[Dict[str, Any]]:
     each request: a demoted, disabled or deleted user loses access immediately,
     and the role returned is the CURRENT one, not the cookie's. The lookup is one
     indexed PK read, cached on `flask.g` so repeated calls in a request query
-    once. If the table is missing or the DB is down we cannot revalidate, so we
-    fall back to the signed cookie (degraded, but the app stays usable)."""
+    once.
+
+    FAILS CLOSED: if the account cannot be revalidated (table missing / DB down)
+    the session is treated as signed-out, never trusted from the cookie's stale
+    role. Trusting it would let a demoted/disabled/deleted admin keep access
+    during a DB outage — and the manual HL execute path does not even need the
+    DB. Login also needs the DB, so during an outage nobody can sign in anyway;
+    failing closed only makes existing sessions match that."""
     cached = getattr(g, "_cm_user", _UNSET)
     if cached is not _UNSET:
         return cached
@@ -74,10 +80,7 @@ def current_user() -> Optional[Dict[str, Any]]:
         if state == "ok":
             result = {"id": fresh["id"], "username": fresh["username"],
                       "role": fresh["role"]}
-        elif state == "unknown":
-            result = u                                   # cannot revalidate → trust cookie
-        else:                                            # "revoked" → session no longer valid
-            result = None
+        # "revoked" AND "unknown" both → no valid session (fail closed).
     try:
         g._cm_user = result
     except Exception:                                    # noqa: BLE001

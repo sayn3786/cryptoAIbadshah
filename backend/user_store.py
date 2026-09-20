@@ -173,27 +173,35 @@ def user_count() -> int:
 # demoting an admin — is guarded so the instance can never be locked out of its
 # own user management.
 
-def _enabled_admin_count(s) -> int:
-    # FOR UPDATE locks the enabled-admin rows for this transaction, so two
-    # concurrent demote/disable/delete operations serialize instead of both
-    # reading "2 admins" and each removing one (which would leave zero).
-    return len(s.execute(text(
-        "SELECT id FROM app_users WHERE role='admin' AND disabled=FALSE FOR UPDATE"
-    )).all())
-
-
 def _get_row(s, user_id: str):
-    # Lock the target row too, so its state cannot change under the guard between
-    # the read and the mutation.
+    """Unlocked read (for non-guarded lookups)."""
     return s.execute(text(
-        "SELECT id, username, role, disabled FROM app_users WHERE id=:id FOR UPDATE"),
+        "SELECT id, username, role, disabled FROM app_users WHERE id=:id"),
         {"id": str(user_id)}).mappings().first()
 
 
-def _is_last_enabled_admin(s, row) -> bool:
-    """True when `row` is an enabled admin and the only one left."""
-    return (row and row["role"] == "admin" and not row["disabled"]
-            and _enabled_admin_count(s) <= 1)
+def _lock_admins_then_target(s, user_id: str):
+    """For a guarded mutation, acquire locks in a CONSISTENT global order to avoid
+    deadlocks: first every enabled-admin row (ordered by id), THEN the target row.
+
+    Two concurrent disable/demote/delete transactions therefore contend on the
+    same first admin row before either touches a target, so they serialize
+    instead of each grabbing its own target and then dead-locking on the other's.
+    Returns (enabled_admin_count, target_row). The count and the target are both
+    read under the lock, so the last-admin decision cannot race a commit.
+    """
+    admin_ids = s.execute(text(
+        "SELECT id FROM app_users WHERE role='admin' AND disabled=FALSE "
+        "ORDER BY id FOR UPDATE")).all()
+    row = s.execute(text(
+        "SELECT id, username, role, disabled FROM app_users WHERE id=:id FOR UPDATE"),
+        {"id": str(user_id)}).mappings().first()
+    return len(admin_ids), row
+
+
+def _would_strand(count: int, row) -> bool:
+    """True when acting on `row` (an enabled admin) would remove the last one."""
+    return bool(row and row["role"] == "admin" and not row["disabled"] and count <= 1)
 
 
 def revalidate(user_id: str):
@@ -261,10 +269,10 @@ def set_disabled(user_id: str, disabled: bool) -> Dict[str, Any]:
     def _work(s):
         if not _table_exists(s):
             raise AuthUnavailable("app_users table is missing (run migration 009)")
-        row = _get_row(s, user_id)
+        count, row = _lock_admins_then_target(s, user_id)
         if not row:
             raise UserValidationError("no such user")
-        if disabled and _is_last_enabled_admin(s, row):
+        if disabled and _would_strand(count, row):
             raise LastAdminError("cannot disable the last enabled admin")
         s.execute(text("UPDATE app_users SET disabled=:d WHERE id=:id"),
                   {"d": bool(disabled), "id": str(user_id)})
@@ -282,10 +290,10 @@ def set_role(user_id: str, role: str) -> Dict[str, Any]:
     def _work(s):
         if not _table_exists(s):
             raise AuthUnavailable("app_users table is missing (run migration 009)")
-        row = _get_row(s, user_id)
+        count, row = _lock_admins_then_target(s, user_id)
         if not row:
             raise UserValidationError("no such user")
-        if role != "admin" and _is_last_enabled_admin(s, row):
+        if role != "admin" and _would_strand(count, row):
             raise LastAdminError("cannot demote the last enabled admin")
         s.execute(text("UPDATE app_users SET role=:r WHERE id=:id"),
                   {"r": role, "id": str(user_id)})
@@ -301,10 +309,10 @@ def delete_user(user_id: str) -> bool:
     def _work(s):
         if not _table_exists(s):
             raise AuthUnavailable("app_users table is missing (run migration 009)")
-        row = _get_row(s, user_id)
+        count, row = _lock_admins_then_target(s, user_id)
         if not row:
             return False
-        if _is_last_enabled_admin(s, row):
+        if _would_strand(count, row):
             raise LastAdminError("cannot delete the last enabled admin")
         s.execute(text("DELETE FROM app_users WHERE id=:id"), {"id": str(user_id)})
         return True

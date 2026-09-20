@@ -74,6 +74,8 @@ def test_login_success_sets_a_session(monkeypatch):
                         lambda u, p: {"id": "u1", "username": "alice",
                                       "role": "admin"} if p == "correct-pass" else None)
     monkeypatch.setattr(us, "touch_login", lambda *_a, **_k: None)
+    monkeypatch.setattr(us, "revalidate",
+                        lambda uid: ("ok", {"id": "u1", "username": "alice", "role": "admin"}))
     c = app.app.test_client()
 
     bad = c.post("/api/auth/login", json={"username": "alice", "password": "nope"})
@@ -158,11 +160,15 @@ def test_create_user_endpoint_bootstraps_with_token(monkeypatch):
 
 
 def _admin_client(app, monkeypatch, role="admin"):
-    """A test client with a signed-in session of the given role."""
+    """A test client with a signed-in session of the given role. Stubs revalidate
+    to 'ok' so the DB-backed session check (fail-closed) passes; tests that want a
+    revoked/changed session override us.revalidate afterwards."""
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-123456")
     monkeypatch.setattr(us, "verify_credentials",
                         lambda u, p: {"id": "me", "username": "admin", "role": role})
     monkeypatch.setattr(us, "touch_login", lambda *_a, **_k: None)
+    monkeypatch.setattr(us, "revalidate",
+                        lambda uid: ("ok", {"id": "me", "username": "admin", "role": role}))
     c = app.app.test_client()
     c.post("/api/auth/login", json={"username": "admin", "password": "x"})
     return c
@@ -278,7 +284,22 @@ def test_hl_admin_accepts_an_admin_session(monkeypatch):
     monkeypatch.setattr(us, "verify_credentials",
                         lambda u, p: {"id": "u1", "username": "alice", "role": "admin"})
     monkeypatch.setattr(us, "touch_login", lambda *_a, **_k: None)
+    monkeypatch.setattr(us, "revalidate",
+                        lambda uid: ("ok", {"id": "u1", "username": "alice", "role": "admin"}))
     c = app.app.test_client()
     c.post("/api/auth/login", json={"username": "alice", "password": "x"})
     # auto-status runs (returns 200) because the admin session satisfies _hl_admin_ok
     assert c.get("/api/hl/auto-status").status_code == 200
+
+
+def test_unknown_revalidation_fails_closed(monkeypatch):
+    # If the account state cannot be checked (DB down / table missing), the
+    # session is treated as signed-out — never trusted from the cookie's role.
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+    assert c.get("/api/auth/me").status_code == 200          # ok while revalidation says ok
+    monkeypatch.setattr(us, "revalidate", lambda uid: ("unknown", None))
+    assert c.get("/api/auth/me").status_code == 401          # unknown → fail closed
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    monkeypatch.delenv("HL_ADMIN_TOKEN", raising=False)
+    assert c.get("/api/hl/auto-status").status_code == 401   # HL surface denied too
