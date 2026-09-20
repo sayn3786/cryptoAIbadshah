@@ -35,6 +35,16 @@ class LastAdminError(RuntimeError):
     """Refused because it would remove the last enabled admin (lockout guard)."""
 
 
+class MigrationRequired(RuntimeError):
+    """A password change was refused because migration 010 (session_version) has
+    not run, so the change could not revoke existing sessions — better to refuse
+    than to report a revocation that did not happen."""
+
+
+class BadCurrentPassword(RuntimeError):
+    """The supplied current password did not match (self-service change)."""
+
+
 def _table_exists(s) -> bool:
     return bool(s.execute(text("SELECT to_regclass('app_users') IS NOT NULL")).scalar())
 
@@ -275,19 +285,66 @@ def set_password(user_id: str, new_password: str) -> Dict[str, Any]:
     def _work(s):
         if not _table_exists(s):
             raise AuthUnavailable("app_users table is missing (run migration 009)")
+        # A reset MUST be able to revoke existing sessions. If migration 010 has
+        # not run there is no session_version to bump, so refuse rather than
+        # report a revocation that did not happen.
+        if not _has_session_version(s):
+            raise MigrationRequired(
+                "run migration 010 before resetting passwords (session revocation)")
         row = _get_row(s, user_id)
         if not row:
             raise UserValidationError("no such user")
-        # Bump the session version (when the column exists) so every cookie issued
-        # before this reset stops matching — a reset revokes existing sessions.
-        if _has_session_version(s):
-            s.execute(text("UPDATE app_users SET password_hash=:h, "
-                           "session_version = session_version + 1 WHERE id=:id"),
-                      {"h": pw_hash, "id": str(user_id)})
-        else:
-            s.execute(text("UPDATE app_users SET password_hash=:h WHERE id=:id"),
-                      {"h": pw_hash, "id": str(user_id)})
+        # Bump the session version so every cookie issued before this reset stops
+        # matching — a reset revokes existing sessions.
+        s.execute(text("UPDATE app_users SET password_hash=:h, "
+                       "session_version = session_version + 1 WHERE id=:id"),
+                  {"h": pw_hash, "id": str(user_id)})
         return _public(dict(_get_row(s, user_id)))
+
+    with session_scope() as s:
+        return _work(s)
+
+
+def change_own_password(user_id: str, current_password: str,
+                        new_password: str) -> Dict[str, Any]:
+    """Self-service password change, verified and applied in ONE row-locked
+    transaction so nothing can slip between the check and the write.
+
+    Raises BadCurrentPassword (wrong current), UserValidationError (weak new /
+    no such user), MigrationRequired (010 not run), AuthUnavailable (no table).
+    Returns the public user PLUS the new session_version, so the caller can
+    re-issue its own cookie and stay logged in while other sessions are revoked.
+    """
+    if not new_password or len(new_password) < 8:
+        raise UserValidationError("password must be at least 8 characters")
+    new_hash = generate_password_hash(new_password)
+
+    def _work(s):
+        if not _table_exists(s):
+            raise AuthUnavailable("app_users table is missing (run migration 009)")
+        if not _has_session_version(s):
+            raise MigrationRequired(
+                "run migration 010 before changing passwords (session revocation)")
+        # Lock the row for the whole check-and-set — an admin reset (or another
+        # change) cannot interleave between verifying the current password and
+        # writing the new one.
+        row = s.execute(text(
+            "SELECT id, username, password_hash FROM app_users WHERE id=:id "
+            "FOR UPDATE"), {"id": str(user_id)}).mappings().first()
+        if not row:
+            raise UserValidationError("no such user")
+        if not check_password_hash(row["password_hash"], current_password):
+            raise BadCurrentPassword()
+        s.execute(text("UPDATE app_users SET password_hash=:h, "
+                       "session_version = session_version + 1 WHERE id=:id"),
+                  {"h": new_hash, "id": str(user_id)})
+        fresh = s.execute(text(
+            "SELECT id, username, role, disabled, created_at, last_login_at, "
+            "session_version FROM app_users WHERE id=:id"),
+            {"id": str(user_id)}).mappings().first()
+        out = _public(dict(fresh))
+        out["session_version"] = int(fresh["session_version"] or 0)
+        return out
 
     with session_scope() as s:
         return _work(s)

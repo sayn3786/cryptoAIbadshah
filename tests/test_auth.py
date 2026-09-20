@@ -226,8 +226,12 @@ def test_last_admin_guard_returns_409(monkeypatch):
 def test_change_own_password_checks_current(monkeypatch):
     app = _app()
     c = _admin_client(app, monkeypatch, role="user")
-    monkeypatch.setattr(us, "verify_password", lambda uid, pw: pw == "right-now")
-    monkeypatch.setattr(us, "set_password", lambda uid, pw: {"id": uid})
+
+    def _change(uid, cur, new):
+        if cur != "right-now":
+            raise us.BadCurrentPassword()
+        return {"id": uid, "username": "admin", "role": "user", "session_version": 1}
+    monkeypatch.setattr(us, "change_own_password", _change)
 
     wrong = c.post("/api/auth/password",
                    json={"current_password": "nope", "new_password": "abcdefgh"})
@@ -236,6 +240,19 @@ def test_change_own_password_checks_current(monkeypatch):
     ok = c.post("/api/auth/password",
                 json={"current_password": "right-now", "new_password": "abcdefgh"})
     assert ok.status_code == 200 and ok.get_json()["ok"] is True
+
+
+def test_password_reset_refused_without_migration_010(monkeypatch):
+    # If session_version is unavailable the reset cannot revoke sessions, so it is
+    # refused (503) rather than falsely reporting success.
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+
+    def _raise(*_a, **_k):
+        raise us.MigrationRequired("run migration 010")
+    monkeypatch.setattr(us, "set_password", _raise)
+    r = c.post("/api/auth/users/u2/password", json={"password": "abcdefgh"})
+    assert r.status_code == 503 and r.get_json()["error_code"] == "MIGRATION_REQUIRED"
 
 
 def test_change_own_password_requires_login(monkeypatch):

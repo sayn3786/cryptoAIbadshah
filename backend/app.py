@@ -4192,6 +4192,9 @@ def _user_mgmt(fn, *, ok_key="user"):
     except _us.UserValidationError as exc:
         return jsonify({"ok": False, "error_code": "INVALID_USER",
                         "error": str(exc)}), 400
+    except _us.MigrationRequired as exc:
+        return jsonify({"ok": False, "error_code": "MIGRATION_REQUIRED",
+                        "error": str(exc)}), 503
     except _us.AuthUnavailable as exc:
         return jsonify({"ok": False, "error_code": "AUTH_NOT_MIGRATED",
                         "error": str(exc)}), 503
@@ -4253,26 +4256,29 @@ def api_auth_change_own_password():
     body = request.get_json(silent=True) or {}
     current = body.get("current_password") or ""
     new = body.get("new_password") or ""
-    if not _us.verify_password(u["id"], current):
+    # Verify-and-replace happen in ONE row-locked transaction (user_store), so an
+    # admin reset cannot interleave between the check and the write.
+    try:
+        updated = _us.change_own_password(u["id"], current, new)
+    except _us.BadCurrentPassword:
         return jsonify({"ok": False, "error_code": "INVALID_CREDENTIALS",
                         "error": "current password is incorrect"}), 401
-    try:
-        _us.set_password(u["id"], new)
     except _us.UserValidationError as exc:
         return jsonify({"ok": False, "error_code": "INVALID_USER",
                         "error": str(exc)}), 400
+    except _us.MigrationRequired as exc:
+        return jsonify({"ok": False, "error_code": "MIGRATION_REQUIRED",
+                        "error": str(exc)}), 503
     except _us.AuthUnavailable as exc:
         return jsonify({"ok": False, "error_code": "AUTH_NOT_MIGRATED",
                         "error": str(exc)}), 503
     except Exception:
         app.logger.exception("self password change failed")
         return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
-    # The reset bumped the session version, which would revoke THIS cookie too.
+    # The change bumped the session version, which would revoke THIS cookie too.
     # Re-issue the caller's session at the new version so they stay logged in
     # while any OTHER sessions (the point of the change) are invalidated.
-    state, fresh = _us.revalidate(u["id"])
-    if state == "ok":
-        _auth.set_session(fresh)
+    _auth.set_session(updated)
     return jsonify({"ok": True})
 
 
