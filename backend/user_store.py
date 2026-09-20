@@ -174,14 +174,19 @@ def user_count() -> int:
 # own user management.
 
 def _enabled_admin_count(s) -> int:
-    return int(s.execute(text(
-        "SELECT count(*) FROM app_users WHERE role='admin' AND disabled=FALSE"
-    )).scalar() or 0)
+    # FOR UPDATE locks the enabled-admin rows for this transaction, so two
+    # concurrent demote/disable/delete operations serialize instead of both
+    # reading "2 admins" and each removing one (which would leave zero).
+    return len(s.execute(text(
+        "SELECT id FROM app_users WHERE role='admin' AND disabled=FALSE FOR UPDATE"
+    )).all())
 
 
 def _get_row(s, user_id: str):
+    # Lock the target row too, so its state cannot change under the guard between
+    # the read and the mutation.
     return s.execute(text(
-        "SELECT id, username, role, disabled FROM app_users WHERE id=:id"),
+        "SELECT id, username, role, disabled FROM app_users WHERE id=:id FOR UPDATE"),
         {"id": str(user_id)}).mappings().first()
 
 
@@ -189,6 +194,32 @@ def _is_last_enabled_admin(s, row) -> bool:
     """True when `row` is an enabled admin and the only one left."""
     return (row and row["role"] == "admin" and not row["disabled"]
             and _enabled_admin_count(s) <= 1)
+
+
+def revalidate(user_id: str):
+    """Re-check a session's user against the live table, so a demoted, disabled
+    or deleted account loses access immediately — not only when the cookie
+    expires. Returns a (state, user) tuple:
+      * ("ok", public_user)  — exists and enabled; `role` is the CURRENT role
+      * ("revoked", None)    — the table exists but the row is gone or disabled
+      * ("unknown", None)    — cannot check (table missing / DB down); the caller
+                               falls back to the signed cookie (degraded, but the
+                               app stays usable during a DB outage)
+    """
+    if not user_id:
+        return ("revoked", None)
+    try:
+        with session_scope() as s:
+            if not _table_exists(s):
+                return ("unknown", None)
+            row = s.execute(text(
+                "SELECT id, username, role, disabled, created_at, last_login_at "
+                "FROM app_users WHERE id=:id"), {"id": str(user_id)}).mappings().first()
+            if not row or row["disabled"]:
+                return ("revoked", None)
+            return ("ok", _public(dict(row)))
+    except Exception:                                    # noqa: BLE001
+        return ("unknown", None)
 
 
 def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:

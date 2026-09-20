@@ -240,6 +240,34 @@ def test_change_own_password_requires_login(monkeypatch):
     assert r.status_code == 401
 
 
+# ── sessions are revalidated against the live table (Codex P1) ───────────────
+
+def test_a_revoked_session_loses_access_immediately(monkeypatch):
+    # An admin signs in, then is disabled/deleted: the very next request must be
+    # denied even though the signed cookie still says "admin".
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+    assert c.get("/api/auth/me").status_code == 200        # still ok while "unknown"/valid
+    monkeypatch.setattr(us, "revalidate", lambda uid: ("revoked", None))
+    assert c.get("/api/auth/me").status_code == 401         # revoked → signed out
+    # and the HL admin surface no longer accepts the dead session
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    monkeypatch.delenv("HL_ADMIN_TOKEN", raising=False)
+    assert c.get("/api/hl/auto-status").status_code == 401
+
+
+def test_role_change_takes_effect_from_the_db_not_the_cookie(monkeypatch):
+    # Cookie was minted as admin, but the DB now says user → admin-only routes deny.
+    app = _app()
+    c = _admin_client(app, monkeypatch)
+    monkeypatch.setattr(us, "revalidate",
+                        lambda uid: ("ok", {"id": "me", "username": "admin", "role": "user"}))
+    me = c.get("/api/auth/me")
+    assert me.status_code == 200 and me.get_json()["user"]["role"] == "user"
+    # a management endpoint (admin-only) is now refused for this demoted session
+    assert c.post("/api/auth/users/x/disable", json={"disabled": True}).status_code == 403
+
+
 def test_hl_admin_accepts_an_admin_session(monkeypatch):
     # An admin session authorizes the HL endpoints (so the UI buttons work),
     # even without the token.

@@ -1006,7 +1006,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=238";
+  var DJS = "/dashboard/js/dashboard.js?v=239";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;
@@ -1127,7 +1127,12 @@
           if (!confirm("Delete " + u.username + "? This cannot be undone.")) return;
           api("/api/auth/users/" + u.id, { method: "DELETE" })
             .then(function (r) { return r.json(); })
-            .then(function (res) { uSetMsg(res.ok ? "Deleted." : (res.error || "Failed"), !res.ok); loadUsers(); })
+            .then(function (res) {
+              // Refresh only on success — otherwise loadUsers() would wipe the
+              // error message before it could be read.
+              if (res.ok) { uSetMsg("Deleted."); loadUsers(); }
+              else { uSetMsg(res.error || "Delete failed", true); }
+            })
             .catch(function () { uSetMsg("Delete failed", true); });
         });
         tb.appendChild(tr);
@@ -1135,11 +1140,16 @@
       uSetMsg(rows.length + " user" + (rows.length === 1 ? "" : "s") + ".");
     }).catch(function () { uSetMsg("Could not load users", true); });
   }
-  function uPost(path, bodyObj, okMsg) {
-    api(path, { method: "POST", headers: { "Content-Type": "application/json" },
+  function uPost(path, bodyObj, okMsg, onOk) {
+    return api(path, { method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(bodyObj) })
       .then(function (r) { return r.json(); })
-      .then(function (res) { uSetMsg(res.ok ? okMsg : (res.error || "Failed"), !res.ok); loadUsers(); })
+      .then(function (res) {
+        // Refresh (which overwrites the message) ONLY on success, so a failure's
+        // explanation survives and the add-user form keeps its values.
+        if (res.ok) { uSetMsg(okMsg); if (onOk) onOk(); loadUsers(); }
+        else { uSetMsg(res.error || "Failed", true); }
+      })
       .catch(function () { uSetMsg("Request failed", true); });
   }
   document.getElementById("cm-users").addEventListener("click", function () {
@@ -1155,9 +1165,10 @@
       username: document.getElementById("cm-nu").value,
       password: document.getElementById("cm-np").value,
       role: document.getElementById("cm-nr").value
-    }, "User created.");
-    document.getElementById("cm-nu").value = "";
-    document.getElementById("cm-np").value = "";
+    }, "User created.", function () {                    // clear the form ONLY on success
+      document.getElementById("cm-nu").value = "";
+      document.getElementById("cm-np").value = "";
+    });
   });
 })();
 </script>

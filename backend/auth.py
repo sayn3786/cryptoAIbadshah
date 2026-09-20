@@ -17,11 +17,12 @@ import functools
 import os
 from typing import Any, Callable, Dict, Optional
 
-from flask import jsonify, session
+from flask import g, jsonify, session
 
 import user_store
 
 _SESSION_KEY = "u"
+_UNSET = object()
 
 
 def _flag(name: str) -> bool:
@@ -54,12 +55,34 @@ def clear_session() -> None:
 
 
 def current_user() -> Optional[Dict[str, Any]]:
-    """The signed-in user from the cookie, or None. This trusts the cookie's
-    SIGNATURE, not the database, so it stays cheap on every request."""
+    """The signed-in user, REVALIDATED against the live table.
+
+    The cookie is signed (tamper-evident), but its role/enabled state are a
+    snapshot from login time. So we re-check the account against app_users on
+    each request: a demoted, disabled or deleted user loses access immediately,
+    and the role returned is the CURRENT one, not the cookie's. The lookup is one
+    indexed PK read, cached on `flask.g` so repeated calls in a request query
+    once. If the table is missing or the DB is down we cannot revalidate, so we
+    fall back to the signed cookie (degraded, but the app stays usable)."""
+    cached = getattr(g, "_cm_user", _UNSET)
+    if cached is not _UNSET:
+        return cached
     u = session.get(_SESSION_KEY)
+    result: Optional[Dict[str, Any]] = None
     if isinstance(u, dict) and u.get("id"):
-        return u
-    return None
+        state, fresh = user_store.revalidate(u["id"])
+        if state == "ok":
+            result = {"id": fresh["id"], "username": fresh["username"],
+                      "role": fresh["role"]}
+        elif state == "unknown":
+            result = u                                   # cannot revalidate → trust cookie
+        else:                                            # "revoked" → session no longer valid
+            result = None
+    try:
+        g._cm_user = result
+    except Exception:                                    # noqa: BLE001
+        pass
+    return result
 
 
 def is_admin() -> bool:
