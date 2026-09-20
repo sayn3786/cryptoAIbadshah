@@ -17,11 +17,12 @@ import functools
 import os
 from typing import Any, Callable, Dict, Optional
 
-from flask import jsonify, session
+from flask import g, jsonify, session
 
 import user_store
 
 _SESSION_KEY = "u"
+_UNSET = object()
 
 
 def _flag(name: str) -> bool:
@@ -46,7 +47,11 @@ def set_session(user: Dict[str, Any]) -> None:
     session.permanent = True
     session[_SESSION_KEY] = {"id": str(user.get("id")),
                              "username": user.get("username"),
-                             "role": user.get("role") or "user"}
+                             "role": user.get("role") or "user",
+                             # Baked into the cookie at login; a password change
+                             # bumps the stored version so this cookie stops
+                             # matching and the session is revoked.
+                             "sv": int(user.get("session_version") or 0)}
 
 
 def clear_session() -> None:
@@ -54,12 +59,38 @@ def clear_session() -> None:
 
 
 def current_user() -> Optional[Dict[str, Any]]:
-    """The signed-in user from the cookie, or None. This trusts the cookie's
-    SIGNATURE, not the database, so it stays cheap on every request."""
+    """The signed-in user, REVALIDATED against the live table.
+
+    The cookie is signed (tamper-evident), but its role/enabled state are a
+    snapshot from login time. So we re-check the account against app_users on
+    each request: a demoted, disabled or deleted user loses access immediately,
+    and the role returned is the CURRENT one, not the cookie's. The lookup is one
+    indexed PK read, cached on `flask.g` so repeated calls in a request query
+    once.
+
+    FAILS CLOSED: if the account cannot be revalidated (table missing / DB down)
+    the session is treated as signed-out, never trusted from the cookie's stale
+    role. Trusting it would let a demoted/disabled/deleted admin keep access
+    during a DB outage — and the manual HL execute path does not even need the
+    DB. Login also needs the DB, so during an outage nobody can sign in anyway;
+    failing closed only makes existing sessions match that."""
+    cached = getattr(g, "_cm_user", _UNSET)
+    if cached is not _UNSET:
+        return cached
     u = session.get(_SESSION_KEY)
+    result: Optional[Dict[str, Any]] = None
     if isinstance(u, dict) and u.get("id"):
-        return u
-    return None
+        state, fresh = user_store.revalidate(u["id"])
+        if state == "ok" and int(fresh.get("session_version") or 0) == int(u.get("sv") or 0):
+            result = {"id": fresh["id"], "username": fresh["username"],
+                      "role": fresh["role"]}
+        # A stale session_version (password changed since login), "revoked", and
+        # "unknown" all → no valid session (fail closed).
+    try:
+        g._cm_user = result
+    except Exception:                                    # noqa: BLE001
+        pass
+    return result
 
 
 def is_admin() -> bool:

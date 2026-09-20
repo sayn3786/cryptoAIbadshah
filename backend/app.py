@@ -4092,12 +4092,13 @@ def api_auth_login():
     if not _auth.secret_configured():
         return jsonify({"ok": False, "error_code": "AUTH_NOT_CONFIGURED",
                         "error": "APP_SECRET_KEY is not set"}), 503
-    body = request.get_json(silent=True) or {}
-    username = (body.get("username") or request.form.get("username") or "").strip()
-    password = body.get("password") or request.form.get("password") or ""
+    body = _json_body()
+    username = _req_str(body.get("username")) or _req_str(request.form.get("username"))
+    password = _req_str(body.get("password")) or _req_str(request.form.get("password"))
     if not username or not password:
         return jsonify({"ok": False, "error_code": "BAD_PARAMS",
                         "error": "username and password required"}), 400
+    username = username.strip()
     try:
         user = _auth.do_login(username, password)
     except Exception:
@@ -4153,10 +4154,15 @@ def api_auth_users_create():
     import user_store as _us
     if not (_auth.is_admin() or _hl_admin_ok()):
         return jsonify({"error": "Forbidden", "error_code": "FORBIDDEN"}), 403
-    body = request.get_json(silent=True) or {}
-    username = (body.get("username") or "").strip()
-    password = body.get("password") or ""
-    role = (body.get("role") or "user").strip().lower()
+    body = _json_body()
+    username = _req_str(body.get("username"))
+    password = _req_str(body.get("password"))
+    role = _req_str(body.get("role"))
+    if username is None or password is None or (body.get("role") is not None and role is None):
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "username, password (and role, if given) must be strings"}), 400
+    username = username.strip()
+    role = (role or "user").strip().lower()
     try:
         user = _us.create_user(username, password, role=role)
     except _us.UserValidationError as exc:
@@ -4169,6 +4175,174 @@ def api_auth_users_create():
         app.logger.exception("create user failed")
         return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
     return jsonify({"ok": True, "user": user})
+
+
+def _req_str(value):
+    """A JSON field coerced to str, or None when it is missing or a non-string
+    (a JSON number/bool/list). Callers treat None as a 400 rather than letting a
+    later .strip()/len() raise and surface as a 500."""
+    return value if isinstance(value, str) else None
+
+
+def _json_body():
+    """The request's JSON as a MAPPING. request.get_json() can return a list,
+    string or number for a truthy non-object body (e.g. `[1]`), on which `.get()`
+    would raise — so anything that is not a dict becomes {} and the field checks
+    turn it into a clean 400."""
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
+
+
+def _bad_uuid(uid):
+    """A 400 response when `uid` is not a valid UUID, else None. The app_users id
+    is a UUID column, so a malformed path segment would otherwise reach Postgres
+    and raise an invalid-text-representation error surfaced as a 500."""
+    import uuid as _uuid
+    try:
+        _uuid.UUID(str(uid))
+        return None
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "invalid user id"}), 400
+
+
+def _require_admin_session():
+    """Admin-session gate for user management. Returns an error response or None.
+    Unlike creation, these mutate EXISTING accounts, so the bootstrap token is not
+    accepted — only a signed-in admin."""
+    import auth as _auth
+    if not _auth.is_admin():
+        return jsonify({"error": "Admin only", "error_code": "FORBIDDEN"}), 403
+    return None
+
+
+def _user_mgmt(fn, *, ok_key="user"):
+    """Run a user_store mutation and map its errors to responses uniformly."""
+    import user_store as _us
+    try:
+        result = fn()
+    except _us.LastAdminError as exc:
+        return jsonify({"ok": False, "error_code": "LAST_ADMIN",
+                        "error": str(exc)}), 409
+    except _us.UserValidationError as exc:
+        return jsonify({"ok": False, "error_code": "INVALID_USER",
+                        "error": str(exc)}), 400
+    except _us.MigrationRequired as exc:
+        return jsonify({"ok": False, "error_code": "MIGRATION_REQUIRED",
+                        "error": str(exc)}), 503
+    except _us.AuthUnavailable as exc:
+        return jsonify({"ok": False, "error_code": "AUTH_NOT_MIGRATED",
+                        "error": str(exc)}), 503
+    except Exception:
+        app.logger.exception("user management op failed")
+        return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
+    return jsonify({"ok": True, ok_key: result})
+
+
+@app.post("/api/auth/users/<uid>/password")
+def api_auth_user_reset_password(uid):
+    guard = _require_admin_session()
+    if guard:
+        return guard
+    bad = _bad_uuid(uid)
+    if bad:
+        return bad
+    import user_store as _us
+    pw = _req_str(_json_body().get("password"))
+    if pw is None:
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "password must be a string"}), 400
+    return _user_mgmt(lambda: _us.set_password(uid, pw))
+
+
+@app.post("/api/auth/users/<uid>/role")
+def api_auth_user_set_role(uid):
+    guard = _require_admin_session()
+    if guard:
+        return guard
+    bad = _bad_uuid(uid)
+    if bad:
+        return bad
+    import user_store as _us
+    role = _req_str(_json_body().get("role"))
+    if role is None:
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "role must be a string"}), 400
+    return _user_mgmt(lambda: _us.set_role(uid, role.strip().lower()))
+
+
+@app.post("/api/auth/users/<uid>/disable")
+def api_auth_user_set_disabled(uid):
+    guard = _require_admin_session()
+    if guard:
+        return guard
+    bad = _bad_uuid(uid)
+    if bad:
+        return bad
+    import user_store as _us
+    body = _json_body()
+    disabled = body.get("disabled")
+    # Require the key to be PRESENT and a real JSON boolean — no default. A
+    # missing key (e.g. a non-object body coerced to {}) or a truthy string must
+    # not silently disable the target; that is a destructive action.
+    if "disabled" not in body or not isinstance(disabled, bool):
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "disabled must be present and true or false (boolean)"}), 400
+    return _user_mgmt(lambda: _us.set_disabled(uid, disabled))
+
+
+@app.delete("/api/auth/users/<uid>")
+def api_auth_user_delete(uid):
+    guard = _require_admin_session()
+    if guard:
+        return guard
+    bad = _bad_uuid(uid)
+    if bad:
+        return bad
+    import user_store as _us
+    return _user_mgmt(lambda: _us.delete_user(uid), ok_key="deleted")
+
+
+@app.post("/api/auth/password")
+def api_auth_change_own_password():
+    """Any signed-in user changes their OWN password after confirming the current
+    one. Not admin-gated — it only ever touches the caller's account."""
+    import auth as _auth
+    import user_store as _us
+    u = _auth.current_user()
+    if not u:
+        return jsonify({"error": "Authentication required",
+                        "error_code": "AUTH_REQUIRED"}), 401
+    body = _json_body()
+    current = _req_str(body.get("current_password"))
+    new = _req_str(body.get("new_password"))
+    if current is None or new is None:
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "current_password and new_password must be strings"}), 400
+    # Verify-and-replace happen in ONE row-locked transaction (user_store), so an
+    # admin reset cannot interleave between the check and the write.
+    try:
+        updated = _us.change_own_password(u["id"], current, new)
+    except _us.BadCurrentPassword:
+        return jsonify({"ok": False, "error_code": "INVALID_CREDENTIALS",
+                        "error": "current password is incorrect"}), 401
+    except _us.UserValidationError as exc:
+        return jsonify({"ok": False, "error_code": "INVALID_USER",
+                        "error": str(exc)}), 400
+    except _us.MigrationRequired as exc:
+        return jsonify({"ok": False, "error_code": "MIGRATION_REQUIRED",
+                        "error": str(exc)}), 503
+    except _us.AuthUnavailable as exc:
+        return jsonify({"ok": False, "error_code": "AUTH_NOT_MIGRATED",
+                        "error": str(exc)}), 503
+    except Exception:
+        app.logger.exception("self password change failed")
+        return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
+    # The change bumped the session version, which would revoke THIS cookie too.
+    # Re-issue the caller's session at the new version so they stay logged in
+    # while any OTHER sessions (the point of the change) are invalidated.
+    _auth.set_session(updated)
+    return jsonify({"ok": True})
 
 
 def _int_arg(name, default, lo, hi):
