@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '246';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '247';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -243,7 +243,14 @@ async function loadTicker() {
 function renderTicker() {
   const bar = document.getElementById('tickerBar');
   if (!bar) return;
-  bar.innerHTML = TICKER_SYMS.map(sym => {
+  // Keep the animated track mounted across live-price refreshes so it never
+  // restarts its scroll. Two equal groups make the wrap seamless.
+  if (!bar.querySelector('.ticker-track')) {
+    bar.innerHTML = '<div class="ticker-track"><div class="ticker-group"></div><div class="ticker-group" aria-hidden="true"></div></div>';
+    bar.tabIndex = 0;
+    bar.setAttribute('aria-label', 'Live cryptocurrency prices. Hover or focus to pause scrolling.');
+  }
+  const items = TICKER_SYMS.map(sym => {
     const d = _tickerData[sym];
     if (!d || d.price == null) return '';
     const chg = d.change_pct ?? 0;
@@ -254,6 +261,7 @@ function renderTicker() {
       <span class="ticker-chg ${cls}">${pct(chg)}</span>
     </div>`;
   }).join('');
+  bar.querySelectorAll('.ticker-group').forEach(group => { group.innerHTML = items; });
 }
 
 /* Fast, lightweight live-price poll (no full analysis) — updates just the price

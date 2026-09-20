@@ -55,12 +55,29 @@ a:hover { color: var(--gold2); }
 .logo { font-size: 2rem; }
 .brand { font-size: 1.2rem; font-weight: 800; color: var(--gold); line-height: 1.1; }
 .brand-sub { font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
-.hdr-center { flex: 1; overflow: hidden; }
+.hdr-center { flex: 1; min-width: 0; overflow: hidden; }
 .hdr-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .last-updated { font-size: .75rem; color: var(--muted); font-family: var(--mono); }
 
 /* ─── Ticker Bar ────────────────────────────────────────────────────────────── */
-.ticker-bar { display: flex; gap: 20px; overflow: hidden; }
+.ticker-bar { overflow: hidden; container-type: inline-size; }
+.ticker-track { display: flex; width: max-content; animation: ticker-right 40s linear infinite; }
+.ticker-group {
+  display: flex; flex-shrink: 0; gap: 20px; align-items: center;
+  min-width: 100cqw; padding-right: 20px; box-sizing: border-box;
+  justify-content: space-around;
+}
+@keyframes ticker-right {
+  from { transform: translateX(-50%); }
+  to { transform: translateX(0); }
+}
+.ticker-bar:hover .ticker-track,
+.ticker-bar:focus-within .ticker-track { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .ticker-bar { overflow-x: auto; }
+  .ticker-track { animation: none; }
+  .ticker-group[aria-hidden="true"] { display: none; }
+}
 .ticker-item {
   display: flex; gap: 6px; align-items: baseline; font-size: .8rem;
   white-space: nowrap; font-family: var(--mono);
