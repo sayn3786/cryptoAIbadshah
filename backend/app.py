@@ -57,6 +57,20 @@ app = Flask(__name__)
 # and return {"error": "not found"} for every API call.
 app.url_map.strict_slashes = False
 
+# ── Session cookie (dashboard login) ─────────────────────────────────────────
+# Flask signs the session cookie with this key; without a STABLE key across
+# serverless invocations, sessions would not survive a cold start. APP_SECRET_KEY
+# must be set for login to work (auth.secret_configured() gates on it); the
+# fallback keeps local/dev booting but is NOT trusted for real sessions.
+app.secret_key = (os.getenv("APP_SECRET_KEY") or "").strip() or "dev-insecure-key"
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,     # JS cannot read the session cookie
+    SESSION_COOKIE_SECURE=True,       # HTTPS only (the app is HTTPS on Vercel)
+    SESSION_COOKIE_SAMESITE="Lax",    # sent on top-level navigations, not cross-site POSTs
+)
+from datetime import timedelta as _timedelta
+app.permanent_session_lifetime = _timedelta(days=7)
+
 
 class _RestoreOriginalPath:
     """Restore the real request path when the platform rewrites it away.
@@ -4018,6 +4032,14 @@ def _hl_admin_ok() -> bool:
     import os as _os
     if _internal_auth_ok():                              # CRON_SECRET path unchanged
         return True
+    # A signed-in ADMIN may drive these from the dashboard UI (session cookie),
+    # so the HL buttons work without exposing the token to the browser.
+    try:
+        import auth as _auth
+        if _auth.is_admin():
+            return True
+    except Exception:                                    # noqa: BLE001
+        pass
     token = _os.getenv("HL_ADMIN_TOKEN", "")
     if not token:
         return False
@@ -4030,6 +4052,123 @@ def _require_hl_admin():
     if not _hl_admin_ok():
         return jsonify({"error": "Unauthorized", "error_code": "FORBIDDEN"}), 401
     return None
+
+
+# ── Dashboard authentication ─────────────────────────────────────────────────
+# Enforcement is centralized here and DEFAULT-OFF (AUTH_REQUIRED). When on, every
+# /api/* route needs a session EXCEPT the auth + health endpoints and any request
+# that already carries valid internal auth (CRON_SECRET or the HL admin token) —
+# so the crons, the GitHub workflows and token-driven HL calls keep working while
+# the browser-facing API sits behind login.
+
+_AUTH_ALWAYS_OPEN = ("/api/auth/login", "/api/auth/logout", "/api/auth/me")
+
+
+@app.before_request
+def _enforce_dashboard_auth():
+    import auth as _auth
+    if not _auth.enforcement_enabled():
+        return None
+    p = (request.path or "")
+    if not p.startswith("/api/"):
+        return None                                       # static/dashboard: not Flask's to gate
+    if p.rstrip("/") in _AUTH_ALWAYS_OPEN or p.startswith("/api/health"):
+        return None
+    # Internal callers (CRON_SECRET) and token-driven HL admin bypass the LOGIN
+    # gate — they authenticate their own way and must keep working headless. Use
+    # the FAIL-CLOSED internal check (not _cron_authorized, which is permissive
+    # when CRON_SECRET is unset) so a missing secret can never open the gate.
+    if _internal_auth_ok() or _hl_admin_ok():
+        return None
+    if _auth.current_user() is not None:
+        return None
+    return jsonify({"error": "Authentication required",
+                    "error_code": "AUTH_REQUIRED"}), 401
+
+
+@app.post("/api/auth/login")
+def api_auth_login():
+    import auth as _auth
+    if not _auth.secret_configured():
+        return jsonify({"ok": False, "error_code": "AUTH_NOT_CONFIGURED",
+                        "error": "APP_SECRET_KEY is not set"}), 503
+    body = request.get_json(silent=True) or {}
+    username = (body.get("username") or request.form.get("username") or "").strip()
+    password = body.get("password") or request.form.get("password") or ""
+    if not username or not password:
+        return jsonify({"ok": False, "error_code": "BAD_PARAMS",
+                        "error": "username and password required"}), 400
+    try:
+        user = _auth.do_login(username, password)
+    except Exception:
+        app.logger.exception("login failed")
+        return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
+    if not user:
+        # One message for every failure mode — no user enumeration.
+        return jsonify({"ok": False, "error_code": "INVALID_CREDENTIALS",
+                        "error": "invalid username or password"}), 401
+    return jsonify({"ok": True, "user": {"username": user["username"],
+                                         "role": user["role"]}})
+
+
+@app.post("/api/auth/logout")
+def api_auth_logout():
+    import auth as _auth
+    _auth.clear_session()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/auth/me")
+def api_auth_me():
+    import auth as _auth
+    u = _auth.current_user()
+    if not u:
+        return jsonify({"authenticated": False,
+                        "auth_required": _auth.enforcement_enabled(),
+                        "auth_configured": _auth.secret_configured()}), 401
+    return jsonify({"authenticated": True,
+                    "user": {"username": u.get("username"), "role": u.get("role")},
+                    "auth_required": _auth.enforcement_enabled()})
+
+
+@app.get("/api/auth/users")
+def api_auth_users_list():
+    import auth as _auth
+    import user_store as _us
+    if not _auth.is_admin():
+        return jsonify({"error": "Admin only", "error_code": "FORBIDDEN"}), 403
+    try:
+        return jsonify({"users": _us.list_users()})
+    except Exception:
+        app.logger.exception("list users failed")
+        return jsonify({"error": "Unavailable", "error_code": "AUTH_ERROR"}), 500
+
+
+@app.post("/api/auth/users")
+def api_auth_users_create():
+    """Create an account. An admin SESSION may create users from the UI; to
+    BOOTSTRAP the very first admin (before any account exists) the internal
+    CRON_SECRET or HL_ADMIN_TOKEN is accepted instead."""
+    import auth as _auth
+    import user_store as _us
+    if not (_auth.is_admin() or _hl_admin_ok()):
+        return jsonify({"error": "Forbidden", "error_code": "FORBIDDEN"}), 403
+    body = request.get_json(silent=True) or {}
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    role = (body.get("role") or "user").strip().lower()
+    try:
+        user = _us.create_user(username, password, role=role)
+    except _us.UserValidationError as exc:
+        return jsonify({"ok": False, "error_code": "INVALID_USER",
+                        "error": str(exc)}), 400
+    except _us.AuthUnavailable as exc:
+        return jsonify({"ok": False, "error_code": "AUTH_NOT_MIGRATED",
+                        "error": str(exc)}), 503
+    except Exception:
+        app.logger.exception("create user failed")
+        return jsonify({"ok": False, "error_code": "AUTH_ERROR"}), 500
+    return jsonify({"ok": True, "user": user})
 
 
 def _int_arg(name, default, lo, hi):
