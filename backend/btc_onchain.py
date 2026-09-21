@@ -1449,11 +1449,14 @@ def get_gomining_strategy(m: dict, gm_token: dict = None, gm_tokenomics: dict = 
     # divergence (or the SHORT guard) routes the reinvestment to TH/BTC, that copy
     # contradicts the toggle. Reflect the actual target so the whole card agrees.
     if phase == "compound" and reinvest_to == "btc":
+        # Lead line is always true; the specific cause comes from reinvest_reason
+        # (BTC lagged, token SHORT, or in-step-with-weak-token) so the banner can
+        # never assert a condition that did not actually hold.
         meta = {**meta,
                 "label": "COMPOUND — ADD TH / HASHPOWER",
-                "desc":  "Mining is profitable. BTC has lagged GOMINING (or the token "
-                         "is in a downtrend), so reinvest profits into TH / hashpower "
-                         "directly rather than buying the extended token."}
+                "desc":  ("Mining is profitable — reinvest profits into TH / hashpower "
+                          "directly this cycle rather than buying the GOMINING token."
+                          + (f" {reinvest_reason}." if reinvest_reason else ""))}
 
     # ── Reasons ────────────────────────────────────────────────────────────────
     reasons = []

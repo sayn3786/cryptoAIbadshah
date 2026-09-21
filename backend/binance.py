@@ -973,7 +973,10 @@ class BinanceClient:
 
     # ── Public interface ──────────────────────────────────────────────────────
 
-    def get_spot_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
+    def _spot_klines_sourced(self, symbol: str, interval: str, limit: int = 100):
+        """Like get_spot_klines but returns (candles, source) so the source is
+        captured ATOMICALLY with the fetch — the shared self.data_source attribute
+        can be overwritten by another worker between a call and a separate read."""
         is_monthly = (interval == "1M")
         is_weekly  = (interval in ("1w", "1W"))
         # Weekly/monthly fallback sources return weekly candles regardless of the
@@ -1032,7 +1035,7 @@ class BinanceClient:
                 _r = None
             if _consider(_r, _name):
                 self.data_source = _name
-                return _best_r[-limit:]
+                return _best_r[-limit:], _name
 
         if use_weekly_fallbacks:
             for _r, _name in (
@@ -1044,7 +1047,7 @@ class BinanceClient:
             ):
                 if _consider(_r, _name):
                     self.data_source = _name
-                    return _best_r[-limit:]
+                    return _best_r[-limit:], _name
         else:
             # For intraday: try the single next-larger interval on each exchange.
             # Stops at one step up (2H→4H, 4H→8H, etc.) to keep latency bounded —
@@ -1059,15 +1062,15 @@ class BinanceClient:
                 result = self._binance_klines(symbol, next_iv, limit)
                 if _consider(result, "binance"):
                     self.data_source = "binance"
-                    return _best_r[-limit:]
+                    return _best_r[-limit:], "binance"
                 result = self._okx_candles(symbol, next_iv, limit)
                 if _consider(result, "okx"):
                     self.data_source = "okx"
-                    return _best_r[-limit:]
+                    return _best_r[-limit:], "okx"
                 result = self._bybit_candles(symbol, next_iv, limit)
                 if _consider(result, "bybit"):
                     self.data_source = "bybit"
-                    return _best_r[-limit:]
+                    return _best_r[-limit:], "bybit"
 
             # CoinGecko intraday is APPROXIMATED — built from periodic price
             # SNAPSHOTS, not true tick OHLC, so its candles have thin bodies and
@@ -1079,18 +1082,27 @@ class BinanceClient:
                 result = self._cg_daily_as_candles(symbol, interval, limit)
                 if _consider(result, "coingecko"):
                     self.data_source = "coingecko"
-                    return _best_r[-limit:]
+                    return _best_r[-limit:], "coingecko"
 
         # Nothing was "rich", but a thin real result still beats synthetic data
         # (e.g. a genuinely young token with only a handful of weekly bars). Return
         # the deepest history we found as long as it clears the absolute floor.
         if _blen(_best_r) >= _floor:
             self.data_source = _best_src
-            return _best_r[-limit:]
+            return _best_r[-limit:], _best_src
 
         self.data_source = "demo"
         from mock_data import mock_spot_klines
-        return mock_spot_klines(symbol, interval, limit)
+        return mock_spot_klines(symbol, interval, limit), "demo"
+
+    def get_spot_klines(self, symbol: str, interval: str, limit: int = 100) -> List[Dict]:
+        res, _src = self._spot_klines_sourced(symbol, interval, limit)
+        return res
+
+    def get_spot_klines_sourced(self, symbol: str, interval: str, limit: int = 100):
+        """(candles, source) with the source captured atomically — use this when a
+        decision must know whether the candles are real or demo/synthetic."""
+        return self._spot_klines_sourced(symbol, interval, limit)
 
     def get_current_price(self, symbol: str) -> Optional[float]:
         """

@@ -1334,8 +1334,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     gomining_token_signal = None
     if symbol == "BTC" and "GOMINING" in SYMBOLS:
         try:
-            _gm_candles = client.get_spot_klines("GOMININGUSDT", "1d", 35) or []
-            _gm_src = client.data_source                  # source of THIS klines call
+            # Fetch WITH the source captured atomically (get_spot_klines_sourced),
+            # so a concurrent worker can't relabel demo candles as real between the
+            # call and a separate self.data_source read.
+            _gm_candles, _gm_src = client.get_spot_klines_sourced("GOMININGUSDT", "1d", 35)
+            _gm_candles = _gm_candles or []
             if _gm_candles and len(_gm_candles) >= 5:
                 _closes = [c["close"] for c in _gm_candles]
                 _price_now = _closes[-1]
@@ -1345,23 +1348,27 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
                 _mean = sum(_closes[-20:]) / min(20, len(_closes))
                 _strength = round(abs(_price_now - _mean) / _mean * 100, 1) if _mean else 0
 
-                # 30-day % change over a MATCHED window (close 30 spans back =
-                # index -31), requiring >=31 real daily closes. Synthetic/demo
-                # candles must NOT drive the reinvestment divergence — a random
-                # return could steer real funds — so a demo source yields None.
-                def _chg_30d(closes, src):
-                    if src == "demo" or len(closes) < 31:
+                # 30-day % change over a MATCHED window from CLOSED daily candles
+                # only (drop today's still-forming bar, like every other signal),
+                # index -31 for the close 30 spans back, requiring >=31 real closes.
+                # Synthetic/demo candles must NOT drive the divergence — a random
+                # return could steer a real-funds recommendation — so demo → None.
+                def _chg_30d(candles, src):
+                    if src == "demo":
                         return None
-                    base = closes[-31]
-                    return round((closes[-1] - base) / base * 100, 1) if base and base > 0 else None
+                    closed, _live = _split_closed(candles, 86400)
+                    cl = [c["close"] for c in closed]
+                    if len(cl) < 31:
+                        return None
+                    base = cl[-31]
+                    return round((cl[-1] - base) / base * 100, 1) if base and base > 0 else None
 
-                _gm_30d_pct = _chg_30d(_closes, _gm_src)
+                _gm_30d_pct = _chg_30d(_gm_candles, _gm_src)
                 # BTC's own 30d change over the same window, for the divergence.
                 _btc_30d_pct = None
                 try:
-                    _btc_c = client.get_spot_klines("BTCUSDT", "1d", 35) or []
-                    _btc_src = client.data_source
-                    _btc_30d_pct = _chg_30d([c["close"] for c in _btc_c], _btc_src)
+                    _btc_c, _btc_src = client.get_spot_klines_sourced("BTCUSDT", "1d", 35)
+                    _btc_30d_pct = _chg_30d(_btc_c or [], _btc_src)
                     # Divergence needs BOTH series from real, matched data; if the
                     # GOMINING side was demo, void the BTC side too so the strategy
                     # falls back to the token-trend gate instead of comparing noise.
