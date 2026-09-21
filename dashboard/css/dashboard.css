@@ -55,12 +55,22 @@ a:hover { color: var(--gold2); }
 .logo { font-size: 2rem; }
 .brand { font-size: 1.2rem; font-weight: 800; color: var(--gold); line-height: 1.1; }
 .brand-sub { font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
-.hdr-center { flex: 1; min-width: 0; overflow: hidden; }
+.hdr-center { flex: 1; min-width: 0; overflow: hidden; display: flex; align-items: center; gap: 8px; }
 .hdr-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .last-updated { font-size: .75rem; color: var(--muted); font-family: var(--mono); }
 
 /* ─── Ticker Bar ────────────────────────────────────────────────────────────── */
-.ticker-bar { overflow: hidden; container-type: inline-size; }
+.ticker-bar { flex: 1; min-width: 0; overflow: hidden; container-type: inline-size;
+  mask-image: linear-gradient(to right, transparent, black 16px, black calc(100% - 16px), transparent); }
+.ticker-toggle { flex: 0 0 auto; min-width: 36px; min-height: 36px; cursor: pointer;
+  color: var(--muted2); background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; }
+.ticker-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.ticker-freshness { display: inline-block; width: 9ch; color: var(--muted); font-size: .65rem; }
+.ticker-item.is-stale .ticker-freshness { color: var(--gold); }
+.ticker-price { display: inline-block; width: 14ch; text-align: right; font-variant-numeric: tabular-nums; }
+.ticker-chg { display: inline-block; width: 9ch; text-align: right; font-variant-numeric: tabular-nums; }
+.ticker-sym { display: inline-block; width: 4ch; }
+.ticker-bar.is-paused .ticker-track { animation-play-state: paused; }
 .ticker-track { display: flex; width: max-content; animation: ticker-right 40s linear infinite; }
 .ticker-group {
   display: flex; flex-shrink: 0; gap: 20px; align-items: center;
@@ -77,6 +87,7 @@ a:hover { color: var(--gold2); }
   .ticker-bar { overflow-x: auto; }
   .ticker-track { animation: none; }
   .ticker-group[aria-hidden="true"] { display: none; }
+  .ticker-toggle { display: none; }
 }
 .ticker-item {
   display: flex; gap: 6px; align-items: baseline; font-size: .8rem;
@@ -1078,7 +1089,8 @@ a:hover { color: var(--gold2); }
   .logo { font-size: 1.6rem; }
   .brand { font-size: 1rem; }
   .brand-sub { font-size: .62rem; letter-spacing: .6px; }
-  .hdr-center { display: none; }
+  .hdr { flex-wrap: wrap; }
+  .hdr-center { display: flex; flex: 1 0 100%; order: 3; width: 100%; padding-top: 6px; }
   .hdr-right {
     margin-left: auto;
     gap: 6px;
