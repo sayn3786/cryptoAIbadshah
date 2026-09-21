@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '248';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '249';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -217,6 +217,8 @@ function initCharts() {
 /* ─── Fetch dashboard overview ────────────────────────────────────────────── */
 const TICKER_SYMS = ['BTC', 'ETH', 'LINK', 'TAO', 'HYPE', 'ONDO'];
 let _tickerData = {};   // {sym: {price, change_pct, ref_close}}
+const TICKER_STALE_MS = 120000;
+const tickerPriceValid = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
 
 async function loadTicker() {
   try {
@@ -228,11 +230,14 @@ async function loadTicker() {
     // these (heavier) full refreshes.
     TICKER_SYMS.forEach(sym => {
       const d = data[sym];
-      if (d && !d.error) {
+      if (d && !d.error && tickerPriceValid(d.price)) {
         _tickerData[sym] = {
           price:      d.price,
           change_pct: d.change_pct ?? 0,
           ref_close:  d.ref_close ?? d.price,
+          // Overview data may be cached; only the lightweight price request
+          // proves that this browser successfully checked the price recently.
+          checked_at: null,
         };
       }
     });
@@ -249,19 +254,39 @@ function renderTicker() {
     bar.innerHTML = '<div class="ticker-track"><div class="ticker-group"></div><div class="ticker-group" aria-hidden="true"></div></div>';
     bar.tabIndex = 0;
     bar.setAttribute('aria-label', 'Live cryptocurrency prices. Hover or focus to pause scrolling.');
+    const markup = TICKER_SYMS.map(sym => `<div class="ticker-item" data-symbol="${sym}"><span class="ticker-sym">${sym}</span><span class="ticker-price">—</span><span class="ticker-chg">—</span><span class="ticker-freshness">Waiting</span></div>`).join('');
+    bar.querySelectorAll('.ticker-group').forEach(group => { group.innerHTML = markup; });
+    const track = bar.querySelector('.ticker-track');
+    const setSpeed = () => {
+      const width = bar.querySelector('.ticker-group').getBoundingClientRect().width;
+      if (width > 0) track.style.animationDuration = `${width / 30}s`;
+    };
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(setSpeed).observe(bar);
+    setSpeed();
+    const toggle = document.getElementById('tickerToggle');
+    if (toggle) toggle.addEventListener('click', () => {
+      const paused = bar.classList.toggle('is-paused');
+      toggle.textContent = paused ? '▶' : 'Ⅱ';
+      toggle.setAttribute('aria-pressed', String(paused));
+      toggle.setAttribute('aria-label', paused ? 'Resume price ticker' : 'Pause price ticker');
+      toggle.title = paused ? 'Resume price ticker' : 'Pause price ticker';
+    });
   }
-  const items = TICKER_SYMS.map(sym => {
+  TICKER_SYMS.forEach(sym => {
     const d = _tickerData[sym];
-    if (!d || d.price == null) return '';
-    const chg = d.change_pct ?? 0;
-    const cls = chg >= 0 ? 'up' : 'dn';
-    return `<div class="ticker-item">
-      <span class="ticker-sym">${sym}</span>
-      <span class="ticker-price">${fmtPrice(d.price || 0)}</span>
-      <span class="ticker-chg ${cls}">${pct(chg)}</span>
-    </div>`;
-  }).join('');
-  bar.querySelectorAll('.ticker-group').forEach(group => { group.innerHTML = items; });
+    const age = d?.checked_at == null ? null : Math.max(0, Date.now() - d.checked_at);
+    const stale = age == null || age >= TICKER_STALE_MS;
+    bar.querySelectorAll(`[data-symbol="${sym}"]`).forEach(item => {
+      item.querySelector('.ticker-price').textContent = d ? fmtPrice(d.price) : '—';
+      const change = item.querySelector('.ticker-chg');
+      const chg = d?.change_pct;
+      change.textContent = Number.isFinite(chg) ? pct(chg) : '—';
+      change.className = `ticker-chg ${Number.isFinite(chg) ? (chg >= 0 ? 'up' : 'dn') : ''}`;
+      item.classList.toggle('is-stale', stale);
+      item.querySelector('.ticker-freshness').textContent = age == null ? (d ? 'Unverified' : 'Waiting') : stale ? `Stale ${Math.floor(age / 60000)}m` : 'Checked';
+      item.title = age == null ? 'Waiting for a successful price check' : `Price checked ${Math.floor(age / 1000)} seconds ago; exchange quote age is unavailable`;
+    });
+  });
 }
 
 /* Fast, lightweight live-price poll (no full analysis) — updates just the price
@@ -270,13 +295,16 @@ async function loadLivePrices() {
   if (!Object.keys(_tickerData).length) return;   // wait for the first full load
   try {
     const syms = TICKER_SYMS.join(',');
-    const prices = await fetch(`${API}/prices?symbols=${syms}`).then(r => r.json());
+    const response = await fetch(`${API}/prices?symbols=${syms}`);
+    if (!response.ok) return;
+    const prices = await response.json();
     let changed = false;
     TICKER_SYMS.forEach(sym => {
       const p = prices[sym];
       const d = _tickerData[sym];
-      if (p != null && d) {
+      if (tickerPriceValid(p) && d) {
         d.price = p;
+        d.checked_at = Date.now();
         if (d.ref_close) d.change_pct = +(((p - d.ref_close) / d.ref_close) * 100).toFixed(2);
         changed = true;
       }
@@ -7204,6 +7232,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // a lightweight live-price poll every 45s so the header prices stay current.
   setInterval(loadTicker, 5 * 60 * 1000);
   setInterval(loadLivePrices, 45 * 1000);
+  setInterval(renderTicker, 15 * 1000); // age prices even while requests fail
   setInterval(checkStrengthChanges, 60 * 60 * 1000);
   // The monitor only advances signals on CLOSED candles, so polling faster than
   // this would just re-render identical rows.

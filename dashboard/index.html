@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/dashboard/css/dashboard.css?v=137" />
+  <link rel="stylesheet" href="/dashboard/css/dashboard.css?v=138" />
 </head>
 <body>
 
@@ -31,6 +31,7 @@
   </div>
   <div class="hdr-center">
     <div id="tickerBar" class="ticker-bar"></div>
+    <button id="tickerToggle" class="ticker-toggle" type="button" aria-label="Pause price ticker" aria-pressed="false" title="Pause price ticker">Ⅱ</button>
   </div>
   <div class="hdr-right">
     <span id="lastUpdated" class="last-updated">—</span>
@@ -1082,7 +1083,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=248";
+  var DJS = "/dashboard/js/dashboard.js?v=249";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;
