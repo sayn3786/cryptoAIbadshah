@@ -57,6 +57,15 @@ def test_in_step_falls_back_to_token_trend():
     assert r2["reinvest_to"] == "btc"           # weak token → TH/BTC
 
 
+def test_btc_fallback_banner_states_no_false_cause():
+    # In step + weak token routes to BTC/TH, but the banner must NOT claim BTC
+    # lagged (it didn't) — the copy is derived from the accurate reason.
+    r = _run(g30=10.0, b30=11.0, direction="NEUTRAL", tk_pts=0)
+    assert r["reinvest_to"] == "btc" and "ADD TH" in r["phase_label"]
+    assert "lagging" not in r["reinvest_reason"].lower()
+    assert "lagging" not in r["phase_desc"].lower()
+
+
 def test_short_token_never_bought_even_when_laggard():
     # GOMINING is the laggard (would-be buy) but it is SHORT — must NOT buy the
     # falling token; reinvest into TH/BTC instead.
