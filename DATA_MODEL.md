@@ -1,5 +1,22 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Candidate evidence update (migration `012`)
+
+`candidate_decisions` is an additive audit table written by
+`backend/decision_audit.py`. Its primary key is
+`(environment, strategy_version, slot_at, symbol)`. `slot_at` is the UTC four-hour
+slot; `observed_at` identifies the computation start. `payload` is bounded JSONB
+containing screening status/reason, timeframe strengths, entry/stop/targets, a
+2H decision snapshot and selection status. First insert wins; retrying does not
+overwrite earlier evidence. Selected does not mean published, filled or profitable.
+No live scoring path reads the table, and no automatic retention deletion runs.
+
+Postmortem, analytics and paper-account endpoints now expose `sample_window`
+with offset/limit, analyzed count, date bounds and possible truncation. Default
+analytical limit is 500; maximum is 1,000. They are not lifetime account reports.
+Strength-band filtering precedes SQL pagination. See
+[deployment and evidence limitations](docs/decision-evidence-integrity.md).
+
 How a recommendation becomes a stored trade, what every column means, and how to
 query it.
 

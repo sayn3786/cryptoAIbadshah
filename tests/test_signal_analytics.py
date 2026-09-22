@@ -39,7 +39,7 @@ def _tier(rep, label):
     raise AssertionError(f"{label} not in report")
 
 
-def test_rising_win_rate_with_strength_is_called_calibrated():
+def test_rising_win_rate_is_exploratory_not_validated_calibration():
     rows = ([_row(-1.0, strength=40) for _ in range(3)]      # Moderate: 40% win
             + [_row(2.0, strength=40) for _ in range(2)]
             + [_row(2.0, strength=60) for _ in range(4)]     # Strong: 80% win
@@ -48,7 +48,16 @@ def test_rising_win_rate_with_strength_is_called_calibrated():
     assert _tier(rep, "Moderate")["win_rate_pct"] == 40.0
     assert _tier(rep, "Strong")["win_rate_pct"] == 80.0
     assert rep["monotonic"] is True
-    assert "right order" in rep["verdict"]
+    assert "exploratory" in rep["verdict"]
+    assert rep["validated_predictive_probability"] is False
+    interval = _tier(rep, "Strong")["win_rate_95pct_interval"]
+    assert interval[0] < 40 and interval[1] > 90
+
+
+def test_wilson_interval_handles_empty_and_extreme_samples():
+    assert an._wilson_interval(0, 0) is None
+    assert an._wilson_interval(0, 5)[0] == 0
+    assert an._wilson_interval(5, 5)[1] == 100
 
 
 def test_a_score_that_does_not_sort_is_flagged_miscalibrated():

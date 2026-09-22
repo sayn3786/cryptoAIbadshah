@@ -282,6 +282,7 @@ def build_snapshot(analysis: Dict[str, Any],
     regime = analysis.get("regime") or {}
     vol_regime = analysis.get("vol_regime") or {}
     funding = analysis.get("funding_rate") or {}
+    from signals import _funding_8h
     oi = analysis.get("open_interest") or {}
     spot_cvd = analysis.get("spot_cvd") or {}
     fut_cvd = analysis.get("futures_cvd") or {}
@@ -414,7 +415,9 @@ def build_snapshot(analysis: Dict[str, Any],
         "demo_mode": bool(analysis.get("demo_mode")),
         "futures_available": bool(analysis.get("futures_available")),
         "market_cap": _num(analysis.get("market_cap")),
-        "funding_rate": _num(funding.get("rate") if isinstance(funding, dict) else None),
+        "funding_rate": _num(_funding_8h(funding) if isinstance(funding, dict) else None),
+        "funding_source": funding.get("source") if isinstance(funding, dict) else None,
+        "funding_interval_hours": funding.get("interval_hours") if isinstance(funding, dict) else None,
         "open_interest": _num(oi.get("value") if isinstance(oi, dict) else None),
         "fear_greed": redact(analysis.get("fear_greed")),
         "btc_correlation": None,                  # filled by the caller
