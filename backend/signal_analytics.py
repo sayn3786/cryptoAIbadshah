@@ -117,6 +117,18 @@ def _pct(sorted_vals: Sequence[float], q: float) -> Optional[float]:
     return round(sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac, 6)
 
 
+def _wilson_interval(wins, total):
+    """Descriptive 95% Wilson interval; does not adjust for correlated trades."""
+    if not total:
+        return None
+    z = 1.959963984540054
+    p = wins / total
+    denominator = 1 + z * z / total
+    center = (p + z * z / (2 * total)) / denominator
+    radius = z * ((p * (1 - p) / total + z * z / (4 * total * total)) ** 0.5) / denominator
+    return [round(100 * (center - radius), 2), round(100 * (center + radius), 2)]
+
+
 def _win_expectancy(rows: Sequence[Dict]) -> Dict[str, Any]:
     """
     The count breakdown, win rate and expectancy for a group of rows.
@@ -159,6 +171,8 @@ def _win_expectancy(rows: Sequence[Dict]) -> Dict[str, Any]:
         "published_n": published,
         "filled_n": filled,
         "decided_n": decided,
+        "win_rate_95pct_interval": _wilson_interval(wins, decided),
+        "evidence_status": "exploratory; correlated trades may overstate effective sample size",
         "cancelled_n": cancelled,
         "scratch_n": scratch,
         "expired_n": expired,
@@ -207,16 +221,17 @@ def strength_calibration(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         verdict = ("not enough populated tiers to judge calibration yet — need "
                    f">= {MIN_BUCKET} trades in at least two tiers")
     elif monotonic:
-        verdict = ("win rate rises with published strength — the score is "
-                   "sorting trades in the right order")
+        verdict = ("win rate rises with published strength in this sample; "
+                   "exploratory association, not validated predictive calibration")
     else:
-        verdict = ("win rate does NOT rise monotonically with strength — the "
-                   "score is poorly calibrated; a higher number is not reliably a "
-                   "better trade")
+        verdict = ("win rate does NOT rise monotonically with strength in this sample; "
+                   "exploratory warning, not a validated calibration conclusion")
     return {
         "buckets": buckets,
         "monotonic": bool(monotonic) if len(scored) >= 2 else None,
         "ordered_win_rates": ordered_rates,
+        "validated_predictive_probability": False,
+        "validation_required": "untouched chronological holdout and shadow evaluation after costs",
         "verdict": verdict,
     }
 

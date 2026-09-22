@@ -895,6 +895,9 @@ def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
                                environment: Optional[str] = None,
                                limit: int = 500,
                                include_archived: bool = False,
+                               offset: int = 0,
+                               min_strength: Optional[float] = None,
+                               max_strength: Optional[float] = None,
                                session=None) -> List[Dict[str, Any]]:
     """
     Terminal signals with their decision snapshot attached — the postmortem feed.
@@ -917,7 +920,10 @@ def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
     Read-only. This never writes, and the report built from it never feeds back
     into live parameters — the same rule the postmortem table itself carries.
     """
-    limit = max(1, min(int(limit or 500), MAX_PAGE_SIZE))
+    # Analytical reads have a separate bounded budget from the 100-row UI page.
+    # Offset permits explicit paging; strength predicates precede LIMIT.
+    limit = max(1, min(int(limit or 500), 1000))
+    offset = max(0, int(offset))
     terminal = sorted(TERMINAL_STATUSES)
 
     def _work(s):
@@ -925,15 +931,21 @@ def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
         where = ["status = ANY(:statuses)"]
         if not include_archived:
             where.append("archived_at IS NULL")
-        params: Dict[str, Any] = {"statuses": terminal, "limit": limit,
+        params: Dict[str, Any] = {"statuses": terminal, "limit": limit, "offset": offset,
                                   **env_params}
+        if min_strength is not None:
+            where.append("confidence_score >= :min_strength")
+            params["min_strength"] = min_strength
+        if max_strength is not None:
+            where.append("confidence_score < :max_strength")
+            params["max_strength"] = max_strength
         if strategy_version:
             where.append("strategy_version = :sver")
             params["sver"] = strategy_version.strip()
         clause = " AND ".join(where) + env_sql
         rows = s.execute(_sql(
             f"SELECT * FROM signals WHERE {clause} "
-            f"ORDER BY closed_at DESC NULLS LAST, generated_at DESC LIMIT :limit"
+            f"ORDER BY closed_at DESC NULLS LAST, generated_at DESC, id DESC LIMIT :limit OFFSET :offset"
         ), params).all()
         items = [_row_to_dict(r) for r in rows]
         if not items:

@@ -2600,6 +2600,7 @@ def _compute_recommendations() -> dict:
     _opts_summary = _opts.get("summary", "")
 
     candidates = []
+    decision_records = []
     expired: list = []      # setups dropped because price already took TP1
     for sym, tfs in raw.items():
         if sym == "BTC":
@@ -2621,6 +2622,12 @@ def _compute_recommendations() -> dict:
         corr_factor = _BTC_CORR.get(sym, 1.0)
         _screen = rec_policy.screen_candidate(h1, h2, h4, corr_factor=corr_factor,
                                               influence=_btc_influence)
+        try:
+            from decision_audit import candidate_record
+            decision_records.append(candidate_record(sym, h1, h2, _screen))
+        except Exception:
+            # Audit-only: malformed evidence must not change live selection.
+            print(f"[decision-audit] SNAPSHOT_FAILED symbol={sym}")
         htf_4h_dir = _screen.get("htf_4h_dir", "NEUTRAL")
         if not _screen["ok"] and _screen["reason"] != "TP1_BEHIND_LIVE":
             continue
@@ -2778,6 +2785,15 @@ def _compute_recommendations() -> dict:
     top = rec_policy.select_publishable(candidates)
 
     intraday_recs = top[:3]
+    try:
+        import decision_audit
+        audit_result = decision_audit.persist(
+            decision_records, {r["symbol"] for r in intraday_recs}, now)
+        if not audit_result.get("ok"):
+            print(f"[decision-audit] {audit_result.get('reason', 'UNAVAILABLE')}")
+    except Exception:
+        # An evidence-store outage must be visible without changing the strategy.
+        print("[decision-audit] WRITE_FAILED")
 
     # ── Persist before publishing ────────────────────────────────────────
     # Each recommendation is written with its targets, decision snapshot and
@@ -3464,7 +3480,7 @@ def api_cron_market_snapshot():
     except Exception as e:
         res = {"ok": False, "error": str(e)}
     print(f"[cron/market-snapshot] {res}")
-    return jsonify({"ok": bool(res.get("ok")), "result": res})
+    return jsonify({"ok": bool(res.get("ok")), "result": res}), (200 if res.get("ok") else 503)
 
 
 @app.get("/api/cron/etf-snapshot")
@@ -3484,7 +3500,7 @@ def api_cron_etf_snapshot():
     except Exception as e:
         res = {"ok": False, "error": str(e)}
     print(f"[cron/etf-snapshot] {res}")
-    return jsonify({"ok": bool(res.get("ok")), "result": res})
+    return jsonify({"ok": bool(res.get("ok")), "result": res}), (200 if res.get("ok") else 503)
 
 
 @app.get("/api/prices")
@@ -4524,6 +4540,18 @@ def api_signals_outcomes():
         return _db_error_response(exc)
 
 
+def _report_sample_window(rows):
+    limit = _int_arg("limit", 500, 1, 1000)
+    offset = _int_arg("offset", 0, 0, 10000000)
+    return {"rows_analyzed": len(rows), "limit": limit, "offset": offset,
+            "possibly_truncated": len(rows) == limit,
+            "next_offset": offset + len(rows) if len(rows) == limit else None,
+            "oldest_closed_at": rows[-1].get("closed_at") if rows else None,
+            "newest_closed_at": rows[0].get("closed_at") if rows else None,
+            "scope": "bounded closed-trade sample; not a lifetime account",
+            "total_matching_rows": None}
+
+
 @app.get("/api/signals/postmortem-report")
 def api_signals_postmortem_report():
     """
@@ -4581,7 +4609,9 @@ def api_signals_postmortem_report():
             strategy_version=sver,
             environment=request.args.get("environment"),
             include_archived=True,       # analytics keep archived history
-            limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
+            min_strength=lo, max_strength=hi,
+            offset=_int_arg("offset", 0, 0, 10000000),
+            limit=_int_arg("limit", 500, 1, 1000))
         if lo is not None or hi is not None:
             # Same discriminators, but over only a strength band — so we can see
             # what separates winners from losers WITHIN the 69+ cohort rather
@@ -4594,6 +4624,7 @@ def api_signals_postmortem_report():
                 return (lo is None or cs >= lo) and (hi is None or cs < hi)
             rows = [r for r in rows if _in_band(r)]
         report = _pm.build_report(rows, strategy_version=sver)
+        report["sample_window"] = _report_sample_window(rows)
         if lo is not None or hi is not None:
             report["strength_band"] = {"min": lo, "max": hi, "rows": len(rows)}
         return jsonify(report)
@@ -4629,8 +4660,11 @@ def api_signals_analytics():
             strategy_version=sver,
             environment=request.args.get("environment"),
             include_archived=True,       # analytics keep archived history
-            limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
-        return jsonify(_an.build_analytics(rows, strategy_version=sver))
+            offset=_int_arg("offset", 0, 0, 10000000),
+            limit=_int_arg("limit", 500, 1, 1000))
+        report = _an.build_analytics(rows, strategy_version=sver)
+        report["sample_window"] = _report_sample_window(rows)
+        return jsonify(report)
     except Exception as exc:
         return _db_error_response(exc)
 
@@ -4671,13 +4705,16 @@ def api_paper_account():
             strategy_version=sver,
             environment=request.args.get("environment"),
             include_archived=True,       # analytics keep archived history
-            limit=_int_arg("limit", 500, 1, store.MAX_PAGE_SIZE))
+            offset=_int_arg("offset", 0, 0, 10000000),
+            limit=_int_arg("limit", 500, 1, 1000))
     except Exception as exc:
         return _db_error_response(exc)
     try:
-        return jsonify(_pa.build_paper_account(
+        report = _pa.build_paper_account(
             rows, trade_size_usd=size, start_balance_usd=start,
-            fee_bps=fee, leverage=lev, strategy_version=sver))
+            fee_bps=fee, leverage=lev, strategy_version=sver)
+        report["sample_window"] = _report_sample_window(rows)
+        return jsonify(report)
     except _pa.PaperAccountConfigError as exc:
         return jsonify({"error": str(exc), "error_code": "BAD_REQUEST"}), 400
 

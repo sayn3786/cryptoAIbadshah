@@ -50,6 +50,16 @@ def _signal(**over):
 
 # ── What it must capture ────────────────────────────────────────────────────
 
+
+def test_funding_snapshot_uses_the_same_eight_hour_rate_as_scoring():
+    from signals import _funding_8h
+    for funding in ({"current": 0.001, "interval_hours": 4},
+                    {"current": 0.002, "current_8h": 0.003, "interval_hours": 4},
+                    {}):
+        context = build_snapshot(_analysis(funding_rate=funding), _signal())["market_context"]
+        assert context["funding_rate"] == _funding_8h(funding)
+
+
 def test_captures_the_indicators_the_strategy_used():
     snap = build_snapshot(_analysis(), _signal())
     iv = snap["indicator_values"]
