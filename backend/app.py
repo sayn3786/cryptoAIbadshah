@@ -2785,15 +2785,6 @@ def _compute_recommendations() -> dict:
     top = rec_policy.select_publishable(candidates)
 
     intraday_recs = top[:3]
-    try:
-        import decision_audit
-        audit_result = decision_audit.persist(
-            decision_records, {r["symbol"] for r in intraday_recs}, now)
-        if not audit_result.get("ok"):
-            print(f"[decision-audit] {audit_result.get('reason', 'UNAVAILABLE')}")
-    except Exception:
-        # An evidence-store outage must be visible without changing the strategy.
-        print("[decision-audit] WRITE_FAILED")
 
     # ── Persist before publishing ────────────────────────────────────────
     # Each recommendation is written with its targets, decision snapshot and
@@ -2912,6 +2903,18 @@ def _compute_recommendations() -> dict:
         _persist = {"all_actionable": not _db.db_required(), "persisted": 0,
                     "duplicates": 0, "failed": [r["symbol"] for r in intraday_recs],
                     "error_code": "PERSISTENCE_ERROR"}
+
+    # Audit I/O runs only AFTER signal persistence. A platform hard timeout
+    # cannot be caught by Python, so even a successful slow audit must never
+    # consume the execution budget needed to commit the live signal set.
+    try:
+        import decision_audit
+        audit_result = decision_audit.persist(
+            decision_records, {r["symbol"] for r in intraday_recs}, now)
+        if not audit_result.get("ok"):
+            print(f"[decision-audit] {audit_result.get('reason', 'UNAVAILABLE')}")
+    except Exception:
+        print("[decision-audit] WRITE_FAILED")
 
     # Next signal slot on the next 4H boundary SGT: 12AM/4AM/8AM/12PM/4PM/8PM.
     # 4H boundaries are the same instants in UTC and SGT, so the published set is

@@ -1,5 +1,6 @@
 """Evidence collection must stay bounded, isolated, and honest about coverage."""
 import json
+import inspect
 import os
 import sys
 from contextlib import contextmanager
@@ -13,6 +14,11 @@ import app
 import db
 import decision_audit
 import signal_store
+
+
+def test_audit_io_runs_after_signal_persistence():
+    source = inspect.getsource(app._compute_recommendations)
+    assert source.index("_sp.persist_recommendations(") < source.index("decision_audit.persist(")
 
 
 def test_rejected_candidate_keeps_reason_and_normalized_funding():
@@ -98,4 +104,3 @@ def test_sample_window_does_not_claim_lifetime_or_known_total():
     assert sample["possibly_truncated"] is True and sample["next_offset"] == 6
     assert sample["total_matching_rows"] is None
     assert sample["oldest_closed_at"] == "2026-09-21"
-
