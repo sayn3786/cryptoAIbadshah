@@ -782,6 +782,9 @@ def find_pivots(
     return ph, pl
 
 
+MACD_HIST_SERIES_LEN = 40      # bars of histogram history sent to the dashboard
+
+
 def calculate_macd(closes: List[float], fast: int = 12, slow: int = 26, signal_period: int = 9) -> Dict:
     """MACD = EMA(fast) - EMA(slow). Signal = EMA(signal_period) of MACD. Histogram = MACD - Signal."""
     def _ema(values: List[float], period: int) -> List[Optional[float]]:
@@ -857,10 +860,18 @@ def calculate_macd(closes: List[float], fast: int = 12, slow: int = 26, signal_p
               for m, s in zip(macd_line, sig_line)]
     flip = flip_history_bars(states)
 
+    # Recent histogram bars (oldest → newest) for the dashboard's histogram
+    # chart. Rounded to significant digits, not decimals, so sub-cent coins
+    # keep their shape instead of flattening to zero.
+    hist_series = [float(f"{m - s:.6g}")
+                   for m, s in zip(macd_line, sig_line)
+                   if m is not None and s is not None][-MACD_HIST_SERIES_LEN:]
+
     return {
         "macd":       round(cur_macd, 8) if cur_macd is not None else None,
         "signal_line": round(cur_sig,  8) if cur_sig  is not None else None,
         "histogram":  histogram,
+        "histogram_series": hist_series,
         "cross":      cross,
         "zero_cross": zero_cross,
         "trend":      trend,
