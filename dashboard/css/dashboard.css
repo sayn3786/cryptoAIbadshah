@@ -939,6 +939,13 @@ a:hover { color: var(--gold2); }
 .macd-hist-bar { width: 14px; border-radius: 2px 2px 0 0; }
 .macd-hist-bar.bull { background: var(--bull); }
 .macd-hist-bar.bear { background: var(--bear); }
+.macd-bars.has-series { display: block; height: auto; }
+.macd-hist-svg { display: block; width: 100%; height: 64px; }
+.macd-hist-svg .macd-zero { stroke: var(--muted2); stroke-width: 1; opacity: .45; vector-effect: non-scaling-stroke; }
+.macd-h.bull { fill: var(--bull); }
+.macd-h.bear { fill: var(--bear); }
+.macd-h.fade { opacity: .45; }
+.macd-hist-cap { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted2); margin-top: 2px; }
 
 .ema-rows  { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; width: 100%; }
 .ema-row   { display: flex; justify-content: space-between; font-size: .72rem; }

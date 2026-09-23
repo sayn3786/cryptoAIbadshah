@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '249';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '250';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1358,10 +1358,18 @@ function renderMACDCard(m) {
   crossEl.textContent  = crossText;
   crossEl.style.color  = crossColor;
 
-  if (barsEl && m.histogram != null) {
-    const h    = m.histogram;
-    const barH = Math.min(Math.abs(h) / (Math.abs(h) + 1e-9) * 28 + 4, 32);
-    barsEl.innerHTML = `<div class="macd-hist-bar ${h >= 0 ? 'bull' : 'bear'}" style="height:${barH}px"></div>`;
+  if (barsEl) {
+    const series = (m.histogram_series || []).filter(v => v != null && isFinite(v));
+    barsEl.classList.toggle('has-series', series.length >= 2);
+    if (series.length >= 2) {
+      barsEl.innerHTML = macdHistogramSvg(series);
+    } else if (m.histogram != null) {
+      // Older cached payloads carry only the latest value — show that one bar.
+      const h = m.histogram;
+      barsEl.innerHTML = `<div class="macd-hist-bar ${h >= 0 ? 'bull' : 'bear'}" style="height:24px"></div>`;
+    } else {
+      barsEl.innerHTML = '';
+    }
   }
 
   // When the MACD line last crossed its signal line, and what before.
@@ -1373,6 +1381,32 @@ function renderMACDCard(m) {
     const card = document.getElementById('macdCard');
     if (card) card.classList.toggle('st-fresh-flip', fh.recent);
   }
+}
+
+// MACD histogram as bars around a zero line (oldest → newest). Bright bars mean
+// momentum is growing in that direction; faded bars mean it is fading.
+function macdHistogramSvg(series) {
+  const W = 200, H = 64, pad = 2;
+  const maxAbs = Math.max(...series.map(v => Math.abs(v))) || 1;
+  const mid = H / 2;
+  const half = mid - pad;
+  const step = W / series.length;
+  const bw = Math.max(step * 0.7, 1);
+  const fmt = v => (v > 0 ? '+' : '') + Number(v).toPrecision(3);
+  const n = series.length;
+  const bars = series.map((v, i) => {
+    const hgt = Math.max(Math.abs(v) / maxAbs * half, 0.75);
+    const y = v >= 0 ? mid - hgt : mid;
+    const prev = i > 0 ? series[i - 1] : v;
+    const growing = Math.abs(v) >= Math.abs(prev);
+    const cls = `${v >= 0 ? 'bull' : 'bear'}${growing ? '' : ' fade'}`;
+    return `<rect class="macd-h ${cls}" x="${(i * step + (step - bw) / 2).toFixed(2)}" y="${y.toFixed(2)}"` +
+           ` width="${bw.toFixed(2)}" height="${hgt.toFixed(2)}"><title>${n - 1 - i === 0 ? 'Now' : `${n - 1 - i} bars ago`}: ${fmt(v)}</title></rect>`;
+  }).join('');
+  return `<svg class="macd-hist-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"` +
+         ` aria-label="MACD histogram, last ${n} bars">` +
+         `<line class="macd-zero" x1="0" x2="${W}" y1="${mid}" y2="${mid}"/>${bars}</svg>` +
+         `<div class="macd-hist-cap"><span>${n - 1} bars ago</span><span>Now ${fmt(series[n - 1])}</span></div>`;
 }
 
 function renderEMACard(ema) {

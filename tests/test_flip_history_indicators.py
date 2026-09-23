@@ -107,6 +107,25 @@ def test_macd_the_pre_existing_fields_survive():
         assert k in m
 
 
+def test_macd_histogram_series_feeds_the_chart():
+    from indicators import MACD_HIST_SERIES_LEN
+    m = calculate_macd(CLOSES)
+    s = m["histogram_series"]
+    assert 2 <= len(s) <= MACD_HIST_SERIES_LEN
+    # Oldest → newest: the last bar IS the current histogram value.
+    assert abs(s[-1] - m["histogram"]) <= 1e-6 * max(1.0, abs(m["histogram"]))
+
+
+def test_macd_histogram_series_keeps_tiny_values_for_sub_cent_coins():
+    tiny = [c * 1e-7 for c in CLOSES]              # e.g. a PEPE-scale price
+    s = calculate_macd(tiny)["histogram_series"]
+    assert any(v != 0 for v in s)                   # not flattened to zero
+
+
+def test_macd_histogram_series_empty_when_history_too_short():
+    assert calculate_macd([1.0] * 10).get("histogram_series") is None
+
+
 # ── EMA ─────────────────────────────────────────────────────────────────────
 
 def test_ema_reports_when_price_last_crossed_the_50():
