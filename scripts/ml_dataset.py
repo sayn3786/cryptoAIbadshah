@@ -44,13 +44,15 @@ def collect(args):
     for symbol in symbols:
         # Do not call build_analysis: price-only research has no need for the
         # paid sources or any of the live recommendation/auto-exec code paths.
+        fetch_started = datetime.now(timezone.utc)
         try:
             candles, source = BinanceClient().get_spot_klines_sourced(SYMBOLS[symbol], "1h", 100)
         except Exception:
             candles, source = [], "fetch_failed"
         observed = datetime.now(timezone.utc)
         try:
-            record = dataset.feature_snapshot(symbol, candles, source, observed, args.environment, slot_at)
+            record = dataset.feature_snapshot(symbol, candles, source, observed, args.environment, slot_at,
+                                              fetch_started_at=fetch_started)
         except dataset.InvalidData:
             counts["run_crossed_slot_boundary"] += 1
             break
@@ -65,27 +67,26 @@ def collect(args):
 
 
 def label(args):
-    from sqlalchemy import text
     _, SYMBOLS = _universe()
     from binance import BinanceClient
     import db
     now = datetime.now(timezone.utc)
     with db.session_scope() as session:
-        records = session.execute(text("""
-            SELECT f.* FROM ml_feature_snapshots f
-            WHERE f.environment = :environment AND f.feature_version = :version
-              AND f.quality = 'ready' AND f.entry_at_ms + 14400000 <= :now_ms
-              AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id = f.id
-                              AND l.label_version = :label_version)
-            ORDER BY f.observed_at, f.id LIMIT :limit
-        """), {"environment": args.environment, "version": dataset.FEATURE_VERSION,
-                "label_version": dataset.LABEL_VERSION, "now_ms": dataset.milliseconds(now),
-                "limit": args.limit}).mappings().all()
+        records = dataset.pending_labels(session, args.environment, now, args.limit)
     counts, cache = Counter(), {}
+    def failed(record, reason, permanent=False):
+        counts[reason] += 1
+        if args.write:
+            with db.session_scope() as session:
+                dataset.record_label_failure(session, record["id"], reason,
+                                             datetime.now(timezone.utc), permanent=permanent)
     for record in records:
         symbol = record["symbol"]
+        if dataset.milliseconds(now) - record["entry_at_ms"] >= 196 * dataset.HOUR_MS:
+            failed(record, "HISTORICAL_BACKFILL_REQUIRED", permanent=True)
+            continue
         if symbol not in SYMBOLS:
-            counts["unknown_symbol"] += 1
+            failed(record, "UNKNOWN_SYMBOL", permanent=True)
             continue
         if symbol not in cache:
             try:
@@ -97,7 +98,7 @@ def label(args):
         try:
             result = dataset.label_snapshot(record, candles, source, available)
         except dataset.InvalidData as exc:
-            counts[str(exc)] += 1
+            failed(record, str(exc))
             continue
         counts["ready"] += 1
         if args.write:
@@ -124,7 +125,7 @@ def main():
         return collect(args) if args.command == "collect" else label(args)
     except Exception:
         # Never log a provider response or DB exception with a connection URL.
-        print(json.dumps({"ok": False, "reason": "RESEARCH_JOB_FAILED_CHECK_DATABASE_AND_MIGRATION_013"}))
+        print(json.dumps({"ok": False, "reason": "RESEARCH_JOB_FAILED_CHECK_DATABASE_AND_MIGRATIONS_013_014"}))
         return 1
 
 

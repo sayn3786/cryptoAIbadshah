@@ -6,10 +6,10 @@ import hashlib
 import json
 import math
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 HOUR_MS = 3_600_000
-FEATURE_VERSION = "candles_1h_v1"
+FEATURE_VERSION = "candles_1h_v2"
 LABEL_VERSION = "next_open_4h_20bps_v1"
 NEUTRAL_BPS = 20.0  # research definition, NOT an estimate of actual trading costs
 SOURCES = frozenset({"binance", "okx", "bybit", "gateio", "kucoin", "mexc", "htx", "lbank"})
@@ -65,13 +65,16 @@ def _ema(values, span):
     return value
 
 
-def feature_snapshot(symbol, candles, source, observed_at, environment, slot_at=None):
+def feature_snapshot(symbol, candles, source, observed_at, environment, slot_at=None, *, fetch_started_at):
     """64 contiguous closed hourly bars; inputs beyond observation never enter features.
 
     All feature formulas belong to FEATURE_VERSION. The 14-bar RSI/ATR here use
     simple window averages, not the trading engine's smoothing conventions.
     """
     observed_ms = milliseconds(observed_at)
+    cutoff_ms = milliseconds(fetch_started_at)
+    if cutoff_ms > observed_ms:
+        raise InvalidData("FETCH_CUTOFF_AFTER_OBSERVATION")
     slot_ms = milliseconds(slot_at or observed_at) // (4 * HOUR_MS) * (4 * HOUR_MS)
     if slot_ms > observed_ms or observed_ms >= slot_ms + 4 * HOUR_MS:
         raise InvalidData("OBSERVATION_OUTSIDE_SLOT")
@@ -79,7 +82,8 @@ def feature_snapshot(symbol, candles, source, observed_at, environment, slot_at=
         "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"ml:{environment}:{FEATURE_VERSION}:{slot_ms}:{symbol}")),
         "environment": environment, "symbol": symbol, "feature_version": FEATURE_VERSION,
         "slot_at": datetime.fromtimestamp(slot_ms / 1000, timezone.utc),
-        "observed_at": observed_at, "source": source if source in SOURCES else "unsupported",
+        "observed_at": observed_at, "fetch_started_at": fetch_started_at,
+        "source": source if source in SOURCES else "unsupported",
         "entry_at_ms": (observed_ms // HOUR_MS + 1) * HOUR_MS,
         "features": {}, "quality": "invalid", "reason": None,
         "last_candle_close_ms": None, "input_hash": None,
@@ -91,14 +95,14 @@ def feature_snapshot(symbol, candles, source, observed_at, environment, slot_at=
             raise InvalidData("UNSUPPORTED_OR_SYNTHETIC_SOURCE")
         # Filter by timestamp first: a forming/future candle is not an input,
         # even if its OHLCV payload is malformed.
-        closed = [c for c in candles if _number(c.get("timestamp")) + HOUR_MS <= observed_ms]
+        closed = [c for c in candles if _number(c.get("timestamp")) + HOUR_MS <= cutoff_ms]
         rows = _candles(closed)[-64:]
         if len(rows) != 64:
             raise InvalidData("INSUFFICIENT_HISTORY")
         if any(b["timestamp"] - a["timestamp"] != HOUR_MS for a, b in zip(rows, rows[1:])):
             raise InvalidData("GAPPED_OR_WRONG_INTERVAL")
         close_ms = rows[-1]["timestamp"] + HOUR_MS
-        if observed_ms - close_ms >= HOUR_MS:
+        if cutoff_ms - close_ms >= HOUR_MS or observed_ms - cutoff_ms >= HOUR_MS:
             raise InvalidData("STALE_CANDLES")
         prices = [c["close"] for c in rows]
         last = prices[-1]
@@ -165,9 +169,9 @@ def save_snapshot(record, session):
     params = {**record, "features": json.dumps(record["features"], allow_nan=False)}
     return session.execute(text("""
         INSERT INTO ml_feature_snapshots
-        (id, environment, symbol, feature_version, slot_at, observed_at, source,
+        (id, environment, symbol, feature_version, slot_at, observed_at, fetch_started_at, source,
          entry_at_ms, features, quality, reason, last_candle_close_ms, input_hash)
-        VALUES (:id, :environment, :symbol, :feature_version, :slot_at, :observed_at,
+        VALUES (:id, :environment, :symbol, :feature_version, :slot_at, :observed_at, :fetch_started_at,
                 :source, :entry_at_ms, CAST(:features AS jsonb), :quality, :reason,
                 :last_candle_close_ms, :input_hash)
         ON CONFLICT (environment, feature_version, slot_at, symbol) DO NOTHING
@@ -184,3 +188,42 @@ def save_label(record, session):
                 :exit_at_ms, :available_at, :entry_price, :exit_price, :return_bps, :direction, :source, :input_hash)
         ON CONFLICT (snapshot_id, label_version) DO NOTHING
     """), record).rowcount
+
+
+def pending_labels(session, environment, now, limit):
+    from sqlalchemy import text
+    return session.execute(text("""
+        SELECT f.* FROM ml_feature_snapshots f
+        LEFT JOIN ml_label_jobs j ON j.snapshot_id = f.id AND j.label_version = :label_version
+        WHERE f.environment = :environment AND f.feature_version = :version
+          AND f.quality = 'ready' AND f.entry_at_ms + 14400000 <= :now_ms
+          AND (j.snapshot_id IS NULL OR (j.status = 'retry' AND j.next_attempt_at <= :now))
+          AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id = f.id
+                          AND l.label_version = :label_version)
+        ORDER BY COALESCE(j.attempts, 0), f.observed_at, f.id LIMIT :limit
+    """), {"environment": environment, "version": FEATURE_VERSION,
+            "label_version": LABEL_VERSION, "now_ms": milliseconds(now), "now": now,
+            "limit": limit}).mappings().all()
+
+
+def record_label_failure(session, snapshot_id, reason, now, *, permanent=False):
+    """Three failed attempts maximum, then explicit operator backfill queue.
+
+    Mutable job metadata is separate from immutable features and outcomes.
+    Never substitutes another source, creates a neutral label, or deletes evidence.
+    """
+    from sqlalchemy import text
+    session.execute(text("""
+        INSERT INTO ml_label_jobs
+          (snapshot_id, label_version, status, attempts, last_reason, last_attempt_at, next_attempt_at)
+        VALUES (:id, :version, :status, 1, :reason, :now, :next)
+        ON CONFLICT (snapshot_id, label_version) DO UPDATE SET
+          attempts = ml_label_jobs.attempts + 1,
+          status = CASE WHEN :permanent OR ml_label_jobs.attempts + 1 >= 3
+                        THEN 'backfill_needed' ELSE 'retry' END,
+          last_reason = :reason, last_attempt_at = :now,
+          next_attempt_at = CASE WHEN :permanent OR ml_label_jobs.attempts + 1 >= 3
+                                 THEN NULL ELSE :next END
+    """), {"id": snapshot_id, "version": LABEL_VERSION,
+            "status": "backfill_needed" if permanent else "retry", "permanent": permanent,
+            "reason": reason, "now": now, "next": None if permanent else now + timedelta(hours=4)})

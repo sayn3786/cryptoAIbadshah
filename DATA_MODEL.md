@@ -2,6 +2,14 @@
 
 ## ML research dataset (migration `013`)
 
+Migration `014` adds the separately recorded `fetch_started_at` cutoff and
+`ml_label_jobs`, a mutable retry/backfill queue keyed by snapshot and label
+version. `candles_1h_v2` uses the pre-fetch cutoff to admit only candles already
+closed before fetching. Old v1 records are retained but excluded from the v2
+labeler. Jobs retry after four hours; three failures or an expired retrieval
+window route them to `backfill_needed` without deleting observations or creating
+artificial outcomes.
+
 `ml_feature_snapshots` stores immutable candle-only feature vectors, their version,
 source, actual observation time, four-hour collection slot, next hourly entry
 timestamp, input hash and quality/failure reason. Uniqueness is per environment,

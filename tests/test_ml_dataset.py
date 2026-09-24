@@ -20,7 +20,8 @@ def bars(start=0, count=64, price=100):
 
 def snapshot(candles=None, **kwargs):
     return ml.feature_snapshot("BTC", bars() if candles is None else candles,
-                               kwargs.get("source", "binance"), kwargs.get("observed", at(64, 5)), "research")
+                               kwargs.get("source", "binance"), kwargs.get("observed", at(64, 5)), "research",
+                               fetch_started_at=kwargs.get("cutoff", kwargs.get("observed", at(64, 5))))
 
 
 def test_flat_features_and_no_raw_payload():
@@ -116,7 +117,7 @@ def test_persistence_never_overwrites_first_observation():
 
 def test_ids_are_stable_per_slot_and_separate_environments():
     assert snapshot()["id"] == snapshot(observed=at(64, 10))["id"]
-    other = ml.feature_snapshot("BTC", bars(), "binance", at(64, 5), "preview")
+    other = ml.feature_snapshot("BTC", bars(), "binance", at(64, 5), "preview", fetch_started_at=at(64, 5))
     assert other["id"] != snapshot()["id"]
 
 
@@ -146,3 +147,72 @@ def test_collect_dry_run_covers_all_symbols_and_never_writes(monkeypatch, capsys
     assert requests == ["BTCUSDT", "ETHUSDT"]
     assert '"invalid": 1' in output and '"ready": 1' in output
     assert "secret" not in output
+
+
+def test_fetch_crossing_hour_boundary_does_not_promote_forming_bar():
+    rows = bars(count=65)
+    rows[-1].update(close=110, high=111)
+    result = snapshot(rows, cutoff=at(64, 59), observed=at(65))
+    assert result["quality"] == "ready"
+    assert result["last_candle_close_ms"] == 64 * ml.HOUR_MS
+    assert result["features"]["return_1h_pct"] == 0
+    assert result["observed_at"] == at(65)
+    assert result["fetch_started_at"] == at(64, 59)
+    assert result["entry_at_ms"] == 66 * ml.HOUR_MS
+
+
+def test_fetch_cutoff_cannot_follow_observation():
+    with pytest.raises(ml.InvalidData, match="FETCH_CUTOFF_AFTER_OBSERVATION"):
+        snapshot(cutoff=at(65))
+
+
+def test_pending_query_excludes_backfill_and_schedules_retries():
+    calls = []
+    class Session:
+        def execute(self, sql, params):
+            calls.append((str(sql), params))
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: []))
+    assert ml.pending_labels(Session(), "research", at(300), 100) == []
+    sql, params = calls[0]
+    assert "j.status = 'retry' AND j.next_attempt_at <= :now" in sql
+    assert "ORDER BY COALESCE(j.attempts, 0)" in sql
+    assert "f.environment = :environment" in sql
+    assert params["environment"] == "research"
+
+
+def test_failure_metadata_backoff_and_permanent_queue():
+    calls = []
+    class Session:
+        def execute(self, sql, params):
+            calls.append((str(sql), params))
+    ml.record_label_failure(Session(), "s1", "SOURCE_MISMATCH", at(300))
+    ml.record_label_failure(Session(), "s2", "HISTORICAL_BACKFILL_REQUIRED", at(300), permanent=True)
+    sql, first = calls[0]
+    assert "ml_label_jobs.attempts + 1 >= 3" in sql
+    assert first["status"] == "retry" and first["next"] == at(304)
+    assert calls[1][1]["status"] == "backfill_needed" and calls[1][1]["next"] is None
+
+
+def test_hundred_failed_jobs_do_not_starve_new_records():
+    # Execute the queue SQL on a lightweight SQL engine, not only string checks.
+    # PostgreSQL migration verification still requires a staging database.
+    from sqlalchemy import create_engine, text
+    engine = create_engine("sqlite://")
+    with engine.begin() as session:
+        session.execute(text("CREATE TABLE ml_feature_snapshots (id TEXT PRIMARY KEY, environment TEXT, feature_version TEXT, quality TEXT, entry_at_ms INTEGER, observed_at TIMESTAMP)"))
+        session.execute(text("CREATE TABLE ml_labels (snapshot_id TEXT, label_version TEXT)"))
+        session.execute(text("CREATE TABLE ml_label_jobs (snapshot_id TEXT, label_version TEXT, status TEXT, attempts INTEGER, last_reason TEXT, last_attempt_at TIMESTAMP, next_attempt_at TIMESTAMP, PRIMARY KEY(snapshot_id,label_version))"))
+        for i in range(101):
+            session.execute(text("INSERT INTO ml_feature_snapshots VALUES (:id, 'research', :version, 'ready', :entry, :observed)"),
+                            {"id": str(i), "version": ml.FEATURE_VERSION, "entry": i * ml.HOUR_MS, "observed": at(i)})
+        assert len(ml.pending_labels(session, "research", at(300), 100)) == 100
+        for i in range(100):
+            ml.record_label_failure(session, str(i), "HISTORICAL_BACKFILL_REQUIRED", at(300), permanent=True)
+        assert [r["id"] for r in ml.pending_labels(session, "research", at(300), 100)] == ["100"]
+        for hour in (300, 304, 308):
+            ml.record_label_failure(session, "100", "SOURCE_MISMATCH", at(hour))
+            assert ml.pending_labels(session, "research", at(hour), 100) == []
+        result = session.execute(text("SELECT status, attempts, next_attempt_at FROM ml_label_jobs WHERE snapshot_id = '100'")).mappings().one()
+        assert result["status"] == "backfill_needed" and result["attempts"] == 3
+        assert result["next_attempt_at"] is None
+        assert ml.pending_labels(session, "research", at(400), 100) == []

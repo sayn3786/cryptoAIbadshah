@@ -5,13 +5,17 @@ return regression later. It does not train a model, modify signal weights, place
 orders, or promise greater accuracy. No new paid service is required by this code;
 database storage and provider usage still consume the user's existing quotas.
 
-## Frozen v1 research contract
+## Frozen v2 research contract
 
 - Inputs: 64 consecutive CLOSED 1H spot candles from one supported exchange.
 - Collection: intended every four hours, independently of selected/published
   signals. Default universe is every current `SCAN_SYMBOLS` member, including BTC.
 - Actual `observed_at` is captured after each fetch. The four-hour slot labels
   the collection run; it is NOT a fabricated historical observation timestamp.
+- `fetch_started_at` is captured BEFORE the request. Only bars already closed
+  by that cutoff are eligible, even if the request crosses an hourly boundary.
+  Freshness is checked against that cutoff, and fetches taking an hour are
+  rejected. Existing v1 records are retained, not promoted into v2 training data.
 - Entry reference: the next hourly candle open strictly after observation.
   Exit reference: the close of the fourth hourly candle from that open.
   Therefore there is up to one hour of waiting before the four-hour target starts.
@@ -52,7 +56,9 @@ established before adding them. Never populate past features from current APIs.
 ## Rollout (explicit, not performed by this PR)
 
 1. Review migration status, then apply only
-   `database/migrations/013_ml_research_dataset.sql` to a test database first.
+   `database/migrations/013_ml_research_dataset.sql`, followed by
+   `database/migrations/014_ml_collection_guards.sql`, to a test database first.
+   If 013 was already applied, only 014 is newly required.
 2. Use the existing backend requirements. Configure DATABASE_URL securely using
    the existing local setup. Do not put a URL/password into a command or commit.
 3. Inspect a price-only dry run (fetches market data but writes nothing):
@@ -84,10 +90,28 @@ established before adding them. Never populate past features from current APIs.
    Fixed-cadence operation is NOT active merely because this PR is deployed.
 
 The label fetch is limited to the latest 200 candles per symbol and batches
-100 pending rows (maximum 500). Run regularly; old missing labels or changed
-exchange sources need explicit source-matched historical backfill. Do not mark
-them neutral or substitute another exchange. An oldest-first backlog can require
-operator intervention; inspect pending age before relying on continuous labeling.
+100 pending rows (maximum 500). Observations whose entry is at least 196 hours
+old move to `backfill_needed` without fetching. Other failures retry after four
+hours, with three failures maximum before backfill routing. Never-attempted rows
+sort before retries. Backfill rows no longer consume the active batch. Run
+regularly; completing a huge backlog still takes multiple bounded runs.
+Dry runs intentionally do not advance queue state.
+
+Historical or source-mismatched rows require explicit source-matched backfill;
+do not mark them neutral, change their exchange, or delete them. The queue is
+mutable operational metadata; snapshots and labels stay immutable. A successful
+label excludes the job from future selection even if historical retry metadata
+remains. Inspect unresolved backfill jobs with:
+
+```sql
+SELECT j.status, j.last_reason, COUNT(*) AS unresolved
+FROM ml_label_jobs j
+JOIN ml_feature_snapshots f ON f.id = j.snapshot_id
+WHERE f.environment = 'research'
+  AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id = j.snapshot_id
+                  AND l.label_version = j.label_version)
+GROUP BY j.status, j.last_reason;
+```
 
 ## Read-only coverage checks
 
