@@ -1,5 +1,27 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## ML research dataset (migration `013`)
+
+Migration `014` adds the separately recorded `fetch_started_at` cutoff and
+`ml_label_jobs`, a mutable retry/backfill queue keyed by snapshot and label
+version. `candles_1h_v2` uses the pre-fetch cutoff to admit only candles already
+closed before fetching. Old v1 records are retained but excluded from the v2
+labeler. Jobs retry after four hours; three failures or an expired retrieval
+window route them to `backfill_needed` without deleting observations or creating
+artificial outcomes.
+
+`ml_feature_snapshots` stores immutable candle-only feature vectors, their version,
+source, actual observation time, four-hour collection slot, next hourly entry
+timestamp, input hash and quality/failure reason. Uniqueness is per environment,
+feature version, slot and symbol. Invalid observations remain visible for coverage
+analysis. `ml_labels` references a feature snapshot and stores its versioned,
+four-hour future spot return from the next hourly open, UP/DOWN/NEUTRAL label,
+source and availability timestamp. Labels are separate from model inputs and
+are never substituted into historical features.
+
+These tables are populated only by the explicit research CLI, not live publication.
+Neither table changes signals or enables orders. See [ML research rollout](docs/ml-research-dataset.md).
+
 ## Candidate evidence update (migration `012`)
 
 `candidate_decisions` is an additive audit table written by
