@@ -1,0 +1,2 @@
+# The Cloudflare Worker is deployed to Cloudflare, not served by Vercel.
+cloudflare/
