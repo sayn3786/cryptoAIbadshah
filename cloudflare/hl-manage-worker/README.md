@@ -31,7 +31,7 @@ least 16 characters, or it is ignored.
 
 ### 3. Create the Worker
 1. <https://dash.cloudflare.com> → **Workers & Pages** → **Create** →
-   **Create Worker**. Name it `hl-manage-worker` → **Deploy**. This creates a
+   **Create Worker**. Name it `cryptoaibadshah` (it must match `name` in `wrangler.toml`) → **Deploy**. This creates a
    placeholder.
 2. **Edit code** → delete everything → paste the contents of
    [`worker.js`](./worker.js) → **Deploy**.
