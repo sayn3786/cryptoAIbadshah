@@ -68,11 +68,11 @@ def test_arm_status_reports_sizing_defaults(monkeypatch):
     monkeypatch.delenv("HL_TRADE_NOTIONAL_USD", raising=False)
     monkeypatch.delenv("HL_LEVERAGE", raising=False)
     s = hx.arm_status()
-    assert s["notional_usd"] == 12.0 and s["leverage"] == 3.0
-    monkeypatch.setenv("HL_TRADE_NOTIONAL_USD", "25")
+    assert s["notional_usd"] == 25.0 and s["leverage"] == 3.0
+    monkeypatch.setenv("HL_TRADE_NOTIONAL_USD", "40")
     monkeypatch.setenv("HL_LEVERAGE", "5")
     s2 = hx.arm_status()
-    assert s2["notional_usd"] == 25.0 and s2["leverage"] == 5.0
+    assert s2["notional_usd"] == 40.0 and s2["leverage"] == 5.0
 
 
 def test_arm_status_never_leaks_the_key(monkeypatch):

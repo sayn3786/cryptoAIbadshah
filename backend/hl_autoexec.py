@@ -25,6 +25,7 @@ tier filter, exit attachment — is tested without the SDK, the network or a DB.
 """
 from __future__ import annotations
 
+import math
 import os
 from typing import Any, Callable, Dict, List, Optional
 
@@ -79,21 +80,61 @@ def _f(x) -> Optional[float]:
         return None
 
 
-def _first_target(row: Dict[str, Any]) -> Optional[float]:
-    """The TP1 price from an attached target ladder (target_number 1, else the
-    lowest-numbered), or None."""
+def _targets(row: Dict[str, Any]) -> List[float]:
+    """Valid target prices from an attached ladder, in target_number order."""
     tgts = row.get("targets") or []
     if not isinstance(tgts, (list, tuple)) or not tgts:
-        return None
+        return []
     def _num(t):
         return t.get("target_number") if isinstance(t, dict) else None
     ordered = sorted((t for t in tgts if isinstance(t, dict)),
                      key=lambda t: (_num(t) is None, _num(t) or 0))
-    for t in ordered:
-        px = _f(t.get("target_price"))
-        if px and px > 0:
-            return px
-    return None
+    return [px for px in (_f(t.get("target_price")) for t in ordered) if px and px > 0]
+
+
+def _first_target(row: Dict[str, Any]) -> Optional[float]:
+    """The TP1 price from an attached target ladder (target_number 1, else the
+    lowest-numbered), or None."""
+    tps = _targets(row)
+    return tps[0] if tps else None
+
+
+def _second_target(row: Dict[str, Any]) -> Optional[float]:
+    tps = _targets(row)
+    return tps[1] if len(tps) > 1 else None
+
+
+DEFAULT_TP1_FRACTION = 0.5      # share of the position TP1 closes; TP2 takes the rest
+
+
+def tp1_fraction() -> float:
+    f = hl_execution._num_env("HL_TP1_FRACTION", DEFAULT_TP1_FRACTION)
+    return f if 0 < f < 1 else DEFAULT_TP1_FRACTION
+
+
+def plan_tp_split(size: float, sz_decimals: int, tp1_px: Optional[float],
+                  tp2_px: Optional[float], *, fraction: Optional[float] = None,
+                  min_order_usd: float = hl_meta.HL_MIN_ORDER_USD):
+    """(tp1_size, tp2_size) for a scale-out, or None to close all at TP1.
+
+    None when there is no TP2, or when either part would be below Hyperliquid's
+    minimum order value (a rejected TP would leave that part with no target).
+    Sizes are rounded DOWN to the lot; TP2 takes the whole remainder so the two
+    always sum to the position size."""
+    if not size or not tp1_px or not tp2_px:
+        return None
+    f = tp1_fraction() if fraction is None else fraction
+    first = hl_meta.round_size(size * f, sz_decimals)
+    if not first:
+        return None
+    q = 10 ** max(0, int(sz_decimals))
+    rest = round(size - first, max(0, int(sz_decimals)))
+    rest = math.floor(rest * q + 1e-9) / q
+    if rest <= 0:
+        return None
+    if first * tp1_px < min_order_usd or rest * tp2_px < min_order_usd:
+        return None
+    return first, rest
 
 
 def _candle_ms(row: Dict[str, Any]) -> Any:
@@ -148,6 +189,7 @@ def to_signal(row: Dict[str, Any]) -> Dict[str, Any]:
         "sl":        _f(row.get("stop_loss") if row.get("stop_loss") is not None
                         else row.get("sl")),
         "tp1":       _first_target(row),
+        "tp2":       _second_target(row),
         "confidence_score": _f(row.get("confidence_score")),
     }
 
@@ -177,16 +219,27 @@ def _attach_exits(sig: Dict[str, Any], res: Dict[str, Any], *,
     sz_dec = int((table.get(coin) or {}).get("sz_decimals") or 0)
     sl_px = hl_meta.round_price(sig.get("sl"), sz_dec) if sig.get("sl") else None
     tp_px = hl_meta.round_price(sig.get("tp1"), sz_dec) if sig.get("tp1") else None
+    tp2_px = hl_meta.round_price(sig.get("tp2"), sz_dec) if sig.get("tp2") else None
+    # Scale out: TP1 closes part, TP2 the rest (the position manager then moves
+    # the stop to entry). Falls back to all-at-TP1 when a part would be too small.
+    split = plan_tp_split(float(size), sz_dec, tp_px, tp2_px)
     # Exit side CLOSES the position: a LONG exits by selling.
     is_buy_exit = sig.get("direction") != "LONG"
     sid, cts = sig.get("id"), sig.get("candle_ts")
+    extra: Dict[str, Any] = {}
+    if split:
+        extra = {"tp_size": split[0], "tp2_px": tp2_px, "tp2_size": split[1],
+                 "tp2_cloid": hl_execution.client_order_id(sid, "tp2", cts)}
     try:
         res["exits"] = exit_fn(
             coin, is_buy_exit, size, sl_px, tp_px, env=env,
             sl_cloid=hl_execution.client_order_id(sid, "sl", cts) if sl_px else None,
-            tp_cloid=hl_execution.client_order_id(sid, "tp1", cts) if tp_px else None)
+            tp_cloid=hl_execution.client_order_id(sid, "tp1", cts) if tp_px else None,
+            **extra)
         res["exits_ok"] = True
-        res["exit_prices"] = {"sl": sl_px, "tp": tp_px}
+        res["exit_prices"] = {"sl": sl_px, "tp": tp_px,
+                              "tp2": tp2_px if split else None}
+        res["tp_split"] = list(split) if split else None
     except Exception as exc:                              # noqa: BLE001
         res["exits_ok"] = False
         res["exits_error"] = str(exc)

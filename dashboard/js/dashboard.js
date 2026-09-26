@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '252';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '255';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2627,7 +2627,10 @@ function _hlPositionRow(p) {
   const side = (p.side || '').toUpperCase();
   const lev  = p.leverage ? `${Number(p.leverage).toFixed(0)}×` : '';
   const more = (p.tp_all_px || []).length > 1 ? ` · +${p.tp_all_px.length - 1} more` : '';
-  const sl = p.sl_px != null
+  const atEntry = p.sl_px != null && p.entry_px && Math.abs(p.sl_px - p.entry_px) <= p.entry_px * 0.0005;
+  const sl = atEntry
+    ? `<b>${_hlPx(p.sl_px)}</b><small class="bull">at entry · risk-free</small>`
+    : p.sl_px != null
     ? `<b>${_hlPx(p.sl_px)}</b><small>${_hlPct(p.sl_dist_pct)} away</small>`
     : `<b class="bear">⚠ None</b><small>unprotected</small>`;
   const tp = p.tp_px != null
@@ -2649,6 +2652,66 @@ function _hlPositionRow(p) {
   </tr>`;
 }
 
+const _hlWhen = ms => {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+         d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+};
+const _hlDur = (a, b) => {
+  if (!a || !b) return '';
+  const m = Math.round((b - a) / 60000);
+  return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor(m % 1440 / 60)}h`;
+};
+const _HL_RESULT = { win: ['WIN', 'bull'], loss: ['LOSS', 'bear'], breakeven: ['BREAK-EVEN', 'muted'] };
+
+function _hlClosedRow(t) {
+  const [label, cls] = _HL_RESULT[t.result] || ['—', 'muted'];
+  const side = (t.side || '').toUpperCase();
+  return `<tr>
+    <td class="hlp-coin" data-label="Coin"><b>${t.coin}</b><span class="hlp-side ${t.side === 'long' ? 'bull' : 'bear'}">${side}</span></td>
+    <td data-label="Opened"><b>${_hlWhen(t.opened_at)}</b><small>${_hlDur(t.opened_at, t.closed_at) ? 'held ' + _hlDur(t.opened_at, t.closed_at) : ''}</small></td>
+    <td data-label="Closed"><b>${_hlWhen(t.closed_at)}</b></td>
+    <td data-label="Entry"><b>${_hlPx(t.entry_px)}</b></td>
+    <td data-label="Exit"><b>${_hlPx(t.exit_px)}</b><small>${t.exits > 1 ? `avg of ${t.exits} exits` : '1 exit'}</small></td>
+    <td data-label="Size"><b>${Number(t.size).toLocaleString('en-US', { maximumFractionDigits: 6 })}</b></td>
+    <td data-label="P&amp;L"><b class="${_hlCls(t.pnl_usd)}">${_hlUsd(t.pnl_usd)}</b><small class="${_hlCls(t.pnl_pct)}">${_hlPct(t.pnl_pct) || ''}${t.fees_usd ? ` · fees ${_hlUsd(t.fees_usd)}` : ''}</small></td>
+    <td data-label="Result"><span class="hlp-result ${cls}">${label}</span></td>
+  </tr>`;
+}
+
+// Collapsed state per section ('open' / 'closed'); per-viewer convenience, so
+// it survives the 30s re-render and reloads. Storage may be unavailable.
+const _hlCollapsed = (() => {
+  try { return JSON.parse(localStorage.getItem('cm_hlp_collapsed') || '{}') || {}; }
+  catch (_) { return {}; }
+})();
+
+function _hlSection(key, headInner, bodyHtml, extraCls = '') {
+  const closed = !!_hlCollapsed[key];
+  return `<div class="hlp-sec${closed ? ' collapsed' : ''}" data-sec="${key}">
+    <button type="button" class="hlp-head hlp-toggle ${extraCls}" aria-expanded="${!closed}">
+      <span class="hlp-chev" aria-hidden="true">▾</span>${headInner}
+    </button>
+    <div class="hlp-body">${bodyHtml}</div>
+  </div>`;
+}
+
+function _hlBindToggle(box) {
+  if (box.dataset.toggleBound) return;
+  box.dataset.toggleBound = '1';
+  box.addEventListener('click', e => {
+    const btn = e.target.closest('.hlp-toggle');
+    if (!btn) return;
+    const sec = btn.closest('.hlp-sec');
+    const key = sec.dataset.sec;
+    _hlCollapsed[key] = !_hlCollapsed[key];
+    sec.classList.toggle('collapsed', _hlCollapsed[key]);
+    btn.setAttribute('aria-expanded', String(!_hlCollapsed[key]));
+    try { localStorage.setItem('cm_hlp_collapsed', JSON.stringify(_hlCollapsed)); } catch (_) {}
+  });
+}
+
 async function loadHlPositions() {
   const box = document.getElementById('hlPositions');
   if (!box) return;
@@ -2657,24 +2720,36 @@ async function loadHlPositions() {
     if (!r.ok) { box.style.display = 'none'; return; }
     const d = await r.json();
     const rows = d.positions || [];
+    const closed = d.closed_trades || [];
     box.style.display = '';
-    if (!rows.length) {
-      box.innerHTML = `<div class="hlp-empty">No open positions.</div>`;
-      return;
-    }
     const partial = (d.partial || []).length
-      ? `<span class="bear"> · ${d.partial.includes('orders') ? 'SL/TP' : 'live price'} unavailable this refresh</span>` : '';
-    box.innerHTML = `
-      <div class="hlp-head">
-        <span>Open positions <b>${rows.length}</b></span>
-        <span>Unrealized <b class="${_hlCls(d.unrealized_pnl_usd)}">${_hlUsd(d.unrealized_pnl_usd)}</b></span>
-      </div>
-      <div class="hlp-wrap"><table class="hlp-table">
+      ? `<span class="bear"> · ${d.partial.map(x => ({ orders: 'SL/TP', mids: 'live price', fills: 'closed trades' })[x] || x).join(', ')} unavailable this refresh</span>` : '';
+
+    const openHtml = _hlSection('open',
+      `<span class="hlp-title">Open positions <b>${rows.length}</b></span>
+       ${rows.length ? `<span>Unrealized <b class="${_hlCls(d.unrealized_pnl_usd)}">${_hlUsd(d.unrealized_pnl_usd)}</b></span>` : ''}`,
+      rows.length ? `<div class="hlp-wrap"><table class="hlp-table">
         <thead><tr><th>Coin</th><th>Size</th><th>Entry</th><th>Mark</th><th>P&amp;L</th>
           <th>Stop-loss</th><th>Take-profit</th><th>R:R</th><th>Liq.</th></tr></thead>
         <tbody>${rows.map(_hlPositionRow).join('')}</tbody>
-      </table></div>
-      <div class="hlp-foot">Updated ${new Date().toLocaleTimeString()} · refreshes every 30s · read-only${partial}</div>`;
+      </table></div>` : `<div class="hlp-empty">No open positions.</div>`);
+
+    const days = d.closed_days || 3;
+    const realized = closed.reduce((a, t) => a + (t.pnl_usd || 0), 0);
+    const wins = closed.filter(t => t.result === 'win').length;
+    const closedHtml = _hlSection('closed',
+      `<span class="hlp-title">Closed · last ${days} days <b>${closed.length}</b>${closed.length ? ` <span class="muted">(${wins} won)</span>` : ''}</span>
+       ${closed.length ? `<span>Realized <b class="${_hlCls(realized)}">${_hlUsd(+realized.toFixed(2))}</b></span>` : ''}`,
+      closed.length ? `<div class="hlp-wrap"><table class="hlp-table">
+        <thead><tr><th>Coin</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th>
+          <th>Size</th><th>P&amp;L</th><th>Result</th></tr></thead>
+        <tbody>${closed.map(_hlClosedRow).join('')}</tbody>
+      </table></div>` : `<div class="hlp-empty">No trades closed in the last ${days} days.</div>`,
+      'hlp-head-closed');
+
+    _hlBindToggle(box);
+    box.innerHTML = openHtml + closedHtml +
+      `<div class="hlp-foot">Updated ${new Date().toLocaleTimeString()} · refreshes every 30s · read-only${partial}</div>`;
   } catch (_) { /* keep the last table on a transient error */ }
 }
 

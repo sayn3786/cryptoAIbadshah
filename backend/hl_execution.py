@@ -31,7 +31,7 @@ _ORDER_NS = "hlorder:"
 
 # Per-trade sizing (testnet defaults). Read here so arm-status can surface them;
 # the actual sizing gate lives in hl_meta.can_place.
-DEFAULT_NOTIONAL_USD = 12.0
+DEFAULT_NOTIONAL_USD = 25.0          # >= 2x the $10 minimum, so TP1/TP2 can split 50/50
 DEFAULT_LEVERAGE = 3.0
 
 
