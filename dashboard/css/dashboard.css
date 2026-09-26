@@ -2372,3 +2372,40 @@ html { overflow-x: hidden; }
 .pat-dir { font-weight: 700; font-size: .72rem; }
 .pat-dir.bull { color: var(--bull); }
 .pat-dir.bear { color: var(--bear); }
+
+/* ── Hyperliquid open positions table ─────────────────────────────────────── */
+.hlp { padding: 0 14px 14px; }
+.hlp-head { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted2); margin-bottom: 8px; }
+.hlp-head b { color: var(--text); font-size: 13px; }
+.hlp-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; -webkit-overflow-scrolling: touch; }
+.hlp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.hlp-table th { text-align: right; font-weight: 600; font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); padding: 8px 10px; background: var(--card2); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.hlp-table td { text-align: right; padding: 9px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: top; }
+.hlp-table tr:last-child td { border-bottom: 0; }
+.hlp-table th:first-child, .hlp-table td:first-child { text-align: left; position: sticky; left: 0; background: var(--card); z-index: 1; }
+.hlp-table th:first-child { background: var(--card2); }
+.hlp-table td b { display: block; font-family: var(--mono); font-weight: 600; color: var(--text); }
+.hlp-table td small { display: block; font-size: 10.5px; color: var(--muted2); margin-top: 2px; font-family: var(--mono); }
+.hlp-table td b.muted { color: var(--muted2); }
+.hlp-coin b { font-family: var(--font) !important; font-size: 13.5px; }
+.hlp-side { display: inline-block; margin-top: 3px; font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  padding: 1px 6px; border-radius: 4px; background: rgba(148,163,184,.1); }
+.hlp-side.bull { background: rgba(16,185,129,.12); }
+.hlp-side.bear { background: rgba(239,68,68,.12); }
+.hlp-foot { font-size: 11px; color: var(--muted); margin-top: 7px; }
+.hlp-empty { font-size: 12.5px; color: var(--muted2); padding: 4px 0; }
+/* Phone: one card per position so stop-loss / take-profit are never off-screen. */
+@media (max-width: 640px) {
+  .hlp-wrap { border: 0; overflow: visible; }
+  .hlp-table thead { display: none; }
+  .hlp-table, .hlp-table tbody { display: block; }
+  .hlp-table tr { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px 12px; padding: 12px;
+    margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+  .hlp-table td { display: block; padding: 0; border: 0; text-align: left; white-space: normal; position: static; }
+  .hlp-table td::before { content: attr(data-label); display: block; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; }
+  .hlp-table td.hlp-coin { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  .hlp-table td.hlp-coin::before { display: none; }
+  .hlp-table td.hlp-coin .hlp-side { margin-top: 0; }
+}

@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '251';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '252';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2607,8 +2607,77 @@ async function loadHlStatus() {
       ${hint}
       <div style="font-size:11px;opacity:.55;margin-top:4px">Read-only — no orders, no signing.</div>
     </div>`;
+    loadHlPositions();
   } catch (_) { sec.style.display = 'none'; }
 }
+// Hyperliquid open positions as a table: entry, live mark, P&L, stop-loss,
+// take-profit, R:R and liquidation. Admin-only endpoint — a non-admin session
+// gets 401/403 and the table simply stays hidden.
+// Fixed decimals by magnitude so entry / mark / SL / TP line up ($0.6000, not $0.6).
+const _hlPx = v => {
+  if (v == null) return '—';
+  const a = Math.abs(v), d = a >= 1000 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 4 : 6;
+  return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+};
+const _hlUsd = v => v == null ? '—' : (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(2);
+const _hlPct = v => v == null ? '' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(2)}%`;
+const _hlCls = v => v > 0 ? 'bull' : v < 0 ? 'bear' : '';
+
+function _hlPositionRow(p) {
+  const side = (p.side || '').toUpperCase();
+  const lev  = p.leverage ? `${Number(p.leverage).toFixed(0)}×` : '';
+  const more = (p.tp_all_px || []).length > 1 ? ` · +${p.tp_all_px.length - 1} more` : '';
+  const sl = p.sl_px != null
+    ? `<b>${_hlPx(p.sl_px)}</b><small>${_hlPct(p.sl_dist_pct)} away</small>`
+    : `<b class="bear">⚠ None</b><small>unprotected</small>`;
+  const tp = p.tp_px != null
+    ? `<b>${_hlPx(p.tp_px)}</b><small>${_hlPct(p.tp_dist_pct)} away${more}</small>`
+    : `<b class="muted">—</b><small>no target</small>`;
+  const rr = p.rr != null
+    ? `<b>${p.rr.toFixed(2)}</b><small>${_hlUsd(-p.risk_usd)} / ${_hlUsd(p.reward_usd)}</small>`
+    : '<b class="muted">—</b>';
+  return `<tr>
+    <td class="hlp-coin" data-label="Coin"><b>${p.coin}</b><span class="hlp-side ${p.side === 'long' ? 'bull' : 'bear'}">${side} ${lev}</span></td>
+    <td data-label="Size"><b>${Number(p.size).toLocaleString('en-US', { maximumFractionDigits: 6 })}</b><small>${_hlUsd(p.position_value_usd)}</small></td>
+    <td data-label="Entry"><b>${_hlPx(p.entry_px)}</b></td>
+    <td data-label="Mark"><b>${_hlPx(p.mark_px)}</b><small class="${_hlCls(p.move_pct)}">${_hlPct(p.move_pct)}</small></td>
+    <td data-label="P&amp;L"><b class="${_hlCls(p.unrealized_pnl_usd)}">${_hlUsd(p.unrealized_pnl_usd)}</b><small class="${_hlCls(p.roe_pct)}">ROE ${_hlPct(p.roe_pct) || '—'}</small></td>
+    <td data-label="Stop-loss">${sl}</td>
+    <td data-label="Take-profit">${tp}</td>
+    <td data-label="R:R">${rr}</td>
+    <td data-label="Liq."><b>${_hlPx(p.liquidation_px)}</b><small>${_hlPct(p.liq_dist_pct)}</small></td>
+  </tr>`;
+}
+
+async function loadHlPositions() {
+  const box = document.getElementById('hlPositions');
+  if (!box) return;
+  try {
+    const r = await fetch(`${API}/hl/positions`);
+    if (!r.ok) { box.style.display = 'none'; return; }
+    const d = await r.json();
+    const rows = d.positions || [];
+    box.style.display = '';
+    if (!rows.length) {
+      box.innerHTML = `<div class="hlp-empty">No open positions.</div>`;
+      return;
+    }
+    const partial = (d.partial || []).length
+      ? `<span class="bear"> · ${d.partial.includes('orders') ? 'SL/TP' : 'live price'} unavailable this refresh</span>` : '';
+    box.innerHTML = `
+      <div class="hlp-head">
+        <span>Open positions <b>${rows.length}</b></span>
+        <span>Unrealized <b class="${_hlCls(d.unrealized_pnl_usd)}">${_hlUsd(d.unrealized_pnl_usd)}</b></span>
+      </div>
+      <div class="hlp-wrap"><table class="hlp-table">
+        <thead><tr><th>Coin</th><th>Size</th><th>Entry</th><th>Mark</th><th>P&amp;L</th>
+          <th>Stop-loss</th><th>Take-profit</th><th>R:R</th><th>Liq.</th></tr></thead>
+        <tbody>${rows.map(_hlPositionRow).join('')}</tbody>
+      </table></div>
+      <div class="hlp-foot">Updated ${new Date().toLocaleTimeString()} · refreshes every 30s · read-only${partial}</div>`;
+  } catch (_) { /* keep the last table on a transient error */ }
+}
+
 function renderOnchainMetrics(mining, symbol, lth) {
   const section = document.getElementById('onchainMetricsSection');
   const grid    = document.getElementById('ocmGrid');
@@ -7257,6 +7326,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadPatternHistory();
   loadPaperAccount();
   loadHlStatus();
+  // Positions table (admin only) — keep entry/mark/P&L/SL/TP current.
+  setInterval(() => {
+    const sec = document.getElementById('hlStatusCard');
+    if (!document.hidden && sec && sec.style.display !== 'none') loadHlPositions();
+  }, 30000);
 
   await renderAssetTabs();   // build tabs sorted by live market cap first
   wireSelectors();
