@@ -101,34 +101,57 @@ def send_market_close(coin: str, cloid_str: str, env: Optional[str] = None) -> A
     return _exchange(env).market_close(coin, cloid=Cloid.from_str(cloid_str))
 
 
+def _send_trigger(ex, coin: str, is_buy_exit: bool, size: float, px: float,
+                  tpsl: str, cloid: Optional[str]) -> Any:
+    """One REDUCE-ONLY market-trigger order (tpsl 'sl' or 'tp')."""
+    from hyperliquid.utils.signing import Cloid
+    ot = {"trigger": {"triggerPx": float(px), "isMarket": True, "tpsl": tpsl}}
+    kw: Dict[str, Any] = {"reduce_only": True}
+    if cloid:
+        kw["cloid"] = Cloid.from_str(cloid)
+    return ex.order(coin, is_buy_exit, float(size), float(px), ot, **kw)
+
+
 def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
                      sl_px: Optional[float], tp_px: Optional[float],
                      *, env: Optional[str] = None,
                      sl_cloid: Optional[str] = None,
-                     tp_cloid: Optional[str] = None) -> Dict[str, Any]:
+                     tp_cloid: Optional[str] = None,
+                     tp_size: Optional[float] = None,
+                     tp2_px: Optional[float] = None,
+                     tp2_size: Optional[float] = None,
+                     tp2_cloid: Optional[str] = None) -> Dict[str, Any]:
     """Place REDUCE-ONLY stop-loss + take-profit trigger orders for an open
     position. `is_buy_exit` is the side that CLOSES the position — the opposite
-    of the entry (a LONG exits by selling). Both are market-trigger orders
+    of the entry (a LONG exits by selling). All are market-trigger orders
     (isMarket True) so they fill when price crosses the level; reduce_only means
     they can only shrink the position, never flip or add to it. Impure (SDK);
-    each order is placed independently so a rejected stop does not abort the TP.
-    Returns {"sl": resp?, "tp": resp?}."""
-    from hyperliquid.utils.signing import Cloid
+    each order is placed independently so a rejected stop does not abort a TP.
+
+    The stop always covers the FULL size. With `tp_size` + `tp2_px`/`tp2_size`
+    the take-profit is split: TP1 closes `tp_size`, TP2 the rest (after TP1 the
+    position manager moves the stop to entry). Without them, TP1 closes the
+    whole position. Returns {"sl": resp?, "tp": resp?, "tp2": resp?}."""
     ex = _exchange(env)
     out: Dict[str, Any] = {}
     if sl_px and sl_px > 0:
-        ot = {"trigger": {"triggerPx": float(sl_px), "isMarket": True, "tpsl": "sl"}}
-        kw: Dict[str, Any] = {"reduce_only": True}
-        if sl_cloid:
-            kw["cloid"] = Cloid.from_str(sl_cloid)
-        out["sl"] = ex.order(coin, is_buy_exit, float(size), float(sl_px), ot, **kw)
+        out["sl"] = _send_trigger(ex, coin, is_buy_exit, size, sl_px, "sl", sl_cloid)
     if tp_px and tp_px > 0:
-        ot = {"trigger": {"triggerPx": float(tp_px), "isMarket": True, "tpsl": "tp"}}
-        kw = {"reduce_only": True}
-        if tp_cloid:
-            kw["cloid"] = Cloid.from_str(tp_cloid)
-        out["tp"] = ex.order(coin, is_buy_exit, float(size), float(tp_px), ot, **kw)
+        out["tp"] = _send_trigger(ex, coin, is_buy_exit, tp_size or size, tp_px, "tp", tp_cloid)
+    if tp2_px and tp2_px > 0 and tp2_size:
+        out["tp2"] = _send_trigger(ex, coin, is_buy_exit, tp2_size, tp2_px, "tp", tp2_cloid)
     return out
+
+
+def send_stop(coin: str, is_buy_exit: bool, size: float, px: float, *,
+              cloid: Optional[str] = None, env: Optional[str] = None) -> Any:
+    """A single reduce-only stop — the position manager's break-even stop."""
+    return _send_trigger(_exchange(env), coin, is_buy_exit, size, px, "sl", cloid)
+
+
+def cancel_order(coin: str, oid: int, env: Optional[str] = None) -> Any:
+    """Cancel one resting order by exchange order id."""
+    return _exchange(env).cancel(coin, int(oid))
 
 
 def order_accepted(resp: Any):

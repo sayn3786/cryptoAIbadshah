@@ -1,0 +1,48 @@
+name: Hyperliquid Position Manager
+
+on:
+  schedule:
+    # Every 5 minutes (GitHub's minimum; scheduled runs are best-effort and can
+    # start several minutes late). Each pass moves a position's stop to ENTRY
+    # once TP1 has filled. The endpoint reads the exchange state every time and
+    # is idempotent, so a late, extra or missed run is harmless.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:        # also triggerable by hand from the Actions tab
+
+concurrency:
+  group: hl-manage
+  cancel-in-progress: false
+
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Move stops to entry after TP1
+        env:
+          APP_URL:     ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          # Never echo the URL (a secret) or the raw body. Print only the
+          # allow-listed summary fields.
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST "$APP_URL/api/hl/manage" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            --max-time 60)
+          HTTP_STATUS=$(printf '%s' "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(printf '%s' "$RESPONSE" | sed '/HTTP_STATUS:/d')
+          printf '%s' "$BODY" | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              print("non-JSON response"); sys.exit(0)
+          keep = ("ok", "ran", "reason", "positions", "actions", "error_code")
+          print({k: d[k] for k in keep if k in d})
+          for r in d.get("results") or []:
+              print({k: r.get(k) for k in ("coin", "action", "placed", "closed", "error")})
+          '
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Position manager returned HTTP $HTTP_STATUS"
+            exit 1
+          fi

@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '252';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '253';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2627,7 +2627,10 @@ function _hlPositionRow(p) {
   const side = (p.side || '').toUpperCase();
   const lev  = p.leverage ? `${Number(p.leverage).toFixed(0)}×` : '';
   const more = (p.tp_all_px || []).length > 1 ? ` · +${p.tp_all_px.length - 1} more` : '';
-  const sl = p.sl_px != null
+  const atEntry = p.sl_px != null && p.entry_px && Math.abs(p.sl_px - p.entry_px) <= p.entry_px * 0.0005;
+  const sl = atEntry
+    ? `<b>${_hlPx(p.sl_px)}</b><small class="bull">at entry · risk-free</small>`
+    : p.sl_px != null
     ? `<b>${_hlPx(p.sl_px)}</b><small>${_hlPct(p.sl_dist_pct)} away</small>`
     : `<b class="bear">⚠ None</b><small>unprotected</small>`;
   const tp = p.tp_px != null

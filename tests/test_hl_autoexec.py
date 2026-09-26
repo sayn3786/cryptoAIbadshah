@@ -110,7 +110,7 @@ def test_execute_opens_each_and_attaches_exits():
         return {"ok": True, "coin": sig["symbol"], "size": 0.01,
                 "notional_usd": 12.0, "side": "buy"}
 
-    def exit_fn(coin, is_buy_exit, size, sl_px, tp_px, *, env, sl_cloid, tp_cloid):
+    def exit_fn(coin, is_buy_exit, size, sl_px, tp_px, *, env, sl_cloid, tp_cloid, **split):
         exits.append({"coin": coin, "is_buy_exit": is_buy_exit,
                       "size": size, "sl": sl_px, "tp": tp_px})
         return {"sl": "ok", "tp": "ok"}
@@ -136,7 +136,7 @@ def test_execute_short_exits_by_buying():
     def open_fn(sig, *, account_state, table, run_order_count, cfg, env):
         return {"ok": True, "coin": sig["symbol"], "size": 0.5, "notional_usd": 12.0}
 
-    def exit_fn(coin, is_buy_exit, size, sl_px, tp_px, *, env, sl_cloid, tp_cloid):
+    def exit_fn(coin, is_buy_exit, size, sl_px, tp_px, *, env, sl_cloid, tp_cloid, **split):
         exits.append(is_buy_exit)
         return {}
 

@@ -115,11 +115,13 @@ def test_happy_path_sends_signed_open(monkeypatch):
     sender = _Sender()
     r = _open(monkeypatch, send_fn=sender)
     assert r["ok"] is True and r["coin"] == "BTC" and r["side"] == "buy"
-    assert r["size"] == 0.0002 and r["notional_usd"] == 12.0 and r["leverage"] == 3.0
+    # $25 default at a 60000 mark: 25/60000 = 0.000416… → floored to BTC's 5 dp.
+    assert r["size"] == 0.00041 and r["leverage"] == 3.0
+    assert r["notional_usd"] == 24.6
     assert r["mark_px"] == 60000
     assert r["cloid"] == hex_.client_order_id("sig1", "open", 1000)
     coin, is_buy, size, cloid, env, leverage = sender.calls[0]
-    assert coin == "BTC" and is_buy is True and size == 0.0002
+    assert coin == "BTC" and is_buy is True and size == 0.00041
     assert cloid == r["cloid"] and leverage == 3.0     # planned leverage passed to the sender
 
 
@@ -148,7 +150,7 @@ def test_sizes_from_live_mark_not_entry(monkeypatch):
     sender = _Sender()
     # entry says 50000 but the live mark is 60000 → size must come from 60000
     _open(monkeypatch, sig={**SIG, "entry": 55000}, mark_px=60000, send_fn=sender)
-    assert sender.calls[0][2] == 0.0002             # 12 / 60000, not 12 / 55000
+    assert sender.calls[0][2] == 0.00041            # 25 / 60000, not 25 / 55000 (0.00045)
 
 
 def test_send_failure_releases_the_claim(monkeypatch):

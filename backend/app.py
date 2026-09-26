@@ -3868,6 +3868,28 @@ def api_hl_account():
                         "error": "Hyperliquid account read failed"}), 502
 
 
+@app.post("/api/hl/manage")
+def api_hl_manage():
+    """Position manager pass: once TP1 has filled, move the remainder's stop to
+    entry (hl_manage). Run every few minutes by the hl-manage workflow; safe to
+    call repeatedly. Internal (CRON_SECRET / HL token) or an admin session.
+    Serialised with order placement so the two never act concurrently."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    import hl_account as _hl
+    if not _hl.configured():
+        return jsonify({"ok": False, "error_code": "HL_NOT_CONFIGURED"}), 503
+    try:
+        import hl_manage
+        with _hl_execute_lock:
+            return jsonify(hl_manage.run())
+    except Exception:
+        app.logger.exception("hyperliquid position manager failed")
+        return jsonify({"ok": False, "error_code": "HL_MANAGE_FAILED",
+                        "error": "Hyperliquid position manager failed"}), 502
+
+
 @app.get("/api/hl/positions")
 def api_hl_positions():
     """Open positions with live mark, stop-loss, take-profit, P&L and R:R for the
