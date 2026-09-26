@@ -18,7 +18,7 @@ don't need it, so Phase 1 never touches a secret that could place a trade.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -117,6 +117,117 @@ def account_state(address: Optional[str] = None, *, env: Optional[str] = None,
     data = _post_info({"type": "clearinghouseState", "user": addr},
                       env=env, session=session)
     return parse_state(data, addr, env)
+
+
+def _classify_trigger(order: Dict[str, Any], side: str,
+                      mark: Optional[float]) -> Optional[str]:
+    """'sl' / 'tp' for a reduce-only trigger order, from Hyperliquid's orderType
+    ("Stop Market", "Take Profit Limit", ...); falls back to where the trigger
+    sits relative to the mark when the type is missing."""
+    ot = str(order.get("orderType") or "").lower()
+    if ot.startswith("stop"):
+        return "sl"
+    if ot.startswith("take profit"):
+        return "tp"
+    px = _num(order.get("triggerPx"))
+    if px is None or mark is None:
+        return None
+    below = px < mark
+    return ("sl" if below else "tp") if side == "long" else ("tp" if below else "sl")
+
+
+def _pct(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    return round((a - b) / b * 100, 2) if a is not None and b else None
+
+
+def enrich_positions(state: Dict[str, Any], orders: Any,
+                     mids: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Each open position with its live mark, stop-loss and take-profit(s).
+
+    Pure (no network), so it is unit-testable against captured payloads.
+    `orders` is Hyperliquid's frontendOpenOrders list; only REDUCE-ONLY TRIGGER
+    orders on the position's coin count as its SL / TP. Distances are % from
+    the current mark; R:R uses the nearest TP against the stop, from entry.
+    """
+    by_coin: Dict[str, List[Dict[str, Any]]] = {}
+    for o in orders or []:
+        if isinstance(o, dict) and o.get("isTrigger") and o.get("reduceOnly"):
+            by_coin.setdefault(str(o.get("coin")), []).append(o)
+    out = []
+    for p in state.get("open_positions") or []:
+        coin, side = p.get("coin"), p.get("side")
+        entry, size = p.get("entry_px"), p.get("size") or 0
+        mark = _num((mids or {}).get(coin))
+        sign = 1 if side == "long" else -1
+        sls, tps = [], []
+        for o in by_coin.get(str(coin), []):
+            kind = _classify_trigger(o, side, mark)
+            px = _num(o.get("triggerPx"))
+            if px is None or kind is None:
+                continue
+            (sls if kind == "sl" else tps).append(px)
+        # The stop that fires first, and TPs nearest-first, in trade direction.
+        sl = (max(sls) if side == "long" else min(sls)) if sls else None
+        tps.sort(reverse=(side != "long"))
+        tp = tps[0] if tps else None
+        risk = abs(entry - sl) if entry is not None and sl is not None else None
+        reward = abs(tp - entry) if entry is not None and tp is not None else None
+        margin = p.get("margin_used_usd")
+        upnl = p.get("unrealized_pnl_usd")
+        out.append({
+            **p,
+            "mark_px": mark,
+            "move_pct": (round(sign * _pct(mark, entry), 2)
+                         if _pct(mark, entry) is not None else None),
+            "roe_pct": round(upnl / margin * 100, 2) if upnl is not None and margin else None,
+            "sl_px": sl,
+            "sl_dist_pct": _pct(sl, mark),
+            "tp_px": tp,
+            "tp_dist_pct": _pct(tp, mark),
+            "tp_all_px": tps,
+            "risk_usd": round(risk * size, 2) if risk is not None else None,
+            "reward_usd": round(reward * size, 2) if reward is not None else None,
+            "rr": round(reward / risk, 2) if risk and reward is not None else None,
+            "liq_dist_pct": _pct(p.get("liquidation_px"), mark),
+            "protected": sl is not None,
+        })
+    return out
+
+
+def positions_detail(address: Optional[str] = None, *, env: Optional[str] = None,
+                     session: Optional[Any] = None) -> Dict[str, Any]:
+    """Account snapshot + enriched positions (entry, mark, SL, TP, P&L, R:R).
+    Three read-only info calls; open orders and mids are best-effort so a
+    failure there still shows the positions, just without SL/TP or mark."""
+    addr = account_address(address)
+    if not addr:
+        return {"configured": False,
+                "error": "HYPERLIQUID_ACCOUNT_ADDRESS is not set"}
+    state = parse_state(_post_info({"type": "clearinghouseState", "user": addr},
+                                   env=env, session=session), addr, env)
+    orders, mids, partial = [], {}, []
+    if state["open_positions"]:
+        try:
+            orders = _post_info({"type": "frontendOpenOrders", "user": addr},
+                                env=env, session=session) or []
+        except Exception:                                # noqa: BLE001
+            partial.append("orders")
+        try:
+            mids = all_mids(env=env, session=session)
+        except Exception:                                # noqa: BLE001
+            partial.append("mids")
+    return {
+        "configured": True,
+        "env": state["env"],
+        "address": _mask(addr),
+        "account_value_usd": state["account_value_usd"],
+        "total_notional_usd": state["total_notional_usd"],
+        "withdrawable_usd": state["withdrawable_usd"],
+        "unrealized_pnl_usd": round(sum(p.get("unrealized_pnl_usd") or 0
+                                        for p in state["open_positions"]), 2),
+        "positions": enrich_positions(state, orders, mids),
+        "partial": partial,
+    }
 
 
 def all_mids(*, env: Optional[str] = None, session: Optional[Any] = None) -> Dict[str, Any]:

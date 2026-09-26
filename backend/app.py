@@ -3868,6 +3868,26 @@ def api_hl_account():
                         "error": "Hyperliquid account read failed"}), 502
 
 
+@app.get("/api/hl/positions")
+def api_hl_positions():
+    """Open positions with live mark, stop-loss, take-profit, P&L and R:R for the
+    dashboard's positions table. Admin-only (HL token or an admin session), like
+    /api/hl/account; read-only."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    import hl_account as _hl
+    if not _hl.configured():
+        return jsonify({"ok": False, "configured": False,
+                        "error_code": "HL_NOT_CONFIGURED"}), 503
+    try:
+        return jsonify({"ok": True, **_hl.positions_detail()})
+    except Exception:
+        app.logger.exception("hyperliquid positions read failed")
+        return jsonify({"ok": False, "error_code": "HL_READ_FAILED",
+                        "error": "Hyperliquid positions read failed"}), 502
+
+
 # PUBLIC connection status — a safe summary the dashboard (or a browser) can read
 # without the internal secret. Account state is already public on-chain; the
 # balance figure is shown only on testnet (redacted on mainnet). Cached briefly
