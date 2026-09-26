@@ -8,6 +8,10 @@ on:
     # is idempotent, so a late, extra or missed run is harmless.
     - cron: '*/5 * * * *'
   workflow_dispatch:        # also triggerable by hand from the Actions tab
+  # Also called by the Signal Outcome Monitor (every 30 min) as a BACKUP:
+  # GitHub often delays or skips frequent schedules, so this guarantees a pass
+  # at least every ~30 minutes even if the */5 schedule never fires.
+  workflow_call:
 
 concurrency:
   group: hl-manage
