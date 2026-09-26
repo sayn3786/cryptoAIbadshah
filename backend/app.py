@@ -2907,14 +2907,34 @@ def _compute_recommendations() -> dict:
     # Audit I/O runs only AFTER signal persistence. A platform hard timeout
     # cannot be caught by Python, so even a successful slow audit must never
     # consume the execution budget needed to commit the live signal set.
-    try:
-        import decision_audit
-        audit_result = decision_audit.persist(
-            decision_records, {r["symbol"] for r in intraday_recs}, now)
-        if not audit_result.get("ok"):
-            print(f"[decision-audit] {audit_result.get('reason', 'UNAVAILABLE')}")
-    except Exception:
-        print("[decision-audit] WRITE_FAILED")
+    #
+    # Skipped when the signal write just failed (the database is likely down, and
+    # a second connect timeout could push the run past the platform limit and
+    # kill Telegram / auto-execute), and when the set is built on the PREVIOUS
+    # bar (the first write per slot is kept, so a stale attempt must not claim
+    # the slot before the retry that actually publishes).
+    _audit_current = (not intraday_recs) or bool(
+        _close_t is not None and _close_t >= _slot_start(now_sgt))
+    if _persist.get("error_code") == "PERSISTENCE_ERROR":
+        print("[decision-audit] SKIPPED_PERSISTENCE_ERROR")
+    elif not _audit_current:
+        print("[decision-audit] SKIPPED_STALE_SLOT")
+    else:
+        try:
+            import decision_audit
+            audit_result = decision_audit.persist(
+                decision_records, {r["symbol"] for r in intraday_recs}, now,
+                context={
+                    "source_candle_close": _close_t.isoformat() if _close_t else None,
+                    "persisted": _persist.get("persisted"),
+                    "duplicates": _persist.get("duplicates"),
+                    "skipped_reason": _persist.get("skipped_reason"),
+                    "error_code": _persist.get("error_code"),
+                })
+            if not audit_result.get("ok"):
+                print(f"[decision-audit] {audit_result.get('reason', 'UNAVAILABLE')}")
+        except Exception:
+            print("[decision-audit] WRITE_FAILED")
 
     # Next signal slot on the next 4H boundary SGT: 12AM/4AM/8AM/12PM/4PM/8PM.
     # 4H boundaries are the same instants in UTC and SGT, so the published set is
@@ -3513,9 +3533,14 @@ def _ml_research_request(kind):
         result = (jobs.collect(symbols, source, environment, write) if kind == "collect"
                   else jobs.label(symbols, source, environment, write, limit))
         return jsonify(result), (200 if result["ok"] else 503)
-    except Exception:
-        # Do not leak DSNs, provider bodies or credentials in responses/logs.
-        return jsonify({"ok": False, "error_code": "RESEARCH_JOB_FAILED"}), 503
+    except Exception as exc:
+        # Do not leak DSNs, provider bodies or credentials in responses/logs:
+        # log only the exception TYPE, which is enough to tell a missing table
+        # (migrations 013/014 not applied) from a network or provider failure.
+        print(f"[ml-research] {kind} failed: {type(exc).__name__} "
+              "(check DATABASE_URL and that migrations 013/014 are applied)")
+        return jsonify({"ok": False, "error_code": "RESEARCH_JOB_FAILED",
+                        "error_type": type(exc).__name__}), 503
 
 
 @app.post("/api/research/ml/collect")

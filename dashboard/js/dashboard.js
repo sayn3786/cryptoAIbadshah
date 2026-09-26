@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '250';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '251';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -230,16 +230,28 @@ async function loadTicker() {
     // these (heavier) full refreshes.
     TICKER_SYMS.forEach(sym => {
       const d = data[sym];
-      if (d && !d.error && tickerPriceValid(d.price)) {
-        _tickerData[sym] = {
-          price:      d.price,
-          change_pct: d.change_pct ?? 0,
-          ref_close:  d.ref_close ?? d.price,
-          // Overview data may be cached; only the lightweight price request
-          // proves that this browser successfully checked the price recently.
-          checked_at: null,
-        };
+      if (!d || d.error || !tickerPriceValid(d.price)) return;
+      const prev = _tickerData[sym];
+      if (prev && prev.checked_at) {
+        // A live-checked price is the source of truth. Overview data may be
+        // cached and this request can take 20-30s on a cold start, so it must
+        // not overwrite a newer checked price or wipe its "Checked" time —
+        // only refresh the daily-change baseline. checked_at keeps ageing, so
+        // the item still turns stale if the live poll stops succeeding.
+        if (d.ref_close) {
+          prev.ref_close  = d.ref_close;
+          prev.change_pct = +(((prev.price - d.ref_close) / d.ref_close) * 100).toFixed(2);
+        }
+        return;
       }
+      _tickerData[sym] = {
+        price:      d.price,
+        change_pct: d.change_pct ?? 0,
+        ref_close:  d.ref_close ?? d.price,
+        // Overview data may be cached; only the lightweight price request
+        // proves that this browser successfully checked the price recently.
+        checked_at: null,
+      };
     });
     renderTicker();
   } catch (_) {}
@@ -7032,6 +7044,7 @@ function jumpTo(sym, tf) {
 async function refresh() {
   await loadAnalysis();
   await loadTicker();
+  await loadLivePrices();          // re-verify now, don't wait for the 45s poll
 }
 
 /* ─── Order Book Walls ────────────────────────────────────────────────────── */
@@ -7264,7 +7277,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Ticker: heavy full refresh every 5 min (rebuilds the change baseline), plus
   // a lightweight live-price poll every 45s so the header prices stay current.
-  setInterval(loadTicker, 5 * 60 * 1000);
+  setInterval(() => loadTicker().then(loadLivePrices), 5 * 60 * 1000);
   setInterval(loadLivePrices, 45 * 1000);
   setInterval(renderTicker, 15 * 1000); // age prices even while requests fail
   setInterval(checkStrengthChanges, 60 * 60 * 1000);
