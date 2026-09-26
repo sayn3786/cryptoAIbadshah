@@ -1,8 +1,8 @@
 # Manual ML research testing on Vercel
 
 POST `/api/research/ml/collect` and POST `/api/research/ml/label` run separate,
-synchronous research jobs using the deployment's existing DATABASE_URL. No
-scheduler, signal generation, orders, or notifications are added. Migrations
+synchronous research jobs using the deployment's existing DATABASE_URL. The
+routes perform no signal generation, orders, or notifications. Migrations
 013 and 014 must already be applied for database operations. No new migration.
 
 ## Enable explicitly after deployment
@@ -57,6 +57,11 @@ the database after a timeout. Do not increase scope to the full universe inside
 this endpoint. Requests are synchronous; no unawaited background work is launched.
 No cloud endpoint or live production DB was invoked during unit tests.
 
+For the opt-in deployment/merge of the automatic GitHub Actions caller, see
+[research scheduling](ml-research-scheduling.md). The endpoint itself does not
+start a scheduler.
+
 Disable by removing ML_RESEARCH_ENABLED or setting it to false and redeploying.
-No credential or schema changes are needed merely to merge this code. The next
-step after deployment is an authenticated cloud dry-run, not enabling a schedule.
+No schema changes are needed merely to deploy these routes. Before enabling the
+separate scheduler, complete an authenticated cloud collect/label test and
+configure its GitHub Actions credentials as described in the scheduling guide.
