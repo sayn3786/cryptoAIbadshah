@@ -194,6 +194,94 @@ def enrich_positions(state: Dict[str, Any], orders: Any,
     return out
 
 
+DEFAULT_CLOSED_DAYS = 3          # how long a closed trade stays in the list
+_CLOSED_LOOKBACK_DAYS = 14       # pair against opens this far back
+
+
+def closed_trades_days() -> float:
+    try:
+        d = float(os.getenv("HL_CLOSED_TRADES_DAYS", "") or DEFAULT_CLOSED_DAYS)
+    except ValueError:
+        d = DEFAULT_CLOSED_DAYS
+    return min(max(d, 1.0), float(_CLOSED_LOOKBACK_DAYS))
+
+
+def closed_trades(fills: Any, now_ms: int, days: float = DEFAULT_CLOSED_DAYS) -> List[Dict[str, Any]]:
+    """Round-trip trades that CLOSED in the last `days`, newest first. Pure.
+
+    Rebuilt from Hyperliquid fills: a trade starts when the position leaves zero
+    and ends when it returns to zero (partial exits — TP1 then TP2 — are one
+    trade). Uses each fill's `startPosition`, so a trade whose opening fills are
+    older than the fetched window is still closed out correctly; its entry is
+    then unknown and shown blank. P&L is closedPnl minus fees on every fill.
+    """
+    rows = [f for f in (fills or []) if isinstance(f, dict)]
+    rows.sort(key=lambda f: (_num(f.get("time")) or 0, str(f.get("tid") or "")))
+    cutoff = now_ms - days * 86_400_000
+    by_coin: Dict[str, List[Dict[str, Any]]] = {}
+    for f in rows:
+        by_coin.setdefault(str(f.get("coin")), []).append(f)
+
+    trades: List[Dict[str, Any]] = []
+    for coin, fs in by_coin.items():
+        cur: Optional[Dict[str, Any]] = None
+        for f in fs:
+            sz, px = _num(f.get("sz")), _num(f.get("px"))
+            start = _num(f.get("startPosition"))
+            if not sz or not px or start is None:
+                continue
+            signed = sz if str(f.get("side")) == "B" else -sz
+            end = start + signed
+            eps = max(abs(start), abs(end), sz) * 1e-9
+            if cur is None:
+                cur = {"coin": coin, "side": None, "opens": [], "closes": [],
+                       "pnl": 0.0, "fees": 0.0, "opened_at": None,
+                       "complete": abs(start) <= eps}
+                if abs(start) > eps:
+                    cur["side"] = "long" if start > 0 else "short"
+            if cur["side"] is None:
+                cur["side"] = "long" if signed > 0 else "short"
+                cur["opened_at"] = int(_num(f.get("time")) or 0)
+            opening = (signed > 0) == (cur["side"] == "long")
+            (cur["opens"] if opening else cur["closes"]).append((px, sz, f.get("oid")))
+            cur["pnl"] += _num(f.get("closedPnl")) or 0.0
+            cur["fees"] += _num(f.get("fee")) or 0.0
+            if abs(end) <= eps:
+                cur["closed_at"] = int(_num(f.get("time")) or 0)
+                trades.append(cur)
+                cur = None
+
+    out = []
+    for t in trades:
+        if t["closed_at"] < cutoff or not t["closes"]:
+            continue
+        def _avg(legs):
+            q = sum(sz for _, sz, _ in legs)
+            return (sum(px * sz for px, sz, _ in legs) / q) if q else None
+        entry = _avg(t["opens"]) if t["complete"] else None
+        exit_px = _avg(t["closes"])
+        size = sum(sz for _, sz, _ in t["closes"])
+        net = round(t["pnl"] - t["fees"], 4)
+        notional = (entry or 0) * size
+        pct = round(net / notional * 100, 2) if notional else None
+        be_band = 0.001 * notional if notional else 0.01
+        out.append({
+            "coin": t["coin"], "side": t["side"],
+            "opened_at": t["opened_at"], "closed_at": t["closed_at"],
+            "entry_px": round(entry, 8) if entry else None,
+            "exit_px": round(exit_px, 8) if exit_px else None,
+            "size": round(size, 8),
+            "exits": len({oid for _, _, oid in t["closes"]}) or len(t["closes"]),
+            "gross_pnl_usd": round(t["pnl"], 4),
+            "fees_usd": round(t["fees"], 4),
+            "pnl_usd": net,
+            "pnl_pct": pct,
+            "result": "win" if net > be_band else "loss" if net < -be_band else "breakeven",
+        })
+    out.sort(key=lambda t: t["closed_at"], reverse=True)
+    return out
+
+
 def positions_detail(address: Optional[str] = None, *, env: Optional[str] = None,
                      session: Optional[Any] = None) -> Dict[str, Any]:
     """Account snapshot + enriched positions (entry, mark, SL, TP, P&L, R:R).
@@ -216,10 +304,24 @@ def positions_detail(address: Optional[str] = None, *, env: Optional[str] = None
             mids = all_mids(env=env, session=session)
         except Exception:                                # noqa: BLE001
             partial.append("mids")
+    # Closed trades are independent of whether anything is open now.
+    import time as _time
+    now_ms = int(_time.time() * 1000)
+    days = closed_trades_days()
+    closed: List[Dict[str, Any]] = []
+    try:
+        fills = _post_info({"type": "userFillsByTime", "user": addr,
+                            "startTime": now_ms - _CLOSED_LOOKBACK_DAYS * 86_400_000},
+                           env=env, session=session) or []
+        closed = closed_trades(fills, now_ms, days)
+    except Exception:                                    # noqa: BLE001
+        partial.append("fills")
     return {
         "configured": True,
         "env": state["env"],
         "address": _mask(addr),
+        "closed_trades": closed,
+        "closed_days": days,
         "account_value_usd": state["account_value_usd"],
         "total_notional_usd": state["total_notional_usd"],
         "withdrawable_usd": state["withdrawable_usd"],

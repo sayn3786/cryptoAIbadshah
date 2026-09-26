@@ -39,6 +39,7 @@ ORDERS = [
     {"coin": "ETH", "isTrigger": True, "reduceOnly": True, "triggerPx": "2800"},
 ]
 MIDS = {"FET": "0.62", "ETH": "2900"}
+FILLS = []
 
 
 def _rows(orders=ORDERS, mids=MIDS):
@@ -85,7 +86,8 @@ class _Session:
         kind = json["type"]
         if kind in self.fail:
             raise RuntimeError("upstream down")
-        data = {"clearinghouseState": STATE, "frontendOpenOrders": ORDERS, "allMids": MIDS}[kind]
+        data = {"clearinghouseState": STATE, "frontendOpenOrders": ORDERS, "allMids": MIDS,
+                "userFillsByTime": FILLS}[kind]
         class R:
             def raise_for_status(self): pass
             def json(self): return data
@@ -147,3 +149,89 @@ def test_endpoint_sanitises_upstream_errors(monkeypatch):
     monkeypatch.setattr(hl_account, "positions_detail", boom)
     resp = app.app.test_client().get("/api/hl/positions", headers={"x-hl-token": "tok"})
     assert resp.status_code == 502 and "secret-detail" not in resp.get_data(as_text=True)
+
+
+# ── closed trades (last N days), rebuilt from fills ──────────────────────────
+
+DAY = 86_400_000
+NOW = 1_800_000_000_000
+
+
+def _fill(coin, side, sz, px, start, t, pnl="0", fee="0", oid=1):
+    return {"coin": coin, "side": side, "sz": str(sz), "px": str(px),
+            "startPosition": str(start), "time": t, "closedPnl": str(pnl),
+            "fee": str(fee), "oid": oid}
+
+
+def test_scale_out_long_is_one_trade_with_two_exits():
+    fills = [
+        _fill("FET", "B", 40, 0.60, 0, NOW - 5 * 3600_000, fee="0.01", oid=1),
+        _fill("FET", "A", 20, 0.66, 40, NOW - 4 * 3600_000, pnl="1.2", fee="0.01", oid=2),  # TP1
+        _fill("FET", "A", 20, 0.72, 20, NOW - 3600_000, pnl="2.4", fee="0.01", oid=3),      # TP2
+    ]
+    [t] = hl.closed_trades(fills, NOW, 3)
+    assert t["coin"] == "FET" and t["side"] == "long" and t["exits"] == 2
+    assert t["entry_px"] == 0.6 and t["exit_px"] == pytest.approx(0.69)
+    assert t["size"] == 40
+    assert t["pnl_usd"] == pytest.approx(3.57)                 # 3.6 gross − 0.03 fees
+    assert t["pnl_pct"] == pytest.approx(14.88, abs=0.01)
+    assert t["result"] == "win" and t["closed_at"] == NOW - 3600_000
+
+
+def test_short_stopped_out_is_a_loss():
+    fills = [_fill("ETH", "A", 0.004, 3000, 0, NOW - 2 * DAY),
+             _fill("ETH", "B", 0.004, 3100, -0.004, NOW - DAY, pnl="-0.4")]
+    [t] = hl.closed_trades(fills, NOW, 3)
+    assert t["side"] == "short" and t["result"] == "loss" and t["pnl_usd"] == -0.4
+
+
+def test_trades_closed_before_the_window_are_hidden():
+    fills = [_fill("FET", "B", 40, 0.6, 0, NOW - 5 * DAY),
+             _fill("FET", "A", 40, 0.66, 40, NOW - 4 * DAY, pnl="2.4")]
+    assert hl.closed_trades(fills, NOW, 3) == []
+    assert len(hl.closed_trades(fills, NOW, 5)) == 1
+
+
+def test_still_open_trade_is_not_listed_as_closed():
+    fills = [_fill("FET", "B", 40, 0.6, 0, NOW - 3600_000),
+             _fill("FET", "A", 20, 0.66, 40, NOW - 1800_000, pnl="1.2")]   # TP1 only
+    assert hl.closed_trades(fills, NOW, 3) == []
+
+
+def test_opening_fills_older_than_history_still_close_the_trade():
+    # Only the exit is in the fetched window: listed, with entry unknown.
+    fills = [_fill("FET", "A", 40, 0.66, 40, NOW - 3600_000, pnl="2.4")]
+    [t] = hl.closed_trades(fills, NOW, 3)
+    assert t["entry_px"] is None and t["pnl_pct"] is None and t["pnl_usd"] == 2.4
+
+
+def test_back_to_back_trades_on_one_coin_are_separate():
+    fills = [_fill("FET", "B", 40, 0.6, 0, NOW - 10 * 3600_000),
+             _fill("FET", "A", 40, 0.55, 40, NOW - 9 * 3600_000, pnl="-2.0"),
+             _fill("FET", "B", 40, 0.5, 0, NOW - 5 * 3600_000),
+             _fill("FET", "A", 40, 0.56, 40, NOW - 4 * 3600_000, pnl="2.4")]
+    trades = hl.closed_trades(fills, NOW, 3)
+    assert [t["result"] for t in trades] == ["win", "loss"]     # newest first
+
+
+def test_tiny_net_result_is_breakeven():
+    fills = [_fill("FET", "B", 40, 0.6, 0, NOW - 2 * 3600_000, fee="0.005"),
+             _fill("FET", "A", 40, 0.6, 40, NOW - 3600_000, pnl="0.0", fee="0.005")]
+    [t] = hl.closed_trades(fills, NOW, 3)
+    assert t["result"] == "breakeven" and t["pnl_usd"] == -0.01
+
+
+def test_positions_detail_includes_closed_trades(monkeypatch):
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xABC")
+    monkeypatch.setattr(sys.modules[__name__], "FILLS",
+                        [_fill("SOL", "B", 1, 100, 0, 1), _fill("SOL", "A", 1, 110, 1, 2, pnl="10")])
+    import time
+    monkeypatch.setattr(time, "time", lambda: 3 / 1000)
+    d = hl.positions_detail(session=_Session())
+    assert d["closed_days"] == 3 and d["closed_trades"][0]["coin"] == "SOL"
+
+
+def test_fills_failure_still_returns_positions(monkeypatch):
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xABC")
+    d = hl.positions_detail(session=_Session(fail=("userFillsByTime",)))
+    assert "fills" in d["partial"] and len(d["positions"]) == 2 and d["closed_trades"] == []

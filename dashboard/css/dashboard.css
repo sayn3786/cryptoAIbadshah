@@ -2409,3 +2409,9 @@ html { overflow-x: hidden; }
   .hlp-table td.hlp-coin::before { display: none; }
   .hlp-table td.hlp-coin .hlp-side { margin-top: 0; }
 }
+.hlp-head-closed { margin-top: 16px; }
+.hlp-head .muted { color: var(--muted); font-weight: 400; }
+.hlp-result { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  padding: 2px 7px; border-radius: 4px; background: rgba(148,163,184,.12); color: var(--muted2); }
+.hlp-result.bull { background: rgba(16,185,129,.12); }
+.hlp-result.bear { background: rgba(239,68,68,.12); }
