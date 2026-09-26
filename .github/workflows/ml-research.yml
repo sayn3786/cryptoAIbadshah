@@ -1,0 +1,35 @@
+name: ML Research Dataset
+
+on:
+  schedule:
+    - cron: '10 */4 * * *'
+    - cron: '15 1-23/4 * * *'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Research operation (writes to Neon)
+        type: choice
+        options: [collect, label]
+        default: label
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: ml-research-dataset
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run bounded research operation
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          RESEARCH_JOB: ${{ github.event_name == 'workflow_dispatch' && inputs.job || (github.event.schedule == '10 */4 * * *' && 'collect' || 'label') }}
+        run: python scripts/ml_research_schedule.py
