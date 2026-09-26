@@ -1,17 +1,10 @@
 name: Hyperliquid Position Manager
 
 on:
-  schedule:
-    # Every 5 minutes (GitHub's minimum; scheduled runs are best-effort and can
-    # start several minutes late). Each pass moves a position's stop to ENTRY
-    # once TP1 has filled. The endpoint reads the exchange state every time and
-    # is idempotent, so a late, extra or missed run is harmless.
-    - cron: '*/5 * * * *'
+  # Scheduled by the Cloudflare Worker (cloudflare/hl-manage-worker/worker.js),
+  # every minute. GitHub's own schedules were best-effort (hours late or skipped),
+  # so this workflow is now manual only: Actions tab -> Run workflow.
   workflow_dispatch:        # also triggerable by hand from the Actions tab
-  # Also called by the Signal Outcome Monitor (every 30 min) as a BACKUP:
-  # GitHub often delays or skips frequent schedules, so this guarantees a pass
-  # at least every ~30 minutes even if the */5 schedule never fires.
-  workflow_call:
 
 concurrency:
   group: hl-manage

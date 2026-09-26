@@ -8,25 +8,33 @@ decides which jobs run:
 | every minute | Position manager: stop → entry after TP1 | `POST /api/hl/manage` | `HL_MANAGE_TOKEN` |
 | hh:02, hh:12, hh:32 | **Publish signals** (+ HL auto-exec entry) | `POST /api/cron/publish` | `SCHEDULER_TOKEN` |
 | hh:05, hh:35 | Outcome monitor (TP/SL hits, expiry) | `POST /api/signals/monitor` | `SCHEDULER_TOKEN` |
-| 00:07, 08:07 | Telegram daily signals (+ Twitter) | `POST /api/cron/daily` | `SCHEDULER_TOKEN` |
+| 00:07, 08:07, 12:07 | Telegram daily signals (+ Twitter) | `POST /api/cron/daily` | `SCHEDULER_TOKEN` |
 | 00:15, 08:15, 16:15 | Pattern alerts → Telegram | `POST /api/patterns/alert` | `SCHEDULER_TOKEN` |
+| 00:20 | TAO snapshot | `POST /api/cron/tao-snapshot` | `SCHEDULER_TOKEN` |
+| 01:30 | ETF-flow and market snapshots | `POST /api/cron/etf-snapshot`, `/api/cron/market-snapshot` | `SCHEDULER_TOKEN` |
+| every 4h at :10 (00:10, 04:10, …) | ML research collect | `POST /api/research/ml/collect` | `SCHEDULER_TOKEN` |
+| 01:15, 05:15, … | ML research label | `POST /api/research/ml/label` | `SCHEDULER_TOKEN` |
 
 Why: GitHub's schedules are best-effort. Publishing ran 1–3 hours late or not
-at all, which made signals late and HL entries stale; Cloudflare fires on time.
-Publish runs three times an hour: the 4H slot publishes at :02 right after the
-close, and :12 / :32 retry if exchange data lagged or a cold start timed out.
-Once a slot is published, extra runs return `SLOT_ALREADY_PUBLISHED` in about a
-second. Timeouts and 5xx errors are retried after 20 s (publish up to 3
-attempts); auth errors are not.
+at all, which made signals late and HL entries stale. Vercel's free-plan cron
+only promises "within the hour". Cloudflare fires on time. Publish runs three
+times an hour: the 4H slot publishes at :02 right after the close, and :12 / :32
+retry if exchange data lagged or a cold start timed out. Once a slot is
+published, extra runs return `SLOT_ALREADY_PUBLISHED` in about a second.
+Timeouts and 5xx errors are retried (publish up to 3 attempts); auth errors are
+not. The ML jobs keep their old rule: 503 is never retried, because it may
+already have recorded a failure.
 
-Every job is safe to repeat (keyed per slot / candle / alert), so the GitHub
-schedules stay as **backups and alarms**. Overlaps never double-send Telegram or
-double-trade. The 12:05 UTC daily run stays on Vercel's own cron.
+**This Worker is the only scheduler.** The GitHub workflows for these jobs are
+manual-only (Actions tab → Run workflow), and `vercel.json` has no crons. Every
+job is safe to repeat (keyed per slot / candle / alert), so a manual run
+alongside the Worker never double-sends or double-trades. Still on GitHub: the
+`tests` workflow (runs on every push and PR) and the weekly report dump.
 
 **Narrow tokens.** Neither token is `CRON_SECRET` or the HL admin token:
 - `HL_MANAGE_TOKEN` opens only `/api/hl/manage` (it can only tighten stops).
-- `SCHEDULER_TOKEN` opens only the four scheduled paths above, POST only. It
-  cannot place orders directly, read the account or manage users.
+- `SCHEDULER_TOKEN` opens only the scheduled paths above, POST only. It cannot
+  place orders directly, read the account or manage users.
 
 A job whose token is missing is skipped (and logged); the others still run.
 
@@ -137,13 +145,17 @@ dismiss them; don't add secrets to `wrangler.toml`.
 3. Cloudflare: Settings → Variables and secrets → edit that Secret → the new
    value → **Deploy**.
 
-Between steps 2 and 3 the Worker gets `401` for a minute or two. That's
-harmless: the GitHub backups keep running.
+Between steps 2 and 3 the Worker's calls with that token get `401` for a
+minute or two, so do the two steps back to back. If a 4H close falls in that
+gap, run **Publish Signals** by hand from GitHub's Actions tab.
 
 ## Turning it off
 Delete the Cron trigger (Settings → Trigger events), or delete the Worker.
-Removing a token from Vercel shuts out that token's jobs. The GitHub triggers
-keep running either way.
+Removing a token from Vercel shuts out that token's jobs.
+
+**This stops all scheduled jobs**: publishing, the monitor, Telegram, snapshots,
+ML research and the position manager. To fall back to GitHub, restore the
+`schedule:` blocks in those workflows (see git history).
 
 ## Deploying with the CLI instead (optional)
 ```

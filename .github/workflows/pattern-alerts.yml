@@ -1,13 +1,9 @@
 name: Pattern Confirmation Alerts
 
 on:
-  schedule:
-    # All times UTC. Chart-pattern confirmations (1D/1W) don't change fast, so a
-    # few checks a day is plenty. Kept separate from the daily-recs cron so a slow
-    # scan can never time that job out (and vice-versa).
-    - cron: '10 0 * * *'    # ~08:10 SGT
-    - cron: '10 8 * * *'    # ~16:10 SGT
-    - cron: '10 16 * * *'   # ~00:10 SGT
+  # Scheduled by the Cloudflare Worker (cloudflare/hl-manage-worker/worker.js),
+  # 00:15, 08:15 and 16:15 UTC. GitHub's own schedules were best-effort (hours late or skipped),
+  # so this workflow is now manual only: Actions tab -> Run workflow.
   workflow_dispatch:        # allow manual trigger from GitHub UI
 
 jobs:

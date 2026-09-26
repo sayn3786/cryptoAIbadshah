@@ -10,8 +10,8 @@ name: Daily Data Snapshots
 # is no dedup concern like the Telegram cron has.
 
 on:
-  schedule:
-    - cron: '30 1 * * *'    # 01:30 UTC daily — after the providers refresh
+  # Scheduled by the Cloudflare Worker (cloudflare/hl-manage-worker/worker.js),
+  # 01:30 UTC (ETF + market) and 00:20 UTC (TAO). This workflow is now manual only: Actions tab -> Run workflow.
   workflow_dispatch:        # allow a manual run from the GitHub UI
 
 jobs:

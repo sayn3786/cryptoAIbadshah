@@ -1,15 +1,9 @@
 name: Telegram Daily Alerts
 
 on:
-  schedule:
-    # All times UTC — SGT is UTC+8, and 4H boundaries are the same instants in
-    # both. Since v44 a signal is only RECORDED on a 4H close, so these must fire
-    # just AFTER the boundary, never before it: a run at 23:50 UTC sees the 06:00
-    # SGT candle, records nothing, and would send an unrecorded set to Telegram.
-    # :05 past absorbs GitHub's scheduling delay, which is late-skewed anyway.
-    - cron: '5 0 * * *'    # ~08:05 AM SGT
-    - cron: '5 8 * * *'    # ~04:05 PM SGT
-    # 8PM SGT handled by Vercel cron (12:05 UTC)
+  # Scheduled by the Cloudflare Worker (cloudflare/hl-manage-worker/worker.js),
+  # 00:07 and 08:07 UTC; 12:05 UTC stays on Vercel's cron. GitHub's own schedules were best-effort (hours late or skipped),
+  # so this workflow is now manual only: Actions tab -> Run workflow.
   workflow_dispatch:       # allow manual trigger from GitHub UI
 
 jobs:
