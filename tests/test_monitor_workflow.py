@@ -1,9 +1,10 @@
 """
 The outcome monitor runs on a schedule.
 
-Nothing advances a signal unless this workflow fires, so the schedule being
+Nothing advances a signal unless the monitor fires, so the schedule being
 present — and calling the right endpoint with the right auth — is the difference
 between having an outcome history and having a write-only log of intentions.
+The schedule lives in the Cloudflare Worker; this workflow is the manual run.
 """
 import os
 
@@ -21,18 +22,17 @@ TRIGGERS = WF.get(True) or WF.get("on") or {}
 
 
 def test_it_runs_on_a_schedule():
-    assert "schedule" in TRIGGERS, \
+    from _worker_schedule import worker_schedule
+    assert worker_schedule().get("monitor"), \
         "without a schedule every signal stays OPEN forever"
-    crons = [e["cron"] for e in TRIGGERS["schedule"]]
-    assert crons, "the schedule block is empty"
 
 
 def test_it_runs_at_least_hourly():
     # Signals are published on 2H candles. Checking less often than hourly would
     # leave outcomes unrecorded for hours after the candle that decided them.
-    crons = [e["cron"] for e in TRIGGERS["schedule"]]
-    assert any(c.split()[1] == "*" for c in crons), \
-        f"the monitor runs less often than hourly: {crons}"
+    from _worker_schedule import worker_schedule
+    hours = {h for h, _ in worker_schedule()["monitor"]}
+    assert hours == set(range(24)), f"the monitor skips hours: {sorted(set(range(24)) - hours)}"
 
 
 def test_it_can_still_be_triggered_by_hand():

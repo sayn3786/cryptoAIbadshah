@@ -1,9 +1,8 @@
 name: ML Research Dataset
 
 on:
-  schedule:
-    - cron: '10 */4 * * *'
-    - cron: '15 1-23/4 * * *'
+  # Scheduled by the Cloudflare Worker (cloudflare/hl-manage-worker/worker.js),
+  # collect every 4h at :10 (00:10, 04:10, …), label at 01:15, 05:15, …. This workflow is now manual only: Actions tab -> Run workflow.
   workflow_dispatch:
     inputs:
       job:
