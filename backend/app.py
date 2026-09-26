@@ -3231,7 +3231,8 @@ def api_patterns_alert():
     if cron_secret and request.method == "POST":
         auth   = request.headers.get("authorization", "")
         secret = request.headers.get("x-cron-secret", "")
-        if auth != f"Bearer {cron_secret}" and secret != cron_secret:
+        if auth != f"Bearer {cron_secret}" and secret != cron_secret \
+                and not _scheduler_token_ok():
             return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     syms = [s.strip().upper() for s in request.args.get("symbols", "").split(",") if s.strip()] or None
@@ -3358,7 +3359,7 @@ def api_cron_publish():
     Off a publication bar it is a no-op by design: the gate inside
     `_compute_recommendations` declines to record, and the response says so.
     """
-    if not _cron_authorized():
+    if not (_cron_authorized() or _scheduler_token_ok()):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     # Check the slot BEFORE computing. The compute is ~50s of upstream fetching,
@@ -3419,7 +3420,7 @@ def api_cron_daily():
     boundaries; this one also persists when it lands on a bar, which is harmless
     — the write is idempotent on the candle.
     """
-    if not _cron_authorized():
+    if not (_cron_authorized() or _scheduler_token_ok()):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     results = {}
@@ -4218,22 +4219,45 @@ def _hl_admin_ok() -> bool:
 _HL_MANAGE_PATH = "/api/hl/manage"
 
 
+def _token_ok(env_name: str, header: str) -> bool:
+    """A narrow shared-secret check: env var `env_name` presented via `header`
+    or `Authorization: Bearer`. Fail-closed when unset or under 16 characters;
+    constant-time compare."""
+    import hmac
+    import os as _os
+    token = _os.getenv(env_name, "")
+    if len(token) < 16:                                  # unset or too weak → closed
+        return False
+    want = token.encode()
+    hdr = request.headers.get(header, "")
+    auth = request.headers.get("authorization", "")
+    bearer = auth[7:] if auth.startswith("Bearer ") else ""
+    return any(hmac.compare_digest(v.encode(), want) for v in (hdr, bearer) if v)
+
+
 def _hl_manage_token_ok() -> bool:
     """The NARROW credential for the position manager only: HL_MANAGE_TOKEN via
     `x-hl-manage-token` or `Authorization: Bearer`. Meant for an outside
     scheduler (a Cloudflare Worker) so it never needs CRON_SECRET or the HL
-    admin token. Accepted by /api/hl/manage and nothing else; fail-closed when
-    unset. Constant-time compare."""
-    import hmac
-    import os as _os
-    token = _os.getenv("HL_MANAGE_TOKEN", "")
-    if len(token) < 16:                                  # unset or too weak → closed
+    admin token. Accepted by /api/hl/manage and nothing else."""
+    return _token_ok("HL_MANAGE_TOKEN", "x-hl-manage-token")
+
+
+# The scheduled jobs an outside scheduler (the Cloudflare Worker) may trigger
+# with SCHEDULER_TOKEN: publishing (which also runs HL auto-exec), the outcome
+# monitor, the daily Telegram/Twitter run and pattern alerts. POST only.
+_SCHEDULER_PATHS = ("/api/cron/publish", "/api/signals/monitor",
+                    "/api/cron/daily", "/api/patterns/alert")
+
+
+def _scheduler_token_ok() -> bool:
+    """SCHEDULER_TOKEN (header `x-scheduler-token` or Bearer), valid ONLY for a
+    POST to one of _SCHEDULER_PATHS. It cannot place orders directly, read the
+    account, manage users or reach any other endpoint, so CRON_SECRET never has
+    to leave Vercel and GitHub."""
+    if request.method != "POST" or (request.path or "").rstrip("/") not in _SCHEDULER_PATHS:
         return False
-    auth = request.headers.get("authorization", "")
-    hdr = request.headers.get("x-hl-manage-token", "")
-    bearer = auth[7:] if auth.startswith("Bearer ") else ""
-    return (hmac.compare_digest(hdr.encode(), token.encode()) if hdr else False) or \
-           (hmac.compare_digest(bearer.encode(), token.encode()) if bearer else False)
+    return _token_ok("SCHEDULER_TOKEN", "x-scheduler-token")
 
 
 def _require_hl_admin():
@@ -4270,6 +4294,9 @@ def _enforce_dashboard_auth():
         return None
     # The narrow manager token opens exactly one path, nothing else.
     if p.rstrip("/") == _HL_MANAGE_PATH and request.method == "POST" and _hl_manage_token_ok():
+        return None
+    # The narrow scheduler token opens only the scheduled-job paths (POST).
+    if _scheduler_token_ok():
         return None
     u = _auth.current_user()
     if u is None:
@@ -5182,7 +5209,7 @@ def api_signals_monitor():
     CANDLE that caused it, so running it twice over the same candles changes
     nothing.
     """
-    unauth = _require_internal()
+    unauth = None if _scheduler_token_ok() else _require_internal()
     if unauth:
         return unauth
     guard = _db_guard()
