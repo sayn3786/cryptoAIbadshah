@@ -69,3 +69,13 @@ jobs:
           export HTTP_STATUS BODY
           python backend/monitor_gate.py
           exit $?
+
+  # Backup trigger for the Hyperliquid position manager (move the stop to entry
+  # after TP1). Its own */5 schedule is best-effort and can be skipped by
+  # GitHub; this runs it on the monitor's more reliable 30-minute cadence.
+  # A separate job, so a manager failure shows on its own and never turns the
+  # monitor red (or vice versa). The endpoint is idempotent — overlapping with
+  # the */5 schedule is harmless.
+  hl-position-manager:
+    uses: ./.github/workflows/hl-manage.yml
+    secrets: inherit
