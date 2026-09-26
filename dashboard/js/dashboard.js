@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '254';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '255';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2680,6 +2680,38 @@ function _hlClosedRow(t) {
   </tr>`;
 }
 
+// Collapsed state per section ('open' / 'closed'); per-viewer convenience, so
+// it survives the 30s re-render and reloads. Storage may be unavailable.
+const _hlCollapsed = (() => {
+  try { return JSON.parse(localStorage.getItem('cm_hlp_collapsed') || '{}') || {}; }
+  catch (_) { return {}; }
+})();
+
+function _hlSection(key, headInner, bodyHtml, extraCls = '') {
+  const closed = !!_hlCollapsed[key];
+  return `<div class="hlp-sec${closed ? ' collapsed' : ''}" data-sec="${key}">
+    <button type="button" class="hlp-head hlp-toggle ${extraCls}" aria-expanded="${!closed}">
+      <span class="hlp-chev" aria-hidden="true">▾</span>${headInner}
+    </button>
+    <div class="hlp-body">${bodyHtml}</div>
+  </div>`;
+}
+
+function _hlBindToggle(box) {
+  if (box.dataset.toggleBound) return;
+  box.dataset.toggleBound = '1';
+  box.addEventListener('click', e => {
+    const btn = e.target.closest('.hlp-toggle');
+    if (!btn) return;
+    const sec = btn.closest('.hlp-sec');
+    const key = sec.dataset.sec;
+    _hlCollapsed[key] = !_hlCollapsed[key];
+    sec.classList.toggle('collapsed', _hlCollapsed[key]);
+    btn.setAttribute('aria-expanded', String(!_hlCollapsed[key]));
+    try { localStorage.setItem('cm_hlp_collapsed', JSON.stringify(_hlCollapsed)); } catch (_) {}
+  });
+}
+
 async function loadHlPositions() {
   const box = document.getElementById('hlPositions');
   if (!box) return;
@@ -2693,33 +2725,29 @@ async function loadHlPositions() {
     const partial = (d.partial || []).length
       ? `<span class="bear"> · ${d.partial.map(x => ({ orders: 'SL/TP', mids: 'live price', fills: 'closed trades' })[x] || x).join(', ')} unavailable this refresh</span>` : '';
 
-    const openHtml = rows.length ? `
-      <div class="hlp-head">
-        <span>Open positions <b>${rows.length}</b></span>
-        <span>Unrealized <b class="${_hlCls(d.unrealized_pnl_usd)}">${_hlUsd(d.unrealized_pnl_usd)}</b></span>
-      </div>
-      <div class="hlp-wrap"><table class="hlp-table">
+    const openHtml = _hlSection('open',
+      `<span class="hlp-title">Open positions <b>${rows.length}</b></span>
+       ${rows.length ? `<span>Unrealized <b class="${_hlCls(d.unrealized_pnl_usd)}">${_hlUsd(d.unrealized_pnl_usd)}</b></span>` : ''}`,
+      rows.length ? `<div class="hlp-wrap"><table class="hlp-table">
         <thead><tr><th>Coin</th><th>Size</th><th>Entry</th><th>Mark</th><th>P&amp;L</th>
           <th>Stop-loss</th><th>Take-profit</th><th>R:R</th><th>Liq.</th></tr></thead>
         <tbody>${rows.map(_hlPositionRow).join('')}</tbody>
-      </table></div>`
-      : `<div class="hlp-empty">No open positions.</div>`;
+      </table></div>` : `<div class="hlp-empty">No open positions.</div>`);
 
     const days = d.closed_days || 3;
     const realized = closed.reduce((a, t) => a + (t.pnl_usd || 0), 0);
     const wins = closed.filter(t => t.result === 'win').length;
-    const closedHtml = closed.length ? `
-      <div class="hlp-head hlp-head-closed">
-        <span>Closed · last ${days} days <b>${closed.length}</b> <span class="muted">(${wins} won)</span></span>
-        <span>Realized <b class="${_hlCls(realized)}">${_hlUsd(+realized.toFixed(2))}</b></span>
-      </div>
-      <div class="hlp-wrap"><table class="hlp-table">
+    const closedHtml = _hlSection('closed',
+      `<span class="hlp-title">Closed · last ${days} days <b>${closed.length}</b>${closed.length ? ` <span class="muted">(${wins} won)</span>` : ''}</span>
+       ${closed.length ? `<span>Realized <b class="${_hlCls(realized)}">${_hlUsd(+realized.toFixed(2))}</b></span>` : ''}`,
+      closed.length ? `<div class="hlp-wrap"><table class="hlp-table">
         <thead><tr><th>Coin</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th>
           <th>Size</th><th>P&amp;L</th><th>Result</th></tr></thead>
         <tbody>${closed.map(_hlClosedRow).join('')}</tbody>
-      </table></div>`
-      : `<div class="hlp-empty hlp-head-closed">No trades closed in the last ${days} days.</div>`;
+      </table></div>` : `<div class="hlp-empty">No trades closed in the last ${days} days.</div>`,
+      'hlp-head-closed');
 
+    _hlBindToggle(box);
     box.innerHTML = openHtml + closedHtml +
       `<div class="hlp-foot">Updated ${new Date().toLocaleTimeString()} · refreshes every 30s · read-only${partial}</div>`;
   } catch (_) { /* keep the last table on a transient error */ }
