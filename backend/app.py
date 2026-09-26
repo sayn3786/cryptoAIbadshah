@@ -3486,6 +3486,48 @@ def api_cron_market_snapshot():
     return jsonify({"ok": bool(res.get("ok")), "result": res}), (200 if res.get("ok") else 503)
 
 
+def _ml_research_request(kind):
+    # Deliberately NOT _cron_authorized(), which allows missing secrets.
+    guard = _require_internal()
+    if guard:
+        return guard
+    if not _feature_enabled("ML_RESEARCH_ENABLED"):
+        return _feature_disabled_response("ML_RESEARCH_ENABLED")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) - {"symbols", "source", "write", "limit"}:
+        return jsonify({"ok": False, "error_code": "INVALID_RESEARCH_REQUEST"}), 400
+    symbols = body.get("symbols", ["BTC", "ETH"])
+    source, write, limit = body.get("source", "okx"), body.get("write", False), body.get("limit", 10)
+    import ml_research_jobs as jobs
+    if (not isinstance(symbols, list) or not 1 <= len(symbols) <= 2
+            or any(not isinstance(s, str) or s not in jobs.SYMBOLS for s in symbols)
+            or len(set(symbols)) != len(symbols) or source not in jobs.SOURCES
+            or type(write) is not bool or type(limit) is not int or not 1 <= limit <= 10):
+        return jsonify({"ok": False, "error_code": "INVALID_RESEARCH_REQUEST"}), 400
+    import deploy_context
+    environment = "research" if deploy_context.is_production() else "research_" + deploy_context.environment()
+    try:
+        import db
+        if (write or kind == "label") and not db.db_configured():
+            return jsonify({"ok": False, "error_code": "DB_NOT_CONFIGURED"}), 503
+        result = (jobs.collect(symbols, source, environment, write) if kind == "collect"
+                  else jobs.label(symbols, source, environment, write, limit))
+        return jsonify(result), (200 if result["ok"] else 503)
+    except Exception:
+        # Do not leak DSNs, provider bodies or credentials in responses/logs.
+        return jsonify({"ok": False, "error_code": "RESEARCH_JOB_FAILED"}), 503
+
+
+@app.post("/api/research/ml/collect")
+def api_ml_research_collect():
+    return _ml_research_request("collect")
+
+
+@app.post("/api/research/ml/label")
+def api_ml_research_label():
+    return _ml_research_request("label")
+
+
 @app.get("/api/cron/etf-snapshot")
 @app.post("/api/cron/etf-snapshot")
 def api_cron_etf_snapshot():

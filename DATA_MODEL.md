@@ -1,5 +1,15 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Manual cloud research jobs
+
+POST `/api/research/ml/collect` and POST `/api/research/ml/label` are fail-closed,
+secret-authenticated endpoints, disabled unless `ML_RESEARCH_ENABLED=true`.
+They default to dry-run and are restricted to BTC/ETH, two symbols, one explicit
+source and at most ten labels. Production uses namespace `research`; other
+deployment environments use separate namespaces. See
+[cloud research instructions](docs/ml-research-endpoints.md). No new migration,
+automatic schedule or change to signal/trading rules is introduced.
+
 ## ML research dataset (migration `013`)
 
 Migration `014` adds the separately recorded `fetch_started_at` cutoff and

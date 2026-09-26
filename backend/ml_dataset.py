@@ -190,8 +190,22 @@ def save_label(record, session):
     """), record).rowcount
 
 
-def pending_labels(session, environment, now, limit):
+def pending_labels(session, environment, now, limit, *, symbols=None, source=None):
     from sqlalchemy import text
+    extra = ""
+    params = {}
+    if symbols is not None:
+        if not symbols:
+            return []
+        names = []
+        for i, symbol in enumerate(symbols):
+            name = f"symbol_{i}"
+            names.append(":" + name)
+            params[name] = symbol
+        extra += " AND f.symbol IN (" + ",".join(names) + ")"
+    if source is not None:
+        extra += " AND f.source = :source"
+        params["source"] = source
     return session.execute(text("""
         SELECT f.* FROM ml_feature_snapshots f
         LEFT JOIN ml_label_jobs j ON j.snapshot_id = f.id AND j.label_version = :label_version
@@ -200,10 +214,9 @@ def pending_labels(session, environment, now, limit):
           AND (j.snapshot_id IS NULL OR (j.status = 'retry' AND j.next_attempt_at <= :now))
           AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id = f.id
                           AND l.label_version = :label_version)
-        ORDER BY COALESCE(j.attempts, 0), f.observed_at, f.id LIMIT :limit
-    """), {"environment": environment, "version": FEATURE_VERSION,
+    """ + extra + " ORDER BY COALESCE(j.attempts, 0), f.observed_at, f.id LIMIT :limit"), {"environment": environment, "version": FEATURE_VERSION,
             "label_version": LABEL_VERSION, "now_ms": milliseconds(now), "now": now,
-            "limit": limit}).mappings().all()
+            "limit": limit, **params}).mappings().all()
 
 
 def record_label_failure(session, snapshot_id, reason, now, *, permanent=False):
