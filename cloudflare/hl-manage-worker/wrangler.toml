@@ -1,7 +1,8 @@
-# Only needed if you deploy with the Wrangler CLI instead of the dashboard.
-# `npx wrangler deploy` from this directory, then:
-#   npx wrangler secret put HL_MANAGE_TOKEN
-name = "hl-manage-worker"
+# Used by Cloudflare's GitHub builds (root directory cloudflare/hl-manage-worker)
+# and by the Wrangler CLI (`npx wrangler deploy` from this directory).
+# HL_MANAGE_TOKEN is a SECRET set in the dashboard (or `wrangler secret put`);
+# secrets survive deploys, plain dashboard variables do not.
+name = "cryptoaibadshah"   # must match the Worker name in Cloudflare
 main = "worker.js"
 compatibility_date = "2026-09-01"
 workers_dev = false          # no public URL; the Worker runs only on its cron
