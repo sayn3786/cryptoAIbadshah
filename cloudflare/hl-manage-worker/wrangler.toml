@@ -1,0 +1,13 @@
+# Only needed if you deploy with the Wrangler CLI instead of the dashboard.
+# `npx wrangler deploy` from this directory, then:
+#   npx wrangler secret put HL_MANAGE_TOKEN
+name = "hl-manage-worker"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = false          # no public URL; the Worker runs only on its cron
+
+[vars]
+APP_URL = "https://cryptomarket-sigma.vercel.app"
+
+[triggers]
+crons = ["* * * * *"]        # every minute

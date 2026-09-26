@@ -3873,10 +3873,13 @@ def api_hl_manage():
     """Position manager pass: once TP1 has filled, move the remainder's stop to
     entry (hl_manage). Run every few minutes by the hl-manage workflow; safe to
     call repeatedly. Internal (CRON_SECRET / HL token) or an admin session.
-    Serialised with order placement so the two never act concurrently."""
-    guard = _require_hl_admin()
-    if guard:
-        return guard
+    Serialised with order placement so the two never act concurrently.
+    Also accepts the narrow HL_MANAGE_TOKEN (the every-minute Cloudflare
+    Worker), which authorises this endpoint only."""
+    if not _hl_manage_token_ok():
+        guard = _require_hl_admin()
+        if guard:
+            return guard
     import hl_account as _hl
     if not _hl.configured():
         return jsonify({"ok": False, "error_code": "HL_NOT_CONFIGURED"}), 503
@@ -4212,6 +4215,27 @@ def _hl_admin_ok() -> bool:
         return False
 
 
+_HL_MANAGE_PATH = "/api/hl/manage"
+
+
+def _hl_manage_token_ok() -> bool:
+    """The NARROW credential for the position manager only: HL_MANAGE_TOKEN via
+    `x-hl-manage-token` or `Authorization: Bearer`. Meant for an outside
+    scheduler (a Cloudflare Worker) so it never needs CRON_SECRET or the HL
+    admin token. Accepted by /api/hl/manage and nothing else; fail-closed when
+    unset. Constant-time compare."""
+    import hmac
+    import os as _os
+    token = _os.getenv("HL_MANAGE_TOKEN", "")
+    if len(token) < 16:                                  # unset or too weak → closed
+        return False
+    auth = request.headers.get("authorization", "")
+    hdr = request.headers.get("x-hl-manage-token", "")
+    bearer = auth[7:] if auth.startswith("Bearer ") else ""
+    return (hmac.compare_digest(hdr.encode(), token.encode()) if hdr else False) or \
+           (hmac.compare_digest(bearer.encode(), token.encode()) if bearer else False)
+
+
 def _require_hl_admin():
     if not _hl_admin_ok():
         return jsonify({"error": "Unauthorized", "error_code": "FORBIDDEN"}), 401
@@ -4243,6 +4267,9 @@ def _enforce_dashboard_auth():
     # the FAIL-CLOSED internal check (not _cron_authorized, which is permissive
     # when CRON_SECRET is unset) so a missing secret can never open the gate.
     if _internal_auth_ok() or _hl_admin_ok():
+        return None
+    # The narrow manager token opens exactly one path, nothing else.
+    if p.rstrip("/") == _HL_MANAGE_PATH and request.method == "POST" and _hl_manage_token_ok():
         return None
     u = _auth.current_user()
     if u is None:
