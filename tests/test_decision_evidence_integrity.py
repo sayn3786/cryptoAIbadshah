@@ -104,3 +104,84 @@ def test_sample_window_does_not_claim_lifetime_or_known_total():
     assert sample["possibly_truncated"] is True and sample["next_offset"] == 6
     assert sample["total_matching_rows"] is None
     assert sample["oldest_closed_at"] == "2026-09-21"
+
+
+# ── review follow-ups: complete evidence, bounded failure, honest context ────
+
+def _capture_session(monkeypatch):
+    calls = []
+    class Session:
+        def execute(self, sql, params=None):
+            calls.append((str(sql), params))
+            return SimpleNamespace(scalar=lambda: True)
+    @contextmanager
+    def session_scope():
+        yield Session()
+    monkeypatch.setattr(db, "db_configured", lambda: True)
+    monkeypatch.setattr(db, "session_scope", session_scope)
+    return calls
+
+
+def test_payload_keeps_nested_snapshot_evidence():
+    # Redacting the whole record pushed snapshot fields past redact's depth
+    # limit and silently stored "…" for S/R zones, trendline and volume grade.
+    snapshot = {"indicator_values": {"support_zone": {"price": 100.5},
+                                     "trendline_local": {"type": "ascending", "touches": 3},
+                                     "breakout_volume": {"ratio": 1.8, "grade": "strong"}}}
+    payload = decision_audit.build_payload(
+        {"symbol": "ETH", "snapshot": snapshot}, {"ETH"})
+    iv = payload["snapshot"]["indicator_values"]
+    assert iv["support_zone"]["price"] == 100.5
+    assert iv["trendline_local"] == {"type": "ascending", "touches": 3}
+    assert iv["breakout_volume"]["grade"] == "strong"
+    assert "…" not in json.dumps(payload)
+
+
+def test_payload_from_real_snapshot_matches_build_snapshot():
+    record = decision_audit.candidate_record("ETH", {"strength": 30}, {
+        "strength": 60, "sig": {"direction": "LONG", "tp_pcts": [1.5, 3.0]},
+        "analysis": {"sr_zones": {"support": {"price": 99.0, "touches": 2}}}},
+        {"ok": True})
+    payload = decision_audit.build_payload(record, set())
+    assert payload["snapshot"] == json.loads(json.dumps(record["snapshot"]))
+
+
+def test_non_finite_numbers_become_null_not_a_lost_slot(monkeypatch):
+    calls = _capture_session(monkeypatch)
+    records = [{"symbol": "ETH", "strength": float("nan")},
+               {"symbol": "BTC", "strength": float("inf"), "snapshot": {"x": float("nan")}},
+               {"symbol": "SOL", "strength": 55.0}]
+    result = decision_audit.persist(records, set(), datetime(2026, 9, 22, 7, 15, tzinfo=timezone.utc))
+    assert result["ok"] and result["skipped"] == 0
+    params = calls[1][1]
+    assert len(params) == 3
+    by_sym = {p["symbol"]: json.loads(p["payload"]) for p in params}
+    assert by_sym["ETH"]["strength"] is None
+    assert by_sym["BTC"]["snapshot"]["x"] is None
+    assert by_sym["SOL"]["strength"] == 55.0
+
+
+def test_rows_are_inserted_in_a_fixed_symbol_order(monkeypatch):
+    calls = _capture_session(monkeypatch)
+    records = [{"symbol": s} for s in ("SOL", "BTC", "ETH")]
+    decision_audit.persist(records, set(), datetime(2026, 9, 22, 7, 15, tzinfo=timezone.utc))
+    assert [p["symbol"] for p in calls[1][1]] == ["BTC", "ETH", "SOL"]
+
+
+def test_context_records_the_candle_and_persistence_outcome(monkeypatch):
+    calls = _capture_session(monkeypatch)
+    ctx = {"source_candle_close": "2026-09-22T06:00:00+00:00", "persisted": 2,
+           "duplicates": 0, "skipped_reason": None, "error_code": None}
+    decision_audit.persist([{"symbol": "ETH"}], {"ETH"},
+                           datetime(2026, 9, 22, 7, 15, tzinfo=timezone.utc), context=ctx)
+    assert json.loads(calls[1][1][0]["payload"])["context"] == ctx
+
+
+def test_audit_skipped_after_persistence_error_and_on_stale_slot():
+    # Guards live in the compute path; assert they precede the audit call so a
+    # down database can't cost a second connect timeout, and a stale first
+    # attempt can't claim the slot.
+    source = inspect.getsource(app._compute_recommendations)
+    audit_at = source.index("decision_audit.persist(")
+    assert source.index('"PERSISTENCE_ERROR"', source.index("_audit_current")) < audit_at
+    assert source.index("SKIPPED_STALE_SLOT") < audit_at

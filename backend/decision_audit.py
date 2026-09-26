@@ -1,5 +1,6 @@
 """Bounded, immutable candidate evidence. Never read by live scoring."""
 import json
+import math
 from datetime import timezone
 
 from signal_snapshot import build_snapshot, redact
@@ -18,7 +19,37 @@ def candidate_record(symbol, h1, h2, screen):
             "snapshot": snapshot}
 
 
-def persist(records, selected_symbols, now):
+def _finite(value):
+    """NaN/inf -> None, recursively, so one bad number can't fail the batch."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_finite(v) for v in value]
+    return value
+
+
+def build_payload(record, selected_symbols, context=None):
+    """The stored evidence for one candidate.
+
+    The snapshot is attached AFTER redacting the rest of the record: it is
+    already bounded by build_snapshot, and redacting it again inside the record
+    pushed its nested fields (S/R zones, trendline, targets, volume grade) past
+    redact's depth limit, where they were silently replaced with "…".
+    """
+    rest = {k: v for k, v in record.items() if k != "snapshot"}
+    payload = redact(rest)
+    payload["snapshot"] = record.get("snapshot")
+    # selected is deliberately not called published: persistence or
+    # delivery can still fail after screening and selection.
+    payload["selected"] = record["symbol"] in selected_symbols
+    if context:
+        payload["context"] = redact(context)
+    return _finite(payload)
+
+
+def persist(records, selected_symbols, now, context=None):
     import db
     import deploy_context
     import signal_publish
@@ -33,19 +64,27 @@ def persist(records, selected_symbols, now):
         if not session.execute(_sql("SELECT to_regclass('candidate_decisions') IS NOT NULL")).scalar():
             return {"ok": False, "reason": "MIGRATION_012_REQUIRED"}
         parameters = []
+        skipped = 0
         for record in records:
-            payload = redact(record)
-            # selected is deliberately not called published: persistence or
-            # delivery can still fail after screening and selection.
-            payload["selected"] = record["symbol"] in selected_symbols
+            try:
+                payload = json.dumps(build_payload(record, selected_symbols, context),
+                                     allow_nan=False)
+            except (TypeError, ValueError):
+                skipped += 1          # one unserialisable record never sinks the slot
+                continue
             parameters.append({"env": deploy_context.environment(),
                                "version": signal_publish.STRATEGY_VERSION,
                                "slot": slot, "observed": at, "symbol": record["symbol"],
-                               "payload": json.dumps(payload, allow_nan=False)})
+                               "payload": payload})
+        if not parameters:
+            return {"ok": False, "reason": "NO_SERIALISABLE_RECORDS"}
+        # A fixed key order: two overlapping crons inserting the same keys in
+        # different orders could otherwise deadlock and lose one batch.
+        parameters.sort(key=lambda p: p["symbol"])
         session.execute(_sql("""
                 INSERT INTO candidate_decisions
                     (environment, strategy_version, slot_at, observed_at, symbol, payload)
                 VALUES (:env, :version, :slot, :observed, :symbol, CAST(:payload AS jsonb))
                 ON CONFLICT (environment, strategy_version, slot_at, symbol) DO NOTHING
             """), parameters)
-    return {"ok": True, "candidates_attempted": len(records)}
+    return {"ok": True, "candidates_attempted": len(records), "skipped": skipped}
