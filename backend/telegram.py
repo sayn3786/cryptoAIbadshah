@@ -324,7 +324,8 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "",
                         active: Optional[Dict[str, str]] = None) -> bool:
     """Send freshly-confirmed alerts to the configured Telegram channel as ONE
     coin-grouped, ranked "Market Update" (see telegram_digest), instead of a
-    separate message per alert type. It notifies with a sound only for real
+    separate message per alert type. Every read is included; a long update is
+    split into numbered messages under Telegram's size limit. It notifies with a sound only for real
     news (⭐ high-timeframe confluence, or a conflict with an open signal);
     otherwise it is delivered silently. `active` maps symbol → open signal
     direction, for the ✅/⚠️ tags. Returns True if the message was sent.
@@ -338,17 +339,20 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "",
     if not token or not chat_id:
         print("[telegram] BOT_TOKEN or CHAT_ID not set — skipping pattern alerts")
         return False
-    from telegram_digest import build_market_digest
-    text, loud = build_market_digest(alerts, active=active, date_label=date_label)
-    try:
-        # Plain text: pattern labels can contain characters that break Markdown.
-        _post_message(token, chat_id, text, markdown=False, silent=not loud)
-        print(f"[telegram] market update ({len(alerts)} reads, "
-              f"{'loud' if loud else 'silent'}) sent to {chat_id}")
-        return True
-    except Exception as e:
-        print(f"[telegram] ERROR sending market update: {e}")
-        return False
+    from telegram_digest import build_market_digest_parts
+    parts, loud = build_market_digest_parts(alerts, active=active, date_label=date_label)
+    sent = False
+    for i, text in enumerate(parts):
+        try:
+            # Plain text: pattern labels can contain characters that break
+            # Markdown. Only the first part may ping; continuations are silent.
+            _post_message(token, chat_id, text, markdown=False, silent=not (loud and i == 0))
+            sent = True
+        except Exception as e:
+            print(f"[telegram] ERROR sending market update part {i + 1}/{len(parts)}: {e}")
+    print(f"[telegram] market update ({len(alerts)} reads, {len(parts)} message(s), "
+          f"{'loud' if loud else 'silent'}) sent to {chat_id}")
+    return sent
 
 
 def send_daily_recs(recs_data: Dict) -> bool:

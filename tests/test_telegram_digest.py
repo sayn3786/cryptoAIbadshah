@@ -65,10 +65,44 @@ def test_forming_reads_are_separate_and_never_loud():
     assert loud is False
 
 
-def test_capped_with_a_pointer_to_the_rest():
-    alerts = [A(f"C{i}", "4H") for i in range(11)]
-    text, _ = td.build_market_digest(alerts, cap=8)
-    assert "+3 more reads on 3 coins in the dashboard" in text
+def test_nothing_is_dropped_however_many_coins():
+    alerts = [A(f"C{i}", "4H") for i in range(30)]
+    text, _ = td.build_market_digest(alerts)
+    assert all(f"C{i}\n" in text for i in range(30)) and "more" not in text
+
+
+def test_many_forming_reads_are_all_listed():
+    alerts = [A(f"F{i}", "1D", kind="divergence_forming", label="Forming Bullish RSI Divergence",
+                closes_to_confirm=2) for i in range(9)]
+    text, _ = td.build_market_digest(alerts)
+    assert all(f"F{i} " in text for i in range(9))
+
+
+def test_a_long_update_splits_between_coin_blocks_under_the_limit():
+    import re
+    alerts = [A(f"COIN{i}", tf) for i in range(60) for tf in ("1W", "1D", "4H")]
+    parts, _ = td.build_market_digest_parts(alerts, max_chars=td.MAX_MESSAGE_CHARS)
+    assert len(parts) > 1 and all(len(p) <= 4096 for p in parts)
+    assert parts[0].startswith(f"🔔 CryptoMonk — Market Update (1/{len(parts)})")
+    assert "@CryptoMonk1560" in parts[-1] and "@CryptoMonk1560" not in parts[0]
+    heads = lambda p: re.findall(r"^⭐ (COIN\d+)  \(", p, flags=re.M)
+    seen = [c for p in parts for c in heads(p)]
+    assert sorted(seen) == sorted(f"COIN{i}" for i in range(60))     # all, once each
+    for p in parts:                                   # a coin's 3 reads stay together
+        for c in heads(p):
+            block = p.split(f"⭐ {c}  (")[1].split("\n\n")[0]
+            assert block.count("\n  ") == 3
+
+
+def test_only_the_first_part_may_ping(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    calls = []
+    monkeypatch.setattr(tg, "_post_message",
+                        lambda token, chat, text, **kw: calls.append(kw["silent"]) or True)
+    alerts = [A(f"COIN{i}", tf) for i in range(60) for tf in ("1W", "1D")]
+    tg.send_pattern_alerts(alerts)
+    assert len(calls) > 1 and calls[0] is False and all(calls[1:])
 
 
 def test_failed_pattern_is_shown_as_failed():

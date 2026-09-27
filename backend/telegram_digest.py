@@ -10,7 +10,9 @@ separate messages (patterns / divergence / forming divergence / RSI reversal).
   * ✅ / ⚠️ marks a read that AGREES / CONFLICTS with an open signal on the coin;
   * forming (provisional) reads are listed separately, so they are never mistaken
     for confirmed ones;
-  * capped (default 8 coins), with "+N more on the dashboard" for the rest.
+  * nothing is dropped: every coin and every read is shown, most important
+    first. A long update is split into numbered messages ("(1/2)", "(2/2)")
+    between coin blocks, because Telegram rejects messages over 4,096 chars.
 
 `build_market_digest` also decides whether the message should notify with a
 sound (`loud`): only for real news (a ⭐ confluence including a 1D/1W read, or
@@ -83,10 +85,30 @@ def _signal_bias(direction: Optional[str]) -> Optional[str]:
     return "bullish" if d == "LONG" else "bearish" if d == "SHORT" else None
 
 
+# Telegram's hard limit is 4,096 characters; stay well under it.
+MAX_MESSAGE_CHARS = 3800
+
+FOOTER = ["⚠️ Not financial advice. A read is a heads-up, not a trigger — manage risk.",
+          "🌟 @CryptoMonk1560"]
+
+
 def build_market_digest(alerts: List[Dict[str, Any]], *,
                         active: Optional[Dict[str, str]] = None,
-                        date_label: str = "", cap: int = 8) -> Tuple[str, bool]:
-    """(message text, loud). `active` maps symbol → open signal direction."""
+                        date_label: str = "") -> Tuple[str, bool]:
+    """(the whole update as one text, loud). Use build_market_digest_parts to
+    send: it splits a long update into Telegram-sized messages."""
+    parts, loud = build_market_digest_parts(alerts, active=active, date_label=date_label,
+                                            max_chars=None)
+    return parts[0], loud
+
+
+def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
+                              active: Optional[Dict[str, str]] = None,
+                              date_label: str = "",
+                              max_chars: Optional[int] = MAX_MESSAGE_CHARS) -> Tuple[List[str], bool]:
+    """([message texts], loud). Every coin and read is included; with
+    `max_chars`, blocks are packed into as many messages as needed, split only
+    between coin blocks. `active` maps symbol → open signal direction."""
     active = {str(k).upper(): v for k, v in (active or {}).items()}
     confirmed = [a for a in alerts if not _forming(a)]
     forming = [a for a in alerts if _forming(a)]
@@ -127,29 +149,39 @@ def build_market_digest(alerts: List[Dict[str, Any]], *,
         rows.append((score, sym, flag, tags, items))
 
     rows.sort(key=lambda r: (-r[0], r[1]))
-    shown, hidden = rows[:cap], rows[cap:]
 
-    lines = ["🔔 CryptoMonk — Market Update" + (f" · {date_label}" if date_label else ""), ""]
-    for _score, sym, flag, tags, items in shown:
-        lines.append(f"{flag}{sym}" + (f"  ({' · '.join(tags)})" if tags else ""))
-        lines += [f"  {describe(a)}" for a in items]
-        lines.append("")
+    blocks = []
+    for _score, sym, flag, tags, items in rows:
+        blocks.append("\n".join([f"{flag}{sym}" + (f"  ({' · '.join(tags)})" if tags else "")]
+                                + [f"  {describe(a)}" for a in items]))
     if forming:
         forming.sort(key=lambda a: -TF_WEIGHT.get(a.get("timeframe"), 1))
-        lines.append("⏳ Forming (not confirmed yet):")
-        for a in forming[:5]:
-            lines.append(f"  {str(a.get('symbol')).upper()} {describe(a)}")
-        if len(forming) > 5:
-            lines.append(f"  +{len(forming) - 5} more")
-        lines.append("")
-    if hidden:
-        n = sum(len(r[4]) for r in hidden)
-        lines.append(f"+{n} more read{'s' if n != 1 else ''} on {len(hidden)} "
-                     f"coin{'s' if len(hidden) != 1 else ''} in the dashboard")
-        lines.append("")
-    lines += ["⚠️ Not financial advice. A read is a heads-up, not a trigger — manage risk.",
-              "🌟 @CryptoMonk1560"]
-    return "\n".join(lines), loud
+        blocks.append("\n".join(["⏳ Forming (not confirmed yet):"]
+                                + [f"  {str(a.get('symbol')).upper()} {describe(a)}"
+                                   for a in forming]))
+
+    title = "🔔 CryptoMonk — Market Update" + (f" · {date_label}" if date_label else "")
+    footer = "\n".join(FOOTER)
+    if max_chars is None:
+        return ["\n\n".join([title] + blocks + [footer])], loud
+
+    # Pack blocks into messages; reserve room for the "(n/N)" title and footer.
+    budget = max_chars - len(title) - len(footer) - 16
+    groups: List[List[str]] = [[]]
+    size = 0
+    for b in blocks:
+        if groups[-1] and size + len(b) + 2 > budget:
+            groups.append([])
+            size = 0
+        groups[-1].append(b)
+        size += len(b) + 2
+    n = len(groups)
+    parts = []
+    for i, g in enumerate(groups, 1):
+        head = title + (f" ({i}/{n})" if n > 1 else "")
+        body = [head] + g + ([footer] if i == n else [])
+        parts.append("\n\n".join(body))
+    return parts, loud
 
 
 # ── signal posts: what's new, still valid, passed, closed ────────────────────
