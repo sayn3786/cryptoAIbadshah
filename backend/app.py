@@ -955,12 +955,14 @@ def _indicator_flips_for(closed: list, tf: str, fresh_bars: Optional[int] = None
 
 # ── Daily Telegram list (1D / 1W) ────────────────────────────────────────────
 # Once a day after the 1D close, the channel gets a LIST of every 1D/1W read
-# from its last DAILY_READ_WINDOW candles: forming and confirmed RSI divergence,
-# RSI reversal and indicator flips. A read that has PLAYED OUT stays listed,
-# marked, for DAILY_PLAYED_OUT_KEEP more candles after the candle it played out
-# on, then drops off. An invalidated RSI reversal drops at once.
+# from its last DAILY_READ_WINDOW candles (3 + 2 grace) that has neither played
+# out nor failed: forming and confirmed RSI divergence, RSI reversal and
+# indicator flips. A read that has PLAYED OUT stays listed, marked, for
+# DAILY_PLAYED_OUT_KEEP more candles after the candle it played out on, then
+# drops off. A divergence that FAILED (closed past its pivot low/high) is shown
+# once, marked; an invalidated RSI reversal drops at once.
 DAILY_READ_TFS = ("1D", "1W")
-DAILY_READ_WINDOW = 3            # "last 3 candles": event age 0, 1 or 2
+DAILY_READ_WINDOW = 5            # 3 candles + 2 more: event age 0–4
 DAILY_PLAYED_OUT_KEEP = 2         # telegram_digest.PLAYED_OUT_KEEP (the "drops off" text)
 _PIVOT_WINDOW = 3                # detectors confirm a pivot 3 closes after it
 _RSI_MARK_PLAYOUT_PCT = 0.03     # candle_analysis.RSI_MARK_PLAYOUT_PCT

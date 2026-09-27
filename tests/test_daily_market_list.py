@@ -1,7 +1,7 @@
 """
 Daily 1D/1W Telegram list.
 
-Every read from its last 3 candles (forming / confirmed RSI divergence, RSI
+Every read from its last 3 + 2 candles, while it has neither played out nor failed (forming / confirmed RSI divergence, RSI
 reversal, indicator flips). A read that played out stays, marked, for 2 more
 candles after it played out, then drops. A divergence whose pivot low/high
 breaks is shown once as ✗ failed, then drops. Invalidated RSI reversals drop at
@@ -28,8 +28,9 @@ def C(closes):
 
 # ── the keep rule ────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("age,show", [(0, True), (1, True), (2, True), (3, False), (-1, False)])
-def test_active_reads_last_three_candles(age, show):
+@pytest.mark.parametrize("age,show", [(0, True), (2, True), (3, True), (4, True),
+                                      (5, False), (-1, False)])
+def test_active_reads_last_three_plus_two_candles(age, show):
     assert app._keep(age, None) == (show, "active")
 
 
@@ -37,7 +38,8 @@ def test_active_reads_last_three_candles(age, show):
     (2, 0, True),      # played out on the latest candle → shown
     (4, 2, True),      # played out 2 candles ago, while it was 2 old → still shown
     (5, 3, False),     # played out 3 candles ago → dropped
-    (6, 1, False),     # was already outside the window when it played out
+    (6, 2, True),      # played out at age 4 (still in the 5-candle window) → tail
+    (7, 2, False),     # was already outside the window when it played out
 ])
 def test_played_out_reads_stay_two_more_candles(event_age, played, show):
     assert app._keep(event_age, played) == (show, "played_out")
@@ -76,7 +78,7 @@ def test_confirmed_divergence_within_the_window_is_listed(stub):
 
 def test_confirmed_divergence_outside_the_window_is_not(stub):
     mp, closed = stub
-    mp.setattr(app, "detect_rsi_divergence", lambda c, r: _div(closed, 59 - 7))   # confirmed 4 ago
+    mp.setattr(app, "detect_rsi_divergence", lambda c, r: _div(closed, 59 - 8))   # confirmed 5 ago
     mp.setattr(app.candle_analysis, "rsi_swing_markers", lambda c, r: [])
     assert app._daily_reads_for(closed, "1D") == []
 
@@ -95,7 +97,7 @@ def test_invalidated_rsi_reversal_is_dropped_and_active_one_listed(stub):
     assert r["kind"] == "rsi_swing" and r["status"] == "active"
 
 
-def test_flips_use_a_three_candle_window(monkeypatch):
+def test_flips_use_a_five_candle_window(monkeypatch):
     seen = {}
     def flips(c, tf, fresh_bars=None):
         seen["fresh_bars"] = fresh_bars
@@ -105,7 +107,7 @@ def test_flips_use_a_three_candle_window(monkeypatch):
     monkeypatch.setattr(app, "detect_rsi_divergence", lambda c, r: {"type": None})
     monkeypatch.setattr(app.candle_analysis, "rsi_swing_markers", lambda c, r: [])
     reads = app._daily_reads_for(C([100.0] * 60), "1W")
-    assert seen["fresh_bars"] == 2 and reads[0]["status"] == "active"
+    assert seen["fresh_bars"] == 4 and reads[0]["status"] == "active"
 
 
 def test_only_1d_and_1w_are_scanned(monkeypatch):
@@ -198,7 +200,7 @@ def test_invalidated_ago_is_the_first_close_past_the_pivot_extreme():
     (2, None, 1, (False, "invalidated")),    # broke a candle ago → gone
     (2, 1, 0, (True, "played_out")),         # played out first; a later break doesn't matter
     (1, None, None, (True, "active")),
-    (5, None, 0, (False, "invalidated")),    # already outside the window
+    (7, None, 0, (False, "invalidated")),    # already outside the window
 ])
 def test_divergence_status(event_age, played, failed, expected):
     assert app._div_status(event_age, played, failed) == expected
