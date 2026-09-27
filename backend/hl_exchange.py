@@ -192,6 +192,7 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
                   run_order_count: int = 0,
                   send_fn: Optional[Callable] = None,
                   claim_fn: Optional[Callable] = None,
+                  known_fn: Optional[Callable] = None,
                   release_fn: Optional[Callable] = None,
                   mark_fn: Optional[Callable] = None,
                   cfg: Optional[Dict[str, Any]] = None,
@@ -204,7 +205,7 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
     the caller's `entry`; `entry` is only a staleness sanity-check. Reason codes:
     DISARMED, MAINNET_NOT_ALLOWED, MAX_ORDERS_PER_RUN, SYMBOL_NOT_ON_HYPERLIQUID,
     NO_MARK_PRICE, STALE_ENTRY, <can_place reason>, POSITION_EXISTS, MAX_EXPOSURE,
-    ALREADY_PLACED, SEND_FAILED, SEND_REJECTED.
+    ORDER_STATUS_UNAVAILABLE, ALREADY_PLACED, SEND_FAILED, SEND_REJECTED.
     """
     cfg = cfg or caps()
     e = hl_account._env(env)
@@ -262,6 +263,20 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
 
     sig_id, candle_ts = signal.get("id"), signal.get("candle_ts")
     cloid = hl_execution.client_order_id(sig_id, "open", candle_ts)
+    # Exchange-side exact-once FIRST: if Hyperliquid has ever seen this client
+    # order id, this signal was already opened, even if the position has since
+    # closed. The app-side claim below is only as durable as the KV store (a
+    # read-only serverless file when none is configured), so it must not be the
+    # only guard: the publish catch-up would otherwise re-open a signal that was
+    # stopped out earlier in the slot. Fail closed when the lookup fails; the
+    # next scheduled run retries.
+    known = (known_fn or hl_account.order_known)(cloid, env=env)
+    if known is True:
+        return {"ok": False, "reason": "ALREADY_PLACED", "coin": coin, "cloid": cloid,
+                "source": "exchange"}
+    if known is None:
+        return {"ok": False, "reason": "ORDER_STATUS_UNAVAILABLE", "coin": coin,
+                "cloid": cloid}
     claim = claim_fn or hl_execution.claim_order
     release = release_fn or _kv_release
     if not claim(sig_id, "open", candle_ts):

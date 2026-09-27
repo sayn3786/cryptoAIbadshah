@@ -35,6 +35,7 @@ def sent(monkeypatch):
     claimed = set()
     monkeypatch.setattr(kv, "claim", lambda k, ttl_seconds=0: not (k in claimed or claimed.add(k)))
     monkeypatch.setattr(kv, "release", lambda k: claimed.discard(k))
+    monkeypatch.setattr(kv, "kv_enabled", lambda: True)      # a durable store
     out = []
     monkeypatch.setattr(oa, "_post", lambda text, session=None: out.append(text) or True)
     return out
@@ -128,3 +129,41 @@ def test_auto_exec_alerts_after_execute_and_survives_alert_errors(monkeypatch):
         raise RuntimeError("alert path broken")
     monkeypatch.setattr(ops_alerts, "notify_manager", boom)
     app._alert_manager_pass({"ran": True, "results": [{"coin": "X"}]})   # must not raise
+
+
+
+# ── without a durable KV store (claims don't persist across invocations) ─────
+
+@pytest.fixture
+def no_store(monkeypatch):
+    """Production without Upstash: every claim 'succeeds' (read-only file)."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot")
+    monkeypatch.setenv("TELEGRAM_REPORT_CHAT_ID", "123456")
+    import kv
+    monkeypatch.setattr(kv, "kv_enabled", lambda: False)
+    monkeypatch.setattr(kv, "claim", lambda k, ttl_seconds=0: True)
+    out = []
+    monkeypatch.setattr(oa, "_post", lambda text, session=None: out.append(text) or True)
+    return out
+
+
+def test_closed_trade_alerts_once_across_minutely_runs_without_a_store(no_store):
+    t = {"coin": "GRAM", "side": "long", "entry_px": 1.593, "exit_px": 1.566,
+         "exits": 1, "pnl_usd": -0.42, "pnl_pct": -1.77, "fees_usd": 0.02,
+         "result": "loss", "closed_at": 10 * 60_000 + 25_000}       # 00:10:25
+    for minute in range(10, 16):                                    # runs at 00:10 … 00:15
+        oa.notify_closed([t], now_ms=minute * 60_000 + 3_000)
+    assert len(no_store) == 1 and "GRAM LONG closed" in no_store[0]
+
+
+def test_manager_failure_alerts_at_most_every_30_min_without_a_store(no_store):
+    fail = [{"coin": "SOL", "action": "move_stop", "placed": False, "error": "x"}]
+    for minute in range(0, 60):
+        oa.notify_manager(fail, now_ms=minute * 60_000)
+    assert len(no_store) == 2                                       # :00 and :30
+
+
+def test_one_shot_alerts_still_send_without_a_store(no_store):
+    oa.notify_manager([{"coin": "FET", "action": "move_stop", "placed": True,
+                        "stop_px": 0.6, "size": 20}], now_ms=7 * 60_000)
+    assert len(no_store) == 1 and "stop moved to entry" in no_store[0]

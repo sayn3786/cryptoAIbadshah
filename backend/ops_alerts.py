@@ -185,12 +185,34 @@ def notify_execution(signals: List[Dict[str, Any]], out: Dict[str, Any]) -> List
     return sent
 
 
-def notify_manager(results: List[Dict[str, Any]]) -> List[str]:
-    """After a position-manager pass: stop moved / remainder closed / failures."""
+def durable_dedupe() -> bool:
+    """True when claims survive across serverless invocations (a shared KV store
+    is configured). Without one, kv.claim falls back to a local file that a
+    read-only serverless filesystem never persists, so every claim "succeeds".
+    Alerts that could repeat then use time-based rules instead."""
+    try:
+        import kv
+        return kv.kv_enabled()
+    except Exception:                                    # noqa: BLE001
+        return False
+
+
+def _now_ms() -> int:
+    import time
+    return int(time.time() * 1000)
+
+
+def notify_manager(results: List[Dict[str, Any]], *, now_ms: Optional[int] = None) -> List[str]:
+    """After a position-manager pass: stop moved / remainder closed / failures.
+    Without durable dedupe, a still-failing action alerts at most every 30 min
+    (the manager runs every minute)."""
+    now_ms = _now_ms() if now_ms is None else now_ms
     sent = []
     for r in results or []:
         coin, act = r.get("coin"), r.get("action")
         if r.get("error") or r.get("placed") is False or r.get("closed") is False:
+            if not durable_dedupe() and (now_ms // 60_000) % 30 != 0:
+                continue
             sent.append(send(fmt_manager_problem(r), f"mgr-fail:{coin}:{act}", ttl=PROBLEM_TTL))
         elif act == "move_stop" and r.get("placed"):
             sent.append(send(fmt_stop_moved(r), f"be:{coin}:{r.get('stop_px')}"))
@@ -199,8 +221,17 @@ def notify_manager(results: List[Dict[str, Any]]) -> List[str]:
     return sent
 
 
-def notify_closed(trades: List[Dict[str, Any]]) -> List[str]:
-    """Trades that fully closed (from hl_account.closed_trades)."""
+def notify_closed(trades: List[Dict[str, Any]], *, now_ms: Optional[int] = None) -> List[str]:
+    """Trades that fully closed (from hl_account.closed_trades).
+
+    With durable dedupe each trade is claimed once. Without it (claims don't
+    persist), only trades that closed in the PREVIOUS whole minute are alerted:
+    the manager runs once a minute, so each trade falls in exactly one run's
+    window and is announced once instead of every minute."""
+    if not durable_dedupe():
+        now_ms = _now_ms() if now_ms is None else now_ms
+        end = (now_ms // 60_000) * 60_000
+        trades = [t for t in trades or [] if end - 60_000 <= (t.get("closed_at") or 0) < end]
     return [send(fmt_closed_trade(t), f"closed:{t.get('coin')}:{t.get('closed_at')}")
             for t in trades or []]
 
