@@ -13,6 +13,7 @@
 //   01:30                data snapshots     POST /api/cron/etf-snapshot, /api/cron/market-snapshot
 //   every 4h at :10      ML collect         POST /api/research/ml/collect  (00:10, 04:10, …)
 //   every 4h at 01:15…   ML label           POST /api/research/ml/label    (01:15, 05:15, …)
+//   Sunday 06:17         weekly report      POST /api/cron/weekly-report  (→ PRIVATE Telegram chat)
 //
 // Publish runs three times an hour. The 4H slot publishes at :02 right after
 // the close, and the :12 / :32 runs retry when exchange data lagged or a cold
@@ -63,19 +64,22 @@ const JOBS = [
   { name: "ml-label", path: "/api/research/ml/label", ...S, retries: 2,
     retryOn: [0, 429, 502, 504], retryDelayMs: 10_000, body: { ...ML_BODY, limit: 10 },
     due: ({ h, m }) => h % 4 === 1 && m === 15 },
+  // Sent at most once per ISO week by the app, so a retry never double-sends.
+  { name: "weekly-report", path: "/api/cron/weekly-report", ...S, retries: 2,
+    due: ({ d, h, m }) => d === 0 && h === 6 && m === 17 },
 ];
 
 // Fields worth logging from any job's response. Never the URL, a token or the
 // raw body.
 const SUMMARY_KEYS = ["ok", "ran", "reason", "positions", "actions", "computed",
   "persisted", "duplicates", "skipped_reason", "error_code", "slot_current",
-  "mode", "attempted", "counts"];
+  "mode", "attempted", "counts", "week", "result"];
 
 const RETRY_DELAY_MS = 20_000;       // a timed-out publish leaves the cache warmer
 
 /** Jobs due at this instant (UTC). Exported for tests. */
 export function dueJobs(date) {
-  const t = { h: date.getUTCHours(), m: date.getUTCMinutes() };
+  const t = { d: date.getUTCDay(), h: date.getUTCHours(), m: date.getUTCMinutes() };
   return JOBS.filter(j => j.due(t)).map(j => j.name);
 }
 

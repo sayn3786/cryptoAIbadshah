@@ -14,6 +14,7 @@ decides which jobs run:
 | 01:30 | ETF-flow and market snapshots | `POST /api/cron/etf-snapshot`, `/api/cron/market-snapshot` | `SCHEDULER_TOKEN` |
 | every 4h at :10 (00:10, 04:10, …) | ML research collect | `POST /api/research/ml/collect` | `SCHEDULER_TOKEN` |
 | 01:15, 05:15, … | ML research label | `POST /api/research/ml/label` | `SCHEDULER_TOKEN` |
+| Sunday 06:17 | Weekly report → **private** Telegram chat | `POST /api/cron/weekly-report` | `SCHEDULER_TOKEN` |
 
 Why: GitHub's schedules are best-effort. Publishing ran 1–3 hours late or not
 at all, which made signals late and HL entries stale. Vercel's free-plan cron
@@ -24,6 +25,11 @@ published, extra runs return `SLOT_ALREADY_PUBLISHED` in about a second.
 Timeouts and 5xx errors are retried (publish up to 3 attempts); auth errors are
 not. The ML jobs keep their old rule: 503 is never retried, because it may
 already have recorded a failure.
+
+**Weekly report.** It goes only to `TELEGRAM_REPORT_CHAT_ID` in Vercel: your
+own chat with the bot, never the public signals channel. Without it the job
+logs `REPORT_CHAT_NOT_CONFIGURED` and sends nothing. It is sent at most once per
+ISO week.
 
 **This Worker is the only scheduler.** The GitHub workflows for these jobs are
 manual-only (Actions tab → Run workflow), and `vercel.json` has no crons. Every

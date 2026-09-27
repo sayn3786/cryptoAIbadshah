@@ -1,41 +1,45 @@
-name: Dump Signal Reports
+name: Weekly Report (private Telegram)
 
-# On-demand: fetches the public read-only report endpoints (cadence, postmortem,
-# analytics) and prints the JSON to the run log, so the current state can be read
-# without a database client. No secret needed beyond APP_URL — these endpoints
-# are public reads. Trigger from the Actions tab (Run workflow); optionally pass
-# a strategy_version, else the current default is used alongside v45 for compare.
+# The weekly performance summary (signals, win rate, expectancy, paper account,
+# Hyperliquid testnet P&L) goes to the owner's PRIVATE Telegram chat
+# (TELEGRAM_REPORT_CHAT_ID). This repo is public, so its Actions logs are too:
+# this workflow never prints report data, only whether the send worked.
+#
+# Scheduled by the Cloudflare Worker (cloudflare/hl-manage-worker/worker.js),
+# Sundays 06:17 UTC. This workflow is the manual trigger: Actions tab -> Run
+# workflow. The app sends at most once per ISO week, so a manual run after the
+# scheduled one reports "skipped".
 
 on:
-  schedule:
-    # Weekly (Sunday 06:17 UTC) — dumps the current cadence/postmortem/analytics
-    # to the run log so the strategy's numbers accrue a persistent archive
-    # without anyone having to remember. Reads only; no writes, no publication.
-    - cron: '17 6 * * 0'
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'strategy_version for the "current" block (blank = deployment default)'
-        required: false
-        default: ''
 
 jobs:
-  dump:
+  send:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
-      - name: Fetch reports
+      - name: Send this week's report
+        env:
+          APP_URL:     ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          set -u
-          BASE="${{ secrets.APP_URL }}"
-          V="${{ github.event.inputs.version }}"
-          Q=""; [ -n "$V" ] && Q="?strategy_version=$V"
-          get() { echo "===== $1 ====="; curl -s --max-time 70 "$BASE$2"; echo; echo; }
-
-          get "CADENCE current default"        "/api/signals/cadence$Q"
-          get "CADENCE v45"                    "/api/signals/cadence?strategy_version=v45_4h_avg"
-          get "POSTMORTEM v45"                 "/api/signals/postmortem-report?strategy_version=v45_4h_avg"
-          get "ANALYTICS v45"                  "/api/signals/analytics?strategy_version=v45_4h_avg"
-          get "POSTMORTEM current default"     "/api/signals/postmortem-report$Q"
-          get "ANALYTICS current default"      "/api/signals/analytics$Q"
-          get "TIMING REPORT (pooled)"         "/api/signals/timing-report"
-          get "PAPER ACCOUNT (\$1/trade)"       "/api/paper/account?trade_size_usd=1$Q"
+          # Never echo the URL (a secret) or the body beyond the allow-listed
+          # outcome fields: the report itself must not reach this public log.
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST "$APP_URL/api/cron/weekly-report" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            --max-time 90)
+          HTTP_STATUS=$(printf '%s' "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(printf '%s' "$RESPONSE" | sed '/HTTP_STATUS:/d')
+          printf '%s' "$BODY" | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              print("non-JSON response"); sys.exit(0)
+          print({k: d[k] for k in ("ok", "week", "result", "error_code", "errors") if k in d})
+          '
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Weekly report returned HTTP $HTTP_STATUS"
+            exit 1
+          fi

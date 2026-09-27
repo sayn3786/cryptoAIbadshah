@@ -3437,6 +3437,80 @@ def _hl_auto_execute_catch_up():
         return {"ok": False, "error_code": "HL_AUTO_EXECUTE_FAILED"}
 
 
+@app.post("/api/cron/weekly-report")
+def api_cron_weekly_report():
+    """Weekly performance summary → the owner's PRIVATE Telegram chat
+    (TELEGRAM_REPORT_CHAT_ID, never the public signals channel).
+
+    Replaces the old workflow that printed the reports into the public repo's
+    Actions log. Sent at most once per ISO week (a retry never double-sends).
+    `?dry=1` builds the message without sending and without claiming the week.
+    Internal: CRON_SECRET or the scheduler token. The HTTP response carries only
+    the outcome, never the report itself (except in dry mode, to the caller).
+    """
+    if not (_cron_authorized() or _scheduler_token_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    import weekly_report as _wr
+    now = datetime.now(timezone.utc)
+    iso = now.isocalendar()
+    week_key = f"{iso[0]}-W{iso[1]:02d}"
+    sver = _strategy_version_for_reports()
+    parts: Dict = {"analytics": None, "paper": None, "cadence": None,
+                   "hl_closed": None, "hl_error": None}
+    errors = []
+    try:
+        import db as _db
+        if _db.db_configured():
+            store = _signal_store()
+            rows = store.list_closed_with_snapshots(
+                strategy_version=sver, include_archived=True, offset=0, limit=1000)
+            try:
+                import signal_analytics as _an
+                parts["analytics"] = _an.build_analytics(rows, strategy_version=sver)
+            except Exception:
+                errors.append("analytics")
+            try:
+                import paper_account as _pa
+                import hl_exchange as _hx
+                parts["paper"] = _pa.build_paper_account(
+                    rows, trade_size_usd=_hx.caps()["notional_usd"],
+                    start_balance_usd=1000.0, fee_bps=_pa.DEFAULT_FEE_BPS,
+                    leverage=1.0, strategy_version=sver)
+            except Exception:
+                errors.append("paper")
+            try:
+                import postmortem_report as _pm
+                page = store.list_signals(strategy_version=sver, include_archived=True,
+                                          limit=store.MAX_PAGE_SIZE, offset=0,
+                                          with_total=False)
+                parts["cadence"] = _pm.cadence_report(page.get("items") or [], now=now)
+            except Exception:
+                errors.append("cadence")
+    except Exception:
+        errors.append("signals")
+    try:
+        import hl_account as _hl
+        if _hl.configured():
+            now_ms = int(now.timestamp() * 1000)
+            fills = _hl._post_info({"type": "userFillsByTime",
+                                    "user": _hl.account_address(),
+                                    "startTime": now_ms - 14 * 86_400_000}) or []
+            parts["hl_closed"] = _hl.closed_trades(fills, now_ms, 7)
+    except Exception:
+        parts["hl_error"] = "read failed"
+    text = _wr.build_message(week_label=week_key, strategy_version=sver, **parts)
+    if request.args.get("dry") in ("1", "true", "yes"):
+        return jsonify({"ok": True, "dry": True, "week": week_key,
+                        "errors": errors, "text": text})
+    if not os.getenv("TELEGRAM_REPORT_CHAT_ID", ""):
+        return jsonify({"ok": False, "week": week_key,
+                        "error_code": "REPORT_CHAT_NOT_CONFIGURED"}), 503
+    result = _dispatch_once("tg:weekly-report", week_key, lambda: _wr.send_private(text))
+    return jsonify({"ok": result in ("sent",) or result.startswith("skipped"),
+                    "week": week_key, "result": result.split(":")[0],
+                    "errors": errors})
+
+
 @app.get("/api/cron/daily")
 @app.post("/api/cron/daily")
 def api_cron_daily():
@@ -4281,7 +4355,7 @@ def _hl_manage_token_ok() -> bool:
 _SCHEDULER_PATHS = ("/api/cron/publish", "/api/signals/monitor",
                     "/api/cron/daily", "/api/patterns/alert",
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
-                    "/api/cron/tao-snapshot",
+                    "/api/cron/tao-snapshot", "/api/cron/weekly-report",
                     "/api/research/ml/collect", "/api/research/ml/label")
 
 
