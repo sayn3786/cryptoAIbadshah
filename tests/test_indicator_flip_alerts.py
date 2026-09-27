@@ -68,7 +68,7 @@ def test_stale_flips_are_not_announced(monkeypatch):
 def test_flips_join_the_telegram_scan_and_dedupe_per_indicator_and_candle(monkeypatch):
     monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC",))
     monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
-    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _candles([1.0] * 80))
+    monkeypatch.setattr(app, "_fetch_alert_candles", lambda sym, tf: (_candles([1.0] * 80), None))
     monkeypatch.setattr(app, "_confirmed_patterns_for", lambda closed, tf: [])
     monkeypatch.setattr(app, "_indicator_flips_for", lambda closed, tf: [
         {"kind": "indicator_flip", "type": "macd", "event": "flip", "direction": "bullish",

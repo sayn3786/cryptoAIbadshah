@@ -179,7 +179,7 @@ def test_telegram_scan_drops_played_out_and_invalidated_swings(monkeypatch):
     import app
     monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC",))
     monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
-    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _candles())
+    monkeypatch.setattr(app, "_fetch_alert_candles", lambda sym, tf: (_candles(), None))
     monkeypatch.setattr(app, "_confirmed_patterns_for", lambda closed, tf: [
         {"kind": "rsi_swing", "type": "overbought_top", "label": "RSI Overbought Top",
          "direction": "bearish", "break_ts": 1, "status": "active"},

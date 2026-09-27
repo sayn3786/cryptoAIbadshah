@@ -204,7 +204,7 @@ def test_scan_confirmed_patterns_parallel_and_claims(monkeypatch):
     monkeypatch.setattr(app, "SYMBOLS", {"BTC": "BTCUSDT", "ETH": "ETHUSDT"})
     monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC", "ETH"))
     monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
-    monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT + [97, 93, 89, 87]))
+    monkeypatch.setattr(app, "_fetch_alert_candles", lambda sym, tf: (_series(DT + [97, 93, 89, 87]), None))
     # Telegram carries momentum reads only; chart patterns stay in the dashboard.
     monkeypatch.setattr(app, "_confirmed_patterns_for", lambda closed, tf: [
         {"kind": "divergence", "label": "Bullish RSI Divergence", "direction": "bullish",

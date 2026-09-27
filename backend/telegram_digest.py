@@ -27,6 +27,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 TF_WEIGHT = {"1W": 4, "1D": 3, "4H": 2, "2H": 1.5, "1H": 1}
 TF_ORDER = ["1W", "1D", "4H", "2H", "1H"]
+TF_MS = {"1W": 7 * 86_400_000, "1D": 86_400_000, "4H": 4 * 3_600_000,
+         "2H": 2 * 3_600_000, "1H": 3_600_000}
 
 
 def _dot(direction: Optional[str]) -> str:
@@ -73,18 +75,32 @@ def describe(a: Dict[str, Any]) -> str:
             label = str(a.get("label") or "")
             tag = "" if "forming" in label.lower() else " forming"
             return f"{head} {label}{tag}{gap_s}{wait}"
-        return f"{head} {a.get('label')}{gap_s}"
+        return f"{head} {a.get('label')}{gap_s}{_age(a)}"
     if kind == "indicator_flip":
         when = when_sgt(a.get("break_ts"))
         return f"{head} {a.get('label')}" + (f" · {when}" if when else "")
     if kind == "rsi_swing":
         rsi = a.get("rsi")
         rsi_s = f" (RSI {rsi:g})" if isinstance(rsi, (int, float)) else ""
-        return f"{head} {a.get('label')}{rsi_s}"
+        return f"{head} {a.get('label')}{rsi_s}{_age(a)}"
     arrow = "↑" if a.get("break_dir") == "up" else "↓" if a.get("break_dir") == "down" else ""
     lvl = f" {arrow} {_px(a.get('level'))}" if a.get("level") is not None else ""
     tgt = f" → 🎯 {_px(a.get('target'))}" if a.get("target") is not None else ""
     return f"{head} {a.get('label')} confirmed{lvl}{tgt}"
+
+
+def _age(a: Dict[str, Any]) -> str:
+    """" · 3 candles ago (pivot Sep 25, 8:00 AM SGT)" for a confirmed divergence
+    or RSI reversal. They are inherently a few candles old when they confirm
+    (a pivot needs closes on its right), so the reader should see how old."""
+    age = a.get("age_candles")
+    tf_ms = TF_MS.get(str(a.get("timeframe")))
+    ts = a.get("break_ts")
+    when = when_sgt(int(ts) + tf_ms) if ts is not None and tf_ms else ""
+    if not isinstance(age, int):
+        return f" · pivot {when}" if when else ""
+    ago = "on the last close" if age == 0 else f"{age} candle{'s' if age != 1 else ''} ago"
+    return f" · {ago}" + (f" (pivot {when})" if when else "")
 
 
 def when_sgt(ts_ms: Any) -> str:

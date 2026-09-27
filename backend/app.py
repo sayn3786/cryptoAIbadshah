@@ -557,6 +557,17 @@ INDICATOR_FLIP_FRESH_BARS = 1
 # Indicator flips are announced on 1D and 1W only: 4H MACD/EMA flips are too
 # frequent across the scanned coins and would crowd out the momentum reads.
 INDICATOR_FLIP_TFS = frozenset({"1D", "1W"})
+# Alert data must be REAL and CURRENT. A coin is skipped when its candles came
+# from the synthetic/demo fallback, or when its latest closed candle closed
+# more than this many intervals ago (a halted pair or a lagging source whose
+# "fresh" bars are really old).
+ALERT_MAX_STALENESS_INTERVALS = 2
+# A CONFIRMED divergence is "played out" (the turn it flagged already happened)
+# once price has closed this far past the pivot candle's close AND RSI is back
+# across the midline. Same rule the detector applies to forming divergences
+# (indicators.detect_rsi_divergence: PLAYOUT_PCT / PLAYOUT_RSI).
+DIVERGENCE_PLAYOUT_PCT = 0.03
+DIVERGENCE_PLAYOUT_RSI = 50.0
 PATTERN_BELL_TFS         = ["1H", "4H", "1D", "1W"]  # in-app bell: also intraday
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
 # A CONFIRMED RSI divergence's second pivot is already `pivot_window` (3) closed
@@ -655,6 +666,57 @@ def _fetch_closed_spot(sym: str, tf: str):
     return closed
 
 
+def _fetch_alert_candles(sym: str, tf: str):
+    """(closed candles, skip_reason) for the Telegram alert scan.
+
+    Like _fetch_closed_spot, but refuses data an alert must never be built on:
+    skip_reason is "demo" when every live source failed and the client fell back
+    to synthetic candles, and "stale" when the latest closed candle closed more
+    than ALERT_MAX_STALENESS_INTERVALS intervals ago. The source comes back with
+    the candles (get_spot_klines_sourced), never from the shared client
+    attribute, which a concurrent request could change."""
+    bs = _exchange_pair(sym)
+    if not bs:
+        return [], "no_pair"
+    interval = TF_INTERVAL.get(tf, "1w")
+    limit = TF_LIMIT.get(tf, 120)
+    spot, source = client.get_spot_klines_sourced(bs, interval, limit)
+    if source == "demo":
+        return [], "demo"
+    if tf in TF_AGG:
+        spot = client.aggregate_candles(spot, TF_AGG[tf])
+    tf_s = TF_SECONDS.get(tf, 3600)
+    closed, _live = _split_closed(spot, tf_s)
+    if not closed:
+        return [], "empty"
+    last_close_ms = int(closed[-1].get("timestamp") or 0) + tf_s * 1000
+    if time.time() * 1000 - last_close_ms > ALERT_MAX_STALENESS_INTERVALS * tf_s * 1000:
+        return [], "stale"
+    return closed, None
+
+
+def _confirmed_divergence_status(closed: list, pivot_ts, bullish: bool) -> str:
+    """"played_out" when the turn a CONFIRMED divergence flagged has already
+    happened: price has CLOSED more than DIVERGENCE_PLAYOUT_PCT past the pivot
+    candle's close in the predicted direction AND RSI is back across
+    DIVERGENCE_PLAYOUT_RSI. Otherwise "active". Close-to-close, so a wick alone
+    never counts."""
+    try:
+        ts_list = [c.get("timestamp") for c in closed]
+        pivot_close = float(closed[ts_list.index(pivot_ts)]["close"])
+        now_close = float(closed[-1]["close"])
+        rsi_now = (calculate_rsi_series([c.get("close") for c in closed]) or [None])[-1]
+    except (ValueError, KeyError, TypeError, IndexError):
+        return "active"
+    if rsi_now is None or pivot_close <= 0:
+        return "active"
+    if bullish:
+        played = now_close > pivot_close * (1 + DIVERGENCE_PLAYOUT_PCT) and rsi_now >= DIVERGENCE_PLAYOUT_RSI
+    else:
+        played = now_close < pivot_close * (1 - DIVERGENCE_PLAYOUT_PCT) and rsi_now <= DIVERGENCE_PLAYOUT_RSI
+    return "played_out" if played else "active"
+
+
 def _confirmed_patterns_for(closed: list, tf: str) -> list:
     """All CONFIRMED + FRESH flags/reversals/triangles in one candle set, as
     normalized alert dicts (symbol added by the caller).
@@ -746,6 +808,7 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
                 "break_ts": curr_ts,
                 "rsi_gap": div.get("strength"),
                 "age_candles": div.get("age_candles"),
+                "status": _confirmed_divergence_status(closed, curr_ts, bullish),
             })
         # FORMING divergence — the early heads-up. Mutually exclusive with the
         # confirmed block above (a forming read has forming=True, a confirmed one
@@ -898,11 +961,16 @@ def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
     symbols = symbols or list(SCAN_SYMBOLS)
     tfs     = tfs or PATTERN_ALERT_TFS
 
+    skipped: dict = {}
+
     def _scan(pair):
         sym, tf = pair
         try:
-            closed = _fetch_closed_spot(sym, tf)
+            closed, why = _fetch_alert_candles(sym, tf)
         except Exception:
+            closed, why = [], "fetch_failed"
+        if why:
+            skipped[f"{sym}:{tf}"] = why
             return []
         out = []
         for pat in _confirmed_patterns_for(closed, tf):
@@ -913,7 +981,8 @@ def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
             # invalidated — don't ping about a spent or void signal. The in-app
             # bell still shows it (labelled with that status). Everything else,
             # and any active reversal, alerts as before.
-            if pat.get("kind") == "rsi_swing" and pat.get("status") not in (None, "active"):
+            if (pat.get("kind") in ("rsi_swing", "divergence")
+                    and pat.get("status") not in (None, "active")):
                 continue
             out.append({"symbol": sym, "timeframe": tf, **pat})
         for flip in _indicator_flips_for(closed, tf):
@@ -926,6 +995,9 @@ def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
         for res in ex.map(_scan, pairs):
             found.extend(res)
 
+    bad = {k: v for k, v in skipped.items() if v in ("demo", "stale")}
+    if bad:
+        print(f"[alerts] skipped {len(bad)} coin/timeframe(s) with unusable data: {bad}")
     new_alerts = []
     for pat in found:
         # kv.claim is atomic SET-NX: True only for the first caller, so a
@@ -3325,8 +3397,11 @@ def api_patterns_alert():
         for sym in (syms or list(SYMBOLS.keys())):
             for tf in (tfs or PATTERN_ALERT_TFS):
                 try:
-                    closed = _fetch_closed_spot(sym, tf)
+                    closed, why = _fetch_alert_candles(sym, tf)
                 except Exception:
+                    continue
+                if why:
+                    found.append({"symbol": sym, "timeframe": tf, "skipped": why})
                     continue
                 for pat in _confirmed_patterns_for(closed, tf):
                     if pat.get("kind") not in TELEGRAM_ALERT_KINDS:
