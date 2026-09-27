@@ -212,3 +212,36 @@ def test_auto_status_endpoint_is_internal(monkeypatch):
     monkeypatch.delenv("CRON_SECRET", raising=False)
     monkeypatch.delenv("HL_ADMIN_TOKEN", raising=False)
     assert app.app.test_client().get("/api/hl/auto-status").status_code == 401
+
+
+# ── current slot only ────────────────────────────────────────────────────────
+
+def test_a_slot_with_no_new_confirmed_signal_selects_nothing():
+    # 00:00 SGT slot (16:00 UTC) published nothing >= the floor; the 16:00 SGT
+    # slot's SUI is still OPEN. It must not be picked as "the latest cohort".
+    from datetime import datetime, timezone
+    rows = [{"symbol": "SUI", "direction": "LONG", "entry_price": 1.271,
+             "confidence_score": 68, "candle_close_time": "2026-09-27T08:00:00+00:00"}]
+    slot_start = datetime(2026, 9, 27, 16, 0, tzinfo=timezone.utc)
+    assert ax.select_confirmed(rows, min_strength=62, not_before=slot_start) == []
+    assert ax.select_confirmed(rows, min_strength=62) != []          # old behaviour, for contrast
+
+
+def test_current_slot_signals_are_still_selected():
+    from datetime import datetime, timezone
+    rows = [{"symbol": "TAO", "direction": "LONG", "entry_price": 333.55,
+             "confidence_score": 74, "candle_close_time": datetime(2026, 9, 27, 12, 0,
+                                                                  tzinfo=timezone.utc)},
+            {"symbol": "SUI", "direction": "LONG", "entry_price": 1.271,
+             "confidence_score": 68, "candle_close_time": "2026-09-27T08:00:00Z"}]
+    got = ax.select_confirmed(rows, min_strength=62,
+                              not_before=datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc))
+    assert [r["symbol"] for r in got] == ["TAO"]
+
+
+def test_the_app_passes_the_current_slot_start():
+    pytest.importorskip("flask")
+    import inspect
+    import app
+    src = inspect.getsource(app._hl_confirmed_published)
+    assert "not_before=" in src and "_slot_start(" in src

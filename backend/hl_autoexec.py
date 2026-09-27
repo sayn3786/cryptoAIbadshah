@@ -147,15 +147,30 @@ def _candle_ms(row: Dict[str, Any]) -> Any:
     return 0
 
 
+def _as_utc(v: Any):
+    """A candle_close_time (datetime or ISO string) as an aware UTC datetime."""
+    from datetime import datetime, timezone
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    try:
+        t = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
 def select_confirmed(rows: List[Dict[str, Any]], *,
-                     min_strength: Optional[float] = None) -> List[Dict[str, Any]]:
+                     min_strength: Optional[float] = None,
+                     not_before: Any = None) -> List[Dict[str, Any]]:
     """The Confirmed-tier signals from the LATEST published slot.
 
     Filters to a real direction, a positive entry, and confidence_score >= the
     Confirmed floor; then keeps only the newest candle's cohort so a run acts on
     the freshly published set, not on older still-open signals from prior slots.
     Rows are expected newest-first (list_signals default), but the latest slot is
-    picked by max candle_close_time regardless of order.
+    picked by max candle_close_time regardless of order. With `not_before` (the
+    current slot's start), rows built on an earlier candle are excluded, so a
+    slot with no new Confirmed signal selects nothing.
     """
     thr = auto_min_strength() if min_strength is None else float(min_strength)
     usable = []
@@ -169,6 +184,13 @@ def select_confirmed(rows: List[Dict[str, Any]], *,
         if direction not in ("LONG", "SHORT") or not entry or entry <= 0:
             continue
         usable.append(r)
+    if not_before is not None:
+        # Only the CURRENT slot's signals. Without this, a slot that published
+        # nothing Confirmed made the previous slot's (still-open) signals "the
+        # latest cohort", and auto-exec re-attempted trades hours old.
+        floor = _as_utc(not_before)
+        usable = [r for r in usable
+                  if (t := _as_utc(r.get("candle_close_time"))) is not None and t >= floor]
     if not usable:
         return []
     latest = max((str(r.get("candle_close_time") or "") for r in usable), default="")

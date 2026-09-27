@@ -229,8 +229,9 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
     Sizing and exposure use the LIVE mid (what a market order fills near), not
     the caller's `entry`; `entry` is only a staleness sanity-check. Reason codes:
     DISARMED, MAINNET_NOT_ALLOWED, MAX_ORDERS_PER_RUN, SYMBOL_NOT_ON_HYPERLIQUID,
-    NO_MARK_PRICE, STALE_ENTRY, <can_place reason>, POSITION_EXISTS, MAX_EXPOSURE,
-    ORDER_STATUS_UNAVAILABLE, ALREADY_PLACED, SEND_FAILED, SEND_REJECTED.
+    POSITION_EXISTS, ALREADY_PLACED (exchange), ORDER_STATUS_UNAVAILABLE,
+    NO_MARK_PRICE, STALE_ENTRY, <can_place reason>, MAX_EXPOSURE,
+    ALREADY_PLACED (claim), SEND_FAILED, SEND_REJECTED.
     """
     cfg = cfg or caps()
     e = hl_account._env(env)
@@ -249,6 +250,29 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
     coin = hl_meta.resolve_coin(signal.get("symbol"), table)
     if coin is None:
         return {"ok": False, "reason": "SYMBOL_NOT_ON_HYPERLIQUID"}
+
+    # "Already handled" checks come FIRST, before any price-based rejection, so
+    # a signal that already became a trade is reported as ALREADY_PLACED /
+    # POSITION_EXISTS (routine, silent) and never as e.g. STALE_ENTRY. Otherwise
+    # a re-check of a live trade whose price has since moved (the publish
+    # catch-up) would claim a trade "was not opened" when it is running.
+    if any((p.get("coin") or "").upper() == coin for p in _open_positions(account_state)):
+        return {"ok": False, "reason": "POSITION_EXISTS", "coin": coin}
+
+    sig_id, candle_ts = signal.get("id"), signal.get("candle_ts")
+    cloid = hl_execution.client_order_id(sig_id, "open", candle_ts)
+    # Exchange-side exact-once: if Hyperliquid has ever seen this client order
+    # id, this signal was already opened, even if the position has since
+    # closed. The app-side claim below is only as durable as the KV store, so it
+    # must not be the only guard. Fail closed when the lookup fails; the next
+    # scheduled run retries.
+    known = (known_fn or hl_account.order_known)(cloid, env=env)
+    if known is True:
+        return {"ok": False, "reason": "ALREADY_PLACED", "coin": coin, "cloid": cloid,
+                "source": "exchange"}
+    if known is None:
+        return {"ok": False, "reason": "ORDER_STATUS_UNAVAILABLE", "coin": coin,
+                "cloid": cloid}
 
     # A MARKET order fills at the live price — size & cap against that, not entry.
     mark = mark_px if mark_px is not None else (mark_fn or hl_account.mid_price)(coin, env=env)
@@ -279,9 +303,6 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
     if not plan.get("ok"):
         return {"ok": False, "reason": plan.get("reason"), "plan": plan}
 
-    if any((p.get("coin") or "").upper() == coin for p in _open_positions(account_state)):
-        return {"ok": False, "reason": "POSITION_EXISTS", "coin": coin}
-
     # Worst-case exposure including slippage on the market fill.
     worst_notional = plan["notional_usd"] * (1 + MARKET_SLIPPAGE)
     if _current_exposure_usd(account_state) + worst_notional > cfg["max_exposure_usd"] + 1e-9:
@@ -290,22 +311,6 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
                 "worst_case_notional_usd": round(worst_notional, 6),
                 "max_exposure_usd": cfg["max_exposure_usd"]}
 
-    sig_id, candle_ts = signal.get("id"), signal.get("candle_ts")
-    cloid = hl_execution.client_order_id(sig_id, "open", candle_ts)
-    # Exchange-side exact-once FIRST: if Hyperliquid has ever seen this client
-    # order id, this signal was already opened, even if the position has since
-    # closed. The app-side claim below is only as durable as the KV store (a
-    # read-only serverless file when none is configured), so it must not be the
-    # only guard: the publish catch-up would otherwise re-open a signal that was
-    # stopped out earlier in the slot. Fail closed when the lookup fails; the
-    # next scheduled run retries.
-    known = (known_fn or hl_account.order_known)(cloid, env=env)
-    if known is True:
-        return {"ok": False, "reason": "ALREADY_PLACED", "coin": coin, "cloid": cloid,
-                "source": "exchange"}
-    if known is None:
-        return {"ok": False, "reason": "ORDER_STATUS_UNAVAILABLE", "coin": coin,
-                "cloid": cloid}
     claim = claim_fn or hl_execution.claim_order
     release = release_fn or _kv_release
     if not claim(sig_id, "open", candle_ts):
