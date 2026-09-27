@@ -3367,8 +3367,15 @@ def api_cron_publish():
     # whole cost of the job for nothing. Checking first is what makes it cheap
     # enough to schedule hourly, which is what absorbs the cron delay.
     if _slot_already_published():
+        # Auto-exec used to run ONLY in the request that persisted the slot. A
+        # publish killed by the 60s platform limit after persisting (or any
+        # slot published elsewhere) then never traded, because every retry
+        # returned here first. Catch it up early in the slot. Safe to repeat:
+        # exact-once claims, the position-exists reconcile and the stale-entry
+        # guard all live in open_position.
         return jsonify({"ok": True, "skipped_reason": "SLOT_ALREADY_PUBLISHED",
-                        "computed": 0, "persisted": 0})
+                        "computed": 0, "persisted": 0,
+                        "hl_auto_execute": _hl_auto_execute_catch_up()})
 
     try:
         result = _compute_recommendations()
@@ -3405,6 +3412,29 @@ def api_cron_publish():
         "source_candle_close": result.get("source_candle_close"),
         "hl_auto_execute": hl_auto,
     })
+
+
+# How long into a 4H slot a missed auto-exec is still caught up (minutes). The
+# publish scheduler retries at :12 and :32, so an hour covers them while keeping
+# entries close to the signal. Beyond it, the stale-entry guard would reject
+# most entries anyway.
+AUTO_EXEC_CATCH_UP_MIN = 60
+
+
+def _hl_auto_execute_catch_up():
+    """Run auto-exec for an ALREADY-published slot, within the first
+    AUTO_EXEC_CATCH_UP_MIN minutes of that slot. Returns the run summary, or a
+    reason it didn't run. Never raises."""
+    now_sgt = datetime.now(_SGT)
+    age_min = (now_sgt - _slot_start(now_sgt)).total_seconds() / 60
+    if age_min > AUTO_EXEC_CATCH_UP_MIN:
+        return {"ok": True, "ran": False, "reason": "PAST_CATCH_UP_WINDOW",
+                "slot_age_min": int(age_min)}
+    try:
+        return _hl_auto_execute_run()
+    except Exception:
+        app.logger.exception("catch-up auto-execute failed")
+        return {"ok": False, "error_code": "HL_AUTO_EXECUTE_FAILED"}
 
 
 @app.get("/api/cron/daily")

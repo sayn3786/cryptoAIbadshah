@@ -33,7 +33,9 @@ globalThis.fetch = async (url, opts) => {
   const q = script.filter(s => s.path === path);
   const status = q.length ? script.splice(script.indexOf(q[0]), 1)[0].status : 200;
   return { status, json: async () => ({ ok: status === 200, ran: true, skipped_reason: null,
-                                        secret_echo: "must-not-log" }) };
+                                        secret_echo: "must-not-log",
+                                        hl_auto_execute: { ran: true, attempted: 1, executed: 1,
+                                                           results: [{ cloid: "0xsecret" }] } }) };
 };
 const env = { APP_URL: "https://app.example/", HL_MANAGE_TOKEN: "manage-token-123456",
               SCHEDULER_TOKEN: "sched-token-1234567" };
@@ -133,3 +135,9 @@ def test_ml_jobs_send_their_body_and_do_not_retry_a_503(result):
     assert call["headers"]["Content-Type"] == "application/json"
     assert result["ml503"]["status"] == 503 and result["ml503"]["attempts"] == 1
     assert result["ml504"]["status"] == 200 and result["ml504"]["attempts"] == 2
+
+
+def test_publish_logs_the_hl_auto_exec_outcome(result):
+    pub = next(r for r in result["at0002"] if r["job"] == "publish")
+    assert pub["hl"] == {"ran": True, "attempted": 1, "executed": 1}
+    assert "0xsecret" not in json.dumps(result["at0002"])
