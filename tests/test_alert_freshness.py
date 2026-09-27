@@ -117,12 +117,15 @@ def test_the_scan_drops_a_played_out_divergence(monkeypatch):
     assert [a["label"] for a in app._scan_confirmed_patterns()] == ["Bearish RSI Divergence"]
 
 
-def test_divergence_and_reversal_lines_show_age_and_pivot_date():
+def test_divergence_and_reversal_lines_show_when_they_happened():
     div = {"symbol": "BTC", "timeframe": "1D", "kind": "divergence", "direction": "bullish",
            "label": "Bullish RSI Divergence", "rsi_gap": 6.2, "age_candles": 3,
            "break_ts": 1790208000000}                        # 24 Sep 00:00 UTC open
-    assert td.describe(div).endswith("· confirmed today (pivot Sep 25, 8:00 AM SGT)")
+    assert td.describe(div).endswith("· confirmed on the latest candle (Sep 28 close)")
     swing = {"symbol": "ETH", "timeframe": "4H", "kind": "rsi_swing", "direction": "bullish",
              "label": "RSI Oversold Bottom", "rsi": 28, "age_candles": 0,
              "break_ts": 1790409600000}
-    assert "· confirmed today (pivot" in td.describe(swing)
+    assert "· confirmed on the latest candle (" in td.describe(swing)
+    div1 = {**div, "age_candles": 4}
+    assert "· confirmed 1 candle ago (Sep 28 close)" in td.describe(div1)
+    assert "pivot" not in td.describe(div1)

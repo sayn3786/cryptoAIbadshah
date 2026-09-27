@@ -62,13 +62,17 @@ def _weight(a: Dict[str, Any]) -> float:
 
 def describe(a: Dict[str, Any]) -> str:
     """One line for one alert (without the coin name). A played-out read is
-    marked, so the list shows it resolved rather than dropping it silently."""
+    marked, and says when it drops off the list."""
     line = _describe(a)
     if a.get("status") == "played_out":
         pa = a.get("played_ago")
-        when = ("" if not isinstance(pa, int) else " today" if pa == 0
-                else f" {pa} candle{'s' if pa != 1 else ''} ago")
-        line += f" · ✓ played out{when}"
+        if isinstance(pa, int):
+            left = PLAYED_OUT_KEEP - pa
+            tail = (" · last time listed" if left <= 0
+                    else f" · drops off after {left} more candle{'s' if left != 1 else ''}")
+            line += f" · ✓ played out {_ago(pa)}{tail}"
+        else:
+            line += " · ✓ played out"
     return line
 
 
@@ -90,6 +94,10 @@ def _describe(a: Dict[str, Any]) -> str:
             return f"{head} {label}{tag}{gap_s}{wait}"
         return f"{head} {a.get('label')}{gap_s}{_age(a)}"
     if kind == "indicator_flip":
+        day = date_sgt(a.get("break_ts"))
+        ago = a.get("bars_ago")
+        if isinstance(ago, int):
+            return f"{head} {a.get('label')} · {_ago(ago)}" + (f" ({day} close)" if day else "")
         when = when_sgt(a.get("break_ts"))
         return f"{head} {a.get('label')}" + (f" · {when}" if when else "")
     if kind == "rsi_swing":
@@ -105,22 +113,34 @@ def _describe(a: Dict[str, Any]) -> str:
 # A confirmed divergence / RSI reversal needs this many closes after its pivot
 # before it exists, so "confirmed N candles ago" = pivot age − this.
 PIVOT_CONFIRM_BARS = 3
+# A played-out read stays listed for this many candles after it played out.
+PLAYED_OUT_KEEP = 2
+
+
+def _ago(n: int) -> str:
+    return "on the latest candle" if n <= 0 else f"{n} candle{'s' if n != 1 else ''} ago"
 
 
 def _age(a: Dict[str, Any]) -> str:
-    """" · confirmed 1 candle ago (pivot Sep 25, 8:00 AM SGT)" for a confirmed
-    divergence or RSI reversal: when it became a fact (what the 3-candle window
-    counts) plus the pivot candle's date."""
+    """" · confirmed 1 candle ago (Sep 27 close)" for a confirmed divergence or
+    RSI reversal: when it actually happened, i.e. the candle that confirmed it
+    (what the 3-candle window counts), not the older pivot."""
     age = a.get("age_candles")
     tf_ms = TF_MS.get(str(a.get("timeframe")))
     ts = a.get("break_ts")
-    when = when_sgt(int(ts) + tf_ms) if ts is not None and tf_ms else ""
-    pivot = f" (pivot {when})" if when else ""
     if not isinstance(age, int):
+        when = when_sgt(int(ts) + tf_ms) if ts is not None and tf_ms else ""
         return f" · pivot {when}" if when else ""
     conf = max(age - PIVOT_CONFIRM_BARS, 0)
-    ago = "today" if conf == 0 else f"{conf} candle{'s' if conf != 1 else ''} ago"
-    return f" · confirmed {ago}{pivot}"
+    day = (date_sgt(int(ts) + (PIVOT_CONFIRM_BARS + 1) * tf_ms)
+           if ts is not None and tf_ms else "")
+    return f" · confirmed {_ago(conf)}" + (f" ({day} close)" if day else "")
+
+
+def date_sgt(ts_ms: Any) -> str:
+    """A candle close time as "Sep 27" (SGT)."""
+    full = when_sgt(ts_ms)
+    return full.split(",")[0] if full else ""
 
 
 def when_sgt(ts_ms: Any) -> str:

@@ -961,7 +961,7 @@ def _indicator_flips_for(closed: list, tf: str, fresh_bars: Optional[int] = None
 # on, then drops off. An invalidated RSI reversal drops at once.
 DAILY_READ_TFS = ("1D", "1W")
 DAILY_READ_WINDOW = 3            # "last 3 candles": event age 0, 1 or 2
-DAILY_PLAYED_OUT_KEEP = 2
+DAILY_PLAYED_OUT_KEEP = 2         # telegram_digest.PLAYED_OUT_KEEP (the "drops off" text)
 _PIVOT_WINDOW = 3                # detectors confirm a pivot 3 closes after it
 _RSI_MARK_PLAYOUT_PCT = 0.03     # candle_analysis.RSI_MARK_PLAYOUT_PCT
 

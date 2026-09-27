@@ -160,3 +160,24 @@ def test_played_out_reads_are_marked_and_do_not_star_or_ping():
     text, loud = td.build_market_digest([played, other])
     assert "· ✓ played out 1 candle ago" in text
     assert "⭐" not in text and loud is False        # one live read only: no confluence
+
+
+@pytest.mark.parametrize("pa, tail", [
+    (0, "✓ played out on the latest candle · drops off after 2 more candles"),
+    (1, "✓ played out 1 candle ago · drops off after 1 more candle"),
+    (2, "✓ played out 2 candles ago · last time listed"),
+])
+def test_played_out_line_says_when_it_drops_off(pa, tail):
+    import telegram_digest as td
+    a = {"timeframe": "1D", "kind": "rsi_swing", "direction": "bullish",
+         "label": "RSI Oversold Bottom", "rsi": 27, "age_candles": 4 + pa,
+         "break_ts": 1790208000000, "status": "played_out", "played_ago": pa}
+    assert td.describe(a).endswith(tail)
+
+
+def test_flip_line_says_how_many_candles_ago():
+    import telegram_digest as td
+    f = {"timeframe": "1D", "kind": "indicator_flip", "direction": "bullish",
+         "label": "SuperTrend flipped bullish", "break_ts": 1790553600000, "bars_ago": 1}
+    assert td.describe(f).endswith("· 1 candle ago (Sep 28 close)")
+    assert td.describe({**f, "bars_ago": 0}).endswith("· on the latest candle (Sep 28 close)")
