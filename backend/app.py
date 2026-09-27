@@ -548,7 +548,12 @@ PATTERN_ALERT_TFS        = ["4H", "1D", "1W"]
 # Which alert kinds go to TELEGRAM. Chart patterns (flags, wedges, triangles,
 # reversals and their FAILED events) are shown in the dashboard only; the
 # channel carries the momentum reads.
-TELEGRAM_ALERT_KINDS     = frozenset({"divergence", "divergence_forming", "rsi_swing"})
+TELEGRAM_ALERT_KINDS     = frozenset({"divergence", "divergence_forming", "rsi_swing",
+                                      "indicator_flip"})
+# An indicator flip alerts when it happened on the latest closed candle, or the
+# one before it (in case a scheduled run was missed). Deduped on the flip
+# candle, so each flip is announced once.
+INDICATOR_FLIP_FRESH_BARS = 1
 PATTERN_BELL_TFS         = ["1H", "4H", "1D", "1W"]  # in-app bell: also intraday
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
 # A CONFIRMED RSI divergence's second pivot is already `pivot_window` (3) closed
@@ -820,6 +825,67 @@ def _confirmed_patterns_for(closed: list, tf: str) -> list:
     return out
 
 
+_FLIP_LABELS = {
+    "macd":       ("MACD bullish cross (histogram turned positive)",
+                   "MACD bearish cross (histogram turned negative)"),
+    "supertrend": ("SuperTrend flipped bullish", "SuperTrend flipped bearish"),
+    "ema50":      ("Price crossed above EMA 50", "Price crossed below EMA 50"),
+    "ichimoku":   ("Ichimoku bullish TK cross", "Ichimoku bearish TK cross"),
+}
+
+
+def _indicator_flips_for(closed: list, tf: str) -> list:
+    """Fresh indicator flips on one candle set, as alert dicts (symbol added
+    by the caller): MACD (signal-line cross, i.e. the histogram changing sign),
+    SuperTrend, price vs EMA 50, and Ichimoku's Tenkan/Kijun cross.
+
+    Only a flip on the latest closed candle (or INDICATOR_FLIP_FRESH_BARS
+    before) counts, so an old trend isn't re-announced. `break_ts` is the CLOSE
+    time of the candle that confirmed the flip: it dedupes the alert and is the
+    date shown. Uses closed candles only, never the forming one."""
+    if not closed or len(closed) < 60:
+        return []
+    from indicators import flip_close_ts
+    closes = [c["close"] for c in closed]
+    found = []
+
+    def _add(key, bars_ago, ts, previous_direction=None, direction=None):
+        if bars_ago is None or bars_ago > INDICATOR_FLIP_FRESH_BARS or not ts:
+            return
+        d = direction or ("bullish" if previous_direction == "bearish" else "bearish")
+        up, down = _FLIP_LABELS[key]
+        found.append({"kind": "indicator_flip", "type": key, "event": "flip",
+                      "label": up if d == "bullish" else down, "direction": d,
+                      "break_ts": ts, "bars_ago": bars_ago,
+                      "level": None, "target": None, "break_dir": None})
+
+    try:
+        m = calculate_macd(closes)
+        _add("macd", m.get("flipped_bars_ago"),
+             flip_close_ts(closed, m.get("flipped_bars_ago")), m.get("previous_direction"))
+    except Exception:
+        pass
+    try:
+        e = calculate_ema_trend(closes)
+        _add("ema50", e.get("flipped_bars_ago"),
+             flip_close_ts(closed, e.get("flipped_bars_ago")), e.get("previous_direction"))
+    except Exception:
+        pass
+    try:
+        st = calculate_supertrend(closed)
+        _add("supertrend", st.get("flipped_bars_ago"), st.get("flipped_ts"),
+             direction=st.get("direction"))
+    except Exception:
+        pass
+    try:
+        ich = calculate_ichimoku(closed)
+        _add("ichimoku", ich.get("tk_flipped_bars_ago"), ich.get("tk_flipped_ts"),
+             ich.get("tk_previous_direction"))
+    except Exception:
+        pass
+    return found
+
+
 def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
     """Scan for freshly-confirmed patterns not yet alerted; atomically CLAIM each
     (exact-once via KV) and return only the newly-claimed ones. The candle fetches
@@ -847,6 +913,8 @@ def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
             if pat.get("kind") == "rsi_swing" and pat.get("status") not in (None, "active"):
                 continue
             out.append({"symbol": sym, "timeframe": tf, **pat})
+        for flip in _indicator_flips_for(closed, tf):
+            out.append({"symbol": sym, "timeframe": tf, **flip})
         return out
 
     pairs = [(sym, tf) for sym in symbols for tf in tfs]

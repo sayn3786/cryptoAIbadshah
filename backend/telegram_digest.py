@@ -6,6 +6,8 @@ separate messages (patterns / divergence / forming divergence / RSI reversal).
     in one place;
   * ranked by importance: higher timeframes first (1W > 1D > 4H > 1H),
     confirmed above forming, and more same-direction reads score higher;
+  * indicator flips (MACD cross, SuperTrend, EMA 50, Ichimoku TK) carry the
+    timeframe and the SGT date/time of the candle close that confirmed them;
   * ⭐ marks confluence (two or more confirmed reads pointing the same way);
   * ✅ / ⚠️ marks a read that AGREES / CONFLICTS with an open signal on the coin;
   * forming (provisional) reads are listed separately, so they are never mistaken
@@ -47,6 +49,8 @@ def _weight(a: Dict[str, Any]) -> float:
     w = TF_WEIGHT.get(str(a.get("timeframe")), 1)
     if _forming(a):
         return w * 0.4
+    if a.get("kind") == "indicator_flip":
+        return w * 0.6            # MACD / EMA often flip together: count less
     if a.get("event") == "failed":
         return w * 0.8
     return w
@@ -70,6 +74,9 @@ def describe(a: Dict[str, Any]) -> str:
             tag = "" if "forming" in label.lower() else " forming"
             return f"{head} {label}{tag}{gap_s}{wait}"
         return f"{head} {a.get('label')}{gap_s}"
+    if kind == "indicator_flip":
+        when = when_sgt(a.get("break_ts"))
+        return f"{head} {a.get('label')}" + (f" · {when}" if when else "")
     if kind == "rsi_swing":
         rsi = a.get("rsi")
         rsi_s = f" (RSI {rsi:g})" if isinstance(rsi, (int, float)) else ""
@@ -78,6 +85,16 @@ def describe(a: Dict[str, Any]) -> str:
     lvl = f" {arrow} {_px(a.get('level'))}" if a.get("level") is not None else ""
     tgt = f" → 🎯 {_px(a.get('target'))}" if a.get("target") is not None else ""
     return f"{head} {a.get('label')} confirmed{lvl}{tgt}"
+
+
+def when_sgt(ts_ms: Any) -> str:
+    """A candle close time as "Sep 27, 12:00 PM SGT" (the channel's timezone)."""
+    try:
+        from datetime import datetime, timedelta, timezone
+        t = datetime.fromtimestamp(int(ts_ms) / 1000, tz=timezone(timedelta(hours=8)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+    return t.strftime("%b %d, %I:%M %p SGT").replace(" 0", " ")
 
 
 def _signal_bias(direction: Optional[str]) -> Optional[str]:
