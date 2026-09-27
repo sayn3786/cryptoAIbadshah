@@ -22,10 +22,19 @@
 // per slot / candle / alert), so a manual GitHub run alongside never
 // double-sends or double-trades. This Worker is the only scheduler.
 //
+// Problem alerts: when a job fails after its retries (app down or unreachable,
+// a 401 token mismatch, a 5xx, a timeout), the Worker messages the owner's
+// PRIVATE Telegram chat directly. It doesn't go through the app, because a
+// broken app can't report on itself. Throttled so a job that keeps failing
+// doesn't message every minute. Needs the optional secrets below; without them
+// failures are only logged.
+//
 // Configuration (Worker → Settings → Variables and secrets):
 //   APP_URL          from wrangler.toml
 //   HL_MANAGE_TOKEN  SECRET, opens /api/hl/manage only
 //   SCHEDULER_TOKEN  SECRET, opens only the scheduled paths above (POST)
+//   TELEGRAM_BOT_TOKEN      SECRET (optional), same bot as the app
+//   TELEGRAM_ALERT_CHAT_ID  SECRET (optional), your PRIVATE chat id, never a channel
 // A job whose token is missing is skipped and logged; the others still run.
 
 // Retry on timeouts / platform errors by default. 4xx (auth, bad request) and
@@ -142,6 +151,62 @@ async function runJob(job, env, sleep) {
   return out;
 }
 
+// Expected non-200s that are not problems.
+const BENIGN_CODES = new Set(["FEATURE_DISABLED"]);   // ML research switched off
+
+// How often a still-failing job may alert, keyed off the UTC minute, so a job
+// that runs every minute doesn't message every minute. Other jobs run a few
+// times a day and alert on every failure.
+const ALERT_WHEN = {
+  manage: ({ m }) => m % 30 === 0,        // every-minute job: at most twice an hour
+  publish: ({ m }) => m === 32,           // the hour's last try: :02/:12 may still recover
+  monitor: ({ m }) => m === 35,           // at most hourly
+};
+
+const HINTS = {
+  0: "app unreachable or timed out",
+  401: "token mismatch: the Cloudflare secret differs from Vercel, or Vercel wasn't redeployed",
+  403: "forbidden: check the token and the endpoint",
+  500: "server error in the app",
+  502: "bad gateway: the app crashed or Vercel had an error",
+  503: "app answered 503",
+  504: "Vercel 60 s timeout",
+};
+
+function failed(r) {
+  if (r.error && r.status === undefined) return true;                  // not configured
+  if (r.status === 200) return false;
+  if (r.error_code && BENIGN_CODES.has(r.error_code)) return false;
+  return true;
+}
+
+/** The alert text for a job result at time `when`, or null. Exported for tests. */
+export function alertFor(r, when) {
+  if (!failed(r)) return null;
+  const t = { h: when.getUTCHours(), m: when.getUTCMinutes() };
+  const allow = ALERT_WHEN[r.job];
+  if (allow && !allow(t)) return null;
+  const at = `${String(t.h).padStart(2, "0")}:${String(t.m).padStart(2, "0")} UTC`;
+  const why = r.error && r.status === undefined ? r.error
+    : `HTTP ${r.status}${r.error_code ? ` ${r.error_code}` : ""}: ${HINTS[r.status] || "unexpected status"}`;
+  const tries = r.attempts > 1 ? ` after ${r.attempts} attempts` : "";
+  return `🚨 Scheduler: ${r.job} failed at ${at}${tries}\n${why}`;
+}
+
+async function sendAlert(env, text) {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_ALERT_CHAT_ID) return false;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_ALERT_CHAT_ID, text,
+                             disable_web_page_preview: true }),
+    });
+    return res.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
 /** Run everything due at `when`; returns one summary per job. Exported for tests. */
 export async function runDue(when, env, sleep = ms => new Promise(r => setTimeout(r, ms))) {
   const names = new Set(dueJobs(when));
@@ -154,8 +219,12 @@ export default {
   // trigger was meant for, so a slightly late start still runs the right jobs.
   async scheduled(event, env, ctx) {
     const when = new Date(event.scheduledTime || Date.now());
-    ctx.waitUntil(runDue(when, env).then(results => {
-      for (const r of results) console.log(JSON.stringify(r));
+    ctx.waitUntil(runDue(when, env).then(async results => {
+      for (const r of results) {
+        console.log(JSON.stringify(r));
+        const text = alertFor(r, when);
+        if (text) r.alerted = await sendAlert(env, text);
+      }
     }));
   },
 

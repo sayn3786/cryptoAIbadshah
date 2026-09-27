@@ -51,6 +51,23 @@ Cloudflare deploys the Worker **from this repo**: every push that changes this
 folder rebuilds it. `worker.js` is the code; `wrangler.toml` sets the Worker
 name, `APP_URL` and the every-minute cron.
 
+## Private alerts
+
+Two sources, both to your **private** chat with the bot (never the signals
+channel):
+
+| From | Alerts | Needs |
+|---|---|---|
+| **The app** | 🟢 position opened (entry, stop, TP1/TP2) · ✅ TP1 hit, stop moved to entry · ⚠️ remainder closed at entry · 🏁/🔴 trade closed with P&L · ⛔ order rejected · 🚨 position **without a stop** · 🚨 stop-move failed · 🚨 auto-exec crashed | `TELEGRAM_ALERT_CHAT_ID` in Vercel, or it falls back to `TELEGRAM_REPORT_CHAT_ID` (already set). Nothing new. |
+| **This Worker** | 🚨 a job failed after its retries: app down or unreachable, `401` token mismatch, `5xx`, Vercel timeout | Two optional Worker **Secrets**: `TELEGRAM_BOT_TOKEN` (same bot as Vercel) and `TELEGRAM_ALERT_CHAT_ID` (your private chat id). Without them, failures are only logged. |
+
+The Worker alerts directly rather than through the app, because a broken app
+can't report on itself. Throttled: the every-minute position manager alerts at
+most twice an hour, publish only on the hour's last try (:32), and the monitor
+at most hourly. Expected responses (ML switched off) never alert. Each app
+alert is sent once (deduped); a still-failing problem repeats every 4 hours at
+most.
+
 ## Setup (about 10 minutes)
 
 ### 1. Create the two tokens

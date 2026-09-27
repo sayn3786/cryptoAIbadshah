@@ -20,6 +20,7 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="node not installed")
 
 HARNESS = r"""
 const w = await import(process.argv[1]);
+console.log = () => {};          // the scheduled handler logs; keep stdout for the JSON result
 const at = (h, m) => new Date(Date.UTC(2026, 8, 26, h, m));
 const out = {};
 out.due = Object.fromEntries([[0,2],[0,5],[0,7],[0,15],[4,2],[4,12],[4,32],[4,35],
@@ -62,6 +63,35 @@ out.mlCall = calls.splice(0).find(c => c.path === "/api/research/ml/collect");
 script = [{ path: "/api/research/ml/label", status: 504 }];
 out.ml504 = (await w.runDue(at(1, 15), env, noSleep)).find(r => r.job === "ml-label");
 calls.splice(0);
+
+// Problem alerts: rules, and a real send through the scheduled handler.
+out.alerts = {
+  pub401at32: w.alertFor({ job: "publish", status: 401, attempts: 1 }, at(4, 32)),
+  pub401at02: w.alertFor({ job: "publish", status: 401, attempts: 1 }, at(4, 2)),
+  mgrAt30:    w.alertFor({ job: "manage", status: 0, attempts: 1 }, at(4, 30)),
+  mgrAt31:    w.alertFor({ job: "manage", status: 0, attempts: 1 }, at(4, 31)),
+  mlOff:      w.alertFor({ job: "ml-collect", status: 503, error_code: "FEATURE_DISABLED" }, at(4, 10)),
+  ok:         w.alertFor({ job: "daily", status: 200 }, at(0, 7)),
+  daily504:   w.alertFor({ job: "daily", status: 504, attempts: 3 }, at(0, 7)),
+};
+const tg = [];
+globalThis.fetch = async (url, opts) => {
+  if (String(url).startsWith("https://api.telegram.org/")) {
+    tg.push({ url: String(url), body: JSON.parse(opts.body) }); return { ok: true };
+  }
+  return { status: 401, json: async () => ({ error_code: "AUTH_REQUIRED" }) };
+};
+let wait;
+await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 4, 32) },
+  { ...env, TELEGRAM_BOT_TOKEN: "bot-token-x", TELEGRAM_ALERT_CHAT_ID: "777" },
+  { waitUntil: p => { wait = p; } });
+await wait;
+out.tg = tg.map(t => ({ chat: t.body.chat_id, text: t.body.text }));
+const tg2 = tg.length;
+await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 4, 32) }, env,
+  { waitUntil: p => { wait = p; } });
+await wait;
+out.tgWithoutSecrets = tg.length - tg2;
 
 out.publicFetch = (await w.default.fetch()).status;
 process.stdout.write(JSON.stringify(out));
@@ -141,3 +171,19 @@ def test_publish_logs_the_hl_auto_exec_outcome(result):
     pub = next(r for r in result["at0002"] if r["job"] == "publish")
     assert pub["hl"] == {"ran": True, "attempted": 1, "executed": 1}
     assert "0xsecret" not in json.dumps(result["at0002"])
+
+
+def test_problem_alert_rules(result):
+    a = result["alerts"]
+    assert "publish failed at 04:32 UTC" in a["pub401at32"] and "token mismatch" in a["pub401at32"]
+    assert a["pub401at02"] is None                     # :12/:32 may still recover
+    assert a["mgrAt30"] and a["mgrAt31"] is None       # every-minute job: at most twice an hour
+    assert a["mlOff"] is None and a["ok"] is None
+    assert "after 3 attempts" in a["daily504"] and "60 s timeout" in a["daily504"]
+
+
+def test_alerts_go_straight_to_the_private_chat(result):
+    # At 04:32 both manage (m%30 != 0 → throttled) and publish run; only publish alerts.
+    assert result["tg"] == [{"chat": "777", "text": result["tg"][0]["text"]}]
+    assert "publish failed" in result["tg"][0]["text"]
+    assert result["tgWithoutSecrets"] == 0             # no secrets → logged only
