@@ -193,4 +193,4 @@ def test_telegram_scan_drops_played_out_and_invalidated_swings(monkeypatch):
     out = app._scan_confirmed_patterns()
     swings = [a for a in out if a["kind"] == "rsi_swing"]
     assert len(swings) == 1 and swings[0]["status"] == "active"   # only the live one
-    assert any(a["kind"] == "flag" for a in out)                  # non-swings untouched
+    assert not any(a["kind"] == "flag" for a in out)              # chart patterns: dashboard only

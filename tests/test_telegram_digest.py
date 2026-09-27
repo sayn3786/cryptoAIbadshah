@@ -173,3 +173,14 @@ def test_daily_post_is_silent_unless_it_has_a_new_signal(monkeypatch):
 def test_market_update_runs_after_every_4h_close():
     from _worker_schedule import worker_schedule
     assert worker_schedule()["patterns"] == [(h, 15) for h in range(0, 24, 4)]
+
+
+
+def test_chart_patterns_are_not_sent_to_telegram_but_stay_in_the_bell():
+    pytest.importorskip("flask")
+    import inspect
+    import app
+    assert app.TELEGRAM_ALERT_KINDS == {"divergence", "divergence_forming", "rsi_swing"}
+    # The Telegram scan filters on it; the in-app bell does not.
+    assert "TELEGRAM_ALERT_KINDS" in inspect.getsource(app._scan_confirmed_patterns)
+    assert "TELEGRAM_ALERT_KINDS" not in inspect.getsource(app.api_pattern_alerts)

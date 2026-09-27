@@ -205,12 +205,18 @@ def test_scan_confirmed_patterns_parallel_and_claims(monkeypatch):
     monkeypatch.setattr(app, "SCAN_SYMBOLS", ("BTC", "ETH"))
     monkeypatch.setattr(app, "PATTERN_ALERT_TFS", ["1D"])
     monkeypatch.setattr(app, "_fetch_closed_spot", lambda sym, tf: _series(DT + [97, 93, 89, 87]))
+    # Telegram carries momentum reads only; chart patterns stay in the dashboard.
+    monkeypatch.setattr(app, "_confirmed_patterns_for", lambda closed, tf: [
+        {"kind": "divergence", "label": "Bullish RSI Divergence", "direction": "bullish",
+         "break_ts": 1},
+        {"kind": "reversal", "type": "double_top", "label": "Double Top",
+         "direction": "bearish", "break_ts": 2}])
     claimed = set()
     monkeypatch.setattr(app, "_kv_claim", lambda key: claimed.add(key) or True)
     out = app._scan_confirmed_patterns()
     syms = {a["symbol"] for a in out}
     assert syms == {"BTC", "ETH"}                    # both scanned in parallel
-    assert all(a["kind"] == "reversal" for a in out if "Top" in a.get("label", ""))
+    assert {a["kind"] for a in out} == {"divergence"}        # the pattern never reaches Telegram
     # a second scan claims nothing new (exact-once)
     monkeypatch.setattr(app, "_kv_claim", lambda key: key not in claimed)
     assert app._scan_confirmed_patterns() == []

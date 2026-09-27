@@ -545,6 +545,10 @@ def _rec_cache_save(key: str, data: dict) -> None:
 # coin-grouped digest ranks it below 1D/1W and delivers 4H-only news silently,
 # so it adds fresher reads without intraday spam. 1H stays in-app only.
 PATTERN_ALERT_TFS        = ["4H", "1D", "1W"]
+# Which alert kinds go to TELEGRAM. Chart patterns (flags, wedges, triangles,
+# reversals and their FAILED events) are shown in the dashboard only; the
+# channel carries the momentum reads.
+TELEGRAM_ALERT_KINDS     = frozenset({"divergence", "divergence_forming", "rsi_swing"})
 PATTERN_BELL_TFS         = ["1H", "4H", "1D", "1W"]  # in-app bell: also intraday
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
 # A CONFIRMED RSI divergence's second pivot is already `pivot_window` (3) closed
@@ -833,6 +837,8 @@ def _scan_confirmed_patterns(symbols=None, tfs=None) -> list:
             return []
         out = []
         for pat in _confirmed_patterns_for(closed, tf):
+            if pat.get("kind") not in TELEGRAM_ALERT_KINDS:
+                continue                 # chart patterns: dashboard only, not Telegram
             # Telegram is a one-shot notification that can't update, so skip an
             # RSI reversal whose reversal has already played out or been
             # invalidated — don't ping about a spent or void signal. The in-app
@@ -3252,6 +3258,8 @@ def api_patterns_alert():
                 except Exception:
                     continue
                 for pat in _confirmed_patterns_for(closed, tf):
+                    if pat.get("kind") not in TELEGRAM_ALERT_KINDS:
+                        continue
                     already = _kv_exists(_pattern_alert_id(sym, tf, pat))
                     found.append({"symbol": sym, "timeframe": tf, "already_alerted": already, **pat})
         return jsonify({"ok": True, "dry": True, "kv": _kv_enabled(), "found": found})
