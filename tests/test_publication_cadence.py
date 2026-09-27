@@ -269,9 +269,9 @@ def _repo(*parts):
 
 
 def test_telegram_cron_fires_just_after_a_4h_boundary():
-    with open(_repo(".github", "workflows", "telegram-alerts.yml")) as fh:
-        schedules = _cron_utc_hours_and_minutes(fh.read())
-    assert schedules, "the telegram workflow must still have a schedule"
+    from _worker_schedule import worker_schedule
+    schedules = worker_schedule().get("daily") or []
+    assert schedules, "the daily Telegram run must still have a schedule"
     for hour, minute in schedules:
         assert hour % 4 == 0, \
             f"{hour:02d}:{minute:02d} UTC is not on a 4H boundary — it would publish nothing"
@@ -279,15 +279,25 @@ def test_telegram_cron_fires_just_after_a_4h_boundary():
             f"{hour:02d}:{minute:02d} UTC fires on or before the boundary; the close is not available yet"
 
 
-def test_vercel_cron_fires_just_after_a_4h_boundary():
+def test_publish_fires_just_after_every_4h_boundary():
+    from _worker_schedule import worker_schedule
+    runs = worker_schedule()["publish"]
+    for h in range(0, 24, 4):
+        assert (h, 0) not in runs, "publish must not fire ON the boundary; the close isn't in yet"
+        assert any(hh == h and 0 < m <= 15 for hh, m in runs)
+
+
+def test_vercels_old_crons_moved_to_the_worker():
+    # Vercel's free-plan crons only promise "within the hour". The 12:05 daily
+    # run and the 00:15 TAO snapshot moved to the Cloudflare Worker, and
+    # vercel.json no longer schedules anything (so nothing runs twice).
     import json
+    from _worker_schedule import worker_schedule
     with open(_repo("vercel.json")) as fh:
-        crons = json.load(fh).get("crons") or []
-    assert crons, "the Vercel cron must still exist"
-    for c in crons:
-        minute, hour = c["schedule"].split()[:2]
-        assert int(hour) % 4 == 0, f"{c['schedule']} is not on a 4H boundary"
-        assert 0 < int(minute) <= 15, f"{c['schedule']} fires on or before the boundary"
+        assert not json.load(fh).get("crons"), "vercel.json must not schedule jobs any more"
+    sched = worker_schedule()
+    assert (12, 7) in sched["daily"]
+    assert sched["tao-snapshot"] == [(0, 20)]
 
 
 def test_the_prewarm_scheduler_covers_all_six_slots():

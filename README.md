@@ -405,8 +405,8 @@ trades were ever taken.
   the cron will not repeat it.
 * **Publishing runs close to Vercel's 60s `maxDuration`.** `/api/cron/daily` has
   already been killed at 61s with `FUNCTION_INVOCATION_TIMEOUT`, and
-  `/api/cron/publish` runs the same compute. `signal-publish.yml` therefore
-  retries up to three times with backoff — the per-symbol analysis cache is
+  `/api/cron/publish` runs the same compute. The scheduler (the Cloudflare
+  Worker, see below) therefore retries up to three times with backoff — the per-symbol analysis cache is
   warmed by the attempt that died, so a follow-up usually completes inside the
   limit. A 401 or 404 is not retried; those do not improve by waiting.
   Retrying is safe because publication is idempotent on the candle.
@@ -432,10 +432,21 @@ trades were ever taken.
   Publication now asks the database *"has this slot published yet?"*, so a late
   run publishes its slot using whatever candle is current by then - fresher
   levels for the same slot, which beats no signal. Still at most 3 per slot.
-* **`signal-publish.yml` runs hourly**, and the endpoint answers the slot
-  question **before** computing. The 23 runs a day that find the slot already
-  done cost one cheap query each instead of ~50s of upstream fetching, which is
-  what makes the frequency affordable - and frequency is what absorbs the delay.
+* **Publishing runs every hour** (hh:02, retried at hh:12 and hh:32), and the
+  endpoint answers the slot question **before** computing. The runs that find
+  the slot already done cost one cheap query each instead of ~50s of upstream
+  fetching, which is what makes the frequency affordable - and frequency is what
+  absorbs a delay or a timed-out attempt.
+* **The clock is a Cloudflare Worker, not GitHub or Vercel.** GitHub Actions
+  cron kept running late or skipping runs (on 26 Sep the 11:00 and 15:00 UTC
+  slots never published), and Vercel's free-plan cron only promises "within the
+  hour". `cloudflare/hl-manage-worker/worker.js` fires every minute and runs
+  publish, the outcome monitor, the Telegram daily run, pattern alerts, the
+  data snapshots, the ML research jobs and the HL position manager on their
+  schedules (see its README). It authenticates with narrow tokens
+  (`SCHEDULER_TOKEN`, `HL_MANAGE_TOKEN`), never `CRON_SECRET`. The GitHub
+  workflows for those jobs are kept for **manual** runs only, and `vercel.json`
+  schedules nothing.
 * The in-process pre-warm scheduler still runs at :02 past each boundary.
   The gate reads the last CLOSED candle, so a job that fires early sees the
   previous bar and publishes nothing — `telegram-alerts.yml` used to fire at
@@ -565,8 +576,8 @@ since the signal's own candle and decides what the market did:
 | Runs on a clock | One run is bounded by `MONITOR_BUDGET_S` (45s, inside the 60s serverless ceiling) and fetches every symbol's candles in parallel. Past the budget it stops cleanly and reports `truncated`: what was decided has committed, and the next tick resumes, because every decision is keyed on its candle. Being killed mid-run records **nothing**. |
 | One bad signal never abandons the batch | A monitor that stops at the first error silently leaves the rest open. |
 
-`.github/workflows/signal-monitor.yml` runs **every 30 minutes**, and can also be triggered
-by hand from the Actions tab. Running it more often is harmless — every decision
+The Cloudflare scheduler runs the monitor **every 30 minutes** (hh:05, hh:35);
+`.github/workflows/signal-monitor.yml` triggers it by hand from the Actions tab. Running it more often is harmless — every decision
 is keyed on the candle that caused it, so an extra run records nothing new.
 
 **The first tick resolves the whole backlog.** Genuine target and stop hits are

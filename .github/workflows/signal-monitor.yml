@@ -1,23 +1,9 @@
 name: Signal Outcome Monitor
 
 on:
-  schedule:
-    # All times UTC. Signals are published on 2H candles, so hourly catches
-    # every close without ever acting on a forming candle. The endpoint is
-    # idempotent — each decision is keyed on the CANDLE that caused it — so an
-    # extra run records nothing new and a missed run loses nothing.
-    #
-    # The FIRST scheduled tick resolves everything already in the database:
-    # genuine target/stop hits are recorded, and anything older than the server
-    # default (72h) is EXPIRED. Expired is terminal but is NOT a loss — it is
-    # excluded from the win rate — so a backlog of stale signals resolves
-    # honestly rather than being scored against the strategy.
-    #
-    # Every 30 minutes, not hourly. One run gets through roughly 30 signals
-    # inside its budget, and there are about 65 working at a time — so hourly
-    # left each signal checked only every other run. Twice an hour covers them
-    # all, and the work rotates stalest-first so nothing is starved either way.
-    - cron: '5,35 * * * *'
+  # Scheduled by the Cloudflare Worker (cloudflare/hl-manage-worker/worker.js),
+  # hh:05 and hh:35 (UTC). GitHub's own schedules were best-effort (hours late or skipped),
+  # so this workflow is now manual only: Actions tab -> Run workflow.
   workflow_dispatch:        # also triggerable by hand from the Actions tab
     inputs:
       max_age_hours:
@@ -69,13 +55,3 @@ jobs:
           export HTTP_STATUS BODY
           python backend/monitor_gate.py
           exit $?
-
-  # Backup trigger for the Hyperliquid position manager (move the stop to entry
-  # after TP1). Its own */5 schedule is best-effort and can be skipped by
-  # GitHub; this runs it on the monitor's more reliable 30-minute cadence.
-  # A separate job, so a manager failure shows on its own and never turns the
-  # monitor red (or vice versa). The endpoint is idempotent — overlapping with
-  # the */5 schedule is harmless.
-  hl-position-manager:
-    uses: ./.github/workflows/hl-manage.yml
-    secrets: inherit

@@ -175,12 +175,11 @@ def test_the_telegram_workflow_retries():
 
 
 def test_the_workflow_still_fires_after_the_boundary():
-    import re
-    path = os.path.join(os.path.dirname(__file__), "..", ".github",
-                        "workflows", "telegram-alerts.yml")
-    text = open(path, encoding="utf-8").read()
-    for m in re.finditer(r"cron:\s*'(\S+)\s+(\S+)\s+\*\s+\*\s+\*'", text):
-        minute, hour = int(m.group(1)), int(m.group(2))
+    # The daily Telegram run is scheduled by the Cloudflare Worker.
+    from _worker_schedule import worker_schedule
+    runs = worker_schedule()["daily"]
+    assert runs, "the daily Telegram run must still be scheduled"
+    for hour, minute in runs:
         assert hour % 4 == 0 and 0 < minute <= 15
 
 

@@ -1,9 +1,9 @@
 """
 SCHEDULER_TOKEN — the narrow credential for the Cloudflare scheduler Worker.
 
-It must open POST to exactly four scheduled-job paths (publish, monitor, daily
-Telegram run, pattern alerts), including through the AUTH_REQUIRED login gate,
-and NOTHING else: not order placement, not the position manager, not other
+It must open POST to exactly the scheduled-job paths (publish, monitor, daily
+Telegram run, pattern alerts, data snapshots, ML research collect/label),
+including through the AUTH_REQUIRED login gate, and NOTHING else: not order placement, not the position manager, not other
 cron endpoints that share the same CRON_SECRET check, not GET. Fail-closed.
 """
 import os
@@ -77,12 +77,10 @@ def test_without_token_the_same_paths_are_refused(client):
     ("post", "/api/hl/manage"),                  # has its own token
     ("get", "/api/hl/account"),
     ("get", "/api/hl/positions"),
-    ("get", "/api/cron/etf-snapshot"),           # shares the CRON_SECRET check
-    ("post", "/api/cron/etf-snapshot"),
-    ("post", "/api/cron/market-snapshot"),
+    ("get", "/api/cron/etf-snapshot"),           # GET: the token is POST-only
+    ("post", "/api/telegram/send"),
     ("get", "/api/recommendations"),
     ("get", "/api/auth/users"),
-    ("post", "/api/research/ml/collect"),
 ])
 def test_token_opens_nothing_else(client, method, path):
     r = getattr(client, method)(path, headers=H)
@@ -110,3 +108,21 @@ def test_unset_or_weak_token_fails_closed(client, monkeypatch, value):
 def test_manager_token_does_not_open_scheduler_paths(client):
     r = client.post("/api/cron/publish", headers={"x-hl-manage-token": "m" * 40})
     assert r.status_code == 401
+
+
+@pytest.mark.parametrize("path", ["/api/cron/etf-snapshot", "/api/cron/market-snapshot",
+                                  "/api/cron/tao-snapshot"])
+def test_token_passes_auth_on_snapshots(client, monkeypatch, path):
+    # Reaching the handler (whatever it then does) proves auth passed; make the
+    # snapshot work itself fail fast and offline.
+    import db
+    monkeypatch.setattr(db, "db_configured", lambda: False)
+    r = client.post(path, headers=H)
+    assert r.status_code not in (401, 403), r.get_data(as_text=True)
+
+
+@pytest.mark.parametrize("kind", ["collect", "label"])
+def test_token_passes_auth_on_ml_research(client, monkeypatch, kind):
+    monkeypatch.delenv("ML_RESEARCH_ENABLED", raising=False)     # feature off → 503, not 401
+    r = client.post(f"/api/research/ml/{kind}", headers=H, json={})
+    assert r.status_code == 503 and r.get_json()["error_code"] != "FORBIDDEN"

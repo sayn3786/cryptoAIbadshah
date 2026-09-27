@@ -3477,7 +3477,7 @@ def api_cron_tao_snapshot():
     history accumulates reliably, independent of page traffic. Own cron (isolated
     from the recs/Twitter daily cron's time budget); idempotent per UTC day.
     """
-    if not _cron_authorized():
+    if not (_cron_authorized() or _scheduler_token_ok()):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     try:
         res = _tao_snapshot_daily()
@@ -3496,7 +3496,7 @@ def api_cron_market_snapshot():
     manual run; the scheduled snapshot rides /api/cron/tao-snapshot. Idempotent
     per UTC day.
     """
-    if not _cron_authorized():
+    if not (_cron_authorized() or _scheduler_token_ok()):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     try:
         import market_metrics_store
@@ -3509,7 +3509,8 @@ def api_cron_market_snapshot():
 
 def _ml_research_request(kind):
     # Deliberately NOT _cron_authorized(), which allows missing secrets.
-    guard = _require_internal()
+    # The scheduler token is fail-closed and path-scoped, so it is safe here.
+    guard = None if _scheduler_token_ok() else _require_internal()
     if guard:
         return guard
     if not _feature_enabled("ML_RESEARCH_ENABLED"):
@@ -3563,7 +3564,7 @@ def api_cron_etf_snapshot():
     window. Own cron (isolated time budget); idempotent per UTC day — the first
     run backfills the provider's whole window, later runs keep it current.
     """
-    if not _cron_authorized():
+    if not (_cron_authorized() or _scheduler_token_ok()):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     try:
         import etf_store
@@ -4245,9 +4246,13 @@ def _hl_manage_token_ok() -> bool:
 
 # The scheduled jobs an outside scheduler (the Cloudflare Worker) may trigger
 # with SCHEDULER_TOKEN: publishing (which also runs HL auto-exec), the outcome
-# monitor, the daily Telegram/Twitter run and pattern alerts. POST only.
+# monitor, the daily Telegram/Twitter run, pattern alerts, the daily data
+# snapshots and the ML research collect/label jobs. POST only.
 _SCHEDULER_PATHS = ("/api/cron/publish", "/api/signals/monitor",
-                    "/api/cron/daily", "/api/patterns/alert")
+                    "/api/cron/daily", "/api/patterns/alert",
+                    "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
+                    "/api/cron/tao-snapshot",
+                    "/api/research/ml/collect", "/api/research/ml/label")
 
 
 def _scheduler_token_ok() -> bool:

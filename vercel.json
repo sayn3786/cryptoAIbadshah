@@ -2,7 +2,9 @@
   "version": 2,
   "buildCommand": "echo No build step required",
   "functions": {
-    "api/index.py": { "maxDuration": 60 }
+    "api/index.py": {
+      "maxDuration": 60
+    }
   },
   "rewrites": [
     {
@@ -20,16 +22,6 @@
     {
       "source": "/dashboard/",
       "destination": "/dashboard/index.html"
-    }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/daily",
-      "schedule": "5 12 * * *"
-    },
-    {
-      "path": "/api/cron/tao-snapshot",
-      "schedule": "15 0 * * *"
     }
   ]
 }

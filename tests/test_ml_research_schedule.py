@@ -92,10 +92,19 @@ def test_request_contract_and_redirects(monkeypatch):
 
 def test_workflow_is_separate_bounded_and_uses_env_secrets():
     raw = (ROOT / ".github/workflows/ml-research.yml").read_text()
-    assert "10 */4 * * *" in raw and "15 1-23/4 * * *" in raw
+    assert "schedule:" not in raw, "scheduled by the Cloudflare Worker now; GitHub is manual"
     assert "workflow_dispatch:" in raw and "options: [collect, label]" in raw
     assert "contents: read" in raw and "cancel-in-progress: false" in raw
     assert "timeout-minutes: 5" in raw
     assert "secrets.CRON_SECRET" in raw and "secrets.APP_URL" in raw
     assert "python scripts/ml_research_schedule.py" in raw
     assert "DATABASE_URL" not in raw
+
+
+def test_worker_keeps_the_research_cadence():
+    # Moved from this workflow's crons ('10 */4 * * *' collect, '15 1-23/4 * * *'
+    # label) to the Cloudflare Worker, same times.
+    from _worker_schedule import worker_schedule
+    sched = worker_schedule()
+    assert sched["ml-collect"] == [(h, 10) for h in range(0, 24, 4)]
+    assert sched["ml-label"] == [(h, 15) for h in range(1, 24, 4)]
