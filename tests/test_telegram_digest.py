@@ -180,7 +180,8 @@ def test_chart_patterns_are_not_sent_to_telegram_but_stay_in_the_bell():
     pytest.importorskip("flask")
     import inspect
     import app
-    assert app.TELEGRAM_ALERT_KINDS == {"divergence", "divergence_forming", "rsi_swing"}
+    assert app.TELEGRAM_ALERT_KINDS == {"divergence", "divergence_forming", "rsi_swing",
+                                        "indicator_flip"}
     # The Telegram scan filters on it; the in-app bell does not.
     assert "TELEGRAM_ALERT_KINDS" in inspect.getsource(app._scan_confirmed_patterns)
     assert "TELEGRAM_ALERT_KINDS" not in inspect.getsource(app.api_pattern_alerts)
