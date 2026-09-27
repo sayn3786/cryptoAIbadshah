@@ -541,7 +541,10 @@ def _rec_cache_save(key: str, data: dict) -> None:
 # it fetches only candles and runs the detectors, skipping the heavy on-chain /
 # funding / CVD work that full build_analysis does, so 32 symbols stay well
 # within a single request.
-PATTERN_ALERT_TFS        = ["1D", "1W"]           # Telegram: higher TFs only (no intraday spam)
+# Telegram: 4H and up. 4H joined when alerts moved to every 4H close; the
+# coin-grouped digest ranks it below 1D/1W and delivers 4H-only news silently,
+# so it adds fresher reads without intraday spam. 1H stays in-app only.
+PATTERN_ALERT_TFS        = ["4H", "1D", "1W"]
 PATTERN_BELL_TFS         = ["1H", "4H", "1D", "1W"]  # in-app bell: also intraday
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
 # A CONFIRMED RSI divergence's second pivot is already `pivot_window` (3) closed
@@ -3254,7 +3257,7 @@ def api_patterns_alert():
         return jsonify({"ok": True, "dry": True, "kv": _kv_enabled(), "found": found})
 
     alerts = _scan_confirmed_patterns(syms, tfs)
-    sent = _send_pattern_alerts(alerts) if alerts else False
+    sent = _send_pattern_alerts(alerts, active=_active_signal_directions()) if alerts else False
     return jsonify({"ok": True, "new": len(alerts), "sent": bool(sent), "alerts": alerts})
 
 
@@ -3300,6 +3303,95 @@ def api_twitter_send():
         return jsonify({"ok": False, "error": "Twitter post failed — check server logs"}), 500
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _send_recs_with_context(result):
+    """Send the daily signal post with its status context: which signals are
+    new since the last post, still valid or already passed, which closed since
+    the last post, and the last 7 days' record. The context is best-effort: a
+    failure there sends the plain post rather than nothing. On success, records
+    what was posted so the next post can tell new from ongoing."""
+    import json as _json
+    import kv as _kv
+    import telegram_digest as _td
+    env = _deploy_env()
+    data = dict(result or {})
+    recs = data.get("recommendations") or []
+    now = datetime.now(timezone.utc)
+    try:
+        prev_raw = _kv.get_value(f"tg:lastpost:{env}")
+        prev = _json.loads(prev_raw) if prev_raw else None
+        data["post_status"] = _td.post_status(recs, (prev or {}).get("keys") if prev else None)
+        since = None
+        if prev and prev.get("at"):
+            since = datetime.fromisoformat(prev["at"])
+        since = since or (now - timedelta(hours=8))
+        data["recent_closed"], data["track_7d"] = _recent_signal_results(since, now)
+    except Exception:
+        app.logger.exception("telegram post context failed")
+    ok = _send_telegram_recs(data)
+    if ok:
+        try:
+            _kv.set_value(f"tg:lastpost:{env}", _json.dumps(
+                {"at": now.isoformat(), "keys": [_td.signal_key(r) for r in recs]}),
+                ttl_seconds=14 * 24 * 3600)
+        except Exception:
+            pass
+    return ok
+
+
+def _recent_signal_results(since, now):
+    """(signals closed since `since`, {wins, losses, avg_pct} over 7 days) for
+    the current strategy version. Cancelled/expired don't count as results."""
+    import db as _db
+    if not _db.db_configured():
+        return [], None
+    import signal_publish as _sp
+    store = _signal_store()
+    page = store.list_signals(statuses=["TP_HIT", "SL_HIT", "CLOSED"],
+                              strategy_version=_sp.strategy_version(),
+                              limit=100, offset=0, with_total=False)
+
+    def _ts(v):
+        if isinstance(v, datetime):
+            return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        try:
+            t = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    rows = [(r, _ts(r.get("closed_at"))) for r in page.get("items") or []]
+    recent = [r for r, t in rows if t and t > since][:8]
+    week = [r for r, t in rows if t and t > now - timedelta(days=7)]
+    rets = []
+    for r in week:
+        try:
+            rets.append(float(r.get("realized_return_pct")))
+        except (TypeError, ValueError):
+            pass
+    track = {"wins": sum(1 for x in rets if x > 0), "losses": sum(1 for x in rets if x < 0),
+             "avg_pct": round(sum(rets) / len(rets), 2) if rets else None}
+    return recent, track
+
+
+def _active_signal_directions() -> Dict[str, str]:
+    """{symbol: LONG/SHORT} for signals still working in the current strategy
+    version, so the Telegram digest can tag reads that agree with or contradict
+    an open signal. Best-effort: {} on any error or with no database."""
+    try:
+        import db as _db
+        if not _db.db_configured():
+            return {}
+        import signal_publish as _sp
+        store = _signal_store()
+        page = store.list_signals(statuses=sorted(store.WORKING_STATUSES),
+                                  strategy_version=_sp.strategy_version(),
+                                  limit=50, offset=0, with_total=False)
+        return {str(r.get("symbol")).upper(): str(r.get("direction")).upper()
+                for r in page.get("items") or [] if r.get("symbol")}
+    except Exception:
+        return {}
 
 
 def _dispatch_once(channel: str, slot_key: str, send) -> str:
@@ -3565,7 +3657,7 @@ def api_cron_daily():
         results["telegram"] = "skipped (no recommendations computed)"
     else:
         results["telegram"] = _dispatch_once(
-            "tg:recs", slot_key, lambda: _send_telegram_recs(result))
+            "tg:recs", slot_key, lambda: _send_recs_with_context(result))
 
     # Twitter — BTC + ETH 1D. The two analyses are built INSIDE the closure, so
     # a run that is going to skip does not pay for them. That also makes a retry

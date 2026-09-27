@@ -216,11 +216,14 @@ def _capture_sends(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     sent = []
     monkeypatch.setattr(tgmod, "_post_message",
-                        lambda token, chat_id, text: sent.append(text) or True)
+                        lambda token, chat_id, text, **kw: sent.append(text) or True)
     return sent
 
 
-def test_a_mixed_batch_sends_divergences_as_a_separate_message(monkeypatch):
+def test_a_mixed_batch_is_one_digest_and_a_divergence_is_not_shown_as_a_breakout(monkeypatch):
+    # Alerts now go out as ONE coin-grouped Market Update. What still matters:
+    # a divergence has no broken level or target, so it must never be rendered
+    # like a breakout ("confirmed ↑ level → 🎯 target").
     sent = _capture_sends(monkeypatch)
     ok = send_pattern_alerts([
         {"kind": "flag", "symbol": "BTC", "timeframe": "1D", "label": "Bullish Flag",
@@ -229,14 +232,11 @@ def test_a_mixed_batch_sends_divergences_as_a_separate_message(monkeypatch):
          "label": "Bullish RSI Divergence", "direction": "bullish", "rsi_gap": 8.2,
          "age_candles": 2, "break_dir": None, "level": None, "target": None},
     ])
-    assert ok is True
-    assert len(sent) == 2, "breakouts and divergences go out as two messages"
-    pattern_msg = next(m for m in sent if "Bullish Flag" in m)
-    div_msg     = next(m for m in sent if "RSI Divergence" in m)
-    # Neither message bleeds into the other.
-    assert "RSI Divergence" not in pattern_msg
-    assert "Bullish Flag" not in div_msg
-
+    assert ok is True and len(sent) == 1
+    msg = sent[0]
+    assert "Bullish Flag confirmed ↑ 65,000.00 → 🎯 68,000.00" in msg
+    div_line = next(l for l in msg.splitlines() if "RSI Divergence" in l)
+    assert "(by 8.2 RSI pts)" in div_line and "🎯" not in div_line and "confirmed" not in div_line
 
 def test_a_divergence_only_batch_sends_one_message(monkeypatch):
     sent = _capture_sends(monkeypatch)
@@ -246,10 +246,10 @@ def test_a_divergence_only_batch_sends_one_message(monkeypatch):
          "age_candles": 0, "break_dir": None, "level": None, "target": None}])
     assert len(sent) == 1 and "RSI Divergence" in sent[0]
 
-
-def test_a_breakout_only_batch_sends_no_divergence_message(monkeypatch):
+def test_a_breakout_only_batch_mentions_no_divergence(monkeypatch):
     sent = _capture_sends(monkeypatch)
     send_pattern_alerts([
         {"kind": "flag", "symbol": "BTC", "timeframe": "1D", "label": "Bullish Flag",
          "direction": "bullish", "break_dir": "up", "level": 65000, "target": 68000}])
     assert len(sent) == 1 and "RSI Divergence" not in sent[0]
+

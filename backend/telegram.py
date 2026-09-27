@@ -1,7 +1,9 @@
 """Telegram notification — sends daily trade recommendations to a channel/group."""
 import os
 import requests
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from telegram_digest import closed_lines, status_line, track_line
 
 
 TELEGRAM_API = "https://api.telegram.org"
@@ -92,9 +94,11 @@ def build_rec_message(recs_data: Dict) -> str:
             is_reversal = r.get("reversal_trade", False)
             rev_tag     = " ↩ REVERSAL" if is_reversal else ""
 
+            _st = status_line((recs_data.get("post_status") or {}).get(str(sym).upper()))
             block = [
                 "",
                 f"*#{i} {sym}/USDT* {_dir_icon(d)} *{d}{rev_tag}*  `{score}/100`",
+            ] + ([f"  {_st}"] if _st else []) + [
                 f"  💰 Entry: {entry}",
                 f"  🛑 Stop:  {sl}" + (f"  (-{sl_pct})" if sl_pct else ""),
             ] + tp_lines + [
@@ -124,6 +128,13 @@ def build_rec_message(recs_data: Dict) -> str:
                         f"— {_icon} price {'up' if _etype == 'pump' else 'down'} {abs(_roc):.1f}%: _{_detail}_"
                     )
             lines += [l for l in block if l is not None]
+
+    _closed = closed_lines(recs_data.get("recent_closed") or [])
+    if _closed:
+        lines += ["", "🏁 *Closed since the last update*"] + _closed
+    _track = track_line(recs_data.get("track_7d"))
+    if _track:
+        lines += ["", _track]
 
     lines += [
         "",
@@ -284,12 +295,17 @@ def build_rsi_swing_alert_message(alerts: List[Dict], date_label: str = "") -> s
     return "\n".join(lines)
 
 
-def _post_message(token: str, chat_id: str, text: str) -> bool:
-    resp = requests.post(
-        f"{TELEGRAM_API}/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-        timeout=15,
-    )
+def _post_message(token: str, chat_id: str, text: str, *,
+                  markdown: bool = True, silent: bool = False) -> bool:
+    """`silent` delivers without a sound/vibration (Telegram's
+    disable_notification): used for routine updates so the channel only pings
+    for real news."""
+    body = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if markdown:
+        body["parse_mode"] = "Markdown"
+    if silent:
+        body["disable_notification"] = True
+    resp = requests.post(f"{TELEGRAM_API}/bot{token}/sendMessage", json=body, timeout=15)
     resp.raise_for_status()
     return True
 
@@ -304,12 +320,16 @@ _DEDICATED = [
 ]
 
 
-def send_pattern_alerts(alerts: List[Dict], date_label: str = "") -> bool:
-    """Send freshly-confirmed alerts to the configured Telegram channel.
+def send_pattern_alerts(alerts: List[Dict], date_label: str = "",
+                        active: Optional[Dict[str, str]] = None) -> bool:
+    """Send freshly-confirmed alerts to the configured Telegram channel as ONE
+    coin-grouped, ranked "Market Update" (see telegram_digest), instead of a
+    separate message per alert type. It notifies with a sound only for real
+    news (⭐ high-timeframe confluence, or a conflict with an open signal);
+    otherwise it is delivered silently. `active` maps symbol → open signal
+    direction, for the ✅/⚠️ tags. Returns True if the message was sent.
 
-    Divergences and RSI reversal markers each go out as their OWN dedicated
-    message; breakout confirmations and failures go out as the 'Pattern'
-    message. All to the same channel. Returns True if any message was sent.
+    (The per-type builders above are kept for previews and tests.)
     """
     if not alerts:
         return False
@@ -318,26 +338,17 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "") -> bool:
     if not token or not chat_id:
         print("[telegram] BOT_TOKEN or CHAT_ID not set — skipping pattern alerts")
         return False
-
-    def _is_dedicated(a):
-        return any(pred(a) for pred, _b, _l in _DEDICATED)
-
-    groups = [(build_pattern_alert_message, "pattern",
-               [a for a in alerts if not _is_dedicated(a)])]
-    for pred, builder, label in _DEDICATED:
-        groups.append((builder, label, [a for a in alerts if pred(a)]))
-
-    sent = False
-    for builder, label, group in groups:
-        if not group:
-            continue
-        try:
-            _post_message(token, chat_id, builder(group, date_label))
-            print(f"[telegram] {len(group)} {label} alert(s) sent to {chat_id}")
-            sent = True
-        except Exception as e:
-            print(f"[telegram] ERROR sending {label} alerts: {e}")
-    return sent
+    from telegram_digest import build_market_digest
+    text, loud = build_market_digest(alerts, active=active, date_label=date_label)
+    try:
+        # Plain text: pattern labels can contain characters that break Markdown.
+        _post_message(token, chat_id, text, markdown=False, silent=not loud)
+        print(f"[telegram] market update ({len(alerts)} reads, "
+              f"{'loud' if loud else 'silent'}) sent to {chat_id}")
+        return True
+    except Exception as e:
+        print(f"[telegram] ERROR sending market update: {e}")
+        return False
 
 
 def send_daily_recs(recs_data: Dict) -> bool:
@@ -350,14 +361,18 @@ def send_daily_recs(recs_data: Dict) -> bool:
         return False
 
     text = build_rec_message(recs_data)
+    # Ping only when there's something new to act on: a new signal (or no
+    # status information at all). A post that only re-lists open signals and
+    # results is delivered silently.
+    status = recs_data.get("post_status")
+    loud = (not status) or any(v.get("state") == "new" for v in status.values())
+    body = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    if not loud:
+        body["disable_notification"] = True
     try:
         resp = requests.post(
             f"{TELEGRAM_API}/bot{token}/sendMessage",
-            json={
-                "chat_id":    chat_id,
-                "text":       text,
-                "parse_mode": "Markdown",
-            },
+            json=body,
             timeout=15,
         )
         resp.raise_for_status()

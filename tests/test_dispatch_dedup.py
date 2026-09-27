@@ -143,7 +143,9 @@ def test_the_cron_dispatches_through_the_guard():
     import inspect
     src = inspect.getsource(appmod.api_cron_daily)
     assert src.count("_dispatch_once(") == 2, "telegram AND twitter must be guarded"
-    assert "_send_telegram_recs(result)" in src
+    # The guarded send adds the post's status context, then sends.
+    assert "_send_recs_with_context(result)" in src
+    assert "_send_telegram_recs(" in inspect.getsource(appmod._send_recs_with_context)
 
 
 def test_a_failed_compute_does_not_announce_a_stale_set():

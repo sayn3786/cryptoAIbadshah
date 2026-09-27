@@ -118,11 +118,11 @@ def _capture_sends(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     sent = []
     monkeypatch.setattr(tgmod, "_post_message",
-                        lambda token, chat_id, text: sent.append(text) or True)
+                        lambda token, chat_id, text, **kw: sent.append(text) or True)
     return sent
 
 
-def test_a_mixed_batch_sends_three_separate_messages(monkeypatch):
+def test_a_mixed_batch_is_one_digest_grouped_by_coin(monkeypatch):
     sent = _capture_sends(monkeypatch)
     ok = send_pattern_alerts([
         {"kind": "flag", "symbol": "BTC", "timeframe": "1D", "label": "Bullish Flag",
@@ -134,11 +134,11 @@ def test_a_mixed_batch_sends_three_separate_messages(monkeypatch):
          "timeframe": "1D", "label": "RSI Oversold Bottom", "direction": "bullish",
          "rsi": 32, "level": None, "target": None, "break_dir": None},
     ])
-    assert ok is True and len(sent) == 3
-    assert any("Bullish Flag" in m and "RSI" not in m for m in sent)
-    assert any("RSI Divergence" in m for m in sent)
-    assert any("RSI Reversal" in m for m in sent)
-
+    assert ok is True and len(sent) == 1
+    msg = sent[0]
+    assert "Market Update" in msg
+    assert "Bullish Flag confirmed" in msg and "RSI Divergence" in msg
+    assert "RSI Oversold Bottom (RSI 32)" in msg
 
 # ── Relevance status: active / played_out / invalidated ──────────────────────
 
