@@ -236,7 +236,8 @@ def test_a_mixed_batch_is_one_digest_and_a_divergence_is_not_shown_as_a_breakout
     msg = sent[0]
     assert "Bullish Flag confirmed ↑ 65,000.00 → 🎯 68,000.00" in msg
     div_line = next(l for l in msg.splitlines() if "RSI Divergence" in l)
-    assert "(by 8.2 RSI pts)" in div_line and "🎯" not in div_line and "confirmed" not in div_line
+    # No broken level and no target: a divergence isn't a breakout.
+    assert "(by 8.2 RSI pts)" in div_line and "🎯" not in div_line and "↑" not in div_line
 
 def test_a_divergence_only_batch_sends_one_message(monkeypatch):
     sent = _capture_sends(monkeypatch)

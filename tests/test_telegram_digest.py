@@ -83,7 +83,7 @@ def test_a_long_update_splits_between_coin_blocks_under_the_limit():
     alerts = [A(f"COIN{i}", tf) for i in range(60) for tf in ("1W", "1D", "4H")]
     parts, _ = td.build_market_digest_parts(alerts, max_chars=td.MAX_MESSAGE_CHARS)
     assert len(parts) > 1 and all(len(p) <= 4096 for p in parts)
-    assert parts[0].startswith(f"🔔 CryptoMonk — Market Update (1/{len(parts)})")
+    assert parts[0].startswith(f"🔔 CryptoMonk — Daily Market Update (1D / 1W) (1/{len(parts)})")
     assert "@CryptoMonk1560" in parts[-1] and "@CryptoMonk1560" not in parts[0]
     heads = lambda p: re.findall(r"^⭐ (COIN\d+)  \(", p, flags=re.M)
     seen = [c for p in parts for c in heads(p)]
@@ -170,9 +170,9 @@ def test_daily_post_is_silent_unless_it_has_a_new_signal(monkeypatch):
 
 # ── schedule ─────────────────────────────────────────────────────────────────
 
-def test_market_update_runs_after_every_4h_close():
+def test_daily_update_runs_once_after_the_1d_close():
     from _worker_schedule import worker_schedule
-    assert worker_schedule()["patterns"] == [(h, 15) for h in range(0, 24, 4)]
+    assert worker_schedule()["patterns"] == [(0, 15)]      # 8:15 AM SGT
 
 
 

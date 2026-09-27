@@ -49,6 +49,10 @@ def _forming(a: Dict[str, Any]) -> bool:
 
 def _weight(a: Dict[str, Any]) -> float:
     w = TF_WEIGHT.get(str(a.get("timeframe")), 1)
+    if a.get("status") == "invalidated":
+        return 0.0
+    if a.get("status") == "played_out":
+        return w * 0.3
     if _forming(a):
         return w * 0.4
     if a.get("kind") == "indicator_flip":
@@ -59,7 +63,25 @@ def _weight(a: Dict[str, Any]) -> float:
 
 
 def describe(a: Dict[str, Any]) -> str:
-    """One line for one alert (without the coin name)."""
+    """One line for one alert (without the coin name). A played-out read is
+    marked, and says when it drops off the list."""
+    line = _describe(a)
+    if a.get("status") == "invalidated":
+        side = "below the divergence low" if a.get("direction") == "bullish" else "above the divergence high"
+        return line + f" · ✗ failed: closed {side} (last time listed)"
+    if a.get("status") == "played_out":
+        pa = a.get("played_ago")
+        if isinstance(pa, int):
+            left = PLAYED_OUT_KEEP - pa
+            tail = (" · last time listed" if left <= 0
+                    else f" · drops off after {left} more candle{'s' if left != 1 else ''}")
+            line += f" · ✓ played out {_ago(pa)}{tail}"
+        else:
+            line += " · ✓ played out"
+    return line
+
+
+def _describe(a: Dict[str, Any]) -> str:
     tf, kind = a.get("timeframe"), a.get("kind")
     head = f"{tf:<3} {_dot(a.get('direction'))}"
     if a.get("event") == "failed":
@@ -77,6 +99,10 @@ def describe(a: Dict[str, Any]) -> str:
             return f"{head} {label}{tag}{gap_s}{wait}"
         return f"{head} {a.get('label')}{gap_s}{_age(a)}"
     if kind == "indicator_flip":
+        day = date_sgt(a.get("break_ts"))
+        ago = a.get("bars_ago")
+        if isinstance(ago, int):
+            return f"{head} {a.get('label')} · {_ago(ago)}" + (f" ({day} close)" if day else "")
         when = when_sgt(a.get("break_ts"))
         return f"{head} {a.get('label')}" + (f" · {when}" if when else "")
     if kind == "rsi_swing":
@@ -89,18 +115,37 @@ def describe(a: Dict[str, Any]) -> str:
     return f"{head} {a.get('label')} confirmed{lvl}{tgt}"
 
 
+# A confirmed divergence / RSI reversal needs this many closes after its pivot
+# before it exists, so "confirmed N candles ago" = pivot age − this.
+PIVOT_CONFIRM_BARS = 3
+# A played-out read stays listed for this many candles after it played out.
+PLAYED_OUT_KEEP = 2
+
+
+def _ago(n: int) -> str:
+    return "on the latest candle" if n <= 0 else f"{n} candle{'s' if n != 1 else ''} ago"
+
+
 def _age(a: Dict[str, Any]) -> str:
-    """" · 3 candles ago (pivot Sep 25, 8:00 AM SGT)" for a confirmed divergence
-    or RSI reversal. They are inherently a few candles old when they confirm
-    (a pivot needs closes on its right), so the reader should see how old."""
+    """" · confirmed 1 candle ago (Sep 27 close)" for a confirmed divergence or
+    RSI reversal: when it actually happened, i.e. the candle that confirmed it
+    (what the 3-candle window counts), not the older pivot."""
     age = a.get("age_candles")
     tf_ms = TF_MS.get(str(a.get("timeframe")))
     ts = a.get("break_ts")
-    when = when_sgt(int(ts) + tf_ms) if ts is not None and tf_ms else ""
     if not isinstance(age, int):
+        when = when_sgt(int(ts) + tf_ms) if ts is not None and tf_ms else ""
         return f" · pivot {when}" if when else ""
-    ago = "on the last close" if age == 0 else f"{age} candle{'s' if age != 1 else ''} ago"
-    return f" · {ago}" + (f" (pivot {when})" if when else "")
+    conf = max(age - PIVOT_CONFIRM_BARS, 0)
+    day = (date_sgt(int(ts) + (PIVOT_CONFIRM_BARS + 1) * tf_ms)
+           if ts is not None and tf_ms else "")
+    return f" · confirmed {_ago(conf)}" + (f" ({day} close)" if day else "")
+
+
+def date_sgt(ts_ms: Any) -> str:
+    """A candle close time as "Sep 27" (SGT)."""
+    full = when_sgt(ts_ms)
+    return full.split(",")[0] if full else ""
 
 
 def when_sgt(ts_ms: Any) -> str:
@@ -156,7 +201,8 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
         items.sort(key=lambda a: (TF_ORDER.index(a.get("timeframe"))
                                   if a.get("timeframe") in TF_ORDER else 9))
         score = sum(_weight(a) for a in items)
-        live = [a for a in items if a.get("event") != "failed"]
+        live = [a for a in items if a.get("event") != "failed"
+                and a.get("status") not in ("played_out", "invalidated")]
         bulls = [a for a in live if a.get("direction") == "bullish"]
         bears = [a for a in live if a.get("direction") == "bearish"]
         confluence = max(len(bulls), len(bears)) >= 2
@@ -193,7 +239,7 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
                                 + [f"  {str(a.get('symbol')).upper()} {describe(a)}"
                                    for a in forming]))
 
-    title = "🔔 CryptoMonk — Market Update" + (f" · {date_label}" if date_label else "")
+    title = "🔔 CryptoMonk — Daily Market Update (1D / 1W)" + (f" · {date_label}" if date_label else "")
     footer = "\n".join(FOOTER)
     if max_chars is None:
         return ["\n\n".join([title] + blocks + [footer])], loud
