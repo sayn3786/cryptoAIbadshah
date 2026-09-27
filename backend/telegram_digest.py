@@ -49,6 +49,8 @@ def _forming(a: Dict[str, Any]) -> bool:
 
 def _weight(a: Dict[str, Any]) -> float:
     w = TF_WEIGHT.get(str(a.get("timeframe")), 1)
+    if a.get("status") == "invalidated":
+        return 0.0
     if a.get("status") == "played_out":
         return w * 0.3
     if _forming(a):
@@ -64,6 +66,9 @@ def describe(a: Dict[str, Any]) -> str:
     """One line for one alert (without the coin name). A played-out read is
     marked, and says when it drops off the list."""
     line = _describe(a)
+    if a.get("status") == "invalidated":
+        side = "below the divergence low" if a.get("direction") == "bullish" else "above the divergence high"
+        return line + f" · ✗ failed: closed {side} (last time listed)"
     if a.get("status") == "played_out":
         pa = a.get("played_ago")
         if isinstance(pa, int):
@@ -197,7 +202,7 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
                                   if a.get("timeframe") in TF_ORDER else 9))
         score = sum(_weight(a) for a in items)
         live = [a for a in items if a.get("event") != "failed"
-                and a.get("status") != "played_out"]
+                and a.get("status") not in ("played_out", "invalidated")]
         bulls = [a for a in live if a.get("direction") == "bullish"]
         bears = [a for a in live if a.get("direction") == "bearish"]
         confluence = max(len(bulls), len(bears)) >= 2

@@ -3,7 +3,8 @@ Daily 1D/1W Telegram list.
 
 Every read from its last 3 candles (forming / confirmed RSI divergence, RSI
 reversal, indicator flips). A read that played out stays, marked, for 2 more
-candles after it played out, then drops. Invalidated RSI reversals drop at
+candles after it played out, then drops. A divergence whose pivot low/high
+breaks is shown once as ✗ failed, then drops. Invalidated RSI reversals drop at
 once. Sent once a day after the 1D close.
 """
 import os
@@ -181,3 +182,49 @@ def test_flip_line_says_how_many_candles_ago():
          "label": "SuperTrend flipped bullish", "break_ts": 1790553600000, "bars_ago": 1}
     assert td.describe(f).endswith("· 1 candle ago (Sep 28 close)")
     assert td.describe({**f, "bars_ago": 0}).endswith("· on the latest candle (Sep 28 close)")
+
+
+# ── divergence invalidation ──────────────────────────────────────────────────
+
+def test_invalidated_ago_is_the_first_close_past_the_pivot_extreme():
+    closed = C([100.0] * 5 + [100.0, 99.5, 98.0, 101.0])     # pivot low 99 at index 5
+    assert app._invalidated_ago(closed, 5, True) == 1        # 98 closes below → index 7
+    assert app._invalidated_ago(closed, 5, False) is None    # never above 101 (high)
+    assert app._invalidated_ago(C([100.0] * 6), 3, True) is None
+
+
+@pytest.mark.parametrize("event_age,played,failed,expected", [
+    (1, None, 0, (True, "invalidated")),     # broke on the latest candle → shown once
+    (2, None, 1, (False, "invalidated")),    # broke a candle ago → gone
+    (2, 1, 0, (True, "played_out")),         # played out first; a later break doesn't matter
+    (1, None, None, (True, "active")),
+    (5, None, 0, (False, "invalidated")),    # already outside the window
+])
+def test_divergence_status(event_age, played, failed, expected):
+    assert app._div_status(event_age, played, failed) == expected
+
+
+def test_a_failed_divergence_is_marked_once_then_dropped(stub):
+    mp, _ = stub
+    closes = [100.0] * 59 + [97.0]           # latest close below the pivot low (99)
+    closed = C(closes)
+    mp.setattr(app, "detect_rsi_divergence", lambda c, r: _div(closed, 59 - 4))
+    mp.setattr(app.candle_analysis, "rsi_swing_markers", lambda c, r: [])
+    reads = app._daily_reads_for(closed, "1D")
+    assert [(r["kind"], r["status"]) for r in reads] == [("divergence", "invalidated")]
+    line = td.describe({**reads[0], "timeframe": "1D"})
+    assert "✗ failed: closed below the divergence low (last time listed)" in line
+
+    closed2 = C([100.0] * 58 + [97.0, 97.0])  # broke a candle ago → gone
+    mp.setattr(app, "detect_rsi_divergence", lambda c, r: _div(closed2, 59 - 4))
+    assert app._daily_reads_for(closed2, "1D") == []
+
+
+def test_a_failed_read_gets_no_star_or_ping():
+    reads = [{"symbol": "BTC", "timeframe": "1W", "kind": "divergence", "direction": "bullish",
+              "label": "Bullish RSI Divergence", "status": "invalidated", "age_candles": 4,
+              "break_ts": 1790208000000},
+             {"symbol": "BTC", "timeframe": "1D", "kind": "indicator_flip", "direction": "bullish",
+              "label": "MACD flipped bullish", "break_ts": 1790553600000, "bars_ago": 0}]
+    text, loud = td.build_market_digest(reads)
+    assert "⭐" not in text and not loud

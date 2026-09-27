@@ -986,6 +986,32 @@ def _played_ago(closed, rsi, start, bullish, pct, need_rsi=True):
     return None
 
 
+def _invalidated_ago(closed, start, bullish):
+    """Bars ago of the FIRST close after `start` beyond the pivot candle's
+    extreme: below its low for a bullish read, above its high for a bearish
+    one. That breaks the idea. None if it hasn't happened."""
+    try:
+        lvl = float(closed[start]["low"] if bullish else closed[start]["high"])
+    except (IndexError, KeyError, TypeError, ValueError):
+        return None
+    last = len(closed) - 1
+    for k in range(start + 1, last + 1):
+        c = float(closed[k]["close"])
+        if (c < lvl) if bullish else (c > lvl):
+            return last - k
+    return None
+
+
+def _div_status(event_age, played_ago, failed_ago):
+    """(show, status) for a divergence: whichever of played-out / invalidated
+    happened FIRST decides. Invalidated shows once, on the candle it broke
+    (marked ✗ failed), then drops."""
+    if failed_ago is not None and (played_ago is None or failed_ago > played_ago):
+        in_window = event_age is not None and event_age - failed_ago < DAILY_READ_WINDOW
+        return in_window and failed_ago == 0, "invalidated"
+    return _keep(event_age, played_ago)
+
+
 def _keep(event_age, played_ago):
     """(show, status) for a read by the daily-list rules."""
     if played_ago is None:
@@ -1017,9 +1043,10 @@ def _daily_reads_for(closed: list, tf: str) -> list:
             ci = ts_list.index(curr)
             pivot_age = last_i - ci
             played = _played_ago(closed, rsi, ci, bullish, DIVERGENCE_PLAYOUT_PCT)
+            failed = _invalidated_ago(closed, ci, bullish)
             side = "Bullish" if bullish else "Bearish"
             if div.get("forming"):
-                show, status = _keep(pivot_age, played)
+                show, status = _div_status(pivot_age, played, failed)
                 if show:
                     out.append({"kind": "divergence_forming", "status": status,
                                 "label": f"Forming {side} RSI Divergence",
@@ -1029,7 +1056,7 @@ def _daily_reads_for(closed: list, tf: str) -> list:
                                 "closes_to_confirm": div.get("closes_to_confirm"),
                                 "played_ago": played})
             elif div.get("status") != "expired":
-                show, status = _keep(pivot_age - _PIVOT_WINDOW, played)
+                show, status = _div_status(pivot_age - _PIVOT_WINDOW, played, failed)
                 if show:
                     out.append({"kind": "divergence", "status": status,
                                 "label": f"{'Hidden ' if hidden else ''}{side} RSI Divergence",
