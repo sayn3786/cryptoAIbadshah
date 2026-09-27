@@ -900,7 +900,7 @@ _FLIP_LABELS = {
 }
 
 
-def _indicator_flips_for(closed: list, tf: str) -> list:
+def _indicator_flips_for(closed: list, tf: str, fresh_bars: Optional[int] = None) -> list:
     """Fresh indicator flips on one candle set, as alert dicts (symbol added
     by the caller): MACD (signal-line cross, i.e. the histogram changing sign),
     SuperTrend, price vs EMA 50, and Ichimoku's Tenkan/Kijun cross.
@@ -916,7 +916,8 @@ def _indicator_flips_for(closed: list, tf: str) -> list:
     found = []
 
     def _add(key, bars_ago, ts, previous_direction=None, direction=None):
-        if bars_ago is None or bars_ago > INDICATOR_FLIP_FRESH_BARS or not ts:
+        limit = INDICATOR_FLIP_FRESH_BARS if fresh_bars is None else fresh_bars
+        if bars_ago is None or bars_ago > limit or not ts:
             return
         d = direction or ("bullish" if previous_direction == "bearish" else "bearish")
         up, down = _FLIP_LABELS[key]
@@ -949,6 +950,147 @@ def _indicator_flips_for(closed: list, tf: str) -> list:
              ich.get("tk_previous_direction"))
     except Exception:
         pass
+    return found
+
+
+# ── Daily Telegram list (1D / 1W) ────────────────────────────────────────────
+# Once a day after the 1D close, the channel gets a LIST of every 1D/1W read
+# from its last DAILY_READ_WINDOW candles: forming and confirmed RSI divergence,
+# RSI reversal and indicator flips. A read that has PLAYED OUT stays listed,
+# marked, for DAILY_PLAYED_OUT_KEEP more candles after the candle it played out
+# on, then drops off. An invalidated RSI reversal drops at once.
+DAILY_READ_TFS = ("1D", "1W")
+DAILY_READ_WINDOW = 3            # "last 3 candles": event age 0, 1 or 2
+DAILY_PLAYED_OUT_KEEP = 2
+_PIVOT_WINDOW = 3                # detectors confirm a pivot 3 closes after it
+_RSI_MARK_PLAYOUT_PCT = 0.03     # candle_analysis.RSI_MARK_PLAYOUT_PCT
+
+
+def _played_ago(closed, rsi, start, bullish, pct, need_rsi=True):
+    """Bars ago of the FIRST close after `start` at which a read played out:
+    price closed `pct` past the start candle's close in the called direction
+    (and, for divergences, RSI back across 50). None if it hasn't."""
+    try:
+        base = float(closed[start]["close"])
+    except (IndexError, KeyError, TypeError, ValueError):
+        return None
+    last = len(closed) - 1
+    for k in range(start + 1, last + 1):
+        c = float(closed[k]["close"])
+        moved = c >= base * (1 + pct) if bullish else c <= base * (1 - pct)
+        r = rsi[k] if k < len(rsi) else None
+        rsi_ok = (not need_rsi) or (r is not None and (r >= DIVERGENCE_PLAYOUT_RSI
+                                                       if bullish else r <= DIVERGENCE_PLAYOUT_RSI))
+        if moved and rsi_ok:
+            return last - k
+    return None
+
+
+def _keep(event_age, played_ago):
+    """(show, status) for a read by the daily-list rules."""
+    if played_ago is None:
+        return event_age is not None and 0 <= event_age < DAILY_READ_WINDOW, "active"
+    # Played out: keep for DAILY_PLAYED_OUT_KEEP candles after it played out,
+    # if it was still inside the window when it did.
+    was_in_window = event_age is not None and event_age - played_ago < DAILY_READ_WINDOW
+    return (was_in_window and played_ago <= DAILY_PLAYED_OUT_KEEP), "played_out"
+
+
+def _daily_reads_for(closed: list, tf: str) -> list:
+    """All reads for the daily list on one closed-candle series (symbol added
+    by the caller). Each carries status active / played_out."""
+    if not closed or len(closed) < 40:
+        return []
+    ts_list = [c.get("timestamp") for c in closed]
+    last_i = len(closed) - 1
+    rsi = calculate_rsi_series([c.get("close") for c in closed])
+    out = []
+
+    # RSI divergence: confirmed, or forming.
+    try:
+        div = detect_rsi_divergence(closed, rsi)
+        curr = ((div.get("points") or {}).get("curr") or {}).get("timestamp")
+        kind_s = str(div.get("type") or "")
+        if curr in ts_list and kind_s:
+            bullish = kind_s.endswith("bullish")
+            hidden = kind_s.startswith("hidden")
+            ci = ts_list.index(curr)
+            pivot_age = last_i - ci
+            played = _played_ago(closed, rsi, ci, bullish, DIVERGENCE_PLAYOUT_PCT)
+            side = "Bullish" if bullish else "Bearish"
+            if div.get("forming"):
+                show, status = _keep(pivot_age, played)
+                if show:
+                    out.append({"kind": "divergence_forming", "status": status,
+                                "label": f"Forming {side} RSI Divergence",
+                                "direction": "bullish" if bullish else "bearish",
+                                "rsi_gap": div.get("strength"), "break_ts": curr,
+                                "age_candles": pivot_age,
+                                "closes_to_confirm": div.get("closes_to_confirm"),
+                                "played_ago": played})
+            elif div.get("status") != "expired":
+                show, status = _keep(pivot_age - _PIVOT_WINDOW, played)
+                if show:
+                    out.append({"kind": "divergence", "status": status,
+                                "label": f"{'Hidden ' if hidden else ''}{side} RSI Divergence",
+                                "direction": "bullish" if bullish else "bearish",
+                                "rsi_gap": div.get("strength"), "break_ts": curr,
+                                "age_candles": pivot_age, "played_ago": played})
+    except Exception:
+        pass
+
+    # RSI reversal (oversold bottom / overbought top), newest marker.
+    try:
+        marks = candle_analysis.rsi_swing_markers(closed, rsi)
+        if marks:
+            m = marks[-1]
+            if m.get("timestamp") in ts_list and m.get("status") != "invalidated":
+                mi = ts_list.index(m["timestamp"])
+                bottom = m.get("kind") == "oversold_bottom"
+                played = _played_ago(closed, rsi, mi, bottom, _RSI_MARK_PLAYOUT_PCT,
+                                     need_rsi=False)
+                show, status = _keep((last_i - mi) - _PIVOT_WINDOW, played)
+                if show:
+                    out.append({"kind": "rsi_swing", "status": status,
+                                "label": "RSI Oversold Bottom" if bottom else "RSI Overbought Top",
+                                "direction": "bullish" if bottom else "bearish",
+                                "rsi": m.get("rsi"), "break_ts": m["timestamp"],
+                                "age_candles": last_i - mi, "played_ago": played})
+    except Exception:
+        pass
+
+    # Indicator flips in the last 3 candles (a flip is superseded, not "played
+    # out": if it flips back, the new flip is what's listed).
+    for f in _indicator_flips_for(closed, tf, fresh_bars=DAILY_READ_WINDOW - 1):
+        out.append({**f, "status": "active"})
+    return out
+
+
+def _daily_market_reads(symbols=None) -> list:
+    """The daily list across coins × (1D, 1W), in parallel. Coins with
+    demo/stale data are skipped (and logged), like the alert scan."""
+    symbols = symbols or list(SCAN_SYMBOLS)
+    skipped: dict = {}
+
+    def _one(pair):
+        sym, tf = pair
+        try:
+            closed, why = _fetch_alert_candles(sym, tf)
+        except Exception:
+            closed, why = [], "fetch_failed"
+        if why:
+            skipped[f"{sym}:{tf}"] = why
+            return []
+        return [{"symbol": sym, "timeframe": tf, **r} for r in _daily_reads_for(closed, tf)]
+
+    pairs = [(sym, tf) for sym in symbols for tf in DAILY_READ_TFS]
+    found: list = []
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        for res in ex.map(_one, pairs):
+            found.extend(res)
+    bad = {k: v for k, v in skipped.items() if v in ("demo", "stale")}
+    if bad:
+        print(f"[daily-list] skipped {len(bad)} coin/timeframe(s) with unusable data: {bad}")
     return found
 
 
@@ -3375,9 +3517,10 @@ def api_telegram_send():
 @app.get("/api/patterns/alert")
 @app.post("/api/patterns/alert")
 def api_patterns_alert():
-    """Scan for freshly-confirmed chart patterns and push any NEW ones to Telegram.
-    Called by the daily cron; also usable on demand. Optional query params:
-      symbols=BTC,ETH  tfs=1D,1W  dry=1 (scan only, don't send / don't record)."""
+    """Send the DAILY 1D/1W Market Update to Telegram (RSI divergences, forming
+    divergences, RSI reversals, indicator flips; see _daily_reads_for).
+    Called once a day after the 1D close; also usable on demand. Optional query
+    params: symbols=BTC,ETH  dry=1 (build the list, don't send)."""
     import os as _os
     cron_secret = _os.getenv("CRON_SECRET", "")
     if cron_secret and request.method == "POST":
@@ -3388,31 +3531,24 @@ def api_patterns_alert():
             return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     syms = [s.strip().upper() for s in request.args.get("symbols", "").split(",") if s.strip()] or None
-    tfs  = [t.strip() for t in request.args.get("tfs", "").split(",") if t.strip()] or None
     dry  = request.args.get("dry") in ("1", "true", "yes")
 
+    # The DAILY 1D/1W list (see _daily_reads_for): every read from its last 3
+    # candles, played-out ones for 2 more candles. Sent at most once per UTC
+    # day, so a scheduler retry never double-posts; nothing is sent when empty.
+    reads = _daily_market_reads(syms)
     if dry:
-        # Preview without claiming/sending — checks (not claims) each id.
-        found = []
-        for sym in (syms or list(SYMBOLS.keys())):
-            for tf in (tfs or PATTERN_ALERT_TFS):
-                try:
-                    closed, why = _fetch_alert_candles(sym, tf)
-                except Exception:
-                    continue
-                if why:
-                    found.append({"symbol": sym, "timeframe": tf, "skipped": why})
-                    continue
-                for pat in _confirmed_patterns_for(closed, tf):
-                    if pat.get("kind") not in TELEGRAM_ALERT_KINDS:
-                        continue
-                    already = _kv_exists(_pattern_alert_id(sym, tf, pat))
-                    found.append({"symbol": sym, "timeframe": tf, "already_alerted": already, **pat})
-        return jsonify({"ok": True, "dry": True, "kv": _kv_enabled(), "found": found})
-
-    alerts = _scan_confirmed_patterns(syms, tfs)
-    sent = _send_pattern_alerts(alerts, active=_active_signal_directions()) if alerts else False
-    return jsonify({"ok": True, "new": len(alerts), "sent": bool(sent), "alerts": alerts})
+        return jsonify({"ok": True, "dry": True, "reads": reads})
+    if not reads:
+        return jsonify({"ok": True, "reads": 0, "result": "empty"})
+    now_sgt = datetime.now(_SGT)
+    day_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    active = _active_signal_directions()
+    result = _dispatch_once(
+        "tg:daily-list", day_key,
+        lambda: _send_pattern_alerts(reads, active=active,
+                                     date_label=now_sgt.strftime("%b %d")))
+    return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
 @app.get("/api/twitter/posts")

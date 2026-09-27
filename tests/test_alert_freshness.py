@@ -121,8 +121,8 @@ def test_divergence_and_reversal_lines_show_age_and_pivot_date():
     div = {"symbol": "BTC", "timeframe": "1D", "kind": "divergence", "direction": "bullish",
            "label": "Bullish RSI Divergence", "rsi_gap": 6.2, "age_candles": 3,
            "break_ts": 1790208000000}                        # 24 Sep 00:00 UTC open
-    assert td.describe(div).endswith("· 3 candles ago (pivot Sep 25, 8:00 AM SGT)")
+    assert td.describe(div).endswith("· confirmed today (pivot Sep 25, 8:00 AM SGT)")
     swing = {"symbol": "ETH", "timeframe": "4H", "kind": "rsi_swing", "direction": "bullish",
              "label": "RSI Oversold Bottom", "rsi": 28, "age_candles": 0,
              "break_ts": 1790409600000}
-    assert "· on the last close (pivot" in td.describe(swing)
+    assert "· confirmed today (pivot" in td.describe(swing)
