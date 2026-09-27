@@ -187,7 +187,7 @@ def _capture_sends(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     sent = []
     monkeypatch.setattr(tgmod, "_post_message",
-                        lambda token, chat_id, text: sent.append(text) or True)
+                        lambda token, chat_id, text, **kw: sent.append(text) or True)
     return sent
 
 
@@ -198,12 +198,14 @@ def test_a_forming_only_batch_sends_one_provisional_message(monkeypatch):
          "label": "Forming Bearish RSI Divergence", "direction": "bearish",
          "rsi_gap": 6.4, "closes_to_confirm": 3,
          "break_dir": None, "level": None, "target": None}])
-    assert ok is True
-    assert len(sent) == 1
-    assert "Forming RSI Divergence" in sent[0]
+    assert ok is True and len(sent) == 1
+    assert "⏳ Forming (not confirmed yet):" in sent[0]
+    assert "3 more closes to confirm" in sent[0]
 
-
-def test_confirmed_and_forming_go_out_as_two_separate_messages(monkeypatch):
+def test_forming_reads_are_listed_apart_from_confirmed_ones(monkeypatch):
+    # One digest now, but a reader must still never mistake a forming read for
+    # a confirmed one: forming reads sit only under the ⏳ "not confirmed yet"
+    # heading, after every confirmed coin block.
     sent = _capture_sends(monkeypatch)
     send_pattern_alerts([
         {"kind": "divergence", "symbol": "TAO", "timeframe": "1D",
@@ -214,9 +216,8 @@ def test_confirmed_and_forming_go_out_as_two_separate_messages(monkeypatch):
          "rsi_gap": 6.4, "closes_to_confirm": 2,
          "break_dir": None, "level": None, "target": None},
     ])
-    assert len(sent) == 2
-    confirmed_msg = next(m for m in sent if "Forming" not in m)
-    forming_msg = next(m for m in sent if "Forming" in m)
-    # Neither message bleeds into the other.
-    assert "Forming" not in confirmed_msg
-    assert "Provisional" in forming_msg or "provisional" in forming_msg
+    assert len(sent) == 1
+    confirmed_part, forming_part = sent[0].split("⏳ Forming (not confirmed yet):")
+    assert "TAO" in confirmed_part and "HYPE" not in confirmed_part
+    assert "HYPE" in forming_part and "2 more closes to confirm" in forming_part
+

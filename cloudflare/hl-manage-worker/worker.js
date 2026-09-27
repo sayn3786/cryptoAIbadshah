@@ -8,7 +8,7 @@
 //   hh:02, hh:12, hh:32  publish signals    POST /api/cron/publish  (+ HL auto-exec)
 //   hh:05, hh:35         outcome monitor    POST /api/signals/monitor
 //   00:07, 08:07, 12:07  Telegram daily     POST /api/cron/daily
-//   00:15, 08:15, 16:15  pattern alerts     POST /api/patterns/alert  (→ Telegram)
+//   every 4h at :15      market update      POST /api/patterns/alert  (→ Telegram digest)
 //   00:20                TAO snapshot       POST /api/cron/tao-snapshot
 //   01:30                data snapshots     POST /api/cron/etf-snapshot, /api/cron/market-snapshot
 //   every 4h at :10      ML collect         POST /api/research/ml/collect  (00:10, 04:10, …)
@@ -55,8 +55,9 @@ const JOBS = [
     due: ({ m }) => m === 5 || m === 35 },
   { name: "daily", path: "/api/cron/daily", ...S, retries: 2,
     due: ({ h, m }) => (h === 0 || h === 8 || h === 12) && m === 7 },
+  // Every 4H close (4H/1D/1W reads, one coin-grouped digest per run).
   { name: "patterns", path: "/api/patterns/alert", ...S, retries: 1,
-    due: ({ h, m }) => (h === 0 || h === 8 || h === 16) && m === 15 },
+    due: ({ h, m }) => h % 4 === 0 && m === 15 },
   { name: "tao-snapshot", path: "/api/cron/tao-snapshot", ...S, retries: 1,
     due: ({ h, m }) => h === 0 && m === 20 },
   { name: "etf-snapshot", path: "/api/cron/etf-snapshot", ...S, retries: 2,
