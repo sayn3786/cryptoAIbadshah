@@ -3398,6 +3398,7 @@ def api_cron_publish():
             hl_auto = _hl_auto_execute_run()
         except Exception:
             app.logger.exception("publish-run auto-execute failed")
+            _alert_auto_exec_crash()
             hl_auto = {"ok": False, "error_code": "HL_AUTO_EXECUTE_FAILED"}
 
     return jsonify({
@@ -3434,7 +3435,19 @@ def _hl_auto_execute_catch_up():
         return _hl_auto_execute_run()
     except Exception:
         app.logger.exception("catch-up auto-execute failed")
+        _alert_auto_exec_crash()
         return {"ok": False, "error_code": "HL_AUTO_EXECUTE_FAILED"}
+
+
+def _alert_auto_exec_crash():
+    try:
+        import ops_alerts
+        ops_alerts.notify_problem(
+            "🚨 HL auto-exec crashed during a publish run. Signals are saved, but "
+            "no order may have been placed for this slot. Check the dashboard / "
+            "run it by hand.", "auto-exec-crash")
+    except Exception:
+        pass
 
 
 @app.post("/api/cron/weekly-report")
@@ -3992,11 +4005,37 @@ def api_hl_manage():
     try:
         import hl_manage
         with _hl_execute_lock:
-            return jsonify(hl_manage.run())
+            out = hl_manage.run()
+        _alert_manager_pass(out)
+        return jsonify(out)
     except Exception:
         app.logger.exception("hyperliquid position manager failed")
         return jsonify({"ok": False, "error_code": "HL_MANAGE_FAILED",
                         "error": "Hyperliquid position manager failed"}), 502
+
+
+# How far back the every-minute manager looks for fully-closed trades to alert
+# on. Each trade is alerted once (deduped), so this only bounds the catch-up
+# after an outage, and what the first run after a deploy reports.
+CLOSED_ALERT_LOOKBACK_H = 3
+
+
+def _alert_manager_pass(out):
+    """Private alerts after a manager pass: stop moved / remainder closed /
+    failures, plus any trade that fully closed recently. Never raises."""
+    try:
+        import ops_alerts
+        if not ops_alerts.chat_id() or not (out or {}).get("ran"):
+            return
+        ops_alerts.notify_manager(out.get("results") or [])
+        import hl_account as _hl
+        now_ms = int(time.time() * 1000)
+        fills = _hl._post_info({"type": "userFillsByTime", "user": _hl.account_address(),
+                                "startTime": now_ms - 14 * 86_400_000}) or []
+        ops_alerts.notify_closed(
+            _hl.closed_trades(fills, now_ms, CLOSED_ALERT_LOOKBACK_H / 24))
+    except Exception:
+        app.logger.exception("manager alerts failed")
 
 
 @app.get("/api/hl/positions")
@@ -4198,6 +4237,11 @@ def _hl_auto_execute_run():
         except Exception:
             pass
         out = _ax.execute(signals, account_state=acct)
+    try:                                   # private trade/problem alerts; never fatal
+        import ops_alerts
+        ops_alerts.notify_execution(signals, out)
+    except Exception:
+        app.logger.exception("trade alert failed")
     out["ok"] = True
     out["ran"] = True
     out["min_strength"] = gate["min_strength"]
