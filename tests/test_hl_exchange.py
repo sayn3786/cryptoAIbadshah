@@ -52,6 +52,7 @@ def _open(monkeypatch, sig=SIG, account=FUNDED, **kw):
     kw.setdefault("table", TABLE)
     kw.setdefault("mark_px", 60000)                # live price for sizing
     kw.setdefault("claim_fn", lambda *a: True)     # claim wins by default
+    kw.setdefault("known_fn", lambda *a, **k: False)  # exchange hasn't seen the cloid
     kw.setdefault("send_fn", _Sender())
     kw.setdefault("release_fn", lambda key: None)
     return hx.open_position(sig, account_state=account, **kw)
@@ -308,3 +309,48 @@ def test_neither_perps_nor_spot_funded_still_rejects(monkeypatch):
     empty = {"account_value_usd": 0.0, "spot_usdc_usd": 0.0, "open_positions": []}
     r = _open(monkeypatch, account=empty)
     assert r["ok"] is False and r["reason"] == "INSUFFICIENT_MARGIN"
+
+
+
+# ── exchange-side exact-once (durable even without a KV store) ───────────────
+
+def test_exchange_already_knows_the_cloid_so_nothing_is_sent(monkeypatch):
+    _arm(monkeypatch)
+    sender = _Sender()
+    claimed = []
+    r = _open(monkeypatch, send_fn=sender, known_fn=lambda *a, **k: True,
+              claim_fn=lambda *a: claimed.append(a) or True)
+    assert r["ok"] is False and r["reason"] == "ALREADY_PLACED" and r["source"] == "exchange"
+    assert sender.calls == [] and claimed == []
+
+
+def test_order_status_lookup_failure_fails_closed(monkeypatch):
+    _arm(monkeypatch)
+    sender = _Sender()
+    r = _open(monkeypatch, send_fn=sender, known_fn=lambda *a, **k: None)
+    assert r["reason"] == "ORDER_STATUS_UNAVAILABLE" and sender.calls == []
+
+
+class _Info:
+    def __init__(self, payload=None, fail=False):
+        self.payload, self.fail, self.sent = payload, fail, None
+    def post(self, url, json=None, timeout=None):
+        self.sent = json
+        if self.fail:
+            raise RuntimeError("down")
+        payload = self.payload
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return payload
+        return R()
+
+
+def test_order_known_parses_the_exchange_answer(monkeypatch):
+    import hl_account
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xABC")
+    s = _Info({"status": "order", "order": {"status": "filled"}})
+    assert hl_account.order_known("0x" + "a" * 32, session=s) is True
+    assert s.sent == {"type": "orderStatus", "user": "0xABC", "oid": "0x" + "a" * 32}
+    assert hl_account.order_known("0x1", session=_Info({"status": "unknownOid"})) is False
+    assert hl_account.order_known("0x1", session=_Info({"weird": 1})) is None
+    assert hl_account.order_known("0x1", session=_Info(fail=True)) is None

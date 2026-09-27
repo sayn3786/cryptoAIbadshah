@@ -4259,6 +4259,13 @@ def api_hl_auto_status():
     import signal_publish as _sp
     body = _ax.gate_status()
     try:
+        import kv as _kv
+        # False = no shared KV store: app-side once-only claims don't persist
+        # between serverless invocations (exchange-side checks still apply).
+        body["durable_dedupe"] = _kv.kv_enabled()
+    except Exception:
+        body["durable_dedupe"] = False
+    try:
         import db as _db
         if _db.db_configured():
             rows = _hl_confirmed_published(_signal_store(), _sp.strategy_version())

@@ -332,6 +332,30 @@ def positions_detail(address: Optional[str] = None, *, env: Optional[str] = None
     }
 
 
+def order_known(cloid: str, address: Optional[str] = None, *, env: Optional[str] = None,
+                session: Optional[Any] = None) -> Optional[bool]:
+    """Has the exchange EVER seen an order with this client order id?
+
+    True if Hyperliquid knows it (open, filled, cancelled, …), False if it
+    answers unknownOid, None if the lookup failed or answered something else.
+    This is the durable, exchange-side exact-once check: it can't be lost the
+    way an app-side claim can when no shared KV store is configured."""
+    addr = account_address(address)
+    if not addr or not cloid:
+        return None
+    try:
+        data = _post_info({"type": "orderStatus", "user": addr, "oid": cloid},
+                          env=env, session=session)
+    except Exception:                                    # noqa: BLE001
+        return None
+    status = (data or {}).get("status") if isinstance(data, dict) else None
+    if status == "order":
+        return True
+    if status == "unknownOid":
+        return False
+    return None
+
+
 def all_mids(*, env: Optional[str] = None, session: Optional[Any] = None) -> Dict[str, Any]:
     """Every perp coin's current mid price, as returned by the info endpoint."""
     return _post_info({"type": "allMids"}, env=env, session=session) or {}
