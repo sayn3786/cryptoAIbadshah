@@ -4451,7 +4451,9 @@ def _hl_confirmed_published(store, sver, *, limit=30):
         environment=_deploy_env(), limit=limit, with_total=False)
     rows = page.get("items") or []
     store.attach_targets(rows)
-    return _ax.select_confirmed(rows)
+    # Current slot only: never re-attempt an earlier slot's signals.
+    slot_start_utc = _slot_start(datetime.now(_SGT)).astimezone(timezone.utc)
+    return _ax.select_confirmed(rows, not_before=slot_start_utc)
 
 
 def _hl_auto_execute_run():

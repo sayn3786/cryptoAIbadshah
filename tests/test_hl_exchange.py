@@ -397,3 +397,30 @@ def test_env_overrides(monkeypatch):
     monkeypatch.setenv("HL_ENTRY_DRIFT_STOP_FRACTION", "0.25")
     cfg = hx.caps()
     assert cfg["max_entry_deviation"] == 0.03 and cfg["entry_drift_stop_fraction"] == 0.25
+
+
+# ── a live/closed trade is never reported as a stale "not opened" ────────────
+
+def test_open_position_wins_over_a_stale_price(monkeypatch):
+    # The SUI case: the position is open and price has moved 1.7% since entry.
+    # A re-check must say POSITION_EXISTS (silent), not STALE_ENTRY.
+    _arm(monkeypatch)
+    acct = {**FUNDED, "open_positions": [{"coin": "BTC", "position_value_usd": 25}]}
+    r = _open(monkeypatch, sig={**SIG, "sl": 58800}, account=acct, mark_px=61000)
+    assert r["reason"] == "POSITION_EXISTS"
+
+
+def test_already_placed_wins_over_a_stale_price(monkeypatch):
+    # The TAO case: TP1 closed half and the trade later closed; a re-check with
+    # price far from entry must say ALREADY_PLACED, not STALE_ENTRY.
+    _arm(monkeypatch)
+    r = _open(monkeypatch, sig={**SIG, "sl": 58800}, mark_px=61500,
+              known_fn=lambda *a, **k: True)
+    assert r["reason"] == "ALREADY_PLACED" and r["source"] == "exchange"
+
+
+def test_already_handled_signals_need_no_price_lookup(monkeypatch):
+    _arm(monkeypatch)
+    r = _open(monkeypatch, mark_px=None, known_fn=lambda *a, **k: True,
+              mark_fn=lambda *a, **k: pytest.fail("no price lookup for a placed signal"))
+    assert r["reason"] == "ALREADY_PLACED"
