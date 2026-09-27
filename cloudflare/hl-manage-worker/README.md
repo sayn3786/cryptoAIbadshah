@@ -130,7 +130,10 @@ The Worker logs one line per job (with a `"job"` field) under **Observability**
 | `"ran":false,"reason":"DISARMED"` | Live trading is off in Vercel (`LIVE_TRADING_ENABLED` / kill switch). Expected if you disarmed it. |
 | `"status":401` / `AUTH_REQUIRED` | The token differs between Cloudflare and Vercel, or Vercel wasn't redeployed after changing it. |
 | `"job":"publish","persisted":N` | The slot was published: N new signals (HL auto-exec ran on them). |
-| `"job":"publish","skipped_reason":"SLOT_ALREADY_PUBLISHED"` | Already published this slot; nothing to do. |
+| `"job":"publish","skipped_reason":"SLOT_ALREADY_PUBLISHED"` | Already published this slot; nothing new to publish. In the slot's first hour it still runs HL auto-exec (see `"hl"`), so a trade missed by a timed-out publish is caught up. |
+| `"hl":{"ran":true,"attempted":N,"executed":M}` | HL auto-exec ran on N Confirmed signals and opened M positions (the rest were already open, stale, etc.). |
+| `"hl":{"ran":false,"reason":"NOT_READY"}` | Auto-exec is off or disarmed in Vercel (`HL_AUTO_EXECUTE`, arm switch). |
+| `"hl":{"reason":"NO_CONFIRMED_SIGNALS"}` | No signal in this slot reached `HL_AUTO_MIN_STRENGTH`. |
 | `"job":"publish","status":504,"attempts":3` | Every attempt hit Vercel's 60 s limit; the next :12/:32 run retries. |
 | `APP_URL or … is not configured` | That token's Secret is missing (see step 5). Only its jobs are skipped. |
 | Build fails in 0 seconds | Wrong root directory, or the Worker name ≠ `name` in `wrangler.toml`. |

@@ -121,6 +121,15 @@ async function runJob(job, env, sleep) {
   if (r.error) out.error = r.error;
   if (r.body && typeof r.body === "object") {
     for (const k of SUMMARY_KEYS) if (k in r.body) out[k] = r.body[k];
+    // Publish reports what HL auto-exec did (it runs in the publishing request
+    // and, if that one was cut off, on the next calls early in the slot).
+    const hl = r.body.hl_auto_execute;
+    if (hl && typeof hl === "object") {
+      out.hl = {};
+      for (const k of ["ran", "attempted", "executed", "reason", "error_code"]) {
+        if (k in hl) out.hl[k] = hl[k];
+      }
+    }
     if (Array.isArray(r.body.results)) {
       out.results = r.body.results.map(x => ({ coin: x.coin, action: x.action,
         placed: x.placed, closed: x.closed, error: x.error }));
