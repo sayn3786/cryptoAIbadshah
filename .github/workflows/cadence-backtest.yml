@@ -40,6 +40,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Fail in seconds, not after a 25-minute replay, when the secrets aren't
+      # visible to Actions (added as Variables, Environment, Codespaces or
+      # Dependabot secrets, or under another name).
+      - name: Check the Telegram secrets are set
+        env:
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_REPORT_CHAT_ID: ${{ secrets.TELEGRAM_REPORT_CHAT_ID }}
+        run: |
+          missing=""
+          [ -n "$TELEGRAM_BOT_TOKEN" ] || missing="$missing TELEGRAM_BOT_TOKEN"
+          [ -n "$TELEGRAM_REPORT_CHAT_ID" ] || missing="$missing TELEGRAM_REPORT_CHAT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing. Add them under Settings -> Secrets and variables -> Actions -> Secrets tab -> New repository secret."
+            exit 1
+          fi
+          echo "Telegram secrets present"
+
       - name: Replay 4h / 2h / 1h and send to private Telegram
         working-directory: backend
         env:
