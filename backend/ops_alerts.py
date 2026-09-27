@@ -30,8 +30,9 @@ PROBLEM_TTL = 4 * 3600          # a still-failing problem re-alerts after 4h, no
 
 # open_position reasons that are routine (not alerted): already handled, or a
 # guard doing its job on a signal the owner doesn't need to hear about.
-_ROUTINE = {"POSITION_EXISTS", "ALREADY_PLACED", "DISARMED", "MAINNET_NOT_ALLOWED",
-            "STALE_ENTRY"}
+# (STALE_ENTRY is alerted once per signal: the owner should know why a
+# published signal didn't become a trade.)
+_ROUTINE = {"POSITION_EXISTS", "ALREADY_PLACED", "DISARMED", "MAINNET_NOT_ALLOWED"}
 
 
 # ── formatting helpers ───────────────────────────────────────────────────────
@@ -113,6 +114,12 @@ def fmt_unprotected(res: Dict[str, Any]) -> str:
             f"Error: {str(res.get('exits_error') or 'unknown')[:160]}")
 
 
+def fmt_stale_entry(res: Dict[str, Any], sig: Dict[str, Any]) -> str:
+    return (f"⏭ {res.get('coin') or sig.get('symbol')} {sig.get('direction', '')} not opened: "
+            f"price already {res.get('drift_pct')}% from the signal entry "
+            f"(limit {res.get('allowed_pct')}%, half the stop distance). Skipped rather than chased.")
+
+
 def fmt_rejected(res: Dict[str, Any], sig: Dict[str, Any]) -> str:
     detail = str(res.get("detail") or res.get("error") or "")[:160]
     return (f"⛔ {res.get('coin') or sig.get('symbol')} {sig.get('direction', '')} "
@@ -179,6 +186,9 @@ def notify_execution(signals: List[Dict[str, Any]], out: Dict[str, Any]) -> List
             sent.append(send(fmt_opened(res, sig), f"open:{cloid}"))
             if res.get("exits_ok") is False:
                 sent.append(send(fmt_unprotected(res), f"unprotected:{cloid}"))
+        elif res.get("reason") == "STALE_ENTRY":
+            sent.append(send(fmt_stale_entry(res, sig),
+                             f"stale:{sig.get('id')}:{sig.get('candle_ts')}"))
         elif res.get("reason") and res.get("reason") not in _ROUTINE:
             sent.append(send(fmt_rejected(res, sig),
                              f"reject:{sig.get('id')}:{res.get('reason')}", ttl=PROBLEM_TTL))

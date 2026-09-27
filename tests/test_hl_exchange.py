@@ -149,9 +149,10 @@ def test_no_mark_price_rejected(monkeypatch):
 def test_sizes_from_live_mark_not_entry(monkeypatch):
     _arm(monkeypatch)
     sender = _Sender()
-    # entry says 50000 but the live mark is 60000 → size must come from 60000
-    _open(monkeypatch, sig={**SIG, "entry": 55000}, mark_px=60000, send_fn=sender)
-    assert sender.calls[0][2] == 0.00041            # 25 / 60000, not 25 / 55000 (0.00045)
+    # entry 59,400 (1% off, inside the stale-entry limit) but the live mark is
+    # 60,000 → size must come from 60,000
+    _open(monkeypatch, sig={**SIG, "entry": 59400}, mark_px=60000, send_fn=sender)
+    assert sender.calls[0][2] == 0.00041            # 25 / 60000, not 25 / 59400 (0.00042)
 
 
 def test_send_failure_releases_the_claim(monkeypatch):
@@ -354,3 +355,45 @@ def test_order_known_parses_the_exchange_answer(monkeypatch):
     assert hl_account.order_known("0x1", session=_Info({"status": "unknownOid"})) is False
     assert hl_account.order_known("0x1", session=_Info({"weird": 1})) is None
     assert hl_account.order_known("0x1", session=_Info(fail=True)) is None
+
+
+
+# ── stale-entry rule tied to the stop ────────────────────────────────────────
+
+CFG = {"max_entry_deviation": 0.02, "entry_drift_stop_fraction": 0.5}
+
+
+def test_allowed_drift_is_half_the_stop_distance_capped_at_2pct():
+    assert hx.allowed_entry_drift(100, 98, CFG) == pytest.approx(0.01)     # 2% stop → 1%
+    assert hx.allowed_entry_drift(100, 90, CFG) == pytest.approx(0.02)     # 10% stop → capped 2%
+    assert hx.allowed_entry_drift(100, 103, CFG) == pytest.approx(0.015)   # short: 3% stop → 1.5%
+    assert hx.allowed_entry_drift(100, None, CFG) == 0.02                  # no stop → cap
+    assert hx.allowed_entry_drift(100, 100, CFG) == 0.02                   # degenerate → cap
+
+
+def test_entry_inside_the_limit_opens(monkeypatch):
+    _arm(monkeypatch)
+    # stop 2% away → 1% allowed; live 0.8% off → opens
+    r = _open(monkeypatch, sig={**SIG, "entry": 60000, "sl": 58800}, mark_px=60480)
+    assert r["ok"] is True
+
+
+def test_entry_past_half_the_stop_distance_is_refused(monkeypatch):
+    _arm(monkeypatch)
+    # stop 2% away → 1% allowed; live 1.5% off → STALE_ENTRY with the numbers
+    r = _open(monkeypatch, sig={**SIG, "entry": 60000, "sl": 58800}, mark_px=60900)
+    assert r["reason"] == "STALE_ENTRY"
+    assert r["drift_pct"] == pytest.approx(1.5) and r["allowed_pct"] == pytest.approx(1.0)
+
+
+def test_wide_stop_is_still_capped_at_2pct(monkeypatch):
+    _arm(monkeypatch)
+    r = _open(monkeypatch, sig={**SIG, "entry": 60000, "sl": 54000}, mark_px=61500)  # 2.5% off
+    assert r["reason"] == "STALE_ENTRY" and r["allowed_pct"] == pytest.approx(2.0)
+
+
+def test_env_overrides(monkeypatch):
+    monkeypatch.setenv("HL_MAX_ENTRY_DEVIATION", "0.03")
+    monkeypatch.setenv("HL_ENTRY_DRIFT_STOP_FRACTION", "0.25")
+    cfg = hx.caps()
+    assert cfg["max_entry_deviation"] == 0.03 and cfg["entry_drift_stop_fraction"] == 0.25

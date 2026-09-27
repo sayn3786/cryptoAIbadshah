@@ -167,3 +167,14 @@ def test_one_shot_alerts_still_send_without_a_store(no_store):
     oa.notify_manager([{"coin": "FET", "action": "move_stop", "placed": True,
                         "stop_px": 0.6, "size": 20}], now_ms=7 * 60_000)
     assert len(no_store) == 1 and "stop moved to entry" in no_store[0]
+
+
+
+def test_a_stale_entry_skip_is_explained_once(sent):
+    res = {"ok": False, "reason": "STALE_ENTRY", "coin": "FET", "drift_pct": 1.5,
+           "allowed_pct": 1.0}
+    oa.notify_execution([SIG], {"results": [res]})
+    oa.notify_execution([SIG], {"results": [res]})      # the :12 / :32 catch-up retries
+    assert len(sent) == 1
+    assert sent[0].startswith("⏭ FET LONG not opened: price already 1.5% from the signal entry")
+    assert "(limit 1.0%" in sent[0]
