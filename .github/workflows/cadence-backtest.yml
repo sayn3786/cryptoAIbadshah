@@ -1,0 +1,54 @@
+name: Cadence backtest (private Telegram)
+
+# Would publishing / executing every 1h or 2h beat today's 4h cadence?
+# Replays the production strategy over the last N days at 4h, 2h and 1h, with
+# HL auto-exec's rules (strength >= min, one position per coin), and sends the
+# comparison to the owner's PRIVATE Telegram chat (TELEGRAM_REPORT_CHAT_ID).
+#
+# This repo is public, so its Actions logs are too: the job prints only how
+# many coins were replayed and whether the message was sent, never a result.
+#
+# Needs two repository secrets (Settings -> Secrets and variables -> Actions):
+#   TELEGRAM_BOT_TOKEN       the same bot as the app
+#   TELEGRAM_REPORT_CHAT_ID  your private chat id (never the channel)
+#
+# Manual only: Actions tab -> Cadence backtest -> Run workflow. ~20-40 min.
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Days of history to replay"
+        default: "90"
+      min_strength:
+        description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
+        default: "62"
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Replay 4h / 2h / 1h and send to private Telegram
+        working-directory: backend
+        env:
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_REPORT_CHAT_ID: ${{ secrets.TELEGRAM_REPORT_CHAT_ID }}
+          DAYS:                    ${{ inputs.days }}
+          MIN_STRENGTH:            ${{ inputs.min_strength }}
+        run: |
+          # Output is only per-coin download counts and
+          # "coins replayed: N; telegram: sent|NOT sent". No results.
+          python -m cadence_compare --telegram \
+            --fetch-days "$DAYS" --min-strength "$MIN_STRENGTH"
