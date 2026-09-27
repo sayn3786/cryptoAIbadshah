@@ -64,7 +64,7 @@ from signals import generate_signal
 __all__ = [
     "PARITY_MODES", "TF_MS", "PUBLICATION_INTERVAL_MS", "RESULT_LABELS",
     "DEFAULT_FEE_BPS", "DEFAULT_SLIPPAGE_BPS",
-    "closed_slice", "publication_slots", "replay", "result_label",
+    "closed_slice", "publication_slots", "publication_slots_every", "replay", "result_label",
     "universe_report", "history_coverage_report", "market_cap_at",
 ]
 
@@ -144,6 +144,34 @@ def publication_slots(candles_4h: Sequence[Dict], *,
         if ts is None:
             continue
         close = int(ts) + span
+        if start_ms is not None and close < start_ms:
+            continue
+        if end_ms is not None and close > end_ms:
+            continue
+        out.append(close)
+    return sorted(set(out))
+
+
+def publication_slots_every(candles_1h: Sequence[Dict], interval_hours: int, *,
+                            start_ms: Optional[int] = None,
+                            end_ms: Optional[int] = None) -> List[int]:
+    """
+    Publication instants for a cadence other than production's 4H: every 1H
+    candle close that falls on an `interval_hours` boundary (UTC). Derived from
+    the data like `publication_slots`, so a gap yields no slot.
+
+    With interval_hours=4 this gives the same instants as `publication_slots`
+    wherever the 1H and 4H histories overlap.
+    """
+    span, every = TF_MS["1H"], int(interval_hours) * 3_600_000
+    out = []
+    for c in candles_1h or []:
+        ts = c.get("timestamp")
+        if ts is None:
+            continue
+        close = int(ts) + span
+        if close % every:
+            continue
         if start_ms is not None and close < start_ms:
             continue
         if end_ms is not None and close > end_ms:
@@ -494,7 +522,8 @@ class _PaperPosition:
 
 
 def _walk_position(pos: _PaperPosition, candles: Sequence[Dict], *,
-                   fill_window_hours: int, max_age_hours: int) -> None:
+                   fill_window_hours: int, max_age_hours: int,
+                   exec_tf: str = "2H") -> None:
     """
     Feed the position one candle at a time, exactly as the hourly monitor sees
     them.
@@ -516,7 +545,7 @@ def _walk_position(pos: _PaperPosition, candles: Sequence[Dict], *,
     for c in candles:
         ts = int(c["timestamp"])
         pos.row["candle_close_time"] = ts
-        now = datetime.fromtimestamp((ts + TF_MS["2H"]) / 1000.0, tz=timezone.utc)
+        now = datetime.fromtimestamp((ts + TF_MS[exec_tf]) / 1000.0, tz=timezone.utc)
         actions = signal_monitor.evaluate(
             pos.row, pos.targets, [c], now=now,
             max_age_hours=max_age_hours, fill_window_hours=fill_window_hours)
@@ -565,7 +594,13 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
            production_universe: Optional[Sequence[str]] = None,
            market_cap_history: Optional[Dict[str, List[Dict]]] = None,
            strategy_version: Optional[str] = None,
-           keep_trades: bool = True) -> Dict[str, Any]:
+           keep_trades: bool = True,
+           interval_hours: int = 4,
+           exec_tf: str = "2H",
+           min_strength: Optional[float] = None,
+           one_per_symbol: bool = False,
+           start_ms: Optional[int] = None,
+           reading_cache: Optional[Dict] = None) -> Dict[str, Any]:
     """
     Replay the publication strategy over `market` and report what it did.
 
@@ -585,6 +620,25 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     the ATR caps, stop widths, target distances and leverage, so this is a gap
     in entry and exit prices, not only in the score.
 
+    Cadence / execution options (defaults reproduce production's published
+    set exactly):
+
+    * ``interval_hours``: publish every N hours instead of every 4H close.
+      Slots then come from the 1H history (see `publication_slots_every`).
+    * ``exec_tf``: the candles positions are walked on. "1H" lets a slot at an
+      odd hour start being managed at once rather than at the next 2H bar.
+    * ``min_strength``: only published recs at or above this strength become
+      trades, like HL auto-exec (HL_AUTO_MIN_STRENGTH).
+    * ``one_per_symbol``: a rec is skipped while an earlier trade on the same
+      coin is still pending or open, like HL's POSITION_EXISTS guard.
+    * ``start_ms``: ignore slots before this instant, so runs at different
+      cadences cover the same window.
+    * ``reading_cache``: a dict shared across calls. A timeframe reading only
+      changes when a new candle of that timeframe closes, so an hourly replay
+      re-reads 2H/4H from here, and a second replay of the same market at
+      another cadence reuses the first one's readings. Price-only mode only
+      (external features would be part of the key).
+
     Deterministic: no wall clock is read anywhere in this function or anything
     it calls. The same market produces the same report, which is what makes a
     regression in the strategy visible as a diff.
@@ -596,9 +650,19 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     symbols = [s for s in (symbols or market.keys())]
     tradable = [s for s in symbols if s != btc_symbol]
 
-    slots = publication_slots(market.get(btc_symbol, {}).get("4H")
-                              or next((m.get("4H") for m in market.values()
-                                       if m.get("4H")), []))
+    if exec_tf not in TF_MS:
+        raise ValueError(f"exec_tf must be one of {tuple(TF_MS)}")
+    if int(interval_hours) == 4:
+        slots = publication_slots(market.get(btc_symbol, {}).get("4H")
+                                  or next((m.get("4H") for m in market.values()
+                                           if m.get("4H")), []))
+    else:
+        slots = publication_slots_every(
+            market.get(btc_symbol, {}).get("1H")
+            or next((m.get("1H") for m in market.values() if m.get("1H")), []),
+            interval_hours)
+    if start_ms is not None:
+        slots = [x for x in slots if x >= start_ms]
     if max_slots:
         slots = slots[-max_slots:]
 
@@ -608,12 +672,34 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     slots_evaluated = 0
     coverage = _ExternalCoverage(parity_mode)
     mcap_seen = {"historical": 0, "unavailable": 0}
+    skipped = {"below_min_strength": 0, "symbol_busy": 0}
+    trades: List[Dict] = []
+    busy_until: Dict[str, float] = {}     # symbol → when its last trade ended
+
+    def _execute(rec: Dict) -> Dict:
+        forward = [c for c in (market.get(rec["symbol"], {}).get(exec_tf) or [])
+                   if int(c["timestamp"]) >= rec["slot_ms"]]
+        pos = _PaperPosition(rec, rec["slot_ms"])
+        _walk_position(pos, forward, fill_window_hours=fill_window_hours,
+                       max_age_hours=max_age_hours, exec_tf=exec_tf)
+        return _settle(pos, rec, fee_bps=fee_bps, slippage_bps=slippage_bps)
+
+    cache = reading_cache if (reading_cache is not None
+                              and parity_mode == "price_only") else None
+
+    def _read(sym, tf, win, ext=None, mcap_value=None):
+        if cache is None or ext is not None:
+            return _tf_reading(sym, tf, win, external=ext, market_cap=mcap_value)
+        key = (sym, tf, int(win[-1]["timestamp"]), len(win), mcap_value)
+        if key not in cache:
+            cache[key] = _tf_reading(sym, tf, win, external=ext, market_cap=mcap_value)
+        return cache[key]
 
     for slot in slots:
         # ── BTC first: every candidate in this slot is measured against it ──
         btc_win = closed_slice(market.get(btc_symbol, {}).get("2H") or [],
                                "2H", slot, lookback=lookback)
-        btc_read = _tf_reading(btc_symbol, "2H", btc_win) if btc_win else None
+        btc_read = _read(btc_symbol, "2H", btc_win) if btc_win else None
         influence = rec_policy.btc_influence(
             (btc_read or {}).get("direction", "NEUTRAL"),
             (btc_read or {}).get("strength", 0),
@@ -628,8 +714,7 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
             reads = {}
             for tf in ("1H", "2H", "4H"):
                 win = closed_slice(tfs.get(tf) or [], tf, slot, lookback=lookback)
-                reads[tf] = (_tf_reading(sym, tf, win, external=ext,
-                                         market_cap=mcap["value"])
+                reads[tf] = (_read(sym, tf, win, ext, mcap["value"])
                              if len(win) >= warmup_bars else None)
             h1, h2, h4 = reads["1H"], reads["2H"], reads["4H"]
 
@@ -686,16 +771,18 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
             rec["slot"] = _iso(slot)
             rec["rank"] = rank
             published.append(rec)
-
-    # ── Execution: the published set, walked forward ────────────────────────
-    trades: List[Dict] = []
-    for rec in published:
-        forward = [c for c in (market.get(rec["symbol"], {}).get("2H") or [])
-                   if int(c["timestamp"]) >= rec["slot_ms"]]
-        pos = _PaperPosition(rec, rec["slot_ms"])
-        _walk_position(pos, forward, fill_window_hours=fill_window_hours,
-                       max_age_hours=max_age_hours)
-        trades.append(_settle(pos, rec, fee_bps=fee_bps, slippage_bps=slippage_bps))
+            if min_strength is not None and (rec.get("strength") or 0) < min_strength:
+                skipped["below_min_strength"] += 1
+                continue
+            if one_per_symbol and busy_until.get(rec["symbol"], -1) > slot:
+                skipped["symbol_busy"] += 1
+                continue
+            # Walked as soon as it is taken (the walk only reads candles after
+            # the slot), so the next slot knows whether the coin is still busy.
+            t = _execute(rec)
+            trades.append(t)
+            busy_until[rec["symbol"]] = (t["closed_at"] if t["closed_at"] is not None
+                                         else float("inf"))
 
     parity = _parity_block(parity_mode, market, symbols, slots, slots_evaluated,
                            coverage, fee_bps, slippage_bps, fill_window_hours,
@@ -706,6 +793,9 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
         "parity": parity,
         "population": _population(candidates_seen, published, trades, rejections),
         "metrics": aggregate(trades),
+        "execution": {"interval_hours": int(interval_hours), "exec_tf": exec_tf,
+                      "min_strength": min_strength, "one_per_symbol": one_per_symbol,
+                      "slots": len(slots), "skipped": skipped},
     }
     if keep_trades:
         report["trades"] = trades
