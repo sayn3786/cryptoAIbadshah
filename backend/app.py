@@ -554,6 +554,9 @@ TELEGRAM_ALERT_KINDS     = frozenset({"divergence", "divergence_forming", "rsi_s
 # one before it (in case a scheduled run was missed). Deduped on the flip
 # candle, so each flip is announced once.
 INDICATOR_FLIP_FRESH_BARS = 1
+# Indicator flips are announced on 1D and 1W only: 4H MACD/EMA flips are too
+# frequent across the scanned coins and would crowd out the momentum reads.
+INDICATOR_FLIP_TFS = frozenset({"1D", "1W"})
 PATTERN_BELL_TFS         = ["1H", "4H", "1D", "1W"]  # in-app bell: also intraday
 PATTERN_ALERT_FRESH_BARS = 3          # break must be within N bars of the last close
 # A CONFIRMED RSI divergence's second pivot is already `pivot_window` (3) closed
@@ -843,7 +846,7 @@ def _indicator_flips_for(closed: list, tf: str) -> list:
     before) counts, so an old trend isn't re-announced. `break_ts` is the CLOSE
     time of the candle that confirmed the flip: it dedupes the alert and is the
     date shown. Uses closed candles only, never the forming one."""
-    if not closed or len(closed) < 60:
+    if tf not in INDICATOR_FLIP_TFS or not closed or len(closed) < 60:
         return []
     from indicators import flip_close_ts
     closes = [c["close"] for c in closed]

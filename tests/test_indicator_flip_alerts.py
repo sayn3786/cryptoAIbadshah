@@ -52,7 +52,7 @@ def test_each_indicator_labels_and_direction(monkeypatch):
           ema={"flipped_bars_ago": 1, "previous_direction": "bullish"},
           st={"flipped_bars_ago": 0, "flipped_ts": 123, "direction": "bullish"},
           ich={"tk_flipped_bars_ago": 0, "tk_flipped_ts": 456, "tk_previous_direction": "bullish"})
-    flips = {f["type"]: f for f in app._indicator_flips_for(_candles([1.0] * 80), "4H")}
+    flips = {f["type"]: f for f in app._indicator_flips_for(_candles([1.0] * 80), "1D")}
     assert flips["macd"]["label"] == "MACD bullish cross (histogram turned positive)"
     assert flips["ema50"]["label"] == "Price crossed below EMA 50"          # 1 bar ago still fresh
     assert flips["supertrend"]["direction"] == "bullish" and flips["supertrend"]["break_ts"] == 123
@@ -62,7 +62,7 @@ def test_each_indicator_labels_and_direction(monkeypatch):
 def test_stale_flips_are_not_announced(monkeypatch):
     _stub(monkeypatch, macd={"flipped_bars_ago": 2, "previous_direction": "bearish"},
           st={"flipped_bars_ago": None, "flipped_ts": None, "direction": "bullish"})
-    assert app._indicator_flips_for(_candles([1.0] * 80), "4H") == []
+    assert app._indicator_flips_for(_candles([1.0] * 80), "1D") == []
 
 
 def test_flips_join_the_telegram_scan_and_dedupe_per_indicator_and_candle(monkeypatch):
@@ -101,3 +101,10 @@ def test_flips_count_toward_confluence_but_less_than_a_divergence():
 def test_the_bell_does_not_get_indicator_flips():
     import inspect
     assert "_indicator_flips_for" not in inspect.getsource(app.api_pattern_alerts)
+
+
+def test_flips_are_announced_on_1d_and_1w_only(monkeypatch):
+    _stub(monkeypatch, macd={"flipped_bars_ago": 0, "previous_direction": "bearish"})
+    c = _candles([1.0] * 80)
+    assert app._indicator_flips_for(c, "4H") == []
+    assert app._indicator_flips_for(c, "1D") and app._indicator_flips_for(c, "1W")
