@@ -12,3 +12,14 @@ APP_URL = "https://cryptomarket-sigma.vercel.app"
 
 [triggers]
 crons = ["* * * * *"]        # every minute; worker.js picks the jobs due
+
+# Keep persisted job results enabled across GitHub deployments. Dashboard-only
+# changes are otherwise replaced by this configuration on the next deploy.
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = false

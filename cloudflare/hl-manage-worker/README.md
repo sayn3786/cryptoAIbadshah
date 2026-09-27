@@ -140,8 +140,13 @@ The first should show `"ok": true, "ran": true`. The second should show `"ok": t
 usually with `"skipped_reason": "SLOT_ALREADY_PUBLISHED"`. That's harmless;
 it publishes only if the current slot hasn't been published yet.
 
-The Worker logs one line per job (with a `"job"` field) under **Observability**
-(enable Workers Logs there if prompted).
+The Worker logs one line per job (with a `"job"` field) under **Observability**.
+Persisted Workers Logs and invocation logs are enabled in `wrangler.toml` at
+100% head sampling; traces remain disabled. Keep this setting in the repository:
+a dashboard-only change can be reset by the next GitHub deployment. Logs from
+periods when logging was disabled cannot be recovered. Inspect ML job `status`,
+`ok`, and `counts.inserted`, not just the Worker's successful invocation count.
+Platform quotas/retention still apply; this is not a permanent audit archive.
 
 ## Reading the result
 
@@ -162,8 +167,8 @@ The Worker logs one line per job (with a `"job"` field) under **Observability**
 | Build fails in 0 seconds | Wrong root directory, or the Worker name ≠ `name` in `wrangler.toml`. |
 
 The orange "Update your Wrangler configuration…" banners in the dashboard are
-suggestions for keeping the dashboard and `wrangler.toml` in sync. You can
-dismiss them; don't add secrets to `wrangler.toml`.
+suggestions for keeping the dashboard and `wrangler.toml` in sync. Persist intended
+non-secret settings such as logging in the file; don't add secrets to it.
 
 ## Rotating a token
 1. `openssl rand -hex 32`.
