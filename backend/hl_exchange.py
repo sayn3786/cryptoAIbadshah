@@ -30,10 +30,17 @@ from kv import release as _kv_release
 DEFAULT_MAX_ORDERS_PER_RUN = 3
 DEFAULT_MAX_EXPOSURE_USD = 100.0
 # Market orders fill near the LIVE price, not the signal's entry. Size and check
-# exposure against a worst-case fill = live_mid * (1 + this), and reject an entry
-# that has drifted more than the max deviation from live (stale / mistyped).
+# exposure against a worst-case fill = live_mid * (1 + this).
 MARKET_SLIPPAGE = 0.05
-DEFAULT_MAX_ENTRY_DEVIATION = 0.15
+# Stale-entry rule: refuse to open when the live price has already moved too far
+# from the signal's entry, because the trade is no longer the one the signal
+# described (a worse reward-to-risk, or already heading for the stop). The limit
+# is tied to the stop: at most HALF the entry→stop distance
+# (HL_ENTRY_DRIFT_STOP_FRACTION), never more than HL_MAX_ENTRY_DEVIATION (2%).
+# A signal without a stop gets the 2% cap. (Was a flat 15%, which let entries
+# open past TP1 or next to the stop.)
+DEFAULT_MAX_ENTRY_DEVIATION = 0.02
+DEFAULT_ENTRY_DRIFT_STOP_FRACTION = 0.5
 
 
 def _flag(name: str) -> bool:
@@ -52,7 +59,25 @@ def caps() -> Dict[str, float]:
                                                   DEFAULT_MAX_EXPOSURE_USD),
         "max_entry_deviation": hl_execution._num_env("HL_MAX_ENTRY_DEVIATION",
                                                      DEFAULT_MAX_ENTRY_DEVIATION),
+        "entry_drift_stop_fraction": hl_execution._num_env(
+            "HL_ENTRY_DRIFT_STOP_FRACTION", DEFAULT_ENTRY_DRIFT_STOP_FRACTION),
     }
+
+
+def allowed_entry_drift(entry: Any, sl: Any, cfg: Dict[str, Any]) -> float:
+    """The largest |live − entry| / entry at which a signal may still open.
+
+    min(stop_fraction × |entry − stop| / entry, max_entry_deviation). Pure.
+    Falls back to the cap when there's no usable stop."""
+    cap = float(cfg.get("max_entry_deviation", DEFAULT_MAX_ENTRY_DEVIATION))
+    frac = float(cfg.get("entry_drift_stop_fraction", DEFAULT_ENTRY_DRIFT_STOP_FRACTION))
+    try:
+        e, stop = float(entry), float(sl)
+    except (TypeError, ValueError):
+        return cap
+    if e <= 0 or stop <= 0 or stop == e:
+        return cap
+    return min(frac * abs(e - stop) / e, cap)
 
 
 def action_ok(resp: Any):
@@ -230,10 +255,14 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
     if not mark or mark <= 0:
         return {"ok": False, "reason": "NO_MARK_PRICE", "coin": coin}
     entry = signal.get("entry")
-    if entry and abs(float(entry) - mark) / mark > cfg["max_entry_deviation"]:
-        return {"ok": False, "reason": "STALE_ENTRY", "coin": coin,
-                "entry": float(entry), "mark_px": mark,
-                "max_entry_deviation": cfg["max_entry_deviation"]}
+    if entry:
+        drift = abs(float(entry) - mark) / float(entry)
+        allowed = allowed_entry_drift(entry, signal.get("sl"), cfg)
+        if drift > allowed:
+            return {"ok": False, "reason": "STALE_ENTRY", "coin": coin,
+                    "entry": float(entry), "mark_px": mark,
+                    "drift_pct": round(drift * 100, 3),
+                    "allowed_pct": round(allowed * 100, 3)}
 
     # Collateral available to back a perp. In a UNIFIED / portfolio-margin
     # account (Hyperliquid's default) the perps accountValue reads 0 / "not
