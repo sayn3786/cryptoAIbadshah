@@ -180,6 +180,37 @@ def publication_slots_every(candles_1h: Sequence[Dict], interval_hours: int, *,
     return sorted(set(out))
 
 
+def atr_at(candles: Sequence[Dict], timeframe: str, at_ms: int,
+           period: int = 14) -> Optional[float]:
+    """ATR(period) from the candles CLOSED at `at_ms` (true range incl. gaps),
+    the same measure generate_signal sizes its stop buffer with."""
+    win = closed_slice(candles, timeframe, at_ms, lookback=period + 1)
+    if len(win) < period + 1:
+        return None
+    trs = [max(c["high"] - c["low"], abs(c["high"] - p["close"]),
+               abs(c["low"] - p["close"]))
+           for p, c in zip(win, win[1:])]
+    return sum(trs) / len(trs)
+
+
+def widen_stop(rec: Dict, candles_2h: Sequence[Dict], *, mult: float = 1.0,
+               atr_add: float = 0.0) -> Dict:
+    """A copy of `rec` whose stop sits at ``mult × distance + atr_add × ATR``
+    from entry (same entry and targets). The published stop is kept as
+    `sl_published`. Never moves a stop closer, and never below zero."""
+    entry, sl = float(rec["entry"]), float(rec["sl"])
+    dist = abs(entry - sl)
+    atr = atr_at(candles_2h, "2H", rec["slot_ms"]) if atr_add else 0.0
+    new = max(dist, dist * float(mult) + float(atr_add) * (atr or 0.0))
+    out = dict(rec)
+    out["sl_published"] = sl
+    if rec["direction"] == "LONG":
+        out["sl"] = round(max(entry * 0.001, entry - new), 10)
+    else:
+        out["sl"] = round(entry + new, 10)
+    return out
+
+
 def _iso(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).isoformat()
 
@@ -600,7 +631,8 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
            min_strength: Optional[float] = None,
            one_per_symbol: bool = False,
            start_ms: Optional[int] = None,
-           reading_cache: Optional[Dict] = None) -> Dict[str, Any]:
+           reading_cache: Optional[Dict] = None,
+           stop_variant: Optional[Dict] = None) -> Dict[str, Any]:
     """
     Replay the publication strategy over `market` and report what it did.
 
@@ -638,6 +670,10 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
       re-reads 2H/4H from here, and a second replay of the same market at
       another cadence reuses the first one's readings. Price-only mode only
       (external features would be part of the key).
+    * ``stop_variant``: ``{"mult": k, "atr_add": a}`` moves each TAKEN trade's
+      stop further from entry, to ``k × distance + a × ATR(14, 2H)``, with the
+      same entry and targets. The published set is unchanged, so variants
+      isolate the stop's effect. R is measured against the new, wider risk.
 
     Deterministic: no wall clock is read anywhere in this function or anything
     it calls. The same market produces the same report, which is what makes a
@@ -677,12 +713,17 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     busy_until: Dict[str, float] = {}     # symbol → when its last trade ended
 
     def _execute(rec: Dict) -> Dict:
+        if stop_variant:
+            rec = widen_stop(rec, market.get(rec["symbol"], {}).get("2H") or [],
+                             **stop_variant)
         forward = [c for c in (market.get(rec["symbol"], {}).get(exec_tf) or [])
                    if int(c["timestamp"]) >= rec["slot_ms"]]
         pos = _PaperPosition(rec, rec["slot_ms"])
         _walk_position(pos, forward, fill_window_hours=fill_window_hours,
                        max_age_hours=max_age_hours, exec_tf=exec_tf)
-        return _settle(pos, rec, fee_bps=fee_bps, slippage_bps=slippage_bps)
+        t = _settle(pos, rec, fee_bps=fee_bps, slippage_bps=slippage_bps)
+        t["published_stop"] = rec.get("sl_published", rec["sl"])
+        return t
 
     cache = reading_cache if (reading_cache is not None
                               and parity_mode == "price_only") else None

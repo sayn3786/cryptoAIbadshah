@@ -3435,8 +3435,11 @@ def _daily_rec_scheduler():
             print(f"[scheduler] ERROR computing recommendations: {exc}")
 
 
-# Start the scheduler in a daemon thread so it dies with the server
-_threading.Thread(target=_daily_rec_scheduler, daemon=True, name="rec-scheduler").start()
+# Start the scheduler in a daemon thread so it dies with the server.
+# DISABLE_REC_SCHEDULER=1 skips it for offline tools (the backtests import app
+# for its symbol list; a long run would otherwise wake it inside the job).
+if os.getenv("DISABLE_REC_SCHEDULER", "").strip().lower() not in ("1", "true", "yes"):
+    _threading.Thread(target=_daily_rec_scheduler, daemon=True, name="rec-scheduler").start()
 
 
 @app.get("/api/recommendations")
