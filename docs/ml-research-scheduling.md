@@ -1,5 +1,11 @@
 # Automatic research dataset
 
+> Historical GitHub setup below is superseded: GitHub is manual-only and the
+> Cloudflare Worker is the scheduler. For current two-hour collection/targets,
+> migration 015, and version-aware verification use
+> [the two-hour rollout guide](ml-two-hour-transition.md). Do not reactivate the
+> old schedule or use the legacy-only SQL below for new-version completeness.
+
 The `ML Research Dataset` GitHub Actions workflow calls the existing protected
 Vercel POST endpoints. This reuses the repository's existing scheduler approach;
 it adds no Vercel cron, database migration, trading action, or model training.

@@ -121,7 +121,7 @@ def test_schedule(result):
     assert due["12:7"] == ["manage", "daily"]             # moved from Vercel's 12:05 cron
     assert due["16:15"] == ["manage"]                     # daily list runs at 00:15 only
     assert due["3:59"] == ["manage"] and due["13:33"] == ["manage"]
-    assert due["0:10"] == ["manage", "ml-collect"] and due["2:10"] == ["manage"]
+    assert due["0:10"] == ["manage", "ml-collect"] and due["2:10"] == ["manage", "ml-collect"]
     assert due["1:15"] == ["manage", "ml-label"] and due["5:15"] == ["manage", "ml-label"]
     assert due["0:20"] == ["manage", "tao-snapshot"]
     assert due["1:30"] == ["manage", "etf-snapshot", "market-snapshot"]

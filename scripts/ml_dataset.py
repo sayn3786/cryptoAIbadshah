@@ -79,7 +79,8 @@ def label(args):
         if args.write:
             with db.session_scope() as session:
                 dataset.record_label_failure(session, record["id"], reason,
-                                             datetime.now(timezone.utc), permanent=permanent)
+                                             datetime.now(timezone.utc), permanent=permanent,
+                                             label_version=dataset.label_spec(record)[0])
     for record in records:
         symbol = record["symbol"]
         if dataset.milliseconds(now) - record["entry_at_ms"] >= 196 * dataset.HOUR_MS:
@@ -125,7 +126,7 @@ def main():
         return collect(args) if args.command == "collect" else label(args)
     except Exception:
         # Never log a provider response or DB exception with a connection URL.
-        print(json.dumps({"ok": False, "reason": "RESEARCH_JOB_FAILED_CHECK_DATABASE_AND_MIGRATIONS_013_014"}))
+        print(json.dumps({"ok": False, "reason": "RESEARCH_JOB_FAILED_CHECK_DATABASE_AND_MIGRATIONS_013_014_015"}))
         return 1
 
 

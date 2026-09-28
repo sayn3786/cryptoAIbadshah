@@ -138,7 +138,8 @@ def test_label_fetch_failure_is_queued_not_a_fake_outcome(monkeypatch):
     def session_scope():
         yield object()
     monkeypatch.setattr(db, "session_scope", session_scope)
-    row = {"id": "test", "symbol": "BTC", "entry_at_ms": dataset.milliseconds(datetime.now(timezone.utc)) - 5 * dataset.HOUR_MS}
+    row = {"id": "test", "symbol": "BTC", "feature_version": dataset.FEATURE_VERSION,
+           "entry_at_ms": dataset.milliseconds(datetime.now(timezone.utc)) - 5 * dataset.HOUR_MS}
     monkeypatch.setattr(dataset, "pending_labels", lambda *a, **kw: [row])
     def unavailable(*a):
         raise RuntimeError("provider secret")

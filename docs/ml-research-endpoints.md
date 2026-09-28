@@ -3,7 +3,8 @@
 POST `/api/research/ml/collect` and POST `/api/research/ml/label` run separate,
 synchronous research jobs using the deployment's existing DATABASE_URL. The
 routes perform no signal generation, orders, or notifications. Migrations
-013 and 014 must already be applied for database operations. No new migration.
+013, 014, and 015 must be applied before deploying the two-hour dataset version.
+See [two-hour transition](ml-two-hour-transition.md) for rollout and legacy handling.
 
 ## Enable explicitly after deployment
 
@@ -23,7 +24,7 @@ not browser address-bar links. Start with JSON:
 Send this to `/api/research/ml/collect`. After inspecting successful dry-run
 results, change `write` to true to record snapshots. The label endpoint accepts
 the same body plus `limit` (default and maximum 10). Run it after the next hourly
-open plus four hours. A successful response with `attempted: 0` means no matching,
+open plus two hours (four for legacy v2 snapshots). A successful response with `attempted: 0` means no matching,
 mature, retry-eligible rows; it does NOT mean outcomes have been inserted.
 
 Symbols are limited to BTC/ETH, at most two distinct symbols. Source is one of

@@ -106,5 +106,5 @@ def test_worker_keeps_the_research_cadence():
     # label) to the Cloudflare Worker, same times.
     from _worker_schedule import worker_schedule
     sched = worker_schedule()
-    assert sched["ml-collect"] == [(h, 10) for h in range(0, 24, 4)]
-    assert sched["ml-label"] == [(h, 15) for h in range(1, 24, 4)]
+    assert sched["ml-collect"] == [(h, 10) for h in range(0, 24, 2)]
+    assert sched["ml-label"] == [(h, 15) for h in range(1, 24, 2)]

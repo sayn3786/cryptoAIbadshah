@@ -83,20 +83,21 @@ def test_zero_volume_remains_missing_not_infinite():
 
 @pytest.mark.parametrize("final_price,direction", [(101, "UP"), (99, "DOWN"), (100.1, "NEUTRAL"),
                                                     (100.2, "NEUTRAL"), (99.8, "NEUTRAL")])
-def test_labels_use_next_open_and_exact_four_hour_window(final_price, direction):
-    rows = bars(start=65, count=4)
+def test_labels_use_next_open_and_exact_two_hour_window(final_price, direction):
+    rows = bars(start=65, count=2)
     rows[-1]["close"] = final_price
-    result = ml.label_snapshot(snapshot(), rows, "binance", at(69))
+    result = ml.label_snapshot(snapshot(), rows, "binance", at(67))
     assert result["direction"] == direction
     assert result["return_bps"] == pytest.approx((final_price / 100 - 1) * 10000)
-    assert result["exit_at_ms"] - result["entry_at_ms"] == 4 * ml.HOUR_MS
+    assert result["exit_at_ms"] - result["entry_at_ms"] == 2 * ml.HOUR_MS
+    assert result["label_version"] == "next_open_2h_20bps_v1"
 
 
 def test_labels_refuse_immaturity_missing_bars_and_changed_exchange():
     row = snapshot()
     for candles, source, available, reason in [
-        (bars(65, 4), "binance", at(68), "LABEL_NOT_MATURE"),
-        (bars(65, 3), "binance", at(69), "MISSING_LABEL_CANDLES"),
+        (bars(65, 2), "binance", at(66), "LABEL_NOT_MATURE"),
+        (bars(65, 1), "binance", at(67), "MISSING_LABEL_CANDLES"),
         (bars(65, 4), "okx", at(69), "SOURCE_MISMATCH")]:
         with pytest.raises(ml.InvalidData, match=reason):
             ml.label_snapshot(row, candles, source, available)
@@ -189,7 +190,7 @@ def test_failure_metadata_backoff_and_permanent_queue():
     ml.record_label_failure(Session(), "s2", "HISTORICAL_BACKFILL_REQUIRED", at(300), permanent=True)
     sql, first = calls[0]
     assert "ml_label_jobs.attempts + 1 >= 3" in sql
-    assert first["status"] == "retry" and first["next"] == at(304)
+    assert first["status"] == "retry" and first["next"] == at(302)
     assert calls[1][1]["status"] == "backfill_needed" and calls[1][1]["next"] is None
 
 
