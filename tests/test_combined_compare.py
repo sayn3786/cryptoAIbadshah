@@ -88,3 +88,47 @@ def test_verdict(best, phrase):
              "total_net_pct": -50.0}
     res = {"rows": [today, {"label": "x", "trades": 10, **best}]}
     assert phrase in cm.verdict(res)
+
+
+# ── out-of-sample: the fixed v54 candidate ───────────────────────────────────
+
+def test_fixed_mode_runs_only_today_and_the_fixed_candidate(stub):
+    res = cm.compare_fixed(market(), days=5)
+    labels = [r["label"] for r in res["rows"]]
+    assert res["fixed"] and len(labels) == 3
+    assert labels[0].startswith("today") and labels[1] == cm.V54[0]
+    assert labels[2] == cm.V54[0] + " + limit TPs"
+    text = cm.render_telegram(res)
+    assert text.startswith("🔬 Out-of-sample check") and "nothing re-picked" in text
+
+
+def test_the_fixed_candidate_is_the_one_the_in_sample_run_picked():
+    assert cm.V54[1] == {"tp1_frac": 0.5, "be": 1.0} and cm.V54[2] == {"atr_add": 1.0}
+
+
+@pytest.mark.parametrize("v54, phrase", [
+    ({"avg_net_pct": 0.12, "profit_factor": 1.08, "total_net_pct": 30.0}, "HOLDS"),
+    ({"avg_net_pct": 0.02, "profit_factor": 1.01, "total_net_pct": 5.0}, "Weaker"),
+    ({"avg_net_pct": -0.02, "profit_factor": 0.98, "total_net_pct": -8.0}, "mostly fitted"),
+    ({"avg_net_pct": -0.2, "profit_factor": 0.8, "total_net_pct": -60.0}, "Not better"),
+])
+def test_verdict_fixed(v54, phrase):
+    today = {"trades": 10, "avg_net_pct": -0.1, "profit_factor": 0.9, "total_net_pct": -40.0}
+    assert phrase in cm.verdict_fixed({"rows": [today, {}, {"trades": 10, **v54}]})
+
+
+def test_end_days_ago_moves_the_download_window(monkeypatch, capsys, stub):
+    pytest.importorskip("flask")
+    import time
+    import cadence_compare as cc
+    seen = {}
+
+    def fetch(symbols, days, *, end_ms=None, log=None, session=None):
+        seen["end_ms"] = end_ms
+        return market()
+
+    monkeypatch.setattr(cc, "fetch_history", fetch)
+    assert cm.main(["--fixed", "--end-days-ago", "135", "--fetch-days", "5"]) == 0
+    ago = (time.time() * 1000 - seen["end_ms"]) / cc.HOUR_MS / 24
+    assert ago == pytest.approx(135, abs=0.1)
+    assert "Out-of-sample check" in capsys.readouterr().out
