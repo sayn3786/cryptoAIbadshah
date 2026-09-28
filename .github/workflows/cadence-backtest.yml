@@ -8,8 +8,12 @@ name: Strategy backtests (private Telegram)
 #   stops    are v53's stops too tight? Same trades, stop moved further out
 #            (x1.25, x1.5, x2, +0.5 / +1 ATR) plus how many stop-outs reached
 #            TP1 afterwards (backend/stop_compare.py)
+#   entry-exit  block trades against the Fibonacci pocket / where structure
+#            fought the trade, and try exit shapes (30/70, stop to entry at 1R,
+#            no break-even, all at TP1, all at TP2), executed the way HL does
+#            (backend/entry_exit_compare.py)
 #
-# Both use HL auto-exec's rules (strength >= min_strength, one position per coin).
+# All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
 # This repo is public, so its Actions logs are too: the job prints only how
 # many coins were replayed and whether the message was sent, never a result.
@@ -26,7 +30,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops]
+        options: [cadence, stops, entry-exit]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -82,6 +86,7 @@ jobs:
         run: |
           case "$STUDY" in
             stops) MODULE=stop_compare ;;
+            entry-exit) MODULE=entry_exit_compare ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
