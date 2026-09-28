@@ -37,7 +37,7 @@ def test_default_costs_unchanged():
 
 
 def test_a_wider_stop_keeps_the_published_stale_guard():
-    # published stop 3% -> allowed drift 1.5%; a +1.6% open is stale either way
+    # published stop 3% → allowed drift 1.5%; a +1.6% open is stale either way
     wide = pbt.widen_stop(rec(), [], mult=2.0)
     c = [bar(0, 101.6, 102, 101)]
     assert ee.simulate_hl(wide, c, **NOFEE)["reason"] == "STALE_ENTRY"
@@ -47,7 +47,7 @@ def test_run_book_applies_the_stop_variant_and_the_band_cap():
     c1 = [bar(i, 100, 100.5, 99.5) for i in range(0, 30)]
     c1[3] = bar(3, 100, 100.2, 96.5)                  # below the 97 stop, above 94
     m = {"ETH": {"1H": c1, "2H": []}, "SOL": {"1H": c1, "2H": []}}
-    pub = [rec(), {**rec(), "symbol": "SOL", "strength": 75}]
+    pub = [{**rec(), "strength": 65}, {**rec(), "symbol": "SOL", "strength": 75}]
     tight = ee.run_book(pub, m, skip=lambda r: False, exit_cfg=ee.HL_TODAY,
                         min_strength=62, **NOFEE)
     wide = ee.run_book(pub, m, skip=lambda r: False, exit_cfg=ee.HL_TODAY,
