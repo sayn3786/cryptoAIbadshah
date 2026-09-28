@@ -451,7 +451,18 @@ def _tf_reading(symbol: str, timeframe: str, window: List[Dict],
         "data_quality": "good",
         "tradeable": True,
         "reversal_radar": sig.get("reversal_radar") or {},
+        # Decision-time context the live postmortem scores (signal_snapshot's
+        # fib summary), so a replay can test filtering on it.
+        "fib": _fib_context(analysis),
     }
+
+
+def _fib_context(analysis: Dict) -> Dict:
+    f = analysis.get("fib")
+    if not isinstance(f, dict) or not f:
+        return {"bias": None, "in_zone": None}
+    return {"bias": f.get("bias"),
+            "in_zone": bool(f.get("in_golden_pocket") or f.get("in_entry_zone"))}
 
 
 # ── The paper position: production's state machine, in memory ────────────────
@@ -632,7 +643,9 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
            one_per_symbol: bool = False,
            start_ms: Optional[int] = None,
            reading_cache: Optional[Dict] = None,
-           stop_variant: Optional[Dict] = None) -> Dict[str, Any]:
+           stop_variant: Optional[Dict] = None,
+           execute: bool = True,
+           keep_published: bool = False) -> Dict[str, Any]:
     """
     Replay the publication strategy over `market` and report what it did.
 
@@ -674,6 +687,10 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
       stop further from entry, to ``k × distance + a × ATR(14, 2H)``, with the
       same entry and targets. The published set is unchanged, so variants
       isolate the stop's effect. R is measured against the new, wider risk.
+    * ``execute=False`` only builds the published set (no position walking);
+      ``keep_published`` returns it as ``report["published"]``, each rec
+      carrying its decision-time flags (fib context, structure adjustment),
+      for tools that simulate their own execution.
 
     Deterministic: no wall clock is read anywhere in this function or anything
     it calls. The same market produces the same report, which is what makes a
@@ -784,6 +801,12 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
                 "reversal_against": _reversal_against(screen["direction"], h2, h4),
                 "h2_exhausted": sig.get("exhaustion_flag", False),
                 "h2_reversal_count": sig.get("reversal_count", 0),
+                # What the live postmortem flags on (see postmortem_report):
+                # structure_fought = structure_adjustment < 0; fib pocket
+                # against = in the zone with the opposite bias.
+                "structure_adjustment": sig.get("structure_adjustment"),
+                "fib_bias": (h2.get("fib") or {}).get("bias"),
+                "fib_in_zone": (h2.get("fib") or {}).get("in_zone"),
                 "data_quality": "good",
                 "entry": sig.get("entry"),
                 "sl": sig.get("sl"),
@@ -812,6 +835,8 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
             rec["slot"] = _iso(slot)
             rec["rank"] = rank
             published.append(rec)
+            if not execute:
+                continue
             if min_strength is not None and (rec.get("strength") or 0) < min_strength:
                 skipped["below_min_strength"] += 1
                 continue
@@ -840,6 +865,8 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     }
     if keep_trades:
         report["trades"] = trades
+    if keep_published:
+        report["published"] = published
     return report
 
 
