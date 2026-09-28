@@ -53,6 +53,11 @@ CANDIDATES = (
 )
 TODAY = ("today: 50/50, stop to entry at TP1", {"tp1_frac": 0.5, "be": "tp1"}, None)
 
+# The v54 candidate, FIXED after the 2026-05-26 → 09-28 run picked it. The
+# out-of-sample check runs exactly this on a different period, never re-picking.
+V54 = ("v54: 50/50, stop to entry at 1R, stop +1 ATR", {"tp1_frac": 0.5, "be": 1.0},
+       {"atr_add": 1.0})
+
 
 def bands(trades: Sequence[Dict], days: float, split: float = BAND_SPLIT) -> Dict:
     lo = [t for t in trades if (t.get("strength") or 0) < split]
@@ -60,8 +65,7 @@ def bands(trades: Sequence[Dict], days: float, split: float = BAND_SPLIT) -> Dic
     return {f"<{split:g}": ee.metrics(lo, days), f"{split:g}+": ee.metrics(hi, days)}
 
 
-def compare(market: Dict, *, min_strength: float = 62, days: Optional[float] = None,
-            correlations=None, production_universe=None, warmup_hours: int = 240) -> Dict:
+def _published(market: Dict, *, days, correlations, production_universe, warmup_hours):
     start = cc.common_start(market, days=days, warmup_hours=warmup_hours)
     end = int(market["BTC"]["1H"][-1]["timestamp"]) + HOUR_MS
     span = (end - start) / (24 * HOUR_MS)
@@ -69,8 +73,10 @@ def compare(market: Dict, *, min_strength: float = 62, days: Optional[float] = N
                      production_universe=production_universe, interval_hours=4,
                      start_ms=start, execute=False, keep_published=True,
                      keep_trades=False, reading_cache={})
-    pub = rep["published"]
+    return rep["published"], start, end, span
 
+
+def _row_fn(pub, market, span, min_strength):
     def row(label, exit_cfg, stop_variant, costs, *, floor=min_strength, group="main"):
         b = ee.run_book(pub, market, skip=lambda r: False,
                         exit_cfg={**exit_cfg, "costs": costs}, min_strength=floor,
@@ -79,6 +85,15 @@ def compare(market: Dict, *, min_strength: float = 62, days: Optional[float] = N
         return {"group": group, "label": label, **ee.metrics(b["trades"], span),
                 "bands": bands(b["trades"], span), "counts": b["counts"],
                 "_cfg": (exit_cfg, stop_variant)}
+    return row
+
+
+def compare(market: Dict, *, min_strength: float = 62, days: Optional[float] = None,
+            correlations=None, production_universe=None, warmup_hours: int = 240) -> Dict:
+    pub, start, end, span = _published(market, days=days, correlations=correlations,
+                                       production_universe=production_universe,
+                                       warmup_hours=warmup_hours)
+    row = _row_fn(pub, market, span, min_strength)
 
     rows = [row(*TODAY, MARKET_TPS)]
     cand_rows = [row(label, cfg, sv, MARKET_TPS) for label, cfg, sv in CANDIDATES]
@@ -97,6 +112,48 @@ def compare(market: Dict, *, min_strength: float = 62, days: Optional[float] = N
                          "slippage_bps": SLIP_BPS, "maker_bps": MAKER_BPS, "cadence_h": 4,
                          "parity_mode": "price_only"},
             "published": len(pub), "rows": rows}
+
+
+def compare_fixed(market: Dict, *, min_strength: float = 62, days: Optional[float] = None,
+                  correlations=None, production_universe=None,
+                  warmup_hours: int = 240) -> Dict:
+    """Out-of-sample: today vs the FIXED v54 candidate (market and limit TPs).
+    Nothing is selected on this data."""
+    pub, start, end, span = _published(market, days=days, correlations=correlations,
+                                       production_universe=production_universe,
+                                       warmup_hours=warmup_hours)
+    row = _row_fn(pub, market, span, min_strength)
+    label, cfg, sv = V54
+    rows = [row(*TODAY, MARKET_TPS, group="oos"),
+            row(label, cfg, sv, MARKET_TPS, group="oos"),
+            row(f"{label} + limit TPs", cfg, sv, LIMIT_TPS, group="oos")]
+    for r in rows:
+        r.pop("_cfg", None)
+    return {"window": {"start": pbt._iso(start), "end": pbt._iso(end), "days": round(span, 1)},
+            "settings": {"min_strength": min_strength, "taker_bps": TAKER_BPS,
+                         "slippage_bps": SLIP_BPS, "maker_bps": MAKER_BPS, "cadence_h": 4,
+                         "parity_mode": "price_only"},
+            "published": len(pub), "rows": rows, "fixed": True}
+
+
+def verdict_fixed(result: Dict) -> str:
+    rows = result["rows"]
+    today, v54 = rows[0], rows[-1]
+    if not v54.get("trades"):
+        return "Not enough trades in this period to judge."
+    per, pf = v54["avg_net_pct"], v54.get("profit_factor") or 0
+    beat = (today.get("trades") and v54["total_net_pct"] > today["total_net_pct"])
+    vs = (f" ({v54['total_net_pct'] - today['total_net_pct']:+.1f}% vs today)"
+          if today.get("trades") else "")
+    if per >= 0.05 and pf >= 1.05 and beat:
+        return f"HOLDS out of sample: {per:+.3f}%/trade, PF {pf}{vs}. Worth a v54 testnet trial."
+    if per > 0 and beat:
+        return (f"Weaker out of sample: {per:+.3f}%/trade, PF {pf}{vs}. Still better than "
+                "today, but the edge is thin.")
+    if beat:
+        return (f"Does NOT hold: {per:+.3f}%/trade, PF {pf}{vs}. Better than today but still "
+                "losing: the in-sample edge was mostly fitted.")
+    return f"Does NOT hold: {per:+.3f}%/trade, PF {pf}{vs}. Not better than today."
 
 
 def verdict(result: Dict) -> str:
@@ -123,8 +180,13 @@ def render_telegram(result: Dict) -> str:
              f"strength ≥ {st['min_strength']}, one position per coin, market entry, "
              f"taker {st['taker_bps']}+{st['slippage_bps']} bps, maker {st['maker_bps']} bps, "
              "price-only", ""]
+    if result.get("fixed"):
+        lines[0] = "🔬 Out-of-sample check (v54 candidate fixed in advance, HL book, every 4h)"
+        lines.insert(3, "Earlier period, no overlap with the run that picked v54; nothing "
+                        "re-picked on this data.")
     heads = {"main": "EXIT + STOP (market TPs, as today)",
-             "costs": "BEST + LIMIT TAKE-PROFITS", "policy": "SAME, 69+ SIGNALS ONLY"}
+             "costs": "BEST + LIMIT TAKE-PROFITS", "policy": "SAME, 69+ SIGNALS ONLY",
+             "oos": "TODAY vs v54 (fixed)"}
     last = None
     for r in result["rows"]:
         if r["group"] != last:
@@ -143,7 +205,7 @@ def render_telegram(result: Dict) -> str:
                 lines.append(f"  {name}: {b['trades']} trades · {b['avg_net_pct']}%/trade · "
                              f"total {b['total_net_pct']}% · PF {b['profit_factor']}")
         lines.append("")
-    lines.append(verdict(result))
+    lines.append(verdict_fixed(result) if result.get("fixed") else verdict(result))
     return "\n".join(lines)
 
 
@@ -154,6 +216,11 @@ def main(argv=None) -> int:
     ap.add_argument("--fetch-days", type=float, default=90)
     ap.add_argument("--days", type=float, help="only the last N days")
     ap.add_argument("--min-strength", type=float, default=62)
+    ap.add_argument("--end-days-ago", type=float, default=0,
+                    help="end the downloaded history this many days ago (an earlier, "
+                         "out-of-sample period)")
+    ap.add_argument("--fixed", action="store_true",
+                    help="out-of-sample mode: only today vs the fixed v54 candidate")
     ap.add_argument("--telegram", action="store_true",
                     help="send to TELEGRAM_REPORT_CHAT_ID (private); print only "
                          "whether it was sent")
@@ -166,14 +233,20 @@ def main(argv=None) -> int:
         market = cli.load_candles(args.candles)
     else:
         print(f"downloading {args.fetch_days:g} days of 1H history...", file=sys.stderr)
+        end_ms = None
+        if args.end_days_ago:
+            import time
+            end_ms = (int(time.time() * 1000) - int(args.end_days_ago * 24 * HOUR_MS)) \
+                // HOUR_MS * HOUR_MS
         market = cc.fetch_history({s: appmod.SYMBOLS[s] for s in universe
-                                   if s in appmod.SYMBOLS}, args.fetch_days,
+                                   if s in appmod.SYMBOLS}, args.fetch_days, end_ms=end_ms,
                                   log=lambda m: print(m, file=sys.stderr))
         if "BTC" not in market:
             print("error: no BTC history", file=sys.stderr)
             return 2
-    res = compare(market, min_strength=args.min_strength, days=args.days,
-                  correlations=corr, production_universe=universe)
+    run = compare_fixed if args.fixed else compare
+    res = run(market, min_strength=args.min_strength, days=args.days,
+              correlations=corr, production_universe=universe)
     if args.telegram:
         # Public repo, public Actions log: results go to the private chat only.
         import weekly_report
