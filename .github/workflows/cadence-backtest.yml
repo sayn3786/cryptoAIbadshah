@@ -1,9 +1,15 @@
-name: Cadence backtest (private Telegram)
+name: Strategy backtests (private Telegram)
 
-# Would publishing / executing every 1h or 2h beat today's 4h cadence?
-# Replays the production strategy over the last N days at 4h, 2h and 1h, with
-# HL auto-exec's rules (strength >= min, one position per coin), and sends the
-# comparison to the owner's PRIVATE Telegram chat (TELEGRAM_REPORT_CHAT_ID).
+# Offline backtests of the live strategy, sent to the owner's PRIVATE Telegram
+# chat (TELEGRAM_REPORT_CHAT_ID). Pick one with the `study` input:
+#
+#   cadence  would publishing / executing every 1h or 2h beat today's 4h?
+#            (backend/cadence_compare.py)
+#   stops    are v53's stops too tight? Same trades, stop moved further out
+#            (x1.25, x1.5, x2, +0.5 / +1 ATR) plus how many stop-outs reached
+#            TP1 afterwards (backend/stop_compare.py)
+#
+# Both use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
 # This repo is public, so its Actions logs are too: the job prints only how
 # many coins were replayed and whether the message was sent, never a result.
@@ -12,11 +18,16 @@ name: Cadence backtest (private Telegram)
 #   TELEGRAM_BOT_TOKEN       the same bot as the app
 #   TELEGRAM_REPORT_CHAT_ID  your private chat id (never the channel)
 #
-# Manual only: Actions tab -> Cadence backtest -> Run workflow. ~20-40 min.
+# Manual only: Actions tab -> Strategy backtests -> Run workflow. ~20-45 min.
 
 on:
   workflow_dispatch:
     inputs:
+      study:
+        description: "Which backtest"
+        type: choice
+        options: [cadence, stops]
+        default: cadence
       days:
         description: "Days of history to replay"
         default: "90"
@@ -57,15 +68,23 @@ jobs:
           fi
           echo "Telegram secrets present"
 
-      - name: Replay 4h / 2h / 1h and send to private Telegram
+      - name: Run the backtest and send to private Telegram
         working-directory: backend
         env:
           TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_REPORT_CHAT_ID: ${{ secrets.TELEGRAM_REPORT_CHAT_ID }}
+          # The tools import app for its symbol list; keep its slot pre-warm
+          # thread from waking up inside a long run.
+          DISABLE_REC_SCHEDULER:   "1"
+          STUDY:                   ${{ inputs.study }}
           DAYS:                    ${{ inputs.days }}
           MIN_STRENGTH:            ${{ inputs.min_strength }}
         run: |
+          case "$STUDY" in
+            stops) MODULE=stop_compare ;;
+            *)     MODULE=cadence_compare ;;
+          esac
           # Output is only per-coin download counts and
           # "coins replayed: N; telegram: sent|NOT sent". No results.
-          python -m cadence_compare --telegram \
+          python -m "$MODULE" --telegram \
             --fetch-days "$DAYS" --min-strength "$MIN_STRENGTH"
