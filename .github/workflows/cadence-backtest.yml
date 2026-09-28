@@ -12,6 +12,9 @@ name: Strategy backtests (private Telegram)
 #            fought the trade, and try exit shapes (30/70, stop to entry at 1R,
 #            no break-even, all at TP1, all at TP2), executed the way HL does
 #            (backend/entry_exit_compare.py)
+#   combined  the best exit + stop together, with realistic HL costs (limit
+#            take-profits too), split into 62-68 / 69+ signal strength
+#            (backend/combined_compare.py)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -30,7 +33,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit]
+        options: [cadence, stops, entry-exit, combined]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -87,6 +90,7 @@ jobs:
           case "$STUDY" in
             stops) MODULE=stop_compare ;;
             entry-exit) MODULE=entry_exit_compare ;;
+            combined) MODULE=combined_compare ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
