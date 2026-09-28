@@ -135,7 +135,7 @@ def test_book_filters_skips_busy_coins_and_counts():
     b = ee.run_book(pub, m, skip=ee.fib_against, exit_cfg=ee.HL_TODAY, min_strength=62,
                     **NOFEE)
     assert len(b["trades"]) == 2
-    assert b["counts"] == {"filtered": 1, "busy": 1, "below_min": 1, "stale": 0}
+    assert b["counts"] == {"filtered": 1, "busy": 1, "below_min": 1, "stale": 0, "capped": 0}
 
 
 def test_metrics_and_drawdown():
