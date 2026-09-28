@@ -86,13 +86,16 @@ EXITS = (
 def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
                 be="tp1", fee_bps: float = pbt.DEFAULT_FEE_BPS,
                 slippage_bps: float = pbt.DEFAULT_SLIPPAGE_BPS,
-                max_hold_hours: int = MAX_HOLD_HOURS) -> Dict:
+                max_hold_hours: int = MAX_HOLD_HOURS,
+                costs: Optional[Dict[str, float]] = None) -> Dict:
     """One trade as HL auto-exec runs it. Returns a result dict; `taken` is
     False (with a reason) when HL would not have opened it.
 
     tp1_frac: share closed at TP1 (1.0 = all; 0.0 = none, hold for TP2).
     be: "tp1" (stop to entry once TP1 fills), a number k (stop to entry once
-        price has reached k x risk in favour), or None (stop never moves)."""
+        price has reached k x risk in favour), or None (stop never moves).
+    costs: bps per leg by kind {"entry", "tp", "stop", "market"}; default is
+        fee_bps + slippage_bps on every leg."""
     long = rec["direction"] == "LONG"
     sgn = 1 if long else -1
     entry_sig, sl = float(rec["entry"]), float(rec["sl"])
@@ -101,7 +104,10 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
     if not fwd or not tps:
         return {"taken": False, "reason": "NO_DATA"}
     fill = float(fwd[0]["open"])
-    allowed = min(DRIFT_STOP_FRACTION * abs(entry_sig - sl) / entry_sig, DRIFT_CAP)
+    # The stale-entry guard measures against the PUBLISHED stop, so a widened
+    # stop never lets in a trade today's HL would have skipped.
+    guard_sl = float(rec.get("sl_published", sl))
+    allowed = min(DRIFT_STOP_FRACTION * abs(entry_sig - guard_sl) / entry_sig, DRIFT_CAP)
     if abs(fill - entry_sig) / entry_sig > allowed:
         return {"taken": False, "reason": "STALE_ENTRY"}
     if (fill - sl) * sgn <= 0 or (tps[0] - fill) * sgn <= 0:
@@ -111,7 +117,7 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
     f1 = 1.0 if tp2 is None else max(0.0, min(1.0, float(tp1_frac)))
     risk = abs(fill - sl)
 
-    legs: List = []                       # (fraction, price)
+    legs: List = []                       # (fraction, price, kind)
     remaining, stop = 1.0, sl
     tp1_done, moved = False, False
     pending_be = False                    # a 1R trigger arms the move from the NEXT bar
@@ -124,7 +130,7 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
         hi, lo = float(c["high"]), float(c["low"])
         # Conservative: the stop is checked before any target in the same bar.
         if (lo <= stop) if long else (hi >= stop):
-            legs.append((remaining, stop))
+            legs.append((remaining, stop, "stop"))
             remaining = 0.0
             outcome = ("tp1_then_be" if tp1_done and moved else
                        "tp1_then_stop" if tp1_done else
@@ -134,7 +140,7 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
         if not tp1_done and ((hi >= tp1) if long else (lo <= tp1)):
             tp1_done = True
             if f1 > 0:
-                legs.append((f1, tp1))
+                legs.append((f1, tp1, "tp"))
                 remaining = round(remaining - f1, 12)
             if remaining <= 1e-12:
                 outcome, closed_at = "tp1", ts
@@ -143,7 +149,7 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
                 stop, moved = fill, True
         if tp1_done and tp2 is not None and remaining > 1e-12 and \
                 ((hi >= tp2) if long else (lo <= tp2)):
-            legs.append((remaining, tp2))
+            legs.append((remaining, tp2, "tp"))
             remaining = 0.0
             outcome, closed_at = "tp2", ts
             break
@@ -152,21 +158,23 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
             if best >= float(be) * risk:
                 pending_be = True
         if ts >= end_ms:
-            legs.append((remaining, float(c["close"])))
+            legs.append((remaining, float(c["close"]), "market"))
             remaining = 0.0
             outcome, closed_at = "timeout", ts
             break
     if remaining > 1e-12:                  # data ran out: mark to the last close
-        legs.append((remaining, float(fwd[-1]["close"])))
+        legs.append((remaining, float(fwd[-1]["close"]), "market"))
         outcome, closed_at = "open_at_end", int(fwd[-1]["timestamp"])
 
-    gross = sum(fr * (px - fill) / fill * 100 * sgn for fr, px in legs)
-    per_leg = (fee_bps + slippage_bps) / 100.0
-    cost = per_leg * (1.0 + sum(fr for fr, _ in legs))
+    gross = sum(fr * (px - fill) / fill * 100 * sgn for fr, px, _ in legs)
+    flat = fee_bps + slippage_bps
+    bps = {"entry": flat, "tp": flat, "stop": flat, "market": flat, **(costs or {})}
+    cost = (bps["entry"] + sum(fr * bps[k] for fr, _, k in legs)) / 100.0
     net = gross - cost
     risk_pct = risk / fill * 100
     return {"taken": True, "symbol": rec["symbol"], "direction": rec["direction"],
-            "slot_ms": rec["slot_ms"], "fill": fill, "stop": sl, "tp1": tp1, "tp2": tp2,
+            "slot_ms": rec["slot_ms"], "strength": rec.get("strength"),
+            "fill": fill, "stop": sl, "tp1": tp1, "tp2": tp2,
             "outcome": outcome, "tp1_hit": tp1_done, "full_stop": outcome == "stop",
             "closed_at": closed_at, "net_pct": round(net, 6),
             "r": round(net / risk_pct, 6) if risk_pct else None}
@@ -176,12 +184,19 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
 
 def run_book(published: Sequence[Dict], market: Dict, *, skip: Callable[[Dict], bool],
              exit_cfg: Dict, min_strength: Optional[float], fee_bps: float,
-             slippage_bps: float) -> Dict:
+             slippage_bps: float, stop_variant: Optional[Dict] = None,
+             max_strength: Optional[float] = None) -> Dict:
+    """The HL book over the published set. `stop_variant` ({mult, atr_add})
+    widens each stop as portfolio_backtest.widen_stop does; `max_strength`
+    keeps only recs below it (a strength band)."""
     busy: Dict[str, float] = {}
     trades: List[Dict] = []
     counts = {"filtered": 0, "busy": 0, "below_min": 0, "stale": 0}
     for rec in sorted(published, key=lambda r: (r["slot_ms"], r.get("rank", 0))):
         if min_strength is not None and (rec.get("strength") or 0) < min_strength:
+            counts["below_min"] += 1
+            continue
+        if max_strength is not None and (rec.get("strength") or 0) >= max_strength:
             counts["below_min"] += 1
             continue
         if skip(rec):
@@ -190,6 +205,9 @@ def run_book(published: Sequence[Dict], market: Dict, *, skip: Callable[[Dict], 
         if busy.get(rec["symbol"], -1) > rec["slot_ms"]:
             counts["busy"] += 1
             continue
+        if stop_variant:
+            rec = pbt.widen_stop(rec, (market.get(rec["symbol"]) or {}).get("2H") or [],
+                                 **stop_variant)
         t = simulate_hl(rec, (market.get(rec["symbol"]) or {}).get("1H") or [],
                         fee_bps=fee_bps, slippage_bps=slippage_bps, **exit_cfg)
         if not t["taken"]:
