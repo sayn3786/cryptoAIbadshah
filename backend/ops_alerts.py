@@ -74,7 +74,10 @@ def fmt_opened(res: Dict[str, Any], sig: Dict[str, Any]) -> str:
     lines = [f"🟢 Opened {res.get('coin')} {side}",
              f"Entry ~{_px(entry)} · size {res.get('size')} "
              f"(${float(res.get('notional_usd') or 0):,.2f}, {res.get('leverage')}x)",
-             f"Stop {_px(ex.get('sl'))}"]
+             f"Stop {_px(ex.get('sl'))}"
+             + (f" (signal stop {_px(ex.get('signal_sl'))} + ATR buffer)"
+                if ex.get("signal_sl") and ex.get("sl")
+                and abs(float(ex["signal_sl"]) - float(ex["sl"])) > 1e-12 else "")]
     if split and ex.get("tp2"):
         lines.append(f"TP1 {_px(ex.get('tp'))} ({split[0]}) · TP2 {_px(ex.get('tp2'))} ({split[1]})")
     elif ex.get("tp"):
@@ -85,7 +88,10 @@ def fmt_opened(res: Dict[str, Any], sig: Dict[str, Any]) -> str:
 
 
 def fmt_stop_moved(r: Dict[str, Any]) -> str:
-    return (f"✅ {r.get('coin')}: TP1 hit, stop moved to entry {_px(r.get('stop_px'))}\n"
+    trig = r.get("trigger")
+    why = ("TP1 hit" if trig in (None, "tp1")
+           else f"price reached {trig} in profit")
+    return (f"✅ {r.get('coin')}: {why}, stop moved to entry {_px(r.get('stop_px'))}\n"
             f"Remaining {r.get('size')} is now risk-free.")
 
 

@@ -6,6 +6,8 @@ Scale-out exits and the break-even position manager.
   * once TP1 has filled, the manager moves the remainder's stop to ENTRY —
     placing the new stop before cancelling the old one — or closes the
     remainder if price is already back through entry.
+This file covers the v53 rule (HL_BREAKEVEN_TRIGGER=tp1, still selectable);
+the v54 default (move at 1R) is in test_hl_v54.py.
 No network: exchange reads and writes are injected fakes.
 """
 import os
@@ -17,6 +19,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 import hl_autoexec as ax                                               # noqa: E402
 import hl_manage as hm                                                 # noqa: E402
+
+@pytest.fixture(autouse=True)
+def _v53_breakeven_rule(monkeypatch):
+    monkeypatch.setenv("HL_BREAKEVEN_TRIGGER", "tp1")
+
 
 OK = {"status": "ok", "response": {"data": {"statuses": [{"resting": {"oid": 9}}]}}}
 TABLE = {"FET": {"sz_decimals": 0}, "ETH": {"sz_decimals": 4}}
