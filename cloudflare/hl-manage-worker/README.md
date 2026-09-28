@@ -12,8 +12,8 @@ decides which jobs run:
 | 00:15, 08:15, 16:15 | Pattern alerts → Telegram | `POST /api/patterns/alert` | `SCHEDULER_TOKEN` |
 | 00:20 | TAO snapshot | `POST /api/cron/tao-snapshot` | `SCHEDULER_TOKEN` |
 | 01:30 | ETF-flow and market snapshots | `POST /api/cron/etf-snapshot`, `/api/cron/market-snapshot` | `SCHEDULER_TOKEN` |
-| every 4h at :10 (00:10, 04:10, …) | ML research collect | `POST /api/research/ml/collect` | `SCHEDULER_TOKEN` |
-| 01:15, 05:15, … | ML research label | `POST /api/research/ml/label` | `SCHEDULER_TOKEN` |
+| every 2h at :10 (00:10, 02:10, …) | ML research collect | `POST /api/research/ml/collect` | `SCHEDULER_TOKEN` |
+| 01:15, 03:15, … | ML research label | `POST /api/research/ml/label` | `SCHEDULER_TOKEN` |
 | Sunday 06:17 | Weekly report → **private** Telegram chat | `POST /api/cron/weekly-report` | `SCHEDULER_TOKEN` |
 
 Why: GitHub's schedules are best-effort. Publishing ran 1–3 hours late or not

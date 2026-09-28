@@ -3903,7 +3903,7 @@ def _ml_research_request(kind):
         # log only the exception TYPE, which is enough to tell a missing table
         # (migrations 013/014 not applied) from a network or provider failure.
         print(f"[ml-research] {kind} failed: {type(exc).__name__} "
-              "(check DATABASE_URL and that migrations 013/014 are applied)")
+              "(check DATABASE_URL and that migrations 013/014/015 are applied)")
         return jsonify({"ok": False, "error_code": "RESEARCH_JOB_FAILED",
                         "error_type": type(exc).__name__}), 503
 

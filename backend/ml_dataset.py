@@ -9,14 +9,26 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 HOUR_MS = 3_600_000
-FEATURE_VERSION = "candles_1h_v2"
-LABEL_VERSION = "next_open_4h_20bps_v1"
+FEATURE_VERSION = "candles_1h_2h_slots_v3"
+LABEL_VERSION = "next_open_2h_20bps_v1"
+LEGACY_FEATURE_VERSION = "candles_1h_v2"
+LEGACY_LABEL_VERSION = "next_open_4h_20bps_v1"
+COLLECTION_HOURS = 2
 NEUTRAL_BPS = 20.0  # research definition, NOT an estimate of actual trading costs
 SOURCES = frozenset({"binance", "okx", "bybit", "gateio", "kucoin", "mexc", "htx", "lbank"})
 
 
 class InvalidData(ValueError):
     pass
+
+
+def label_spec(snapshot):
+    version = snapshot["feature_version"]
+    if version == FEATURE_VERSION:
+        return LABEL_VERSION, 2
+    if version == LEGACY_FEATURE_VERSION:
+        return LEGACY_LABEL_VERSION, 4
+    raise InvalidData("UNSUPPORTED_FEATURE_VERSION")
 
 
 def _number(value):
@@ -75,8 +87,8 @@ def feature_snapshot(symbol, candles, source, observed_at, environment, slot_at=
     cutoff_ms = milliseconds(fetch_started_at)
     if cutoff_ms > observed_ms:
         raise InvalidData("FETCH_CUTOFF_AFTER_OBSERVATION")
-    slot_ms = milliseconds(slot_at or observed_at) // (4 * HOUR_MS) * (4 * HOUR_MS)
-    if slot_ms > observed_ms or observed_ms >= slot_ms + 4 * HOUR_MS:
+    slot_ms = milliseconds(slot_at or observed_at) // (COLLECTION_HOURS * HOUR_MS) * (COLLECTION_HOURS * HOUR_MS)
+    if slot_ms > observed_ms or observed_ms >= slot_ms + COLLECTION_HOURS * HOUR_MS:
         raise InvalidData("OBSERVATION_OUTSIDE_SLOT")
     record = {
         "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"ml:{environment}:{FEATURE_VERSION}:{slot_ms}:{symbol}")),
@@ -135,7 +147,7 @@ def feature_snapshot(symbol, candles, source, observed_at, environment, slot_at=
 
 
 def label_snapshot(snapshot, candles, source, available_at):
-    """Four complete hourly bars from the NEXT hourly open after observation.
+    """Versioned target from the NEXT hourly open: two hours, legacy v2 four.
 
     Raw spot return only. NOT TP-before-SL, execution P&L, or net return.
     Caller persists only successful labels; unavailable labels remain pending.
@@ -144,19 +156,20 @@ def label_snapshot(snapshot, candles, source, available_at):
         raise InvalidData("FEATURES_NOT_READY")
     if source not in SOURCES or source != snapshot["source"]:
         raise InvalidData("SOURCE_MISMATCH")
+    label_version, horizon = label_spec(snapshot)
     start = int(snapshot["entry_at_ms"])
-    end = start + 4 * HOUR_MS
+    end = start + horizon * HOUR_MS
     now_ms = milliseconds(available_at)
     if now_ms < end:
         raise InvalidData("LABEL_NOT_MATURE")
     rows = _candles([c for c in candles if start <= _number(c.get("timestamp")) < end])
-    if [r["timestamp"] for r in rows] != [start + i * HOUR_MS for i in range(4)]:
+    if [r["timestamp"] for r in rows] != [start + i * HOUR_MS for i in range(horizon)]:
         raise InvalidData("MISSING_LABEL_CANDLES")
     entry, exit_price = rows[0]["open"], rows[-1]["close"]
     # Stable inclusive neutral boundaries despite binary floating-point noise.
     bps = round((exit_price / entry - 1) * 10000, 10)
-    return {"snapshot_id": snapshot["id"], "label_version": LABEL_VERSION,
-            "horizon_hours": 4, "neutral_bps": NEUTRAL_BPS,
+    return {"snapshot_id": snapshot["id"], "label_version": label_version,
+            "horizon_hours": horizon, "neutral_bps": NEUTRAL_BPS,
             "entry_at_ms": start, "exit_at_ms": end, "available_at": available_at,
             "entry_price": entry, "exit_price": exit_price, "return_bps": bps,
             "direction": "UP" if bps > NEUTRAL_BPS else "DOWN" if bps < -NEUTRAL_BPS else "NEUTRAL",
@@ -208,18 +221,22 @@ def pending_labels(session, environment, now, limit, *, symbols=None, source=Non
         params["source"] = source
     return session.execute(text("""
         SELECT f.* FROM ml_feature_snapshots f
-        LEFT JOIN ml_label_jobs j ON j.snapshot_id = f.id AND j.label_version = :label_version
-        WHERE f.environment = :environment AND f.feature_version = :version
-          AND f.quality = 'ready' AND f.entry_at_ms + 14400000 <= :now_ms
+        LEFT JOIN ml_label_jobs j ON j.snapshot_id = f.id AND j.label_version =
+          CASE WHEN f.feature_version = :version THEN :label_version ELSE :legacy_label END
+        WHERE f.environment = :environment AND f.feature_version IN (:version, :legacy_version)
+          AND f.quality = 'ready' AND f.entry_at_ms +
+          CASE WHEN f.feature_version = :version THEN 7200000 ELSE 14400000 END <= :now_ms
           AND (j.snapshot_id IS NULL OR (j.status = 'retry' AND j.next_attempt_at <= :now))
           AND NOT EXISTS (SELECT 1 FROM ml_labels l WHERE l.snapshot_id = f.id
-                          AND l.label_version = :label_version)
+                          AND l.label_version = CASE WHEN f.feature_version = :version
+                              THEN :label_version ELSE :legacy_label END)
     """ + extra + " ORDER BY COALESCE(j.attempts, 0), f.observed_at, f.id LIMIT :limit"), {"environment": environment, "version": FEATURE_VERSION,
-            "label_version": LABEL_VERSION, "now_ms": milliseconds(now), "now": now,
+            "label_version": LABEL_VERSION, "legacy_version": LEGACY_FEATURE_VERSION,
+            "legacy_label": LEGACY_LABEL_VERSION, "now_ms": milliseconds(now), "now": now,
             "limit": limit, **params}).mappings().all()
 
 
-def record_label_failure(session, snapshot_id, reason, now, *, permanent=False):
+def record_label_failure(session, snapshot_id, reason, now, *, permanent=False, label_version=LABEL_VERSION):
     """Three failed attempts maximum, then explicit operator backfill queue.
 
     Mutable job metadata is separate from immutable features and outcomes.
@@ -237,6 +254,6 @@ def record_label_failure(session, snapshot_id, reason, now, *, permanent=False):
           last_reason = :reason, last_attempt_at = :now,
           next_attempt_at = CASE WHEN :permanent OR ml_label_jobs.attempts + 1 >= 3
                                  THEN NULL ELSE :next END
-    """), {"id": snapshot_id, "version": LABEL_VERSION,
+    """), {"id": snapshot_id, "version": label_version,
             "status": "backfill_needed" if permanent else "retry", "permanent": permanent,
-            "reason": reason, "now": now, "next": None if permanent else now + timedelta(hours=4)})
+            "reason": reason, "now": now, "next": None if permanent else now + timedelta(hours=2 if label_version == LABEL_VERSION else 4)})

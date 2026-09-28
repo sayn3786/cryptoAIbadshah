@@ -2,7 +2,7 @@ name: ML Research Dataset
 
 on:
   # Scheduled by the Cloudflare Worker (cloudflare/hl-manage-worker/worker.js),
-  # collect every 4h at :10 (00:10, 04:10, …), label at 01:15, 05:15, …. This workflow is now manual only: Actions tab -> Run workflow.
+  # collect every 2h at :10 (00:10, 02:10, …), label at 01:15, 03:15, …. This workflow is now manual only: Actions tab -> Run workflow.
   workflow_dispatch:
     inputs:
       job:

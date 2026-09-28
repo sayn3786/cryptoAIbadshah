@@ -11,8 +11,8 @@
 //   every 4h at :15      market update      POST /api/patterns/alert  (→ Telegram digest)
 //   00:20                TAO snapshot       POST /api/cron/tao-snapshot
 //   01:30                data snapshots     POST /api/cron/etf-snapshot, /api/cron/market-snapshot
-//   every 4h at :10      ML collect         POST /api/research/ml/collect  (00:10, 04:10, …)
-//   every 4h at 01:15…   ML label           POST /api/research/ml/label    (01:15, 05:15, …)
+//   every 2h at :10      ML collect         POST /api/research/ml/collect  (00:10, 02:10, …)
+//   every 2h at 01:15…   ML label           POST /api/research/ml/label    (01:15, 03:15, …)
 //   Sunday 06:17         weekly report      POST /api/cron/weekly-report  (→ PRIVATE Telegram chat)
 //
 // Publish runs three times an hour. The 4H slot publishes at :02 right after
@@ -70,10 +70,10 @@ const JOBS = [
   // off) answers 503 and is simply logged.
   { name: "ml-collect", path: "/api/research/ml/collect", ...S, retries: 2,
     retryOn: [0, 429, 502, 504], retryDelayMs: 10_000, body: ML_BODY,
-    due: ({ h, m }) => h % 4 === 0 && m === 10 },
+    due: ({ h, m }) => h % 2 === 0 && m === 10 },
   { name: "ml-label", path: "/api/research/ml/label", ...S, retries: 2,
     retryOn: [0, 429, 502, 504], retryDelayMs: 10_000, body: { ...ML_BODY, limit: 10 },
-    due: ({ h, m }) => h % 4 === 1 && m === 15 },
+    due: ({ h, m }) => h % 2 === 1 && m === 15 },
   // Sent at most once per ISO week by the app, so a retry never double-sends.
   { name: "weekly-report", path: "/api/cron/weekly-report", ...S, retries: 2,
     due: ({ d, h, m }) => d === 0 && h === 6 && m === 17 },

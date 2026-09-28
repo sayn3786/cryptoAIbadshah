@@ -1,5 +1,9 @@
 # Phase 1–2: ML research dataset (no live model)
 
+> Current collection uses two-hour slots and two-hour targets, with migration
+> 015 and separate versions. See [the rollout guide](ml-two-hour-transition.md).
+> Four-hour descriptions below refer to retained legacy v2 data.
+
 This is the data foundation for comparing logistic classification and Ridge
 return regression later. It does not train a model, modify signal weights, place
 orders, or promise greater accuracy. No new paid service is required by this code;

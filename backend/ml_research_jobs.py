@@ -75,7 +75,7 @@ def label(symbols, source, environment, write=False, limit=10):
     counts, cache, results, failures = Counter(), {}, [], []
     for record in records:
         if dataset.milliseconds(now) - record["entry_at_ms"] >= 196 * dataset.HOUR_MS:
-            failures.append((record["id"], "HISTORICAL_BACKFILL_REQUIRED", True))
+            failures.append((record["id"], "HISTORICAL_BACKFILL_REQUIRED", True, dataset.label_spec(record)[0]))
             counts["HISTORICAL_BACKFILL_REQUIRED"] += 1
             continue
         symbol = record["symbol"]
@@ -92,14 +92,14 @@ def label(symbols, source, environment, write=False, limit=10):
             results.append(result)
             counts["ready"] += 1
         except dataset.InvalidData as exc:
-            failures.append((record["id"], str(exc), False))
+            failures.append((record["id"], str(exc), False, dataset.label_spec(record)[0]))
             counts[str(exc)] += 1
     if write and (results or failures):
         with db.session_scope() as session:
             for result in results:
                 counts["inserted"] += dataset.save_label(result, session)
-            for identity, reason, permanent in failures:
-                dataset.record_label_failure(session, identity, reason, datetime.now(timezone.utc), permanent=permanent)
+            for identity, reason, permanent, version in failures:
+                dataset.record_label_failure(session, identity, reason, datetime.now(timezone.utc), permanent=permanent, label_version=version)
     return {"ok": not failures, "mode": "write" if write else "dry_run",
             "environment": environment, "source": source, "attempted": len(records),
             "limit": limit, "counts": dict(counts)}

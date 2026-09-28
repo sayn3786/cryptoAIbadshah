@@ -1,5 +1,13 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Two-hour research transition
+
+New research records use two-hour collection slots (`candles_1h_2h_slots_v3`)
+and two-hour targets (`next_open_2h_20bps_v1`). Apply migration `015` BEFORE deploy.
+Existing v2 snapshots/labels keep their four-hour meaning and remain labelable.
+Do not combine horizons in training. See [rollout guide](docs/ml-two-hour-transition.md).
+Older four-hour descriptions below document the legacy dataset, not new records.
+
 ## Manual cloud research jobs
 
 POST `/api/research/ml/collect` and POST `/api/research/ml/label` are fail-closed,
