@@ -5,7 +5,7 @@ decides which jobs run:
 
 | When (UTC) | Job | Endpoint | Token |
 |---|---|---|---|
-| every minute | Position manager: stop → entry after TP1 | `POST /api/hl/manage` | `HL_MANAGE_TOKEN` |
+| every minute | Position manager: stop → entry at 1R (v54), cancels leftover exit orders | `POST /api/hl/manage` | `HL_MANAGE_TOKEN` |
 | hh:02, hh:12, hh:32 | **Publish signals** (+ HL auto-exec entry) | `POST /api/cron/publish` | `SCHEDULER_TOKEN` |
 | hh:05, hh:35 | Outcome monitor (TP/SL hits, expiry) | `POST /api/signals/monitor` | `SCHEDULER_TOKEN` |
 | 00:07, 08:07, 12:07 | Telegram daily signals (+ Twitter) | `POST /api/cron/daily` | `SCHEDULER_TOKEN` |
@@ -58,7 +58,7 @@ channel):
 
 | From | Alerts | Needs |
 |---|---|---|
-| **The app** | 🟢 position opened (entry, stop, TP1/TP2) · ✅ TP1 hit, stop moved to entry · ⚠️ remainder closed at entry · 🏁/🔴 trade closed with P&L · ⛔ order rejected · 🚨 position **without a stop** · 🚨 stop-move failed · 🚨 auto-exec crashed | `TELEGRAM_ALERT_CHAT_ID` in Vercel, or it falls back to `TELEGRAM_REPORT_CHAT_ID` (already set). Nothing new. |
+| **The app** | 🟢 position opened (entry, stop, TP1/TP2) · ✅ price reached 1R, stop moved to entry · ⚠️ remainder closed at entry · 🏁/🔴 trade closed with P&L · ⛔ order rejected · 🚨 position **without a stop** · 🚨 stop-move failed · 🚨 auto-exec crashed | `TELEGRAM_ALERT_CHAT_ID` in Vercel, or it falls back to `TELEGRAM_REPORT_CHAT_ID` (already set). Nothing new. |
 | **This Worker** | 🚨 a job failed after its retries: app down or unreachable, `401` token mismatch, `5xx`, Vercel timeout | Two optional Worker **Secrets**: `TELEGRAM_BOT_TOKEN` (same bot as Vercel) and `TELEGRAM_ALERT_CHAT_ID` (your private chat id). Without them, failures are only logged. |
 
 The Worker alerts directly rather than through the app, because a broken app
@@ -153,7 +153,8 @@ Platform quotas/retention still apply; this is not a permanent audit archive.
 | You see | Meaning |
 |---|---|
 | `"job":"manage","ran":true,"actions":0` | Working; no position needs its stop moved. |
-| `"action":"move_stop","placed":true` | TP1 had filled; the stop was moved to entry. |
+| `"action":"move_stop","placed":true` | Price reached 1R in profit (`"trigger":"1R"`; with `HL_BREAKEVEN_TRIGGER=tp1`, TP1 had filled); the stop was moved to entry. |
+| `"action":"cancel_orphans"` | A closed position's leftover stop / take-profit orders (10+ minutes old) were cancelled. |
 | `"action":"close_remainder","closed":true` | Price was already back through entry; the remainder was closed. |
 | `"ran":false,"reason":"DISARMED"` | Live trading is off in Vercel (`LIVE_TRADING_ENABLED` / kill switch). Expected if you disarmed it. |
 | `"status":401` / `AUTH_REQUIRED` | The token differs between Cloudflare and Vercel, or Vercel wasn't redeployed after changing it. |

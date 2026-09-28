@@ -137,6 +137,24 @@ def _send_trigger(ex, coin: str, is_buy_exit: bool, size: float, px: float,
     return ex.order(coin, is_buy_exit, float(size), float(px), ot, **kw)
 
 
+def _send_limit_tp(ex, coin: str, is_buy_exit: bool, size: float, px: float,
+                   cloid: Optional[str]) -> Any:
+    """One REDUCE-ONLY resting limit take-profit (GTC). It rests in the book and
+    fills at `px` or better, paying the maker fee instead of a market trigger's
+    taker fee plus slippage."""
+    from hyperliquid.utils.signing import Cloid
+    kw: Dict[str, Any] = {"reduce_only": True}
+    if cloid:
+        kw["cloid"] = Cloid.from_str(cloid)
+    return ex.order(coin, is_buy_exit, float(size), float(px), {"limit": {"tif": "Gtc"}}, **kw)
+
+
+def tp_order_type() -> str:
+    """"limit" (v54 default: resting maker orders) or "trigger" (v53: market
+    triggers), from HL_TP_ORDER."""
+    return "trigger" if os.getenv("HL_TP_ORDER", "").strip().lower() == "trigger" else "limit"
+
+
 def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
                      sl_px: Optional[float], tp_px: Optional[float],
                      *, env: Optional[str] = None,
@@ -145,26 +163,36 @@ def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
                      tp_size: Optional[float] = None,
                      tp2_px: Optional[float] = None,
                      tp2_size: Optional[float] = None,
-                     tp2_cloid: Optional[str] = None) -> Dict[str, Any]:
-    """Place REDUCE-ONLY stop-loss + take-profit trigger orders for an open
-    position. `is_buy_exit` is the side that CLOSES the position — the opposite
-    of the entry (a LONG exits by selling). All are market-trigger orders
-    (isMarket True) so they fill when price crosses the level; reduce_only means
-    they can only shrink the position, never flip or add to it. Impure (SDK);
-    each order is placed independently so a rejected stop does not abort a TP.
+                     tp2_cloid: Optional[str] = None,
+                     tp_type: Optional[str] = None) -> Dict[str, Any]:
+    """Place REDUCE-ONLY stop-loss + take-profit orders for an open position.
+    `is_buy_exit` is the side that CLOSES the position — the opposite of the
+    entry (a LONG exits by selling). The stop is a market trigger (isMarket
+    True) so it fills when price crosses the level. Take-profits are resting
+    limit orders by default (`tp_type` "limit", see tp_order_type) or market
+    triggers ("trigger"). reduce_only means they can only shrink the position,
+    never flip or add to it. Impure (SDK); each order is placed independently
+    so a rejected stop does not abort a TP.
 
     The stop always covers the FULL size. With `tp_size` + `tp2_px`/`tp2_size`
     the take-profit is split: TP1 closes `tp_size`, TP2 the rest (after TP1 the
     position manager moves the stop to entry). Without them, TP1 closes the
     whole position. Returns {"sl": resp?, "tp": resp?, "tp2": resp?}."""
     ex = _exchange(env)
+    limit = (tp_type or tp_order_type()) == "limit"
+
+    def _tp(sz, px, cloid):
+        if limit:
+            return _send_limit_tp(ex, coin, is_buy_exit, sz, px, cloid)
+        return _send_trigger(ex, coin, is_buy_exit, sz, px, "tp", cloid)
+
     out: Dict[str, Any] = {}
     if sl_px and sl_px > 0:
         out["sl"] = _send_trigger(ex, coin, is_buy_exit, size, sl_px, "sl", sl_cloid)
     if tp_px and tp_px > 0:
-        out["tp"] = _send_trigger(ex, coin, is_buy_exit, tp_size or size, tp_px, "tp", tp_cloid)
+        out["tp"] = _tp(tp_size or size, tp_px, tp_cloid)
     if tp2_px and tp2_px > 0 and tp2_size:
-        out["tp2"] = _send_trigger(ex, coin, is_buy_exit, tp2_size, tp2_px, "tp", tp2_cloid)
+        out["tp2"] = _tp(tp2_size, tp2_px, tp2_cloid)
     return out
 
 

@@ -4624,6 +4624,17 @@ def _hl_confirmed_published(store, sver, *, limit=30):
     return _ax.select_confirmed(rows, not_before=slot_start_utc)
 
 
+def _hl_signal_atr(symbol):
+    """ATR(14) of the symbol's CLOSED 2H candles, or None (demo/stale data, or
+    a fetch error). Used only to widen the placed stop."""
+    import hl_autoexec as _ax
+    try:
+        closed, _skip = _fetch_alert_candles(str(symbol or "").upper(), "2H")
+    except Exception:
+        return None
+    return _ax.atr(closed) if closed else None
+
+
 def _hl_auto_execute_run():
     """Run one auto-execute pass over the latest Confirmed-tier published set.
 
@@ -4646,13 +4657,23 @@ def _hl_auto_execute_run():
     if not signals:
         return {"ok": True, "ran": True, "attempted": 0, "executed": 0,
                 "reason": "NO_CONFIRMED_SIGNALS", "results": []}
+    if _ax.stop_atr_add() > 0:
+        # v54: the placed stop sits HL_STOP_ATR_ADD x ATR(14, 2H) beyond the
+        # signal's. No usable 2H data → the signal's own stop (never none).
+        for s_ in signals:
+            s_["atr"] = _hl_signal_atr(s_.get("symbol"))
     with _hl_execute_lock:
         acct = _ha.account_state()
         try:
             acct["spot_usdc_usd"] = _ha.spot_usdc()
         except Exception:
             pass
-        out = _ax.execute(signals, account_state=acct)
+        try:                               # leftover exits of closed trades
+            open_orders = _ha._post_info({"type": "frontendOpenOrders",
+                                          "user": _ha.account_address()}) or []
+        except Exception:
+            open_orders = None             # the position manager still cleans up
+        out = _ax.execute(signals, account_state=acct, open_orders=open_orders)
     try:                                   # private trade/problem alerts; never fatal
         import ops_alerts
         ops_alerts.notify_execution(signals, out)

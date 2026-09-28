@@ -145,14 +145,21 @@ def enrich_positions(state: Dict[str, Any], orders: Any,
     """Each open position with its live mark, stop-loss and take-profit(s).
 
     Pure (no network), so it is unit-testable against captured payloads.
-    `orders` is Hyperliquid's frontendOpenOrders list; only REDUCE-ONLY TRIGGER
-    orders on the position's coin count as its SL / TP. Distances are % from
-    the current mark; R:R uses the nearest TP against the stop, from entry.
+    `orders` is Hyperliquid's frontendOpenOrders list; REDUCE-ONLY orders on
+    the position's coin count as its SL / TP: triggers by type (or side of the
+    mark), and resting reduce-only LIMIT orders as take-profits (v54 places
+    TPs as limits). Distances are % from the current mark; R:R uses the
+    nearest TP against the stop, from entry.
     """
     by_coin: Dict[str, List[Dict[str, Any]]] = {}
+    limit_tps: Dict[str, List[float]] = {}
     for o in orders or []:
-        if isinstance(o, dict) and o.get("isTrigger") and o.get("reduceOnly"):
+        if not (isinstance(o, dict) and o.get("reduceOnly")):
+            continue
+        if o.get("isTrigger"):
             by_coin.setdefault(str(o.get("coin")), []).append(o)
+        elif _num(o.get("limitPx")) is not None:
+            limit_tps.setdefault(str(o.get("coin")), []).append(_num(o.get("limitPx")))
     out = []
     for p in state.get("open_positions") or []:
         coin, side = p.get("coin"), p.get("side")
@@ -166,6 +173,7 @@ def enrich_positions(state: Dict[str, Any], orders: Any,
             if px is None or kind is None:
                 continue
             (sls if kind == "sl" else tps).append(px)
+        tps.extend(limit_tps.get(str(coin), []))
         # The stop that fires first, and TPs nearest-first, in trade direction.
         sl = (max(sls) if side == "long" else min(sls)) if sls else None
         tps.sort(reverse=(side != "long"))

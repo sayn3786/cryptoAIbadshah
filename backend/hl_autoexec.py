@@ -106,6 +106,49 @@ def _second_target(row: Dict[str, Any]) -> Optional[float]:
 
 DEFAULT_TP1_FRACTION = 0.5      # share of the position TP1 closes; TP2 takes the rest
 
+# v54: the placed stop sits this many ATR(14, 2H) beyond the signal's stop.
+# Backtests found the signal stop too close to routine pullbacks once the
+# break-even move no longer rescues the trade. 0 = the published stop (v53).
+DEFAULT_STOP_ATR_ADD = 1.0
+
+
+def stop_atr_add() -> float:
+    v = hl_execution._num_env("HL_STOP_ATR_ADD", DEFAULT_STOP_ATR_ADD)
+    return v if 0 <= v <= 5 else DEFAULT_STOP_ATR_ADD
+
+
+def atr(candles: List[Dict[str, Any]], period: int = 14) -> Optional[float]:
+    """ATR(period) over CLOSED candles (true range incl. gaps), the measure the
+    signal engine sizes stops with. None when there are too few candles."""
+    c = [x for x in candles or [] if isinstance(x, dict)]
+    if len(c) < period + 1:
+        return None
+    try:
+        trs = [max(float(b["high"]) - float(b["low"]),
+                   abs(float(b["high"]) - float(a["close"])),
+                   abs(float(b["low"]) - float(a["close"])))
+               for a, b in zip(c[-period - 1:], c[-period:])]
+    except (KeyError, TypeError, ValueError):
+        return None
+    v = sum(trs) / len(trs)
+    return v if v > 0 else None
+
+
+def placed_stop(sig: Dict[str, Any], *, add: Optional[float] = None) -> Optional[float]:
+    """The stop to place: the signal's stop moved `add` x ATR further from entry
+    (sig["atr"], ATR of the 2H chart). Falls back to the signal's stop when
+    there is no ATR; never crosses zero."""
+    sl = _f(sig.get("sl"))
+    if not sl:
+        return None
+    add = stop_atr_add() if add is None else add
+    a = _f(sig.get("atr"))
+    if not add or not a:
+        return sl
+    if sig.get("direction") == "LONG":
+        return max(sl - add * a, sl * 0.01)
+    return sl + add * a
+
 
 def tp1_fraction() -> float:
     f = hl_execution._num_env("HL_TP1_FRACTION", DEFAULT_TP1_FRACTION)
@@ -239,7 +282,8 @@ def _attach_exits(sig: Dict[str, Any], res: Dict[str, Any], *,
         res["exits_error"] = "missing coin/size on fill"
         return
     sz_dec = int((table.get(coin) or {}).get("sz_decimals") or 0)
-    sl_px = hl_meta.round_price(sig.get("sl"), sz_dec) if sig.get("sl") else None
+    stop = placed_stop(sig)
+    sl_px = hl_meta.round_price(stop, sz_dec) if stop else None
     tp_px = hl_meta.round_price(sig.get("tp1"), sz_dec) if sig.get("tp1") else None
     tp2_px = hl_meta.round_price(sig.get("tp2"), sz_dec) if sig.get("tp2") else None
     # Scale out: TP1 closes part, TP2 the rest (the position manager then moves
@@ -260,11 +304,25 @@ def _attach_exits(sig: Dict[str, Any], res: Dict[str, Any], *,
             **extra)
         res["exits_ok"] = True
         res["exit_prices"] = {"sl": sl_px, "tp": tp_px,
-                              "tp2": tp2_px if split else None}
+                              "tp2": tp2_px if split else None,
+                              "signal_sl": sig.get("sl")}
         res["tp_split"] = list(split) if split else None
     except Exception as exc:                              # noqa: BLE001
         res["exits_ok"] = False
         res["exits_error"] = str(exc)
+
+
+def leftover_exits(coin: str, open_orders: Optional[List[Dict[str, Any]]],
+                   account_state: Dict[str, Any]) -> List[Any]:
+    """Order ids of REDUCE-ONLY orders on `coin` while the account holds no
+    position on it: exits left by a closed trade. Cancelled before a new open,
+    so an old take-profit can't close part of the new position. Pure."""
+    if not coin or any((p.get("coin") or "").upper() == coin.upper()
+                       for p in (account_state or {}).get("open_positions") or []):
+        return []
+    return [o.get("oid") for o in open_orders or []
+            if isinstance(o, dict) and o.get("reduceOnly")
+            and str(o.get("coin") or "").upper() == coin.upper() and o.get("oid") is not None]
 
 
 def execute(signals: List[Dict[str, Any]], *,
@@ -273,6 +331,8 @@ def execute(signals: List[Dict[str, Any]], *,
             cfg: Optional[Dict[str, Any]] = None,
             open_fn: Optional[Callable] = None,
             exit_fn: Optional[Callable] = None,
+            open_orders: Optional[List[Dict[str, Any]]] = None,
+            cancel_fn: Optional[Callable] = None,
             env: Optional[str] = None) -> Dict[str, Any]:
     """Open each signal through the Phase-4a guard, attaching a stop + TP1 to
     every fill. Returns {"attempted", "executed", "results"}.
@@ -290,8 +350,22 @@ def execute(signals: List[Dict[str, Any]], *,
     results: List[Dict[str, Any]] = []
     run_count = 0
     for sig in signals:
+        cleared = []
+        if open_orders is not None:
+            coin = hl_meta.resolve_coin(sig.get("symbol"), table)
+            cancel = cancel_fn or hl_exchange.cancel_order
+            for oid in leftover_exits(coin, open_orders, account_state):
+                try:
+                    cancel(coin, oid, env)
+                    cleared.append(oid)
+                except Exception:                         # noqa: BLE001 — the manager retries
+                    pass
+            if cleared:
+                open_orders = [o for o in open_orders if o.get("oid") not in cleared]
         res = open_fn(sig, account_state=account_state, table=table,
                       run_order_count=run_count, cfg=cfg, env=env)
+        if cleared:
+            res["cleared_leftover_oids"] = cleared
         if res.get("ok"):
             run_count += 1
             _reflect_open(account_state, res.get("coin"), res.get("notional_usd"))
