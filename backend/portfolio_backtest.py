@@ -645,7 +645,8 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
            reading_cache: Optional[Dict] = None,
            stop_variant: Optional[Dict] = None,
            execute: bool = True,
-           keep_published: bool = False) -> Dict[str, Any]:
+           keep_published: bool = False,
+           keep_candidates: bool = False) -> Dict[str, Any]:
     """
     Replay the publication strategy over `market` and report what it did.
 
@@ -690,7 +691,9 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     * ``execute=False`` only builds the published set (no position walking);
       ``keep_published`` returns it as ``report["published"]``, each rec
       carrying its decision-time flags (fib context, structure adjustment),
-      for tools that simulate their own execution.
+      for tools that simulate their own execution. ``keep_candidates`` also
+      returns EVERY screened candidate of every slot (``report["candidates"]``,
+      each with slot_ms and its rank within the slot), not only the top three.
 
     Deterministic: no wall clock is read anywhere in this function or anything
     it calls. The same market produces the same report, which is what makes a
@@ -726,6 +729,7 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
     coverage = _ExternalCoverage(parity_mode)
     mcap_seen = {"historical": 0, "unavailable": 0}
     skipped = {"below_min_strength": 0, "symbol_busy": 0}
+    all_candidates: List[Dict] = []
     trades: List[Dict] = []
     busy_until: Dict[str, float] = {}     # symbol → when its last trade ended
 
@@ -826,6 +830,10 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
 
         slots_evaluated += 1
         ranked = rec_policy.rank_candidates(slot_candidates)
+        if keep_candidates:
+            for i, c in enumerate(ranked, start=1):
+                all_candidates.append({**c, "id": f"{c['symbol']}-{slot}", "slot_ms": slot,
+                                       "slot": _iso(slot), "rank": i})
         for rank, cand in enumerate(rec_policy.select_publishable(ranked), start=1):
             if not (cand["entry"] and cand["sl"] and cand["tp_targets"]):
                 continue
@@ -867,6 +875,8 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
         report["trades"] = trades
     if keep_published:
         report["published"] = published
+    if keep_candidates:
+        report["candidates"] = all_candidates
     return report
 
 

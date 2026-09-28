@@ -19,6 +19,10 @@ name: Strategy backtests (private Telegram)
 #            earlier period that ends `end_days_ago` days back (default 135,
 #            so it doesn't overlap the run that picked v54)
 #            (backend/combined_compare.py --fixed)
+#   universe  more coins (the browse-only ones too) and/or every 69+ signal per
+#            slot instead of the top 3, under HL's caps and without them; set
+#            end_days_ago to 0 and to 135 for both periods
+#            (backend/universe_compare.py; ~35-50 min with the extra coins)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -37,7 +41,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -46,13 +50,13 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos only: end the history this many days ago"
+        description: "v54-oos / universe: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
   compare:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -102,6 +106,8 @@ jobs:
             combined) MODULE=combined_compare ;;
             v54-oos) MODULE=combined_compare
                      EXTRA="--fixed --end-days-ago $END_DAYS_AGO" ;;
+            universe) MODULE=universe_compare
+                      EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and

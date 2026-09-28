@@ -185,13 +185,18 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
 def run_book(published: Sequence[Dict], market: Dict, *, skip: Callable[[Dict], bool],
              exit_cfg: Dict, min_strength: Optional[float], fee_bps: float,
              slippage_bps: float, stop_variant: Optional[Dict] = None,
-             max_strength: Optional[float] = None) -> Dict:
+             max_strength: Optional[float] = None,
+             max_open: Optional[int] = None,
+             max_per_slot: Optional[int] = None) -> Dict:
     """The HL book over the published set. `stop_variant` ({mult, atr_add})
     widens each stop as portfolio_backtest.widen_stop does; `max_strength`
-    keeps only recs below it (a strength band)."""
+    keeps only recs below it (a strength band). `max_open` / `max_per_slot`
+    model HL auto-exec's exposure cap (positions open at once) and its
+    per-run order cap."""
     busy: Dict[str, float] = {}
     trades: List[Dict] = []
-    counts = {"filtered": 0, "busy": 0, "below_min": 0, "stale": 0}
+    counts = {"filtered": 0, "busy": 0, "below_min": 0, "stale": 0, "capped": 0}
+    per_slot: Dict[int, int] = {}
     for rec in sorted(published, key=lambda r: (r["slot_ms"], r.get("rank", 0))):
         if min_strength is not None and (rec.get("strength") or 0) < min_strength:
             counts["below_min"] += 1
@@ -205,6 +210,13 @@ def run_book(published: Sequence[Dict], market: Dict, *, skip: Callable[[Dict], 
         if busy.get(rec["symbol"], -1) > rec["slot_ms"]:
             counts["busy"] += 1
             continue
+        slot = rec["slot_ms"]
+        if max_per_slot is not None and per_slot.get(slot, 0) >= max_per_slot:
+            counts["capped"] += 1
+            continue
+        if max_open is not None and sum(1 for c in busy.values() if c > slot) >= max_open:
+            counts["capped"] += 1
+            continue
         if stop_variant:
             rec = pbt.widen_stop(rec, (market.get(rec["symbol"]) or {}).get("2H") or [],
                                  **stop_variant)
@@ -214,6 +226,7 @@ def run_book(published: Sequence[Dict], market: Dict, *, skip: Callable[[Dict], 
             counts["stale"] += 1
             continue
         trades.append(t)
+        per_slot[slot] = per_slot.get(slot, 0) + 1
         busy[rec["symbol"]] = t["closed_at"] if t["closed_at"] is not None else float("inf")
     return {"trades": trades, "counts": counts}
 
