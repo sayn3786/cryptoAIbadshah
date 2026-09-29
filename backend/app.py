@@ -2710,8 +2710,10 @@ def _published_slot(now_sgt=None) -> dict:
         return _empty("DB_NOT_CONFIGURED")
     try:
         import signal_publish as _sp
+        # The published set only; HL-only extras share the slot but are not it.
         rows = _signal_store().list_published_between(
-            start, end, strategy_version=_sp.STRATEGY_VERSION, limit=20)
+            start, end, strategy_version=_sp.STRATEGY_VERSION,
+            strategy_name=_sp.STRATEGY_NAME, limit=20)
     except Exception as exc:
         print(f"[recs] slot read failed — {_db.sanitize_db_error(exc)}")
         return _empty("DB_READ_FAILED")
@@ -3157,6 +3159,30 @@ def _compute_recommendations() -> dict:
         if not _out["all_actionable"]:
             print(f"[recs] NOT actionable — persistence failed for "
                   f"{', '.join(_out['failed'])} ({_out.get('error_code')})")
+
+        # ── HL-only extras: every other Confirmed-tier candidate ────────────
+        # Backtests (two non-overlapping 125-day periods, HL caps) found
+        # trading EVERY candidate at the auto-exec floor beat trading only the
+        # top three in both. They are recorded under their own strategy_name
+        # so auto-exec can trade them and the tracker can score them, and are
+        # never posted: the channel reads filter on the top three's name.
+        # Best-effort — a failure here never affects the published set.
+        try:
+            _extra = _hl_extra_candidates(candidates, intraday_recs)
+            if _extra:
+                for _r in _extra:
+                    _r.setdefault("generated_at_utc", now)
+                _xa = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
+                       for r in _extra}
+                _xo = _sp.persist_recommendations(
+                    _extra, _xa, strategy_name=_sp.HL_EXTRA_STRATEGY_NAME)
+                _persist["hl_extra"] = {"symbols": [r["symbol"] for r in _extra],
+                                        "persisted": _xo["persisted"],
+                                        "duplicates": _xo["duplicates"],
+                                        "failed": _xo["failed"]}
+        except Exception as _xexc:
+            import db as _db3
+            print(f"[recs] HL extras skipped — {_db3.sanitize_db_error(_xexc)}")
 
         # ── Log what the detectors saw on this bar ───────────────────────────
         # A LOG, never an input. The detectors read candles and are the only
@@ -3662,6 +3688,36 @@ def _send_recs_with_context(result):
     return ok
 
 
+HL_EXTRA_MAX = 3        # auto-exec opens at most 3 per run anyway (HL_MAX_ORDERS_PER_RUN)
+
+
+def _hl_extra_candidates(candidates, published):
+    """The Confirmed-tier candidates (strength >= the auto-exec floor) that are
+    NOT in the published set, strongest first, at most HL_EXTRA_MAX. Empty
+    unless auto-exec is enabled and HL_EXTRA_SIGNALS isn't "off". Pure apart
+    from reading those switches."""
+    import hl_autoexec as _ax
+    if not _ax.is_auto_enabled():
+        return []
+    if os.getenv("HL_EXTRA_SIGNALS", "").strip().lower() in ("0", "off", "false", "no"):
+        return []
+    floor = _ax.auto_min_strength()
+    taken = {str(r.get("symbol")).upper() for r in published or []}
+    out = []
+    for c in candidates or []:                 # already ranked, strongest first
+        sym = str(c.get("symbol") or "").upper()
+        strength = c.get("display_strength") or c.get("strength") or 0
+        if sym in taken or strength < floor:
+            continue
+        if not (c.get("entry") and c.get("sl") and c.get("tp_targets")):
+            continue
+        out.append(c)
+        taken.add(sym)
+        if len(out) >= HL_EXTRA_MAX:
+            break
+    return out
+
+
 def _recent_signal_results(since, now):
     """(signals closed since `since`, {wins, losses, avg_pct} over 7 days) for
     the current strategy version. Cancelled/expired don't count as results."""
@@ -3670,8 +3726,11 @@ def _recent_signal_results(since, now):
         return [], None
     import signal_publish as _sp
     store = _signal_store()
+    # The channel's track record: the published top three only, never the
+    # HL-only extras (signal_publish.HL_EXTRA_STRATEGY_NAME).
     page = store.list_signals(statuses=["TP_HIT", "SL_HIT", "CLOSED"],
                               strategy_version=_sp.strategy_version(),
+                              strategy_name=_sp.STRATEGY_NAME,
                               limit=100, offset=0, with_total=False)
 
     def _ts(v):
@@ -3709,6 +3768,7 @@ def _active_signal_directions() -> Dict[str, str]:
         store = _signal_store()
         page = store.list_signals(statuses=sorted(store.WORKING_STATUSES),
                                   strategy_version=_sp.strategy_version(),
+                                  strategy_name=_sp.STRATEGY_NAME,   # channel-facing
                                   limit=50, offset=0, with_total=False)
         return {str(r.get("symbol")).upper(): str(r.get("direction")).upper()
                 for r in page.get("items") or [] if r.get("symbol")}

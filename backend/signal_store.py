@@ -711,6 +711,7 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
                  direction: Optional[str] = None,
                  strategy_version: Optional[str] = None,
                  exchange: Optional[str] = None,
+                 strategy_name: Optional[str] = None,
                  include_archived: bool = False,
                  environment: Optional[str] = None,
                  limit: int = DEFAULT_PAGE_SIZE,
@@ -756,6 +757,9 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
     if exchange:
         where.append("exchange = :exchange")
         params["exchange"] = exchange.strip()
+    if strategy_name:
+        where.append("strategy_name = :sname")
+        params["sname"] = strategy_name.strip()
     if not include_archived:
         where.append("archived_at IS NULL")
 
@@ -821,6 +825,7 @@ def attach_targets(rows: List[Dict[str, Any]], *, session=None) -> List[Dict[str
 
 def list_published_between(since, until, *,
                            strategy_version: Optional[str] = None,
+                           strategy_name: Optional[str] = None,
                            environment: Optional[str] = None,
                            limit: int = 50,
                            session=None) -> List[Dict[str, Any]]:
@@ -852,6 +857,9 @@ def list_published_between(since, until, *,
         if strategy_version:
             where.append("strategy_version = :sver")
             params["sver"] = strategy_version.strip()
+        if strategy_name:
+            where.append("strategy_name = :sname")
+            params["sname"] = strategy_name.strip()
         clause = " AND ".join(where) + env_sql
         rows = s.execute(_sql(
             f"SELECT * FROM signals WHERE {clause} "

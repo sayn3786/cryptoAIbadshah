@@ -28,7 +28,7 @@ import signal_store as store
 from signal_snapshot import build_card, build_snapshot
 
 __all__ = [
-    "STRATEGY_NAME", "STRATEGY_VERSION", "PersistResult",
+    "STRATEGY_NAME", "HL_EXTRA_STRATEGY_NAME", "STRATEGY_VERSION", "PersistResult",
     "persist_recommendation", "persist_recommendations", "strategy_version",
 ]
 
@@ -36,6 +36,12 @@ __all__ = [
 # the signal maths changes, so old and new signals stay independently analysable
 # and the idempotency key does not collide across versions.
 STRATEGY_NAME = "mtf_confluence_top3"
+# Same rule-set and version, but NOT in the published top three: a Confirmed-
+# tier (auto-exec floor) candidate recorded only so Hyperliquid auto-exec can
+# trade it and the tracker/postmortem can score it. Never posted to the channel;
+# the channel-facing reads filter on STRATEGY_NAME. A separate name also keeps
+# it out of the top three's idempotency key.
+HL_EXTRA_STRATEGY_NAME = "mtf_confluence_hl_extra"
 # v44: published on the 4H CLOSE only — six sets a day, three trades each, so at
 # most eighteen a day — and ranked by the AVERAGE of 1H and 2H strength rather
 # than by the composite quality score, which is demoted to the tiebreak. Both the
@@ -110,7 +116,8 @@ def _candle_window(analysis: Dict[str, Any], timeframe: str):
 
 def persist_recommendation(rec: Dict[str, Any],
                            analysis: Optional[Dict[str, Any]] = None,
-                           *, session=None) -> PersistResult:
+                           *, session=None,
+                           strategy_name: str = STRATEGY_NAME) -> PersistResult:
     """
     Persist ONE published recommendation.
 
@@ -167,7 +174,7 @@ def persist_recommendation(rec: Dict[str, Any],
             exchange=(analysis.get("data_source") or rec.get("exchange") or "unknown"),
             timeframe=timeframe,
             direction=direction,
-            strategy_name=STRATEGY_NAME,
+            strategy_name=strategy_name,
             strategy_version=STRATEGY_VERSION,
             candle_open_time=open_t,
             candle_close_time=close_t,
@@ -208,7 +215,8 @@ def persist_recommendation(rec: Dict[str, Any],
 
 
 def persist_recommendations(recs: List[Dict[str, Any]],
-                            analyses: Optional[Dict[str, Dict[str, Any]]] = None
+                            analyses: Optional[Dict[str, Dict[str, Any]]] = None,
+                            *, strategy_name: str = STRATEGY_NAME
                             ) -> Dict[str, Any]:
     """
     Persist a whole recommendation set.
@@ -229,7 +237,8 @@ def persist_recommendations(recs: List[Dict[str, Any]],
     results: List[PersistResult] = []
     for rec in recs or []:
         sym = (rec.get("symbol") or "").upper()
-        results.append(persist_recommendation(rec, analyses.get(sym)))
+        results.append(persist_recommendation(rec, analyses.get(sym),
+                                              strategy_name=strategy_name))
 
     failed = [r["symbol"] for r in results if not r["actionable"]]
     return {
