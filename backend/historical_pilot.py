@@ -84,11 +84,15 @@ def get_page(symbol, cursor, *, get=requests.get, sleep=time.sleep):
     raise AssertionError("unreachable")
 
 
-def download(path, symbols, start, end, *, page=get_page, now=None, max_pages=100):
+def download(path, symbols, start, end, *, page=get_page, now=None, max_pages=100,
+             max_days=31):
     """Resume verified partial archives; fail closed on gaps or cursor stalls."""
     now = now or datetime.now(timezone.utc)
-    if start % (4 * HOUR) or end % (4 * HOUR) or not 0 < end-start <= 31*24*HOUR:
-        raise ValueError("Pilot needs a 4H-aligned range of at most 31 days")
+    if isinstance(max_days, bool) or not isinstance(max_days, int) or not 1 <= max_days <= 366:
+        raise ValueError("max_days must be an integer from 1 to 366")
+    if (start < WARMUP or start % (4 * HOUR) or end % (4 * HOUR)
+            or not 0 < end-start <= max_days*24*HOUR):
+        raise ValueError(f"Needs a 4H-aligned range of at most {max_days} days")
     symbols = list(dict.fromkeys(symbols))
     if not symbols or "BTC" not in symbols or len(symbols) > 10 or any(
             not re.fullmatch(r"[A-Z0-9]{2,12}", s) for s in symbols):
@@ -146,6 +150,19 @@ def load_archive(path):
     spec = archive["spec"]
     if spec.get("format") != FORMAT or not archive.get("complete"):
         raise ValueError("A completed, supported historical archive is required")
+    start, end = spec["evaluation_start_ms"], spec["evaluation_end_ms"]
+    if (spec.get("source") != "okx" or spec.get("instrument_type") != "SPOT"
+            or any(isinstance(v, bool) or not isinstance(v, int) for v in (start, end))
+            or start < WARMUP or start % (4*HOUR) or end % (4*HOUR)
+            or not 0 < end-start <= 366*24*HOUR
+            or spec["history_start_ms"] != start-WARMUP
+            or spec["history_end_ms"] != end+TAIL):
+        raise ValueError("Invalid archive source or evaluation/warmup/outcome bounds")
+    symbols = spec["symbols"]
+    if (not isinstance(symbols, list) or not 1 <= len(symbols) <= 10
+            or len(set(symbols)) != len(symbols) or "BTC" not in symbols
+            or any(not isinstance(s, str) or not re.fullmatch(r"[A-Z0-9]{2,12}", s) for s in symbols)):
+        raise ValueError("Invalid archive symbols")
     for symbol in spec["symbols"]:
         row = archive["series"][symbol]
         if row["sha256"] != digest(row["candles"]):
@@ -208,7 +225,7 @@ def replay_pilot(archive, split, *, fee_bps=6.0, slippage_bps=2.0, rr_floor=1.0)
     # Generation ends at evaluation end; outcome candles remain separately available.
     generation = {s: {tf: [c for c in rows if c["timestamp"]+pbt.TF_MS[tf] <= end]
                       for tf, rows in tfs.items()} for s, tfs in market.items()}
-    base = pbt.replay(generation, symbols=spec["symbols"], start_ms=start,
+    base = pbt.replay(generation, symbols=spec["symbols"], start_ms=start, reading_cache={},
                       execute=False, keep_published=True, keep_trades=False)
     trades = []
     for rec in base["published"]:

@@ -16,6 +16,8 @@ def main(argv=None):
     fetch.add_argument("--start", required=True)
     fetch.add_argument("--end", required=True)
     fetch.add_argument("--archive", required=True)
+    fetch.add_argument("--max-days", type=int, default=31,
+                       help="Explicit range ceiling, 1–366 days; default 31")
     replay = sub.add_parser("replay")
     replay.add_argument("--archive", required=True)
     replay.add_argument("--split", required=True)
@@ -26,7 +28,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == "download":
         archive = pilot.download(args.archive, args.symbols.upper().split(","),
-                                 pilot.utc_ms(args.start), pilot.utc_ms(args.end))
+                                 pilot.utc_ms(args.start), pilot.utc_ms(args.end),
+                                 max_days=args.max_days)
         print(json.dumps({"complete": archive["complete"], "candles": {
             s: len(v["candles"]) for s, v in archive["series"].items()}}))
     else:

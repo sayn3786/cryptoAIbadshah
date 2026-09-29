@@ -1,4 +1,3 @@
-import copy
 import json
 import sys
 from datetime import datetime, timezone
@@ -161,3 +160,32 @@ def test_http_retry_is_bounded_and_redirects_rejected():
     with pytest.raises(ValueError,match="302"):
         h.get_page("BTC",START,get=get,sleep=lambda s:None)
     assert len(calls)==1
+
+
+def test_long_history_requires_explicit_opt_in(tmp_path):
+    end=START+90*24*h.HOUR
+    now=datetime(2027,1,1,tzinfo=timezone.utc)
+    with pytest.raises(ValueError,match="31 days"):
+        h.download(tmp_path/"a",["BTC"],START,end,page=page,now=now)
+    out=h.download(tmp_path/"a",["BTC"],START,end,page=page,now=now,max_days=90)
+    assert out["complete"]
+    assert len(out["series"]["BTC"]["candles"]) == (90+40+4)*24
+    assert h.load_archive(tmp_path/"a")["complete"]
+
+
+@pytest.mark.parametrize("limit", [0,367,True,1.5])
+def test_invalid_range_ceiling(tmp_path,limit):
+    with pytest.raises(ValueError,match="max_days"):
+        h.download(tmp_path/"a",["BTC"],START,END,page=page,now=NOW,max_days=limit)
+
+
+@pytest.mark.parametrize("field,value", [("source","binance"),
+    ("history_start_ms",START), ("history_end_ms",END),
+    ("symbols",["ETH"]), ("symbols",["BTC","BTC"])])
+def test_tampered_archive_metadata_rejected(tmp_path,field,value):
+    path=tmp_path/"a"
+    out=h.download(path,["BTC"],START,END,page=page,now=NOW)
+    out["spec"][field]=value
+    h.save(path,out)
+    with pytest.raises(ValueError,match="Invalid archive"):
+        h.load_archive(path)

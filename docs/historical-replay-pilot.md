@@ -19,7 +19,14 @@ python scripts/historical_replay.py replay \
   --output /tmp/cryptostars-pilot/september-report.json
 ```
 
-The evaluation interval is start-inclusive/end-exclusive, at most 31 days.
+The evaluation interval is start-inclusive/end-exclusive, at most 31 days by default.
+For longer research, explicitly pass `--max-days 180` (maximum 366) to download.
+The exact `--start` and `--end` still determine the requested data; this flag is
+only a safety ceiling. The 100-page per-symbol budget remains in force and an
+incomplete run can be resumed with the same command. No multi-month download
+is scheduled automatically. More symbols may be explicitly requested, e.g.
+`--symbols BTC,ETH,ICP,LINK,SUI`; availability is verified by complete candle
+coverage, and unavailable instruments fail closed instead of being dropped.
 Start, split and end must be UTC four-hour boundaries. The downloader also
 retrieves 40 days of indicator warmup and four days of outcome candles. End
 must therefore be at least four days in the past. Dates and symbols are fixed
