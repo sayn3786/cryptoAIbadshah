@@ -13,7 +13,9 @@ so this is testnet-only by default even when armed and enabled.
 
 Scope: only the Confirmed tier (confidence_score >= HL_AUTO_MIN_STRENGTH,
 default the v53 Confirmed floor of 69) from the LATEST published slot — the tier
-v53 recalibrated to be predictive. Everything else about safety is inherited
+v53 recalibrated to be predictive. That includes the slot's HL-only extras
+(Confirmed candidates outside the published top three, recorded under
+signal_publish.HL_EXTRA_STRATEGY_NAME), strongest first. Everything else about safety is inherited
 from open_position: the deterministic cloid + exact-once claim (a cron retry
 no-ops), reconcile-before-act (never a second position on a coin we hold), the
 per-run order cap and the total-exposure cap.
@@ -239,6 +241,9 @@ def select_confirmed(rows: List[Dict[str, Any]], *,
     latest = max((str(r.get("candle_close_time") or "") for r in usable), default="")
     if latest:
         usable = [r for r in usable if str(r.get("candle_close_time") or "") == latest]
+    # Strongest first: the per-run order cap and the exposure cap then keep
+    # the best of the slot (the published top three and any HL-only extras).
+    usable.sort(key=lambda r: -(_f(r.get("confidence_score")) or 0))
     return usable
 
 
