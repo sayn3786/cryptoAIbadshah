@@ -1004,18 +1004,26 @@ def _invalidated_ago(closed, start, bullish):
     return None
 
 
-def _div_status(event_age, played_ago, failed_ago):
+def _div_status(event_age, played_ago, failed_ago, *, confirmed=True):
     """(show, status) for a divergence: whichever of played-out / invalidated
     happened FIRST decides. Invalidated shows once, on the candle it broke
     (marked ✗ failed), then drops."""
     if failed_ago is not None and (played_ago is None or failed_ago > played_ago):
         in_window = event_age is not None and event_age - failed_ago < DAILY_READ_WINDOW
         return in_window and failed_ago == 0, "invalidated"
-    return _keep(event_age, played_ago)
+    return _keep(event_age, played_ago, confirmed=confirmed)
 
 
-def _keep(event_age, played_ago):
-    """(show, status) for a read by the daily-list rules."""
+def _keep(event_age, played_ago, *, confirmed=True):
+    """(show, status) for a read by the daily-list rules.
+
+    A read whose move played out BEFORE it was confirmed (the play-out candle
+    is older than the confirming one), or a forming read that has already
+    played out, is never listed ("played_out_early"): by the time it could be
+    posted the move it points to had already happened."""
+    if played_ago is not None and (not confirmed or event_age is None
+                                   or played_ago > event_age):
+        return False, "played_out_early"
     if played_ago is None:
         return event_age is not None and 0 <= event_age < DAILY_READ_WINDOW, "active"
     # Played out: keep for DAILY_PLAYED_OUT_KEEP candles after it played out,
@@ -1048,7 +1056,7 @@ def _daily_reads_for(closed: list, tf: str) -> list:
             failed = _invalidated_ago(closed, ci, bullish)
             side = "Bullish" if bullish else "Bearish"
             if div.get("forming"):
-                show, status = _div_status(pivot_age, played, failed)
+                show, status = _div_status(pivot_age, played, failed, confirmed=False)
                 if show:
                     out.append({"kind": "divergence_forming", "status": status,
                                 "label": f"Forming {side} RSI Divergence",
