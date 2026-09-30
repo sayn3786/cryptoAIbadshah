@@ -36,13 +36,17 @@ def test_groups_by_coin_and_ranks_higher_timeframes_first():
     assert btc_block.index("1W") < btc_block.index("4H")
 
 
-def test_confluence_is_starred_and_loud_when_it_includes_1d_or_1w():
-    text, loud = td.build_market_digest([A("BTC", "1D"), A("BTC", "4H", kind="rsi_swing",
+def test_star_is_only_for_two_bullish_weekly_reads():
+    # The read study found an edge only for 2+ bullish WEEKLY reads.
+    text, loud = td.build_market_digest([A("BTC", "1W"), A("BTC", "1W", kind="rsi_swing",
                                          label="RSI Oversold Bottom", rsi=28)])
-    assert "⭐ BTC  (2 bullish reads)" in text and loud is True
-    _, loud_4h = td.build_market_digest([A("BTC", "4H"), A("BTC", "4H", kind="rsi_swing",
-                                          label="RSI Oversold Bottom", rsi=28)])
-    assert loud_4h is False                                      # 4H-only confluence: silent
+    assert "⭐ BTC  (2 bullish weekly reads · past: +12.5% avg over 14d)" in text
+    assert loud is True
+    mixed, loud_mixed = td.build_market_digest([A("ETH", "1W"), A("ETH", "1D"), A("ETH", "4H")])
+    assert "⭐" not in mixed and loud_mixed is False                 # mixed timeframes: no star
+    bear, loud_bear = td.build_market_digest([A("SOL", "1W", direction="bearish"),
+                                              A("SOL", "1W", direction="bearish")])
+    assert "SOL  (2 bearish weekly reads)" in bear and "⭐" not in bear and loud_bear is False
 
 
 def test_conflict_with_an_open_signal_is_flagged_and_loud():
@@ -80,7 +84,7 @@ def test_many_forming_reads_are_all_listed():
 
 def test_a_long_update_splits_between_coin_blocks_under_the_limit():
     import re
-    alerts = [A(f"COIN{i}", tf) for i in range(60) for tf in ("1W", "1D", "4H")]
+    alerts = [A(f"COIN{i}", tf) for i in range(60) for tf in ("1W", "1W", "1D")]
     parts, _ = td.build_market_digest_parts(alerts, max_chars=td.MAX_MESSAGE_CHARS)
     assert len(parts) > 1 and all(len(p) <= 4096 for p in parts)
     assert parts[0].startswith(f"🔔 CryptoMonk — Daily Market Update (1D / 1W) (1/{len(parts)})")
@@ -100,7 +104,7 @@ def test_only_the_first_part_may_ping(monkeypatch):
     calls = []
     monkeypatch.setattr(tg, "_post_message",
                         lambda token, chat, text, **kw: calls.append(kw["silent"]) or True)
-    alerts = [A(f"COIN{i}", tf) for i in range(60) for tf in ("1W", "1D")]
+    alerts = [A(f"COIN{i}", tf) for i in range(60) for tf in ("1W", "1W")]
     tg.send_pattern_alerts(alerts)
     assert len(calls) > 1 and calls[0] is False and all(calls[1:])
 
@@ -118,9 +122,43 @@ def test_send_is_one_plain_text_message_silent_unless_loud(monkeypatch):
     monkeypatch.setattr(tg, "_post_message",
                         lambda token, chat, text, **kw: calls.append(kw) or True)
     tg.send_pattern_alerts([A("SOL", "4H")])
-    tg.send_pattern_alerts([A("BTC", "1D"), A("BTC", "1W")])
+    tg.send_pattern_alerts([A("BTC", "1W"), A("BTC", "1W")])
     assert calls == [{"markdown": False, "silent": True},
                      {"markdown": False, "silent": False}]
+
+
+def test_forming_bullish_divergence_on_1d_is_a_caution():
+    text, loud = td.build_market_digest([
+        A("KAS", "1D", kind="divergence_forming", label="Forming Bullish RSI Divergence",
+          rsi_gap=4.8, closes_to_confirm=1)])
+    line = [l for l in text.splitlines() if "KAS" in l][0]
+    assert "⚠️ Forming Bullish RSI Divergence" in line and "🟢" not in line
+    assert "historically price kept falling" in line and loud is False
+    assert td.EVIDENCE_FOOTER in text
+    weekly, _ = td.build_market_digest([            # only the 1D bullish one is a caution
+        A("KAS", "1W", kind="divergence_forming", label="Forming Bullish RSI Divergence")])
+    assert "caution" not in weekly and td.EVIDENCE_FOOTER not in weekly
+
+
+def test_track_record_notes_only_on_active_backed_reads():
+    st = A("BTC", "1W", kind="indicator_flip", type="supertrend",
+           label="SuperTrend flipped bullish", break_ts=1790553600000, bars_ago=0)
+    text, _ = td.build_market_digest([st])
+    assert "📈 past: +23% avg over 14d, rose 55% of 47 times" in text
+    assert td.EVIDENCE_FOOTER in text
+    ema = A("ETH", "1D", kind="indicator_flip", type="ema50", direction="bearish",
+            label="Price crossed below EMA 50", break_ts=1790553600000, bars_ago=1)
+    assert "📉 past: weakness continued" in td.describe(ema)
+    macd = A("ETH", "1W", kind="indicator_flip", type="macd", label="MACD bullish cross",
+             break_ts=1790553600000, bars_ago=1)
+    assert "past" not in td.describe(macd)                      # no clear edge: no note
+    done = dict(st, status="played_out", played_ago=1)
+    assert "📈" not in td.describe(done)
+
+
+def test_no_evidence_footer_without_notes():
+    text, _ = td.build_market_digest([A("SOL", "4H")])
+    assert td.EVIDENCE_FOOTER not in text
 
 
 # ── signal posts ─────────────────────────────────────────────────────────────
