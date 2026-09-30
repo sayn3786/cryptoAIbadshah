@@ -8,7 +8,14 @@ separate messages (patterns / divergence / forming divergence / RSI reversal).
     confirmed above forming, and more same-direction reads score higher;
   * indicator flips (MACD cross, SuperTrend, EMA 50, Ichimoku TK) carry the
     timeframe and the SGT date/time of the candle close that confirmed them;
-  * ⭐ marks confluence (two or more confirmed reads pointing the same way);
+  * ⭐ marks WEEKLY bullish confluence (two or more active 1W reads pointing
+    up). The read event study (2023-26, 28 coins) found that was the one
+    confluence with an edge (+5% avg over 7 days, +12.5% over 14); two reads
+    on mixed timeframes did no better than an ordinary day, so they no longer
+    earn a star. Two bearish weekly reads are tagged, without a star;
+  * reads the study backed carry a short track record (📈 / 📉), and a 1D
+    FORMING bullish divergence is shown as a caution: historically price kept
+    falling after it (-2% avg over 7 days, the study's clearest result);
   * ✅ / ⚠️ marks a read that AGREES / CONFLICTS with an open signal on the coin;
   * forming (provisional) reads are listed separately, so they are never mistaken
     for confirmed ones;
@@ -17,8 +24,8 @@ separate messages (patterns / divergence / forming divergence / RSI reversal).
     between coin blocks, because Telegram rejects messages over 4,096 chars.
 
 `build_market_digest` also decides whether the message should notify with a
-sound (`loud`): only for real news (a ⭐ confluence including a 1D/1W read, or
-a read that conflicts with an open signal on 4H+). Everything else is delivered
+sound (`loud`): only for real news (a ⭐ weekly confluence, or a read that
+conflicts with an open signal on 4H+). Everything else is delivered
 silently. Pure: no network, unit-tested.
 """
 from __future__ import annotations
@@ -78,6 +85,10 @@ def describe(a: Dict[str, Any]) -> str:
             line += f" · ✓ played out {_ago(pa)}{tail}"
         else:
             line += " · ✓ played out"
+        return line
+    note = evidence(a)
+    if note:
+        line += f" · {note}"
     return line
 
 
@@ -96,6 +107,8 @@ def _describe(a: Dict[str, Any]) -> str:
                     if isinstance(left, int) else "")
             label = str(a.get("label") or "")
             tag = "" if "forming" in label.lower() else " forming"
+            if _forming_bull_caution(a):
+                return f"{tf:<3} ⚠️ {label}{tag}{gap_s}{wait} · {FORMING_BULL_CAUTION}"
             return f"{head} {label}{tag}{gap_s}{wait}"
         return f"{head} {a.get('label')}{gap_s}{_age(a)}"
     if kind == "indicator_flip":
@@ -120,6 +133,36 @@ def _describe(a: Dict[str, Any]) -> str:
 PIVOT_CONFIRM_BARS = 3
 # A played-out read stays listed for this many candles after it played out.
 PLAYED_OUT_KEEP = 2
+
+# What similar reads did before — from the read event study (read_study,
+# 2022-12 → 2026-09, 28 coins, run 2026-09-30). Only reads with a clear or
+# near-clear edge get a note; averages are pulled up by a few big runs, so the
+# hit rate is shown too. Re-run the study (study=reads) to refresh them.
+EVIDENCE = {
+    ("1W", "indicator_flip", "supertrend", "bullish"):
+        "📈 past: +23% avg over 14d, rose 55% of 47 times",
+    ("1W", "indicator_flip", "ichimoku", "bullish"):
+        "📈 past: +15% avg over 14d, rose 58% of 64 times",
+    ("1D", "indicator_flip", "ema50", "bearish"):
+        "📉 past: weakness continued 56% of 1,256 times",
+}
+WEEKLY_STAR_NOTE = "past: +12.5% avg over 14d"
+FORMING_BULL_CAUTION = ("caution: historically price kept falling after this "
+                        "(−2% avg over 7d, rose only 39% of 250 times)")
+EVIDENCE_FOOTER = "📈/📉 = what similar reads did in 2023–26; history, not a forecast."
+
+
+def evidence(a: Dict[str, Any]) -> Optional[str]:
+    """The track-record note for an ACTIVE read the study backed, else None."""
+    if a.get("status") in ("played_out", "invalidated") or a.get("event") == "failed":
+        return None
+    return EVIDENCE.get((a.get("timeframe"), a.get("kind"), a.get("type"),
+                         a.get("direction")))
+
+
+def _forming_bull_caution(a: Dict[str, Any]) -> bool:
+    return (a.get("kind") == "divergence_forming" and a.get("timeframe") == "1D"
+            and a.get("direction") == "bullish")
 
 
 def _ago(n: int) -> str:
@@ -205,16 +248,20 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
                 and a.get("status") not in ("played_out", "invalidated")]
         bulls = [a for a in live if a.get("direction") == "bullish"]
         bears = [a for a in live if a.get("direction") == "bearish"]
-        confluence = max(len(bulls), len(bears)) >= 2
         lean = "bullish" if len(bulls) > len(bears) else "bearish" if len(bears) > len(bulls) else None
+        wk_bulls = sum(1 for a in bulls if a.get("timeframe") == "1W")
+        wk_bears = sum(1 for a in bears if a.get("timeframe") == "1W")
         sig = _signal_bias(active.get(sym))
         tags, flag = [], ""
-        if confluence:
+        if wk_bulls >= 2:
+            # The one confluence the read study found an edge for.
             flag = "⭐ "
-            tags.append(f"{max(len(bulls), len(bears))} {lean} reads")
+            tags.append(f"{wk_bulls} bullish weekly reads · {WEEKLY_STAR_NOTE}")
             score += 2
-            if any(TF_WEIGHT.get(a.get("timeframe"), 0) >= 3 for a in (bulls if lean == "bullish" else bears)):
-                loud = True
+            loud = True
+        elif wk_bears >= 2:
+            tags.append(f"{wk_bears} bearish weekly reads")
+            score += 1
         if sig and lean:
             if lean == sig:
                 tags.append(f"matches the open {active[sym].upper()} signal")
@@ -240,7 +287,8 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
                                    for a in forming]))
 
     title = "🔔 CryptoMonk — Daily Market Update (1D / 1W)" + (f" · {date_label}" if date_label else "")
-    footer = "\n".join(FOOTER)
+    notes_shown = any(evidence(a) or _forming_bull_caution(a) for a in alerts)
+    footer = "\n".join(([EVIDENCE_FOOTER] if notes_shown else []) + FOOTER)
     if max_chars is None:
         return ["\n\n".join([title] + blocks + [footer])], loud
 
