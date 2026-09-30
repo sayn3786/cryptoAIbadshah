@@ -214,3 +214,29 @@ def test_report_includes_pairs_and_context():
     text = rs.render_telegram(res)
     assert "DIVERGENCE + RSI REVERSAL / TREND FLIP" in text
     assert "BY WEEKLY CONTEXT" in text
+
+
+def test_too_few_list_is_capped():
+    rows = [{"label": f"pair {i}", "n_7": i % 19} for i in range(200)]
+    line = rs._too_few(rows)
+    assert line.count("(") == 16 and "+185 more" in line and len(line) < 600
+
+
+def test_split_message_chops_a_block_longer_than_the_limit():
+    import entry_exit_compare as ee
+    huge = "HEAD\n\n(" + ", ".join(f"item {i}" for i in range(3000)) + ")\n\nTAIL"
+    parts = ee.split_message(huge, limit=3800)
+    assert len(parts) > 1 and all(len(p) <= 3800 for p in parts)
+    assert parts[0].startswith("HEAD") and parts[-1].endswith("TAIL")
+    assert all(len(p) <= 100 for p in ee.split_message("x" * 350, limit=100))
+
+
+def test_send_parts_spaces_them_and_stops_on_failure():
+    import entry_exit_compare as ee
+    sent, waits = [], []
+    ok = ee.send_parts(["a", "b", "c"], lambda p: sent.append(p) or True, sleep=waits.append)
+    assert ok and sent == ["a", "b", "c"] and waits == [1.2, 1.2]
+    sent.clear()
+    assert ee.send_parts(["a", "b", "c"], lambda p: sent.append(p) or p != "b",
+                         sleep=lambda s: None) is False
+    assert sent == ["a", "b"]

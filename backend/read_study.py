@@ -393,6 +393,18 @@ def is_focus_pair(r: Dict) -> bool:
 
 # ── report ───────────────────────────────────────────────────────────────────
 
+TOO_FEW_SHOWN = 15
+
+
+def _too_few(rows: Sequence[Dict]) -> str:
+    """One compact line: the most common under-sampled rows, then a count."""
+    rows = sorted(rows, key=lambda r: -r["n_7"])
+    shown = ", ".join(f"{r['label']} ({r['n_7']})" for r in rows[:TOO_FEW_SHOWN])
+    more = len(rows) - TOO_FEW_SHOWN
+    return (f"(too few to judge, n < {MIN_N}: {shown}"
+            + (f", +{more} more" if more > 0 else "") + ")")
+
+
 def _line(r: Dict) -> str:
     mark = ("✅ " if r["significant"] and r["edge_7"] > 0 else
             "❌ " if r["significant"] and r["edge_7"] < 0 else "")
@@ -446,8 +458,7 @@ def render_telegram(result: Dict) -> str:
         lines += [_line(r), ""]
     thin = [r for r in result["reads"] if r["n_7"] < MIN_N]
     if thin:
-        lines += [f"(too few to judge, n < {MIN_N}: "
-                  + ", ".join(f"{r['tf']} {r['label']} ({r['n_7']})" for r in thin) + ")", ""]
+        lines += [_too_few([{**r, "label": f"{r['tf']} {r['label']}"} for r in thin]), ""]
     conf = [r for r in result["confluence"] if r["n_7"] >= MIN_N and r.get("edge_7") is not None]
     if conf:
         lines.append("CONFLUENCE (the day a coin's active reads reach the count)")
@@ -461,8 +472,7 @@ def render_telegram(result: Dict) -> str:
             lines += [_line(r), ""]
         few = [r for r in focus if r["n_7"] < MIN_N]
         if few:
-            lines += [f"(too few, n < {MIN_N}: "
-                      + ", ".join(f"{r['label']} ({r['n_7']})" for r in few) + ")", ""]
+            lines += [_too_few(few), ""]
     rest = sorted([r for r in pairs if not is_focus_pair(r) and r["n_7"] >= MIN_N],
                   key=lambda r: -r["edge_7"])
     if rest:
@@ -477,8 +487,7 @@ def render_telegram(result: Dict) -> str:
             lines += [_line(r), ""]
         few = [r for r in ctx if r["n_7"] < MIN_N]
         if few:
-            lines += [f"(too few, n < {MIN_N}: "
-                      + ", ".join(f"{r['label']} ({r['n_7']})" for r in few) + ")", ""]
+            lines += [_too_few(few), ""]
     lines.append(verdict(result))
     return "\n".join(lines)
 
@@ -503,8 +512,8 @@ def main(argv=None) -> int:
         # Public repo, public Actions log: results go to the private chat only.
         import weekly_report
         try:
-            sent = all([weekly_report.send_private(p)
-                        for p in ee.split_message(render_telegram(res))])
+            sent = ee.send_parts(ee.split_message(render_telegram(res)),
+                                 weekly_report.send_private)
         except Exception as exc:                         # noqa: BLE001
             sent = False          # never print it: the URL carries the bot token
             print(f"telegram error: {type(exc).__name__}")

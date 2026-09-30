@@ -372,10 +372,32 @@ def render_telegram(result: Dict) -> str:
     return "\n".join(lines)
 
 
+def _chop(block: str, limit: int) -> List[str]:
+    """Pieces of ONE block, each <= limit: at line breaks, then after commas,
+    then hard cuts. Telegram rejects a message over 4096 characters."""
+    if len(block) <= limit:
+        return [block]
+    for sep in ("\n", ", "):
+        parts, cur = [], ""
+        for piece in block.split(sep):
+            add = piece if not cur else cur + sep + piece
+            if cur and len(add) > limit:
+                parts.append(cur)
+                cur = piece
+            else:
+                cur = add
+        parts.append(cur)
+        if all(len(p) <= limit for p in parts):
+            return parts
+    return [block[i:i + limit] for i in range(0, len(block), limit)]
+
+
 def split_message(text: str, limit: int = 3800) -> List[str]:
-    """Telegram caps a message at 4096 chars: split at blank lines."""
+    """Telegram caps a message at 4096 chars: split at blank lines, and chop
+    any single block that is itself too long."""
     parts, cur = [], ""
-    for block in text.split("\n\n"):
+    blocks = [p for b in text.split("\n\n") for p in _chop(b, limit)]
+    for block in blocks:
         add = block if not cur else cur + "\n\n" + block
         if cur and len(add) > limit:
             parts.append(cur)
@@ -385,6 +407,19 @@ def split_message(text: str, limit: int = 3800) -> List[str]:
     if cur:
         parts.append(cur)
     return parts
+
+
+def send_parts(parts: Sequence[str], send, *, gap_s: float = 1.2, sleep=None) -> bool:
+    """Send each part in order, `gap_s` apart (Telegram rate-limits bursts to
+    one chat). Stops at the first failure; True only if every part went."""
+    import time
+    sleep = sleep or time.sleep
+    for i, p in enumerate(parts):
+        if i:
+            sleep(gap_s)
+        if not send(p):
+            return False
+    return True
 
 
 def main(argv=None) -> int:
