@@ -21,6 +21,13 @@ close:
 Plus confluence: the day a coin's active same-direction reads reach 2 or 3
 (what gets a star in the list), and 2+ weekly reads alone.
 
+Pairs: every two same-direction reads active on the same coin the same day
+(first day both are), by family — RSI divergence, hidden divergence, forming
+divergence, RSI reversal, SuperTrend, Ichimoku TK, EMA 50, MACD — and
+timeframe. Divergence + RSI reversal and divergence + trend flip pairs are
+always shown, however rare. And each 1D divergence / RSI reversal split by
+its WEEKLY context: weekly reads agree, none, or point the other way.
+
 Private Telegram report; public Actions log shows only whether it was sent.
 
     python -m read_study --days 1000
@@ -199,6 +206,75 @@ def _sign(direction: str) -> int:
     return 1 if direction == "bullish" else -1
 
 
+FLIP_FAMILY = {"supertrend": "SuperTrend", "ichimoku": "Ichimoku TK", "ema50": "EMA 50",
+               "macd": "MACD"}
+REVERSAL_FAMILIES = ("RSI divergence", "hidden divergence", "forming divergence",
+                     "RSI reversal")
+DIVERGENCE_FAMILIES = ("RSI divergence", "hidden divergence", "forming divergence")
+
+
+def family(r: Dict) -> Optional[str]:
+    k = r.get("kind")
+    if k == "divergence":
+        return "hidden divergence" if "hidden" in str(r.get("label") or "").lower() \
+            else "RSI divergence"
+    if k == "divergence_forming":
+        return "forming divergence"
+    if k == "rsi_swing":
+        return "RSI reversal"
+    if k == "indicator_flip":
+        return FLIP_FAMILY.get(r.get("type"))
+    return None
+
+
+def _active(reads: Sequence[Dict]) -> List[Dict]:
+    return [r for r in reads or [] if r.get("status") == "active"
+            and r.get("direction") in ("bullish", "bearish") and family(r)]
+
+
+def pair_events(lists: Sequence[Tuple[int, List[Dict]]]) -> List[Dict]:
+    """Two same-direction reads active on the coin the same day, once per pair
+    (the first day both are). Labelled by timeframe + family, in a fixed order."""
+    from itertools import combinations
+    seen, out = set(), []
+    for i, reads in lists:
+        for a, b in combinations(_active(reads), 2):
+            if a["direction"] != b["direction"]:
+                continue
+            key = tuple(sorted((read_key(a, a["tf"]), read_key(b, b["tf"])), key=str))
+            if key in seen:
+                continue
+            seen.add(key)
+            names = sorted((f"{a['tf']} {family(a)}", f"{b['tf']} {family(b)}"))
+            out.append({"label": f"{names[0]} + {names[1]} ({a['direction']})",
+                        "direction": a["direction"], "day": i, "tf": "pair",
+                        "families": (family(a), family(b))})
+    return out
+
+
+def context_events(lists: Sequence[Tuple[int, List[Dict]]]) -> List[Dict]:
+    """Each 1D divergence / RSI reversal on its first active day, split by the
+    WEEKLY reads active that day: agree (1+ same direction), against (1+
+    opposite and none agreeing), or none."""
+    seen, out = set(), []
+    for i, reads in lists:
+        act = _active(reads)
+        for r in act:
+            if r["tf"] != "1D" or family(r) not in REVERSAL_FAMILIES:
+                continue
+            key = read_key(r, r["tf"])
+            if key in seen:
+                continue
+            seen.add(key)
+            wk = [w for w in act if w["tf"] == "1W"]
+            same = sum(1 for w in wk if w["direction"] == r["direction"])
+            opp = sum(1 for w in wk if w["direction"] != r["direction"])
+            ctx = "weekly agrees" if same else "weekly against" if opp else "no weekly read"
+            out.append({"label": f"1D {family(r)} ({r['direction']}) · {ctx}",
+                        "direction": r["direction"], "day": i, "tf": "ctx"})
+    return out
+
+
 def confluence_events(lists: Sequence[Tuple[int, List[Dict]]]) -> List[Dict]:
     """The day a coin's ACTIVE same-direction reads first reach 2 or 3 (both
     timeframes), and 2 weekly reads alone."""
@@ -270,9 +346,16 @@ def summarize(events: Sequence[Dict], base: Dict) -> List[Dict]:
 
 def study(daily_by_coin: Dict[str, Sequence[Dict]], reads_fn,
           *, warmup_days: int = 120) -> Dict:
-    events, conf = [], []
+    events, conf, pairs, ctx = [], [], [], []
+
+    def _fwd(daily, e):
+        return {h: (None if (f := forward(daily, e["day"], h)) is None
+                    else _sign(e["direction"]) * f) for h in HORIZONS}
+
     for sym, daily in daily_by_coin.items():
         sc = scan_coin(daily, reads_fn, warmup_days=warmup_days)
+        pairs += [{**e, "symbol": sym, "fwd": _fwd(daily, e)} for e in pair_events(sc["lists"])]
+        ctx += [{**e, "symbol": sym, "fwd": _fwd(daily, e)} for e in context_events(sc["lists"])]
         for e in sc["events"]:
             events.append({"symbol": sym, "tf": e["tf"], "label": e.get("label"),
                            "direction": e.get("direction"), "day": e["day"],
@@ -290,7 +373,22 @@ def study(daily_by_coin: Dict[str, Sequence[Dict]], reads_fn,
     last = max(int(d[-1]["timestamp"]) for d in daily_by_coin.values())
     return {"coins": len(daily_by_coin), "events": len(events), "start": first, "end": last,
             "reads": summarize(events, base), "confluence": summarize(conf, base),
+            "pairs": _with_families(summarize(pairs, base), pairs),
+            "context": summarize(ctx, base),
             "baseline": {f"{d} {h}d": round(v["mean"], 3) for (d, h), v in base.items()}}
+
+
+def _with_families(rows: List[Dict], pairs: Sequence[Dict]) -> List[Dict]:
+    fam = {e["label"]: e["families"] for e in pairs}
+    return [{**r, "families": fam.get(r["label"], ())} for r in rows]
+
+
+def is_focus_pair(r: Dict) -> bool:
+    """Divergence + RSI reversal, or divergence + trend flip: always reported."""
+    f = r.get("families") or ()
+    divs = [x for x in f if x in DIVERGENCE_FAMILIES]
+    others = [x for x in f if x not in DIVERGENCE_FAMILIES]
+    return bool(divs) and bool(others)
 
 
 # ── report ───────────────────────────────────────────────────────────────────
@@ -298,7 +396,7 @@ def study(daily_by_coin: Dict[str, Sequence[Dict]], reads_fn,
 def _line(r: Dict) -> str:
     mark = ("✅ " if r["significant"] and r["edge_7"] > 0 else
             "❌ " if r["significant"] and r["edge_7"] < 0 else "")
-    tf = "" if r["tf"] == "conf" else f"{r['tf']} "
+    tf = "" if r["tf"] in ("conf", "pair", "ctx") else f"{r['tf']} "
     s = (f"{mark}{tf}{r['label']} · n={r['n_7']}\n"
          f"   7d {r['mean_7']:+.2f}% (edge {r['edge_7']:+.2f}, t {r.get('t')}) · "
          f"hit {r['hit_7']}% vs {r['base_hit_7']}%")
@@ -310,22 +408,22 @@ def _line(r: Dict) -> str:
 
 
 def verdict(result: Dict) -> str:
-    good = [r for r in result["reads"] + result["confluence"]
-            if r["significant"] and r["edge_7"] > 0]
-    bad = [r for r in result["reads"] + result["confluence"]
-           if r["significant"] and r["edge_7"] < 0]
+    pool = (result["reads"] + result["confluence"] + result.get("pairs", [])
+            + result.get("context", []))
+    good = [r for r in pool if r["significant"] and r["edge_7"] > 0]
+    bad = [r for r in pool if r["significant"] and r["edge_7"] < 0]
     if not good and not bad:
         return ("No read beat an ordinary day by a clear margin over 7 days: as "
                 "they stand, they are context, not a confluence worth scoring.")
     out = []
     if good:
         out.append("Predictive (7d): " + "; ".join(
-            f"{'' if r['tf'] == 'conf' else r['tf'] + ' '}{r['label']} {r['edge_7']:+.2f}%"
-            for r in sorted(good, key=lambda r: -r["edge_7"])[:5]) + ".")
+            f"{'' if r['tf'] in ('conf', 'pair', 'ctx') else r['tf'] + ' '}{r['label']} "
+            f"{r['edge_7']:+.2f}%" for r in sorted(good, key=lambda r: -r["edge_7"])[:5]) + ".")
     if bad:
         out.append("Worked AGAINST their direction: " + "; ".join(
-            f"{'' if r['tf'] == 'conf' else r['tf'] + ' '}{r['label']} {r['edge_7']:+.2f}%"
-            for r in sorted(bad, key=lambda r: r["edge_7"])[:5]) + ".")
+            f"{'' if r['tf'] in ('conf', 'pair', 'ctx') else r['tf'] + ' '}{r['label']} "
+            f"{r['edge_7']:+.2f}%" for r in sorted(bad, key=lambda r: r["edge_7"])[:5]) + ".")
     out.append("Next: backtest the predictive ones as a confluence on the live HL book.")
     return " ".join(out)
 
@@ -355,6 +453,32 @@ def render_telegram(result: Dict) -> str:
         lines.append("CONFLUENCE (the day a coin's active reads reach the count)")
         for r in sorted(conf, key=lambda r: -r["edge_7"]):
             lines += [_line(r), ""]
+    pairs = [r for r in result.get("pairs", []) if r.get("edge_7") is not None]
+    focus = sorted([r for r in pairs if is_focus_pair(r)], key=lambda r: -r["n_7"])
+    if focus:
+        lines.append("DIVERGENCE + RSI REVERSAL / TREND FLIP (best 7-day edge first)")
+        for r in sorted([r for r in focus if r["n_7"] >= MIN_N], key=lambda r: -r["edge_7"]):
+            lines += [_line(r), ""]
+        few = [r for r in focus if r["n_7"] < MIN_N]
+        if few:
+            lines += [f"(too few, n < {MIN_N}: "
+                      + ", ".join(f"{r['label']} ({r['n_7']})" for r in few) + ")", ""]
+    rest = sorted([r for r in pairs if not is_focus_pair(r) and r["n_7"] >= MIN_N],
+                  key=lambda r: -r["edge_7"])
+    if rest:
+        lines.append(f"OTHER PAIRS (n ≥ {MIN_N}): best 8 and worst 4 by 7-day edge")
+        shown = rest[:8] + [r for r in rest[-4:] if r not in rest[:8]]
+        for r in shown:
+            lines += [_line(r), ""]
+    ctx = [r for r in result.get("context", []) if r.get("edge_7") is not None]
+    if ctx:
+        lines.append("1D DIVERGENCE / RSI REVERSAL BY WEEKLY CONTEXT")
+        for r in sorted([r for r in ctx if r["n_7"] >= MIN_N], key=lambda r: r["label"]):
+            lines += [_line(r), ""]
+        few = [r for r in ctx if r["n_7"] < MIN_N]
+        if few:
+            lines += [f"(too few, n < {MIN_N}: "
+                      + ", ".join(f"{r['label']} ({r['n_7']})" for r in few) + ")", ""]
     lines.append(verdict(result))
     return "\n".join(lines)
 
