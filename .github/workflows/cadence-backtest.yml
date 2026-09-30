@@ -35,6 +35,10 @@ name: Strategy backtests (private Telegram)
 #            below EMA 50, no shorts on 2+ bullish weekly reads, weekly-backed
 #            longs first); set end_days_ago to 0 and to 135
 #            (backend/read_filter_compare.py)
+#   factors  trade-outcome factor study: every candidate over ~260 days, v54
+#            execution, ~25 factors known at entry WITH vs WITHOUT in each
+#            half; only factors consistent in both are reported as candidates
+#            (backend/factor_study.py; ~40-60 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -53,7 +57,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -130,6 +134,8 @@ jobs:
           # "coins replayed: N; telegram: sent|NOT sent". No results.
           if [ "$STUDY" = "reads" ]; then
             python -m read_study --telegram --days 1500
+          elif [ "$STUDY" = "factors" ]; then
+            python -m factor_study --telegram --fetch-days 260
           else
             python -m "$MODULE" --telegram \
               --fetch-days "$DAYS" --min-strength "$MIN_STRENGTH" $EXTRA
