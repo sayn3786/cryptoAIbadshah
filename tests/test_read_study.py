@@ -143,3 +143,74 @@ def test_study_and_report_end_to_end():
     assert res["coins"] == 1 and res["events"] > 20
     text = rs.render_telegram(res)
     assert text.startswith("🔬 Daily-read event study") and "SuperTrend flipped bullish" in text
+
+
+# ── pairs and weekly context ─────────────────────────────────────────────────
+
+def _read(tf, kind, direction, key, status="active", type_=None, label=""):
+    return {"tf": tf, "kind": kind, "direction": direction, "status": status,
+            "type": type_, "label": label, "break_ts": key}
+
+
+def test_family_names():
+    assert rs.family(_read("1D", "divergence", "bullish", 1, label="Bullish RSI Divergence")) \
+        == "RSI divergence"
+    assert rs.family(_read("1D", "divergence", "bullish", 1,
+                           label="Hidden Bullish RSI Divergence")) == "hidden divergence"
+    assert rs.family(_read("1D", "divergence_forming", "bullish", 1)) == "forming divergence"
+    assert rs.family(_read("1D", "rsi_swing", "bullish", 1)) == "RSI reversal"
+    assert rs.family(_read("1W", "indicator_flip", "bullish", 1, type_="supertrend")) == "SuperTrend"
+    assert rs.family({"kind": "flag"}) is None
+
+
+def test_pairs_count_once_same_direction_active_only():
+    div = _read("1D", "divergence", "bullish", 1, label="Bullish RSI Divergence")
+    rev = _read("1D", "rsi_swing", "bullish", 2)
+    st = _read("1W", "indicator_flip", "bullish", 3, type_="supertrend")
+    bear = _read("1D", "indicator_flip", "bearish", 4, type_="macd")
+    old = _read("1D", "indicator_flip", "bullish", 5, type_="ema50", status="played_out")
+    lists = [(0, [div]), (1, [div, rev, bear, old]), (2, [div, rev, st])]
+    got = {(e["label"], e["day"]) for e in rs.pair_events(lists)}
+    assert got == {("1D RSI divergence + 1D RSI reversal (bullish)", 1),
+                   ("1D RSI divergence + 1W SuperTrend (bullish)", 2),
+                   ("1D RSI reversal + 1W SuperTrend (bullish)", 2)}
+
+
+def test_focus_pairs_are_divergence_with_something_else():
+    assert rs.is_focus_pair({"families": ("RSI divergence", "RSI reversal")})
+    assert rs.is_focus_pair({"families": ("MACD", "forming divergence")})
+    assert not rs.is_focus_pair({"families": ("RSI divergence", "hidden divergence")})
+    assert not rs.is_focus_pair({"families": ("SuperTrend", "MACD")})
+
+
+def test_daily_reversals_are_split_by_weekly_context():
+    d_div = _read("1D", "divergence", "bullish", 1, label="Bullish RSI Divergence")
+    d_rev = _read("1D", "rsi_swing", "bearish", 2)
+    d_fb = _read("1D", "divergence_forming", "bullish", 3)
+    wk_up = _read("1W", "indicator_flip", "bullish", 9, type_="ichimoku")
+    flip = _read("1D", "indicator_flip", "bullish", 7, type_="macd")     # not a reversal read
+    lists = [(0, [d_div, wk_up, flip]), (1, [d_div, d_rev, wk_up]), (2, [d_fb])]
+    got = {e["label"]: e["day"] for e in rs.context_events(lists)}
+    assert got == {"1D RSI divergence (bullish) · weekly agrees": 0,
+                   "1D RSI reversal (bearish) · weekly against": 1,
+                   "1D forming divergence (bullish) · no weekly read": 2}
+
+
+def test_report_includes_pairs_and_context():
+    daily = {"ETH": [_day(i, 100 + (i % 9)) for i in range(220)]}
+
+    def reads(closed, tf):
+        n = len(closed)
+        if tf == "1D" and n % 4 == 0:
+            return [{"kind": "divergence", "label": "Bullish RSI Divergence",
+                     "direction": "bullish", "break_ts": n, "status": "active"},
+                    {"kind": "rsi_swing", "label": "RSI Oversold Bottom",
+                     "direction": "bullish", "break_ts": n, "status": "active"}]
+        return []
+
+    res = rs.study(daily, reads, warmup_days=40)
+    labels = [r["label"] for r in res["pairs"]]
+    assert "1D RSI divergence + 1D RSI reversal (bullish)" in labels
+    text = rs.render_telegram(res)
+    assert "DIVERGENCE + RSI REVERSAL / TREND FLIP" in text
+    assert "BY WEEKLY CONTEXT" in text
