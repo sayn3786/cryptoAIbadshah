@@ -94,8 +94,13 @@ def test_flips_count_toward_confluence_but_less_than_a_divergence():
     div = {"symbol": "BTC", "timeframe": "1D", "kind": "divergence", "direction": "bullish",
            "label": "Bullish RSI Divergence", "rsi_gap": 5.0}
     assert td._weight(flip) < td._weight(div)
+    # Two DAILY reads no longer earn a star (the read study found no edge in
+    # them); two WEEKLY bullish reads, flips included, do.
     text, loud = td.build_market_digest([flip, div])
-    assert "⭐ BTC  (2 bullish reads)" in text and loud is True
+    assert "⭐" not in text and loud is False
+    wk = [{**flip, "timeframe": "1W"}, {**div, "timeframe": "1W"}]
+    text, loud = td.build_market_digest(wk)
+    assert "⭐ BTC  (2 bullish weekly reads" in text and loud is True
 
 
 def test_the_bell_does_not_get_indicator_flips():
