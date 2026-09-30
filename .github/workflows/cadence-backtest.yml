@@ -23,6 +23,10 @@ name: Strategy backtests (private Telegram)
 #            slot instead of the top 3, under HL's caps and without them; set
 #            end_days_ago to 0 and to 135 for both periods
 #            (backend/universe_compare.py; ~35-50 min with the extra coins)
+#   rr       the live setup's reward-to-risk: no ATR widening, TPs scaled with
+#            the stop, a minimum reward at the fill (0.5/0.8/1R), and risk-based
+#            position sizing; set end_days_ago to 0 and to 135 for both periods
+#            (backend/rr_compare.py)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -41,7 +45,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -50,7 +54,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -108,6 +112,8 @@ jobs:
                      EXTRA="--fixed --end-days-ago $END_DAYS_AGO" ;;
             universe) MODULE=universe_compare
                       EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            rr) MODULE=rr_compare
+                EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and

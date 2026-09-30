@@ -32,7 +32,10 @@ PROBLEM_TTL = 4 * 3600          # a still-failing problem re-alerts after 4h, no
 # guard doing its job on a signal the owner doesn't need to hear about.
 # (STALE_ENTRY is alerted once per signal: the owner should know why a
 # published signal didn't become a trade.)
-_ROUTINE = {"POSITION_EXISTS", "ALREADY_PLACED", "DISARMED", "MAINNET_NOT_ALLOWED"}
+# SYMBOL_NOT_ON_HYPERLIQUID: the coin simply isn't listed there (e.g. ENJ) —
+# expected every time that coin qualifies, not a problem to act on.
+_ROUTINE = {"POSITION_EXISTS", "ALREADY_PLACED", "DISARMED", "MAINNET_NOT_ALLOWED",
+            "SYMBOL_NOT_ON_HYPERLIQUID"}
 
 
 # ── formatting helpers ───────────────────────────────────────────────────────

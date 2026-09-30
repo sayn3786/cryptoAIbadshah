@@ -81,13 +81,30 @@ EXITS = (
 )
 
 
+def rr_at_fill(fill: float, stop: float, tp1: float, tp2: Optional[float],
+               tp1_frac: float, long: bool) -> float:
+    """Planned reward at the actual fill, in R (fill → stop): the TP1 share at
+    TP1 plus the rest at TP2, before costs. A TP already behind the fill counts
+    as zero. Pure."""
+    sgn = 1 if long else -1
+    risk = abs(fill - stop)
+    if not risk:
+        return 0.0
+    r1 = max(0.0, (tp1 - fill) * sgn) / risk
+    if tp2 is None:
+        return r1
+    r2 = max(0.0, (tp2 - fill) * sgn) / risk
+    return tp1_frac * r1 + (1 - tp1_frac) * r2
+
+
 # ── HL execution, one trade ──────────────────────────────────────────────────
 
 def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
                 be="tp1", fee_bps: float = pbt.DEFAULT_FEE_BPS,
                 slippage_bps: float = pbt.DEFAULT_SLIPPAGE_BPS,
                 max_hold_hours: int = MAX_HOLD_HOURS,
-                costs: Optional[Dict[str, float]] = None) -> Dict:
+                costs: Optional[Dict[str, float]] = None,
+                min_rr_at_fill: Optional[float] = None) -> Dict:
     """One trade as HL auto-exec runs it. Returns a result dict; `taken` is
     False (with a reason) when HL would not have opened it.
 
@@ -95,7 +112,10 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
     be: "tp1" (stop to entry once TP1 fills), a number k (stop to entry once
         price has reached k x risk in favour), or None (stop never moves).
     costs: bps per leg by kind {"entry", "tp", "stop", "market"}; default is
-        fee_bps + slippage_bps on every leg."""
+        fee_bps + slippage_bps on every leg.
+    min_rr_at_fill: skip (LOW_RR_AT_FILL) when the planned reward left at the
+        actual fill — the TP1/TP2 split averaged — is below this many R, R being
+        fill → placed stop. Each result records `rr_at_fill` either way."""
     long = rec["direction"] == "LONG"
     sgn = 1 if long else -1
     entry_sig, sl = float(rec["entry"]), float(rec["sl"])
@@ -116,6 +136,9 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
     tp2 = tps[1] if len(tps) > 1 else None
     f1 = 1.0 if tp2 is None else max(0.0, min(1.0, float(tp1_frac)))
     risk = abs(fill - sl)
+    rr_fill = rr_at_fill(fill, sl, tp1, tp2, f1, long)
+    if min_rr_at_fill is not None and rr_fill < min_rr_at_fill:
+        return {"taken": False, "reason": "LOW_RR_AT_FILL", "rr_at_fill": rr_fill}
 
     legs: List = []                       # (fraction, price, kind)
     remaining, stop = 1.0, sl
@@ -177,6 +200,7 @@ def simulate_hl(rec: Dict, candles_1h: Sequence[Dict], *, tp1_frac: float = 0.5,
             "fill": fill, "stop": sl, "tp1": tp1, "tp2": tp2,
             "outcome": outcome, "tp1_hit": tp1_done, "full_stop": outcome == "stop",
             "closed_at": closed_at, "net_pct": round(net, 6),
+            "risk_pct": round(risk_pct, 6), "rr_at_fill": round(rr_fill, 4),
             "r": round(net / risk_pct, 6) if risk_pct else None}
 
 
