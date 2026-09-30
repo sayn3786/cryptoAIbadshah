@@ -27,6 +27,9 @@ name: Strategy backtests (private Telegram)
 #            the stop, a minimum reward at the fill (0.5/0.8/1R), and risk-based
 #            position sizing; set end_days_ago to 0 and to 135 for both periods
 #            (backend/rr_compare.py)
+#   reads    event study of the Daily Market Update reads: what each 1D / 1W
+#            read (and a star confluence) did over the next 1-14 days, against
+#            an ordinary day; ~4 years of daily history (backend/read_study.py)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -45,7 +48,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -118,5 +121,9 @@ jobs:
           esac
           # Output is only per-coin download counts and
           # "coins replayed: N; telegram: sent|NOT sent". No results.
-          python -m "$MODULE" --telegram \
-            --fetch-days "$DAYS" --min-strength "$MIN_STRENGTH" $EXTRA
+          if [ "$STUDY" = "reads" ]; then
+            python -m read_study --telegram --days 1500
+          else
+            python -m "$MODULE" --telegram \
+              --fetch-days "$DAYS" --min-strength "$MIN_STRENGTH" $EXTRA
+          fi
