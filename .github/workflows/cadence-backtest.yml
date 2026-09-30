@@ -30,6 +30,11 @@ name: Strategy backtests (private Telegram)
 #   reads    event study of the Daily Market Update reads: what each 1D / 1W
 #            read (and a star confluence) did over the next 1-14 days, against
 #            an ordinary day; ~4 years of daily history (backend/read_study.py)
+#   read-filters  the event study's findings as filters on the live HL book
+#            (no longs on a 1D forming bullish divergence / after a 1D cross
+#            below EMA 50, no shorts on 2+ bullish weekly reads, weekly-backed
+#            longs first); set end_days_ago to 0 and to 135
+#            (backend/read_filter_compare.py)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -48,7 +53,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -57,7 +62,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -117,6 +122,8 @@ jobs:
                       EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             rr) MODULE=rr_compare
                 EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            read-filters) MODULE=read_filter_compare
+                          EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
