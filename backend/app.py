@@ -3176,7 +3176,7 @@ def _compute_recommendations() -> dict:
         # never posted: the channel reads filter on the top three's name.
         # Best-effort — a failure here never affects the published set.
         try:
-            _extra = _hl_extra_candidates(candidates, intraday_recs)
+            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())
             if _extra:
                 for _r in _extra:
                     _r.setdefault("generated_at_utc", now)
@@ -3603,6 +3603,9 @@ def api_patterns_alert():
     # candles, played-out ones for 2 more candles. Sent at most once per UTC
     # day, so a scheduler retry never double-posts; nothing is sent when empty.
     reads = _daily_market_reads(syms)
+    if syms is None:
+        # The full scan: kept for the 4H publish's HL bottom-read boost (v55).
+        _store_daily_reads(reads)
     if dry:
         return jsonify({"ok": True, "dry": True, "reads": reads})
     if not reads:
@@ -3699,31 +3702,108 @@ def _send_recs_with_context(result):
 HL_EXTRA_MAX = 3        # auto-exec opens at most 3 per run anyway (HL_MAX_ORDERS_PER_RUN)
 
 
-def _hl_extra_candidates(candidates, published):
-    """The Confirmed-tier candidates (strength >= the auto-exec floor) that are
-    NOT in the published set, strongest first, at most HL_EXTRA_MAX. Empty
-    unless auto-exec is enabled and HL_EXTRA_SIGNALS isn't "off". Pure apart
-    from reading those switches."""
+# v55 (HL only): +HL_BOTTOM_READ_BOOST strength, for auto-exec, when an ACTIVE
+# 1D RSI reversal or divergence (confirmed or forming) on the Daily Market
+# Update points the trade's way — a long signal while 1D shows an oversold
+# bottom / bullish divergence. The trade-outcome factor study and the
+# strength-adjustment backtest found +10 lifted the HL book in both periods
+# (May-Sep $7.53 -> $15.29, Jan-May $13.27 -> $17.70). The channel's signals and
+# their strength are unchanged; only which signals HL trades moves.
+DEFAULT_BOTTOM_READ_BOOST = 10.0
+BOTTOM_READ_KINDS = ("rsi_swing", "divergence", "divergence_forming")
+DAILY_READS_KV_KEY = "daily_reads:v1"
+DAILY_READS_MAX_AGE_MS = 30 * 3_600_000      # older (a failed daily job): no boost
+
+
+def _bottom_read_boost() -> float:
+    try:
+        v = float(os.getenv("HL_BOTTOM_READ_BOOST", "") or DEFAULT_BOTTOM_READ_BOOST)
+    except ValueError:
+        return DEFAULT_BOTTOM_READ_BOOST
+    return v if 0 <= v <= 20 else DEFAULT_BOTTOM_READ_BOOST
+
+
+def _store_daily_reads(reads, now_ms=None) -> bool:
+    """Save each coin's ACTIVE daily-list reads (the full scan only), so the 4H
+    publish can read them without fetching. Never raises."""
+    try:
+        import kv as _kv
+        by: dict = {}
+        for r in reads or []:
+            if r.get("status") != "active":
+                continue
+            by.setdefault(str(r.get("symbol") or "").upper(), []).append(
+                [r.get("timeframe"), r.get("kind"), r.get("type"), r.get("direction")])
+        payload = {"at": int(now_ms if now_ms is not None else time.time() * 1000),
+                   "reads": by}
+        return _kv.set_value(DAILY_READS_KV_KEY, json.dumps(payload), ttl_seconds=3 * 86_400)
+    except Exception:
+        return False
+
+
+def _hl_bottom_reads(now_ms=None) -> dict:
+    """{SYMBOL: {directions}} of active 1D bottom/top reads from the stored
+    daily list, or {} when it is missing or older than DAILY_READS_MAX_AGE_MS."""
+    try:
+        import kv as _kv
+        raw = _kv.get_value(DAILY_READS_KV_KEY)
+        data = json.loads(raw) if raw else None
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    if now_ms - int(data.get("at") or 0) > DAILY_READS_MAX_AGE_MS:
+        return {}
+    out: dict = {}
+    for sym, rows in (data.get("reads") or {}).items():
+        for tf, kind, _typ, direction in rows:
+            if tf == "1D" and kind in BOTTOM_READ_KINDS and direction in ("bullish", "bearish"):
+                out.setdefault(sym, set()).add(direction)
+    return out
+
+
+def _hl_extra_candidates(candidates, published, bottoms=None):
+    """The candidates auto-exec should trade beyond the published set, at most
+    HL_EXTRA_MAX, strongest first. A candidate qualifies when its strength — plus
+    the v55 bottom-read boost when `bottoms` ({SYMBOL: {directions}}) has an
+    active 1D bottom/top read its way — reaches the auto-exec floor. A boosted
+    one is returned as a COPY carrying the boosted strength (display_strength,
+    which becomes the stored confidence_score) and `hl_boost`. A published
+    signal already at the floor is left to its own row; a published one that
+    only the boost lifts is returned too (as an extra row, under its own
+    strategy_name). Empty unless auto-exec is enabled and HL_EXTRA_SIGNALS isn't
+    "off". Pure apart from reading those switches."""
     import hl_autoexec as _ax
     if not _ax.is_auto_enabled():
         return []
     if os.getenv("HL_EXTRA_SIGNALS", "").strip().lower() in ("0", "off", "false", "no"):
         return []
     floor = _ax.auto_min_strength()
-    taken = {str(r.get("symbol")).upper() for r in published or []}
-    out = []
-    for c in candidates or []:                 # already ranked, strongest first
+    boost = _bottom_read_boost()
+    bottoms = bottoms or {}
+
+    def _strength(c):
+        return c.get("display_strength") or c.get("strength") or 0
+
+    taken = {str(r.get("symbol")).upper() for r in published or [] if _strength(r) >= floor}
+    picks = []
+    for c in candidates or []:
         sym = str(c.get("symbol") or "").upper()
-        strength = c.get("display_strength") or c.get("strength") or 0
-        if sym in taken or strength < floor:
+        if sym in taken or not (c.get("entry") and c.get("sl") and c.get("tp_targets")):
             continue
-        if not (c.get("entry") and c.get("sl") and c.get("tp_targets")):
+        d = "bullish" if str(c.get("direction")).upper() == "LONG" else "bearish"
+        add = boost if boost and d in bottoms.get(sym, ()) else 0
+        s = _strength(c) + add
+        if s < floor:
             continue
-        out.append(c)
+        if add:
+            c = {**c, "display_strength": round(s, 1), "hl_boost": add,
+                 "hl_boost_reason": "1D bottom/top read with the trade"}
+        picks.append((s, c))
         taken.add(sym)
-        if len(out) >= HL_EXTRA_MAX:
-            break
-    return out
+    picks.sort(key=lambda p: -p[0])
+    return [c for _s, c in picks[:HL_EXTRA_MAX]]
 
 
 def _recent_signal_results(since, now):
