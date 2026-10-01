@@ -142,3 +142,72 @@ def test_list_signals_accepts_a_strategy_name_filter():
     import inspect
     assert "strategy_name" in inspect.signature(store.list_signals).parameters
     assert "strategy_name" in inspect.signature(store.list_published_between).parameters
+
+
+# ── v55: the 1D bottom/top read boost (HL only) ──────────────────────────────
+
+def test_boost_lifts_a_below_floor_candidate_into_hl(app_mod, monkeypatch):
+    monkeypatch.delenv("HL_BOTTOM_READ_BOOST", raising=False)
+    cands = [_cand("ETH", 80), _cand("SOL", 75), _cand("LINK", 72),
+             _cand("ADA", 62), _cand("XRP", 65), _cand("AVAX", 60, direction="SHORT")]
+    bottoms = {"ADA": {"bullish"}, "AVAX": {"bullish"}}      # AVAX's read points the other way
+    got = app_mod._hl_extra_candidates(cands, cands[:3], bottoms)
+    assert [(c["symbol"], c["display_strength"], c.get("hl_boost")) for c in got] == \
+        [("ADA", 72, 10.0)]
+    assert cands[3].get("display_strength") is None              # the original is untouched
+
+
+def test_a_published_signal_only_the_boost_lifts_gets_an_extra_row(app_mod):
+    top = [_cand("ETH", 80), _cand("SOL", 66), _cand("LINK", 64)]
+    got = app_mod._hl_extra_candidates(top, top, {"SOL": {"bullish"}, "ETH": {"bullish"}})
+    assert [c["symbol"] for c in got] == ["SOL"]                  # ETH already >= 69 itself
+
+
+def test_boost_off_and_strongest_first(app_mod, monkeypatch):
+    cands = [_cand("A", 61), _cand("B", 66), _cand("C", 70)]
+    bottoms = {"A": {"bullish"}, "B": {"bullish"}}
+    got = app_mod._hl_extra_candidates(cands, [], bottoms)
+    assert [c["symbol"] for c in got] == ["B", "A", "C"]          # 76, 71, 70
+    monkeypatch.setenv("HL_BOTTOM_READ_BOOST", "0")
+    assert [c["symbol"] for c in app_mod._hl_extra_candidates(cands, [], bottoms)] == ["C"]
+
+
+def test_daily_reads_are_stored_and_read_back_fresh_only(app_mod, monkeypatch):
+    store = {}
+    import kv
+    monkeypatch.setattr(kv, "set_value", lambda k, v, ttl_seconds=0: store.__setitem__(k, v) or True)
+    monkeypatch.setattr(kv, "get_value", lambda k: store.get(k))
+    reads = [{"symbol": "ADA", "timeframe": "1D", "kind": "rsi_swing", "direction": "bullish",
+              "status": "active"},
+             {"symbol": "ADA", "timeframe": "1W", "kind": "divergence", "direction": "bearish",
+              "status": "active"},                                   # weekly: not a 1D bottom
+             {"symbol": "XRP", "timeframe": "1D", "kind": "divergence_forming",
+              "direction": "bearish", "status": "active"},
+             {"symbol": "SOL", "timeframe": "1D", "kind": "rsi_swing", "direction": "bullish",
+              "status": "played_out"},
+             {"symbol": "ETH", "timeframe": "1D", "kind": "indicator_flip", "type": "macd",
+              "direction": "bullish", "status": "active"}]
+    assert app_mod._store_daily_reads(reads, now_ms=1_000_000)
+    assert app_mod._hl_bottom_reads(now_ms=1_000_000 + 3_600_000) == \
+        {"ADA": {"bullish"}, "XRP": {"bearish"}}
+    assert app_mod._hl_bottom_reads(now_ms=1_000_000 + 31 * 3_600_000) == {}   # stale
+    store.clear()
+    assert app_mod._hl_bottom_reads() == {}
+
+
+def test_the_daily_job_stores_the_full_scan_only(app_mod, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app_mod, "_daily_market_reads", lambda syms: [{"symbol": "ADA"}])
+    monkeypatch.setattr(app_mod, "_store_daily_reads", lambda reads: calls.append(reads))
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    c = app_mod.app.test_client()
+    c.get("/api/patterns/alert?dry=1&symbols=BTC")
+    assert calls == []
+    c.get("/api/patterns/alert?dry=1")
+    assert calls == [[{"symbol": "ADA"}]]
+
+
+def test_the_publish_path_passes_the_stored_reads():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "backend", "app.py"),
+               encoding="utf-8").read()
+    assert "_hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())" in src
