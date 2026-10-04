@@ -52,6 +52,11 @@ name: Strategy backtests (private Telegram)
 #            on HL as extras (at 69, at 75, or after a 15-point jump) vs live
 #            4h only; end_days_ago 0 and 135
 #            (backend/hourly_topup_compare.py; ~30-45 min)
+#   prejump  sub-69 coins at a publish that read 69+ within 3h: which signs
+#            at the publish (squeeze, volume, pressing the high, score rising,
+#            1H leading 2H, BTC with it) pick them, and does entering at the
+#            publish pay; end_days_ago 0 and 135
+#            (backend/prejump_study.py; ~30-45 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -70,7 +75,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -79,7 +84,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -149,6 +154,8 @@ jobs:
                   EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             hourly) MODULE=hourly_topup_compare
                     EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            prejump) MODULE=prejump_study
+                     EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
