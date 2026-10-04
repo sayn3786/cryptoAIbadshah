@@ -4902,6 +4902,79 @@ def _hl_auto_execute_run():
     return out
 
 
+def _hl_decision(sig, *, floor, table, held, known_fn):
+    """Why HL did or didn't open one RECORDED signal. Pure apart from known_fn
+    (the exchange's order lookup by client order id)."""
+    import hl_execution as _hx
+    import hl_meta as _hm
+    s = sig.get("confidence_score")
+    if s is None or s < floor:
+        return f"below the floor ({s if s is not None else '—'} < {floor:g})"
+    coin = _hm.resolve_coin(sig.get("symbol"), table) if table else None
+    if table and coin is None:
+        return "not listed on Hyperliquid (skipped silently)"
+    try:
+        known = known_fn(_hx.client_order_id(sig.get("id"), "open", sig.get("candle_ts")))
+    except Exception:
+        known = None
+    if known is True:
+        return "opened on HL (order placed)"
+    if coin and coin.upper() in held:
+        return "not opened: a position on this coin was already open"
+    if known is None:
+        return "unknown: the order lookup failed"
+    return ("not opened: stale entry, a cap, or an exchange reject — see the ⏭ / ⛔ "
+            "Telegram alert or the Cloudflare hl summary")
+
+
+def _hl_slot_status(now_sgt=None) -> dict:
+    """The signals RECORDED in the current 4H slot (published top three and
+    HL-only extras) and HL's decision for each. Never raises."""
+    try:
+        import db as _db
+        if not _db.db_enabled():
+            return {"error": "DB_NOT_CONFIGURED", "signals": []}
+        import hl_account as _ha
+        import hl_autoexec as _ax
+        import hl_meta as _hm
+        import signal_publish as _sp
+        now_sgt = now_sgt or datetime.now(_SGT)
+        start = _slot_start(now_sgt)
+        end = start + timedelta(hours=PUBLICATION_INTERVAL_HOURS)
+        store = _signal_store()
+        rows = []
+        for name, kind in ((_sp.STRATEGY_NAME, "published"),
+                           (_sp.HL_EXTRA_STRATEGY_NAME, "hl_extra")):
+            rows += [(kind, r) for r in store.list_published_between(
+                start, end, strategy_version=_sp.STRATEGY_VERSION,
+                strategy_name=name, limit=20)]
+        table, held, known_fn = {}, set(), (lambda cloid: None)
+        if _ha.configured():
+            try:
+                table = _hm.asset_table()
+            except Exception:
+                table = {}
+            try:
+                held = {str(p.get("coin") or "").upper()
+                        for p in _ha.account_state().get("open_positions") or []}
+            except Exception:
+                held = set()
+            known_fn = _ha.order_known
+        floor = _ax.auto_min_strength()
+        out = []
+        for kind, r in rows:
+            sig = _ax.to_signal(r)
+            out.append({"symbol": sig.get("symbol"), "direction": sig.get("direction"),
+                        "strength": sig.get("confidence_score"), "row": kind,
+                        "hl": (_hl_decision(sig, floor=floor, table=table, held=held,
+                                            known_fn=known_fn)
+                               if _ha.configured() else "Hyperliquid not configured")})
+        return {"slot_start": start.isoformat(), "signals": out}
+    except Exception:
+        app.logger.exception("hl slot status failed")
+        return {"error": "SLOT_STATUS_FAILED", "signals": []}
+
+
 @app.get("/api/hl/strength-diag")
 def api_hl_strength_diag():
     """Why is (or isn't) anything reaching the auto-exec floor right now?
@@ -4912,7 +4985,11 @@ def api_hl_strength_diag():
     rejection), strongest first by pre-calibration strength, the published
     top three with their strength, and the HL extras that would be recorded
     (v55 boosts marked). Admin only: the HL admin token, CRON_SECRET, or a
-    signed-in admin session. Query: n (lines, default 15, max 60)."""
+    signed-in admin session. Query: n (lines, default 15, max 60).
+
+    Also returns what was RECORDED at this slot's publish and HL's decision
+    for each (opened / already open / not listed / below the floor / stale or
+    rejected), since the dry run reflects prices NOW, not at the publish."""
     guard = _require_hl_admin()
     if guard:
         return guard
@@ -4927,9 +5004,10 @@ def api_hl_strength_diag():
         app.logger.exception("strength diagnostic failed")
         return jsonify({"ok": False, "error_code": "STRENGTH_DIAG_FAILED"}), 500
     floor = _ax.auto_min_strength()
-    published = [f"{r.get('symbol')} {r.get('direction')} "
-                 f"{r.get('display_strength') or r.get('strength')}"
-                 for r in result.get("recommendations") or []]
+    now_top3 = [f"{r.get('symbol')} {r.get('direction')} "
+                f"{r.get('display_strength') or r.get('strength')}"
+                for r in result.get("recommendations") or []]
+    slot = _hl_slot_status()
     return jsonify({
         "ok": True, "dry_run": True,
         "generated_at": result.get("generated_at"), "slot": result.get("slot"),
@@ -4938,9 +5016,17 @@ def api_hl_strength_diag():
         # Coins with an active 1D bottom/top read in the stored daily list (0
         # also when the list is missing or stale — then nothing is boosted).
         "coins_with_bottom_reads": len(_hl_bottom_reads()),
-        "published_top3": published,
-        "hl_extra_preview": result.get("hl_extra_preview") or [],
-        "strength_diag": (result.get("strength_diag_full") or [])[:n],
+        # What was actually RECORDED at this slot's publish, and what HL did
+        # with each — the answer to "why didn't X open?".
+        "recorded_this_slot": slot.get("signals") or [],
+        **({"recorded_error": slot["error"]} if slot.get("error") else {}),
+        # Everything below is the scan run NOW: what WOULD be published from
+        # current prices. Signals publish (and HL trades) only at the slot's
+        # publish run, so a coin scoring 69+ here mid-slot is not traded until
+        # the next slot.
+        "top3_if_published_now": now_top3,
+        "hl_extra_if_published_now": result.get("hl_extra_preview") or [],
+        "strength_diag_now": (result.get("strength_diag_full") or [])[:n],
     })
 
 
