@@ -1233,6 +1233,18 @@ def generate_signal(analysis: Dict) -> Dict:
     score = 0
     # Group contribution tracker — signed (positive = bull, negative = bear)
     g = {'trend': 0, 'momentum': 0, 'flow': 0, 'sentiment': 0, 'pattern': 0}
+    # Per-section score attribution (signed: + bull, - bear). Each section is
+    # opened with _mark(name, score); the score moved until the next mark is
+    # credited to it, so caps and combos show up as their own entries. Report
+    # only: nothing below reads it.
+    score_breakdown: Dict[str, float] = {}
+    _mark_at: List = [None, 0]
+
+    def _mark(name, now):
+        prev, at = _mark_at
+        if prev is not None and now != at:
+            score_breakdown[prev] = round(score_breakdown.get(prev, 0) + (now - at), 2)
+        _mark_at[:] = [name, now]
     bull_reasons: List[str] = []
     bear_reasons: List[str] = []
 
@@ -1281,6 +1293,7 @@ def generate_signal(analysis: Dict) -> Dict:
         return int(round(pts * tf_cycle_w))
 
     # ── RSI level (contrarian — extreme readings only) ───────────────────────
+    _mark('rsi_level', score)
     # Mid-range RSI (45–65) is genuinely ambiguous: the same reading occurs both
     # in healthy trends and in weak rallies. Only extreme levels carry reliable
     # mean-reversion edge; the 55–65 band is removed (was −4, net noise).
@@ -1303,6 +1316,7 @@ def generate_signal(analysis: Dict) -> Dict:
         # 45–65: genuinely neutral — no score (same reading in uptrends and dead-cat bounces)
 
     # ── RSI slope (momentum direction — catches building/fading pressure) ────
+    _mark('rsi_slope', score)
     # RSI level is contrarian; RSI slope is momentum. They answer different
     # questions. A coin with RSI=55 and slope=+14 is building bullish pressure.
     # The same coin with RSI=55 and slope=−14 is momentum fading from overbought.
@@ -1329,6 +1343,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"RSI drifting lower ({rsi_slope:.1f} over 5 candles) — mild downward pressure")
 
     # ── Price Rate-of-Change (ROC) ────────────────────────────────────────────
+    _mark('roc', score)
     # The most direct momentum signal: "this coin is actively moving right now."
     # A coin that's up 16% in 4 candles scores zero from RSI/trend indicators
     # if it was previously in a downtrend. ROC fills that gap by reading the
@@ -1356,6 +1371,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"Mild negative price momentum ({price_roc:+.1f}% over 4 candles)")
 
     # ── Last-4-candle direction consistency ───────────────────────────────────
+    _mark('candle_consistency', score)
     # Candle consistency over the 4 most recently CLOSED candles, SYMMETRIC in
     # bull/bear with dojis neutral (dir 0). The old map keyed on bull_count
     # alone with `bear_count = 4 - bull_count`, so every doji counted as a
@@ -1379,6 +1395,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"Candle consistency: {bear_count}/4 recent closed candles bearish — sustained selling pressure")
 
     # ── CVD: Unified Spot × Futures Analysis ─────────────────────────────────
+    _mark('cvd', score)
     # Spot CVD, Futures CVD, and their divergence type are NOT independent —
     # they describe the same market event from different angles.
     #
@@ -1496,6 +1513,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append("Futures CVD bearish — speculative selling rising; no divergence with spot")
 
     # ── Funding Rate ─────────────────────────────────────────────────────────
+    _mark('funding', score)
     # THE highest-reliability crypto-specific signal. Extreme negative funding
     # means shorts are paying longs — the market is max short, creating intense
     # squeeze risk. Documented by BitMEX traders, Arthur Hayes, Cobie, and
@@ -1522,6 +1540,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(f"Funding elevated ({fr:.4f}%/8h{_fr_note}) — longs overextended, late-cycle caution")
 
     # ── Open Interest ─────────────────────────────────────────────────────────
+    _mark('open_interest', score)
     # Rising OI + rising price = new longs entering (bullish conviction).
     # Rising OI + falling price = new shorts entering (bearish conviction).
     # Widely used by futures-focused traders; works best as a confirmation filter.
@@ -1564,6 +1583,7 @@ def generate_signal(analysis: Dict) -> Dict:
                 bear_reasons.append(f"OI easing ({oi_change:.1f}% over 5 candles) with falling price — longs closing out")
 
     # ── OI squeeze fuel (reversal read, on top of the continuation read) ──────
+    _mark('oi_squeeze_fuel', score)
     # price↓ + OI↑ is bearish NOW (new shorts) — but those same shorts are
     # forced buyers on any bounce. When it's pronounced and funding isn't
     # positive, flag SHORT-SQUEEZE fuel (softens the bearish OI score and warns
@@ -1583,6 +1603,7 @@ def generate_signal(analysis: Dict) -> Dict:
             f"crowded leveraged longs are flush fuel on any dip")
 
     # ── Squeeze priming (funding ↔ CVD divergence) ────────────────────────────
+    _mark('squeeze_priming', score)
     # Upgrades the raw OI-squeeze read: a squeeze only becomes actionable once
     # funding confirms the crowded side is PAYING. "Primed" earns a small
     # contrarian bonus; "building" is a heads-up only (its components are already
@@ -1595,6 +1616,7 @@ def generate_signal(analysis: Dict) -> Dict:
         (bull_reasons if _sqp["mode"] == "short_squeeze" else bear_reasons).append(_sqp["note"])
 
     # ── Fair Value Gaps ───────────────────────────────────────────────────────
+    _mark('fvg', score)
     # ICT concept — price tends to return to fill gaps ~70% of the time.
     # Useful as magnet zones and dynamic support/resistance. Moderate standalone
     # signal strength; works best combined with CVD or funding confirmation.
@@ -1619,6 +1641,7 @@ def generate_signal(analysis: Dict) -> Dict:
         )
 
     # ── CHoCH — Change of Character (structure shift) ────────────────────────
+    _mark('choch', score)
     choch_sig = choch.get("signal", "none")
     if choch_sig != "none":
         freshness = max(0, 1 - choch.get("candles_ago", 99) / 10)  # 1.0 if current, 0 if 10+ ago
@@ -1631,6 +1654,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"Bearish CHoCH — structure flipped: {choch.get('label', '')}")
 
     # ── Liquidity Grab ────────────────────────────────────────────────────────
+    _mark('liquidity_grab', score)
     liq_sig = liq_grab.get("signal", "none")
     if liq_sig != "none":
         freshness = max(0, 1 - liq_grab.get("candles_ago", 99) / 5)  # decays faster
@@ -1643,6 +1667,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"Bearish liq. grab — {liq_grab.get('label', '')}")
 
     # ── Accumulation + Equal H/L + FVG setup (ICT/SMC triple combo) ─────────
+    _mark('acc_setup', score)
     _acc_sig = acc_setup.get("signal", "none")
     if _acc_sig != "none":
         # Setup strength is 55-100 from the detector; scale to max ±25 pts here
@@ -1657,6 +1682,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"ICT Setup: {acc_setup.get('label', 'Acc+EQH+FVG dump setup')}")
 
     # ── Pre-compute trend context for counter-trend discounts ─────────────────
+    _mark('trend_context', score)
     # t_bull / t_bear are the raw trend bucket values (before capping).
     # Computed here so Flag and MACD sections below can discount counter-trend signals.
     # The authoritative scoring still happens in the full Trend section further down.
@@ -1680,6 +1706,7 @@ def generate_signal(analysis: Dict) -> Dict:
     t_bull, t_bear = _trend_raw(analysis)
 
     # ── Flag Patterns — one strongest per direction ───────────────────────────
+    _mark('flags', score)
     # Bulkowski's "Encyclopedia of Chart Patterns" gives confirmed bull flags
     # ~67% success rate — one of the stronger chart pattern signals.
     # Dominant (highest-TF) flag scores more; secondary TF flag scores less.
@@ -1737,6 +1764,7 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= pts; g['pattern'] -= pts
 
     # ── Reversal & converging-trendline patterns (CONFIRMED only) ─────────────
+    _mark('reversal_patterns', score)
     # Confirmed Double Top/Bottom, Head & Shoulders, triangles and wedges add
     # directional points — but only when the breakout is FRESH (the neckline/rail
     # break happened within PATTERN_FRESH_BARS of the last close), so a months-old
@@ -1780,6 +1808,7 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= _pts; g['pattern'] -= _pts; bear_reasons.append(_label)
 
     # ── Engulfing Patterns ────────────────────────────────────────────────────
+    _mark('engulfing', score)
     # Bulkowski research + HTF studies show confirmed engulfing has 60-65%
     # accuracy on daily+ timeframes, especially with volume confirmation.
     # Most recent candle (ago=1) is significantly more reliable than older.
@@ -1802,6 +1831,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(label)
 
     # ── MACD ─────────────────────────────────────────────────────────────────
+    _mark('macd', score)
     # Momentum crossover — documented by Van Tharp and Larry Connors backtests.
     # Fresh cross > histogram direction alone. Zero-cross (histogram flipping
     # sign) is the strongest MACD signal.
@@ -1829,6 +1859,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(f"MACD histogram negative ({m_hist:+.4f}) — bearish momentum sustained{note}")
 
     # ── Trend indicators — EMA + SuperTrend + Ichimoku (capped bucket) ────────
+    _mark('trend_ema_supertrend_ichimoku', score)
     # These three all measure the same thing: "is the market in an uptrend?"
     # Letting them each score independently can add 50+ pts from one idea.
     # Cap the combined trend contribution at ±35 so they confirm each other
@@ -1875,6 +1906,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append("EMA7 below EMA21 — short-term trend bearish; near-term sellers in control")
 
     # ── 200 EMA retest — the classic pullback-to-trend entry ──────────────────
+    _mark('ema200_retest', score)
     # In an uptrend (EMA50 > EMA200) price dipping back to the 200 EMA and
     # bouncing is a high-quality continuation BUY; in a downtrend, rallying up
     # into the 200 EMA and rejecting is the mirror SELL. Requires the 200 EMA to
@@ -1900,6 +1932,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"200 EMA retest → rejection (${ema200_v:,.4f}) — price rallied into the 200 EMA in a downtrend and turned back down; trend-continuation sell")
 
     # ── Order Book Imbalance ──────────────────────────────────────────────────
+    _mark('order_book', score)
     # Live bid/ask walls aggregated across exchanges. Timeframe-independent —
     # it's a market snapshot, not candle-derived. Not scaled by tf_macro_w.
     ob = analysis.get("order_book") or {}
@@ -1942,6 +1975,7 @@ def generate_signal(analysis: Dict) -> Dict:
         )
 
     # ── Exchange Netflow (CoinGlass) ──────────────────────────────────────────
+    _mark('netflow', score)
     # BTC/ETH on-chain flow to/from exchanges. Positive = exchange inflow (sell
     # pressure). Negative = withdrawal (accumulation, bullish). 8h rolling window.
     ws = analysis.get("whale_sells") or {}
@@ -1975,6 +2009,7 @@ def generate_signal(analysis: Dict) -> Dict:
         )
 
     # ── ETF Flows ─────────────────────────────────────────────────────────────
+    _mark('etf_flows', score)
     # Institutional buy/sell via spot ETFs — only BTC/ETH/XRP have ETFs.
     # Weight: inflow = bullish (institutions accumulating), outflow = bearish.
     # Magnitude compared to 30d average determines pts (15/8/4 tier).
@@ -2000,6 +2035,7 @@ def generate_signal(analysis: Dict) -> Dict:
             )
 
     # ── Macro backdrop (Fed / inflation / jobs) ───────────────────────────────
+    _mark('macro', score)
     # Global risk-asset context from the latest US data releases. Crypto rides
     # liquidity: cooling inflation & rate cuts add strength, hot inflation &
     # hawkish data drop strength. This impact holds until the next release.
@@ -2057,6 +2093,7 @@ def generate_signal(analysis: Dict) -> Dict:
             (bull_reasons if imm_pts > 0 else bear_reasons).append(_line)
 
     # ── Traditional markets backdrop (DXY / SPX / 10Y) ────────────────────────
+    _mark('tradfi', score)
     # Crypto is a risk asset: dollar and yields lead it, equities correlate.
     # Small weight — context, not a trigger. Capped at ±8.
     mkts = analysis.get("markets") or {}
@@ -2072,6 +2109,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"Traditional markets headwind: {names}{_cyc_note}")
 
     # ── Market regime (BTC dominance / stablecoin liquidity / alt rotation) ──
+    _mark('market_regime', score)
     reg = analysis.get("regime") or {}
     sym_l = analysis.get("symbol", "")
     if reg:
@@ -2102,6 +2140,7 @@ def generate_signal(analysis: Dict) -> Dict:
                 f"⚖️ OI rotation: {oi_reg.get('note', '')} ({oi_tilt:+d}){_cyc_note}")
 
     # ── GOMINING tokenomics (burn vs mint supply dynamics) ────────────────────
+    _mark('gomining', score)
     # GOMINING burns all tokens spent on miner maintenance weekly; supply
     # contraction = real utility demand. Only fires on the GOMINING view.
     gtk = analysis.get("gomining_tokenomics") or {}
@@ -2121,6 +2160,7 @@ def generate_signal(analysis: Dict) -> Dict:
         (bull_reasons if _up else bear_reasons).append(f"🔧 {gtk['maint_note']}{_cyc_note}")
 
     # ── TAO / Bittensor ecosystem (subnet pool flows + alpha breadth) ─────────
+    _mark('tao', score)
     # Net TAO flowing into subnet Alpha pools is staked/illiquid supply — the
     # dTAO equivalent of ETF inflows. Alpha breadth = ecosystem-wide demand.
     # Each note lands as its own confluence line so the user sees exactly
@@ -2142,6 +2182,7 @@ def generate_signal(analysis: Dict) -> Dict:
             # info notes stay on the ecosystem card only
 
     # ── Long / Short Ratio ────────────────────────────────────────────────────
+    _mark('long_short_ratio', score)
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,
     # L/S ratio only measures account count on one exchange — less reliable.
@@ -2164,6 +2205,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd long-heavy, late-cycle caution")
 
     # ── Fear & Greed Index ────────────────────────────────────────────────────
+    _mark('fear_greed', score)
     # Composite sentiment — same contrarian principle as funding rate but macro.
     # Extreme Fear historically marks the best buying opportunities across cycles.
     # Alternative.me index; rivals funding rate for macro contrarian reliability.
@@ -2190,6 +2232,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"Fear & Greed: {fg_val} ({fg_lbl}) — market greedy, contrarian bearish lean{tf_note}")
 
     # ── News Sentiment ────────────────────────────────────────────────────────
+    _mark('news', score)
     # CryptoPanic community votes + keyword analysis (CoinDesk / CoinTelegraph RSS).
     # Major events (ETF approval, exchange hack, govt ban) move markets 10-30%;
     # routine news is noise. Capped at ±20 — confirmation role, not a trigger.
@@ -2237,6 +2280,7 @@ def generate_signal(analysis: Dict) -> Dict:
         )
 
     # ── Elliott Wave ──────────────────────────────────────────────────────────
+    _mark('elliott', score)
     # Lowest-reliability signal in this system. EW is highly subjective even
     # for expert humans; algorithmic labelling has multiple valid interpretations.
     # Many prop traders don't use it at all. Kept as a weak tiebreaker only.
@@ -2250,6 +2294,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(f"Elliott Wave: {wave_label} (bearish phase) — weak supporting signal")
 
     # ── RSI Divergence (regular = reversal, hidden = continuation) ─────────────
+    _mark('rsi_divergence', score)
     # Regular bullish (price LL, RSI HL) / bearish (price HH, RSI LH) call a
     # REVERSAL. Hidden bullish (price HL, RSI LL) / bearish (price LH, RSI HH)
     # confirm the TREND continuing — Ted's "hidden bearish" downtrend read. Both
@@ -2304,6 +2349,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(div_desc or "Hidden bearish divergence — price lower high, RSI higher high (downtrend continuation)")
 
     # ── Diagonal trendlines — LOCAL (trigger) + MACRO (bias filter) ───────────
+    _mark('trendlines', score)
     # LOCAL line sits near price: its break/rejection is an actionable trigger.
     # MACRO line is the multi-week ceiling/floor: it sets regime bias (favour the
     # dominant trend, treat counter-trend entries as lower-probability) and a
@@ -2348,6 +2394,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bull_reasons.append(f"⤴ Above the macro ascending floor (~${mv:,.4f}, {mdist:.0f}% above) — dominant uptrend intact; counter-trend shorts are lower-probability")
 
     # ── Supply / demand zones (S/R bands) ─────────────────────────────────────
+    _mark('sr_zones', score)
     # Price inside or approaching an overhead supply zone = sellers likely to
     # defend (bearish lean); inside/approaching a demand zone = buyers likely to
     # step in (bullish lean). Modest weight — structure context, not a trigger.
@@ -2366,6 +2413,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bull_reasons.append(f"Price {_w} demand/support zone ${_sz.get('bottom'):,.4f}–${_sz.get('top'):,.4f} ({_sz.get('touches',0)} touches) — buyers likely to defend, bounce zone")
 
     # ── Bollinger Bands ───────────────────────────────────────────────────────
+    _mark('bollinger', score)
     # Squeeze = coiled spring. Breakout after squeeze = high-probability burst.
     # Weights conservative until we have live performance data — can raise later.
     bb = analysis.get("bollinger") or {}
@@ -2459,6 +2507,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(f"⚡ Trend cap applied — raw trend score {t_bear} capped at {TREND_CAP} (EMA/SuperTrend/Ichimoku all agree, preventing triple-counting)")
 
     # ── VWAP ─────────────────────────────────────────────────────────────────
+    _mark('vwap', score)
     # Most widely used institutional intraday indicator. Price above rising VWAP
     # = institutions accumulating. Fresh cross = high-quality entry signal.
     vwap_data      = analysis.get("vwap") or {}
@@ -2485,6 +2534,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(f"Price below VWAP{slope_note} {fmt_v(vwap_val)} — institutional sell-side pressure dominant")
 
     # ── Stochastic RSI ────────────────────────────────────────────────────────
+    _mark('stoch_rsi', score)
     # More sensitive than plain RSI — oscillates faster and gives earlier signals.
     # Cross from oversold/overbought zone is highest quality; zone alone is weaker.
     srsi           = analysis.get("stoch_rsi") or {}
@@ -2520,6 +2570,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(f"Stoch RSI near overbought (K:{srsi_k}) — mild extended lean")
 
     # ── Volume Confirmation ───────────────────────────────────────────────────
+    _mark('volume', score)
     # Elevated volume on a directional candle validates the move — price action
     # without volume is weak; with volume it's conviction. Keeps whale activity
     # (2.5×) separate — this covers the 1.3-2.4× range (elevated but not whale).
@@ -2537,6 +2588,7 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(vol_desc or f"Volume confirmation bearish ({vol_ratio:.1f}× avg)")
 
     # ── BTC mining / on-chain signals (BTC only) ──────────────────────────────
+    _mark('btc_onchain', score)
     # Hash Ribbon  : miners recovered (+12 buy cross / +7 bull) or capitulating (-10/-6)
     # Halving phase: mid (6-18 mo post-halving) = historically bullish window (+6)
     # Profitability: price vs estimated break-even cost
@@ -2662,6 +2714,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons[_i] += _cyc_note
 
     # ── Reversal Radar — scored rollup (confluence-of-reversal bonus) ──────────
+    _mark('reversal_radar', score)
     # Each radar component (RSI extreme, divergence, squeeze fuel, funding…)
     # already scores individually; this rollup adds a MODEST extra weight when
     # MANY independent reversal signs fire at once — the same principle as the
@@ -2683,6 +2736,7 @@ def generate_signal(analysis: Dict) -> Dict:
                 f"bottoming signals ({_rr_labels}); downtrend may be washing out, watch for reversal")
 
     # ── Group soft-caps (double-counting control) ─────────────────────────────
+    _mark('group_caps', score)
     # Within a group the signals are CORRELATED, not independent: RSI level +
     # RSI slope + ROC + candle-consistency + Stoch RSI are five reads of the
     # same momentum; CVD + OI + order-book + volume are four reads of the same
@@ -2705,6 +2759,7 @@ def generate_signal(analysis: Dict) -> Dict:
                 f"multiple correlated {_grp} reads stacked; trimmed to avoid double-counting")
 
     # ── Confluence Engine ─────────────────────────────────────────────────────────
+    _mark('confluence', score)
     # Analyzes cross-group relationships to dynamically adjust the final score.
     # Groups: TREND | MOMENTUM | FLOW | SENTIMENT | PATTERN
     # BTC additionally populates FLOW (Hash Ribbon, Profitability, Difficulty)
@@ -2725,6 +2780,9 @@ def generate_signal(analysis: Dict) -> Dict:
     combo_pts = 0   # additive bonuses/penalties from specific cross-group combos
 
     # ── Combo 1: Flow confirms Trend (real money behind the move) ─────────────────
+    # combo_pts is applied in one go below: mark score + combo_pts so each
+    # combo is credited with its own points.
+    _mark('combo_flow_trend', score + combo_pts)
     # Sign comes from the AGREEING GROUPS, never from the running score: bullish
     # Flow+Trend agreement is always +12 (bearish always −12). Keying off `score`
     # let bullish agreement strengthen a SHORT whenever other groups had made the
@@ -2737,6 +2795,7 @@ def generate_signal(analysis: Dict) -> Dict:
         (bull_reasons if agree_bull else bear_reasons).append(label)
 
     # ── Combo 2: Momentum confirms Trend (healthy trend continuation) ─────────────
+    _mark('combo_momentum_trend', score + combo_pts)
     if gdir['momentum'] == gdir['trend'] != 'neutral':
         pts = 8
         agree_bull = gdir['trend'] == 'bull'
@@ -2745,6 +2804,7 @@ def generate_signal(analysis: Dict) -> Dict:
         (bull_reasons if agree_bull else bear_reasons).append(label)
 
     # ── Combo 3: Flow contradicts Trend (CVD divergence warning) ─────────────────
+    _mark('combo_flow_against_trend', score + combo_pts)
     # A contradiction reduces confidence in the TREND direction (pulls the score
     # back toward zero from the trend's side) — keyed off gdir['trend'], not the
     # running score, so a bearish trend is never described as an "uptrend".
@@ -2758,6 +2818,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bull_reasons.append(f"⚠️ Flow-Trend divergence — CVD/Volume contradicts downtrend (−{penalty} pts caution); squeeze risk elevated")
 
     # ── Combo 4: Momentum diverging from Trend (early exhaustion warning) ─────────
+    _mark('combo_momentum_against_trend', score + combo_pts)
     if gdir['momentum'] not in ('neutral', gdir['trend']) and gdir['trend'] != 'neutral':
         penalty = min(abs(g['momentum']), 12)
         trend_bull = gdir['trend'] == 'bull'
@@ -2768,6 +2829,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bull_reasons.append(f"⚠️ Momentum diverging from downtrend (−{penalty} pts) — possible reversal building; monitor closely")
 
     # ── Combo 5: Extreme Funding + Trend aligned (maximum squeeze/flush setup) ───
+    _mark('combo_funding_trend', score + combo_pts)
     fr_val = _funding_8h(funding) or 0.0                 # per-8h normalized
     if abs(fr_val) >= 0.02 and gdir['trend'] == overall_dir and gdir['trend'] != 'neutral':
         pts = 15
@@ -2778,6 +2840,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"🔗 Extreme Funding+Trend aligned — max long positioning ({fr_val:.4f}%/8h) + bearish trend = extreme flush setup")
 
     # ── Combo 6: SuperTrend flip + Volume confirmation (breakout with conviction) ─
+    _mark('combo_supertrend_volume', score + combo_pts)
     vol_sig_local = (analysis.get("vol_signal") or {}).get("signal")
     st_local      = analysis.get("supertrend") or {}
     st_flipped_local = st_local.get("flipped", False)
@@ -2793,6 +2856,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append("🔗 SuperTrend flip + Volume — trend breakdown confirmed with elevated volume; high-conviction breakdown")
 
     # ── Combo 7: RSI divergence + MACD cross (dual momentum reversal) ─────────────
+    _mark('combo_divergence_macd', score + combo_pts)
     rsi_div_local  = analysis.get("rsi_divergence") or {}
     div_type_local = rsi_div_local.get("type")
     macd_local     = analysis.get("macd") or {}
@@ -2812,6 +2876,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append("🔗 RSI divergence + MACD cross — dual momentum reversal confirmed; high-quality top signal")
 
     # ── Combo 8: Bollinger squeeze + Volume breakout (coiled spring released) ──────
+    _mark('combo_bb_squeeze_volume', score + combo_pts)
     # Gated on breakout_after_squeeze (previous window squeezed) — the stronger
     # squeeze-release combo only fires for a genuine post-compression break.
     bb_local      = analysis.get("bollinger") or {}
@@ -2827,6 +2892,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append("🔗 BB squeeze + Volume — compressed bands broke bearish with volume confirmation; explosive breakdown setup")
 
     # ── Combo 9: BTC Hash Ribbon + Trend aligned (on-chain confirms price trend) ─
+    _mark('combo_hash_ribbon', score + combo_pts)
     # BTC-only. Hash Ribbon is a lagging but high-accuracy miner health signal.
     # When it agrees with the price trend direction, it adds deep structural weight.
     if mining:
@@ -2843,6 +2909,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"🔗 Hash Ribbon+Trend (BTC) — miner stress ({ribbon_local}) + bearish trend = structural BTC bear pressure")
 
     # ── Combo 10: BTC Profitability extreme + Halving phase (macro cycle alignment) ─
+    _mark('combo_btc_cycle', score + combo_pts)
     # When miners are highly profitable AND we're in the historical bull phase window,
     # both on-chain and macro cycle agree → high conviction BTC bullish structural context.
     if mining:
@@ -2858,6 +2925,7 @@ def generate_signal(analysis: Dict) -> Dict:
             bear_reasons.append(f"🔗 Miner Stress+Late Cycle (BTC) — near break-even ({prof_local:.1f}×) in late halving cycle = maximum capitulation risk{_cyc_note}")
 
     # ── BTC cycle-top zone (mirror of the realized-price floor) ──────────────────
+    _mark('btc_cycle_top', score + combo_pts)
     # Pi Cycle Top (111DMA vs 2×350DMA), Mayer Multiple (price/200DMA) and the
     # MVRV 3.5× top band. Heat 0-6; scored as structural bearish weight the same
     # way realized-price/hash-ribbon score structural bullish support.
@@ -2893,6 +2961,7 @@ def generate_signal(analysis: Dict) -> Dict:
                                     f"not a top yet, but upside is maturing{_cyc_note}")
 
     # ── Combo 11: Fresh macro inflection + technical alignment (regime change) ───
+    _mark('combo_macro_inflection', score + combo_pts)
     # A just-released data point that FLIPPED direction (e.g. CPI reaccelerating
     # after months of cooling, claims spiking after a calm stretch) is how macro
     # regime changes start. When technicals already lean the same way, both are
@@ -2920,6 +2989,7 @@ def generate_signal(analysis: Dict) -> Dict:
                 f"and {n_agree} indicator groups agree; possible macro-driven trend reversal (−{pts})")
 
     # ── Combo 12: ETF flow reversal day + technical alignment ─────────────────────
+    _mark('combo_etf_reversal', score + combo_pts)
     # A counter-streak flow day alone is damped (unconfirmed). But when technicals
     # point the SAME way as the flip, institutions and price action agree — the
     # damped flow day gets its weight back as an early reversal signal.
@@ -2947,6 +3017,7 @@ def generate_signal(analysis: Dict) -> Dict:
     score += combo_pts
 
     # ── Multi-group confluence multiplier ─────────────────────────────────────────
+    _mark('confluence_multiplier', score)
     # Applied after combo adjustments — amplifies already-strong multi-group signals
     MULT_LABELS = {5: "Penta", 4: "Quad", 3: "Triple", 2: "Double"}
     if n_agree >= 4 and len(conflicting) == 0:
@@ -2983,6 +3054,7 @@ def generate_signal(analysis: Dict) -> Dict:
     score = round(score * mult)
 
     # ── Final direction ───────────────────────────────────────────────────────
+    _mark(None, score)
     #   VWAP cross +14, Stoch RSI bull cross +20, Volume +12 → total ~320
     # In practice signals overlap — realistic ceiling ~200.
     # MAX_SCORE is the realistic ceiling — what a genuinely strong multi-signal setup
@@ -3720,6 +3792,11 @@ def generate_signal(analysis: Dict) -> Dict:
         # postmortem can measure whether the freshness-weighted brake helped.
         "rsi_reversal_adjustment": rev_adj,
         "rsi_reversal_bars_ago":   rev_bars_ago,
+        # Which section moved the score how much (before MAX_SCORE scaling),
+        # and the two v50 brakes not echoed elsewhere. Report only.
+        "score_breakdown":      score_breakdown,
+        "obv_adjustment":       obv_adj,
+        "fib_adjustment":       fib_adj,
         # Whether the stop had to be moved clear of a liquidity pool, or could
         # not be (blocked by the risk cap) and therefore needs smaller size.
         "stop_liquidity":       _sl_liq,
