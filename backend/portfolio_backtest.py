@@ -838,6 +838,14 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
                 "market_cap": mcap["value"],
                 "market_cap_source": mcap["source"],
                 "vol_tier_label": sig.get("vol_tier_label"),
+                # Per-section score attribution (signed, + bull) of the signal
+                # that set the ladder, and the direction-relative strength
+                # brakes, for indicator_study. Report only.
+                "score_breakdown": dict(sig.get("score_breakdown") or {}),
+                "strength_adjustments": {k: sig.get(k) or 0 for k in (
+                    "structure_adjustment", "liquidation_adjustment",
+                    "rsi_reversal_adjustment", "obv_adjustment", "fib_adjustment",
+                    "options_adjustment")},
             }
             q, qf = rec_policy.rec_quality(cand, cand["htf_4h_dir"])
             cand["quality_score"], cand["quality_factors"] = q, qf
