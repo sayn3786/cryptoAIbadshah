@@ -646,7 +646,8 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
            stop_variant: Optional[Dict] = None,
            execute: bool = True,
            keep_published: bool = False,
-           keep_candidates: bool = False) -> Dict[str, Any]:
+           keep_candidates: bool = False,
+           primary_tf: str = "2H") -> Dict[str, Any]:
     """
     Replay the publication strategy over `market` and report what it did.
 
@@ -694,6 +695,11 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
       for tools that simulate their own execution. ``keep_candidates`` also
       returns EVERY screened candidate of every slot (``report["candidates"]``,
       each with slot_ms and its rank within the slot), not only the top three.
+    * ``primary_tf="1H"`` scores every coin on its 1H chart ALONE: the 1H
+      reading is passed to the screen as both 1H and 2H (so direction, strength,
+      entry, stop and targets are all 1H's and the 1H/2H split cap can't fire),
+      and BTC's own 1H reading drives the BTC adjustment. The 2H chart isn't
+      read. Default "2H" is production.
 
     Deterministic: no wall clock is read anywhere in this function or anything
     it calls. The same market produces the same report, which is what makes a
@@ -759,9 +765,9 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
 
     for slot in slots:
         # ── BTC first: every candidate in this slot is measured against it ──
-        btc_win = closed_slice(market.get(btc_symbol, {}).get("2H") or [],
-                               "2H", slot, lookback=lookback)
-        btc_read = _read(btc_symbol, "2H", btc_win) if btc_win else None
+        btc_win = closed_slice(market.get(btc_symbol, {}).get(primary_tf) or [],
+                               primary_tf, slot, lookback=lookback)
+        btc_read = _read(btc_symbol, primary_tf, btc_win) if btc_win else None
         influence = rec_policy.btc_influence(
             (btc_read or {}).get("direction", "NEUTRAL"),
             (btc_read or {}).get("strength", 0),
@@ -775,10 +781,15 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
             mcap_seen[mcap["source"]] = mcap_seen.get(mcap["source"], 0) + 1
             reads = {}
             for tf in ("1H", "2H", "4H"):
+                if tf == "2H" and primary_tf == "1H":
+                    reads[tf] = None                 # 1H-only: the 2H chart isn't read
+                    continue
                 win = closed_slice(tfs.get(tf) or [], tf, slot, lookback=lookback)
                 reads[tf] = (_read(sym, tf, win, ext, mcap["value"])
                              if len(win) >= warmup_bars else None)
             h1, h2, h4 = reads["1H"], reads["2H"], reads["4H"]
+            if primary_tf == "1H":
+                h2 = h1
 
             screen = rec_policy.screen_candidate(
                 h1, h2, h4, corr_factor=correlations.get(sym, 1.0),
