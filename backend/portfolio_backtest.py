@@ -842,6 +842,7 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
                 # that set the ladder, and the direction-relative strength
                 # brakes, for indicator_study. Report only.
                 "score_breakdown": dict(sig.get("score_breakdown") or {}),
+                "h1_score_breakdown": dict((h1.get("sig") or {}).get("score_breakdown") or {}),
                 "strength_adjustments": {k: sig.get(k) or 0 for k in (
                     "structure_adjustment", "liquidation_adjustment",
                     "rsi_reversal_adjustment", "obv_adjustment", "fib_adjustment",
