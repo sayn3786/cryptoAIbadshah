@@ -2821,8 +2821,13 @@ def _observed_patterns(analysis: dict) -> list:
 _passes_tf_gates = rec_policy.passes_tf_gates
 
 
-def _compute_recommendations() -> dict:
+def _compute_recommendations(dry_run: bool = False) -> dict:
     """
+    ``dry_run=True`` runs the same scan but WRITES NOTHING — no signal rows, no
+    HL extras, no pattern log, no decision-audit rows (callers must not cache
+    it either). It returns the full strength diagnostic and the HL extras that
+    would be recorded; /api/hl/strength-diag uses it.
+
     Best-signal engine (Phase 3 — composite quality ranking):
     - Analyze all tokens at 1H, 2H and 4H
     - Pick tokens where 1H and 2H agree on direction (= confirmed momentum)
@@ -3153,6 +3158,10 @@ def _compute_recommendations() -> dict:
         _first = next((raw.get(r["symbol"], {}).get("2H", {}) or {}
                        for r in intraday_recs), {})
         _, _close_t = _sp._candle_window(_first.get("analysis") or {}, "2H")
+        if dry_run:
+            _persist = {"all_actionable": False, "persisted": 0, "duplicates": 0,
+                        "failed": [], "error_code": None, "skipped_reason": "DRY_RUN"}
+            raise _SkipPersistence
         if intraday_recs and _slot_already_published(now_sgt):
             _persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
                         "failed": [], "error_code": None,
@@ -3278,7 +3287,9 @@ def _compute_recommendations() -> dict:
     # the slot before the retry that actually publishes).
     _audit_current = (not intraday_recs) or bool(
         _close_t is not None and _close_t >= _slot_start(now_sgt))
-    if _persist.get("error_code") == "PERSISTENCE_ERROR":
+    if dry_run:
+        pass                                    # a dry run writes nothing
+    elif _persist.get("error_code") == "PERSISTENCE_ERROR":
         print("[decision-audit] SKIPPED_PERSISTENCE_ERROR")
     elif not _audit_current:
         print("[decision-audit] SKIPPED_STALE_SLOT")
@@ -3332,6 +3343,13 @@ def _compute_recommendations() -> dict:
         # a missing symbol is explainable instead of silently absent.
         "expired_setups":   expired,
         "strength_diag":    _top_strength_diag(strength_diag),
+        **({"strength_diag_full": _top_strength_diag(strength_diag, n=60),
+            "hl_extra_preview": [
+                f"{c['symbol']} {c.get('direction')} "
+                f"{c.get('display_strength') or c.get('strength')}"
+                + (f" (+{c['hl_boost']:g} bottom/top read)" if c.get("hl_boost") else "")
+                for c in _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())]}
+           if dry_run else {}),
         # Publication gate. When false these recommendations were NOT recorded
         # and must be treated as analysis only, never as tradeable output.
         "actionable":       bool(_persist.get("all_actionable", True)),
@@ -4882,6 +4900,48 @@ def _hl_auto_execute_run():
     out["ran"] = True
     out["min_strength"] = gate["min_strength"]
     return out
+
+
+@app.get("/api/hl/strength-diag")
+def api_hl_strength_diag():
+    """Why is (or isn't) anything reaching the auto-exec floor right now?
+
+    Runs the publish scan as a DRY RUN — nothing is written (no signals, no HL
+    extras, no audit rows, no cache) — and returns every candidate's strength
+    path (1H/2H, BTC, structure, liquidation, options, the v53 caps, any
+    rejection), strongest first by pre-calibration strength, the published
+    top three with their strength, and the HL extras that would be recorded
+    (v55 boosts marked). Admin only: the HL admin token, CRON_SECRET, or a
+    signed-in admin session. Query: n (lines, default 15, max 60)."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    import hl_autoexec as _ax
+    try:
+        n = max(1, min(int(request.args.get("n", 15)), 60))
+    except ValueError:
+        n = 15
+    try:
+        result = _compute_recommendations(dry_run=True)
+    except Exception:
+        app.logger.exception("strength diagnostic failed")
+        return jsonify({"ok": False, "error_code": "STRENGTH_DIAG_FAILED"}), 500
+    floor = _ax.auto_min_strength()
+    published = [f"{r.get('symbol')} {r.get('direction')} "
+                 f"{r.get('display_strength') or r.get('strength')}"
+                 for r in result.get("recommendations") or []]
+    return jsonify({
+        "ok": True, "dry_run": True,
+        "generated_at": result.get("generated_at"), "slot": result.get("slot"),
+        "floor": floor, "auto_enabled": _ax.is_auto_enabled(),
+        "bottom_read_boost": _bottom_read_boost(),
+        # Coins with an active 1D bottom/top read in the stored daily list (0
+        # also when the list is missing or stale — then nothing is boosted).
+        "coins_with_bottom_reads": len(_hl_bottom_reads()),
+        "published_top3": published,
+        "hl_extra_preview": result.get("hl_extra_preview") or [],
+        "strength_diag": (result.get("strength_diag_full") or [])[:n],
+    })
 
 
 @app.get("/api/hl/auto-status")
