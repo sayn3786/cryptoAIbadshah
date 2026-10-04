@@ -809,6 +809,10 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
                 # structure_fought = structure_adjustment < 0; fib pocket
                 # against = in the zone with the opposite bias.
                 "structure_adjustment": sig.get("structure_adjustment"),
+                # Before the v53 caps, and whether the entry was chased: lets
+                # a backtest replay the calibration with a cap switched off.
+                "strength_before_calibration": screen.get("strength_before_calibration"),
+                "chased": screen.get("chased"),
                 "fib_bias": (h2.get("fib") or {}).get("bias"),
                 "fib_in_zone": (h2.get("fib") or {}).get("in_zone"),
                 "data_quality": "good",

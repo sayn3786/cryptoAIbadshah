@@ -625,10 +625,15 @@ def screen_candidate(h1: Dict, h2: Dict, h4: Optional[Dict], *,
     # everything downstream (confidence_score, quality tiebreak), so production
     # and the backtest replay demote identically. It only ever lowers, and never
     # below the publication floor for a would-publish trade.
+    chased = candidate_is_chased(sig)
+    # Kept for diagnostics and the calibration backtest: what the setup scored
+    # before v53 capped it, and whether it was flagged as chased.
+    out["strength_before_calibration"] = adj["strength"]
+    out["chased"] = bool(chased)
     cal = apply_tier_calibration(adj["strength"],
                                  h1_strength=h1.get("strength"),
                                  h2_strength=h2.get("strength"),
-                                 chased=candidate_is_chased(sig))
+                                 chased=chased)
     adj["strength"] = cal["strength"]
     out["strength"] = cal["strength"]
     out["calibration_notes"] = cal["notes"]

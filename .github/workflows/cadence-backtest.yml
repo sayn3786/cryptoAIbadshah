@@ -42,6 +42,9 @@ name: Strategy backtests (private Telegram)
 #   strength  the factor study's consistent factors as strength changes on the
 #            live HL book; set end_days_ago to 0 and to 135
 #            (backend/strength_adjust_compare.py)
+#   calibration  the v53 caps (chased / 1H-2H split at 68) vs the HL floor:
+#            today, no chase cap, no split cap, no caps; end_days_ago 0 and 135
+#            (backend/calibration_compare.py)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -60,7 +63,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -69,7 +72,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -133,6 +136,8 @@ jobs:
                           EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             strength) MODULE=strength_adjust_compare
                       EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            calibration) MODULE=calibration_compare
+                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and

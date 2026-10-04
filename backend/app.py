@@ -2933,6 +2933,7 @@ def _compute_recommendations() -> dict:
     _opts_summary = _opts.get("summary", "")
 
     candidates = []
+    strength_diag = []      # why candidates did / didn't reach the auto-exec floor
     decision_records = []
     expired: list = []      # setups dropped because price already took TP1
     for sym, tfs in raw.items():
@@ -2962,6 +2963,9 @@ def _compute_recommendations() -> dict:
             # Audit-only: malformed evidence must not change live selection.
             print(f"[decision-audit] SNAPSHOT_FAILED symbol={sym}")
         htf_4h_dir = _screen.get("htf_4h_dir", "NEUTRAL")
+        _d = _strength_diag(sym, h1, h2, _screen)
+        if _d:
+            strength_diag.append(_d)
         if not _screen["ok"] and _screen["reason"] != "TP1_BEHIND_LIVE":
             continue
 
@@ -3185,6 +3189,8 @@ def _compute_recommendations() -> dict:
                 _xo = _sp.persist_recommendations(
                     _extra, _xa, strategy_name=_sp.HL_EXTRA_STRATEGY_NAME)
                 _persist["hl_extra"] = {"symbols": [r["symbol"] for r in _extra],
+                                        "boosted": [f"{r['symbol']} {r.get('display_strength')}"
+                                                    for r in _extra if r.get("hl_boost")],
                                         "persisted": _xo["persisted"],
                                         "duplicates": _xo["duplicates"],
                                         "failed": _xo["failed"]}
@@ -3325,6 +3331,7 @@ def _compute_recommendations() -> dict:
         # had already traded through by the time the set was built. Surfaced so
         # a missing symbol is explainable instead of silently absent.
         "expired_setups":   expired,
+        "strength_diag":    _top_strength_diag(strength_diag),
         # Publication gate. When false these recommendations were NOT recorded
         # and must be treated as analysis only, never as tradeable output.
         "actionable":       bool(_persist.get("all_actionable", True)),
@@ -3702,6 +3709,45 @@ def _send_recs_with_context(result):
 HL_EXTRA_MAX = 3        # auto-exec opens at most 3 per run anyway (HL_MAX_ORDERS_PER_RUN)
 
 
+STRENGTH_DIAG_TOP = 6
+
+
+def _strength_diag(sym, h1, h2, screen):
+    """One candidate's strength path, for the publish response (Cloudflare log):
+    {"line", "before"}. None for a symbol with no direction (filtered early)."""
+    if not screen.get("direction"):
+        return None
+    sig = (h2 or {}).get("sig") or {}
+    before = screen.get("strength_before_calibration")
+    final = screen.get("strength")
+    parts = [f"{sym} {screen['direction']}",
+             f"1H {round((h1 or {}).get('strength') or 0)} 2H {round((h2 or {}).get('strength') or 0)}",
+             f"BTC {screen.get('btc_adj', 0):+g}"]
+    for key, label in (("structure_adjustment", "struct"),
+                       ("liquidation_adjustment", "liq"),
+                       ("options_adjustment", "opts")):
+        v = sig.get(key)
+        if isinstance(v, (int, float)) and v:
+            parts.append(f"{label} {v:+g}")
+    if before is not None and final is not None:
+        parts.append(f"{before:g}→{final:g}" if before != final else f"{final:g}")
+    notes = screen.get("calibration_notes") or []
+    if notes:
+        parts.append("/".join(notes))
+    if screen.get("chased") and "chase_capped_to_strong" not in notes:
+        parts.append("chased")
+    if not screen.get("ok") and screen.get("reason"):
+        parts.append(f"rejected {screen['reason']}")
+    return {"line": " · ".join(parts), "before": before if before is not None else (final or 0)}
+
+
+def _top_strength_diag(rows, n=STRENGTH_DIAG_TOP):
+    """The n candidates that scored highest BEFORE calibration — the ones that
+    could have reached the floor — as compact lines."""
+    rows = sorted((r for r in rows or [] if r), key=lambda r: -(r.get("before") or 0))
+    return [r["line"] for r in rows[:n]]
+
+
 # v55 (HL only): +HL_BOTTOM_READ_BOOST strength, for auto-exec, when an ACTIVE
 # 1D RSI reversal or divergence (confirmed or forming) on the Daily Market
 # Update points the trade's way — a long signal while 1D shows an oversold
@@ -3974,6 +4020,11 @@ def api_cron_publish():
         "slot_current": result.get("slot_current"),
         "source_candle_close": result.get("source_candle_close"),
         "hl_auto_execute": hl_auto,
+        # The slot's highest pre-calibration candidates and what moved their
+        # strength (BTC, structure, liquidation, the v53 caps), plus any v55
+        # boosted HL extras: why a slot did or didn't reach the floor.
+        "strength_diag": result.get("strength_diag"),
+        "hl_extra": persistence.get("hl_extra"),
     })
 
 
