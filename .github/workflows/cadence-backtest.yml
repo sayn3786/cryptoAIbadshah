@@ -48,6 +48,10 @@ name: Strategy backtests (private Telegram)
 #   oneh     1H-only signals published every hour vs the live 1H+2H / 4h
 #            setup, at a 69 and a 62 floor; end_days_ago 0 and 135
 #            (backend/oneh_compare.py; ~30-45 min)
+#   hourly   the live engine checked every hour, off-slot 69+ signals opened
+#            on HL as extras (at 69, at 75, or after a 15-point jump) vs live
+#            4h only; end_days_ago 0 and 135
+#            (backend/hourly_topup_compare.py; ~30-45 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -66,7 +70,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -75,7 +79,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -143,6 +147,8 @@ jobs:
                          EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             oneh) MODULE=oneh_compare
                   EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            hourly) MODULE=hourly_topup_compare
+                    EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
