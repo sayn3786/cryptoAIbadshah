@@ -83,7 +83,10 @@ const JOBS = [
 // raw body.
 const SUMMARY_KEYS = ["ok", "ran", "reason", "positions", "actions", "computed",
   "persisted", "duplicates", "skipped_reason", "error_code", "slot_current",
-  "mode", "attempted", "counts", "week", "result"];
+  "mode", "attempted", "counts", "week", "result",
+  // publish: the slot's top candidates and what moved their strength, and any
+  // HL-only extras (v55 boosted ones listed) — why a slot did or didn't trade.
+  "strength_diag", "hl_extra"];
 
 const RETRY_DELAY_MS = 20_000;       // a timed-out publish leaves the cache warmer
 
