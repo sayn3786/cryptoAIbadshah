@@ -4874,6 +4874,16 @@ def _hl_auto_execute_run():
     if not signals:
         return {"ok": True, "ran": True, "attempted": 0, "executed": 0,
                 "reason": "NO_CONFIRMED_SIGNALS", "results": []}
+    signals, skipped = _hl_low_vol_filter(signals, gate["min_strength"])
+    if skipped:
+        try:                               # private alert; never fatal
+            import ops_alerts
+            ops_alerts.notify_low_vol(skipped)
+        except Exception:
+            app.logger.exception("low-vol alert failed")
+    if not signals:
+        return {"ok": True, "ran": True, "attempted": 0, "executed": 0,
+                "reason": "LOW_VOLATILITY", "results": [], "skipped_low_vol": skipped}
     if _ax.stop_atr_add() > 0:
         # v54: the placed stop sits HL_STOP_ATR_ADD x ATR(14, 2H) beyond the
         # signal's. No usable 2H data → the signal's own stop (never none).
@@ -4899,7 +4909,36 @@ def _hl_auto_execute_run():
     out["ok"] = True
     out["ran"] = True
     out["min_strength"] = gate["min_strength"]
+    if skipped:
+        out["skipped_low_vol"] = skipped
     return out
+
+
+def _hl_low_vol_filter(signals, floor):
+    """(kept, skipped): v56 drops a signal whose strength clears the floor by
+    less than the low-volatility dock while the coin's 1H ATR is under 0.8x
+    its 120h median. Only those near the floor fetch candles; unknown
+    volatility (no data) keeps the signal. Never raises."""
+    import hl_autoexec as _ax
+    dock = _ax.low_vol_dock()
+    if dock <= 0:
+        return signals, []
+    kept, skipped = [], []
+    for s_ in signals:
+        cs = s_.get("confidence_score")
+        ratio = None
+        if cs is not None and cs - dock < floor:
+            try:
+                closed, _skip = _fetch_alert_candles(str(s_.get("symbol") or "").upper(), "1H")
+                ratio = _ax.atr_ratio(closed) if closed else None
+            except Exception:
+                ratio = None
+        if _ax.low_vol_skip(s_, ratio, floor=floor, dock=dock):
+            skipped.append({**s_, "atr_ratio": round(ratio, 3), "low_vol_dock": dock,
+                            "floor": floor})
+        else:
+            kept.append(s_)
+    return kept, skipped
 
 
 def _hl_decision(sig, *, floor, table, held, known_fn):
@@ -4923,8 +4962,8 @@ def _hl_decision(sig, *, floor, table, held, known_fn):
         return "not opened: a position on this coin was already open"
     if known is None:
         return "unknown: the order lookup failed"
-    return ("not opened: stale entry, a cap, or an exchange reject — see the ⏭ / ⛔ "
-            "Telegram alert or the Cloudflare hl summary")
+    return ("not opened: stale entry, a quiet market (low-volatility dock), a cap, or "
+            "an exchange reject — see the ⏭ / ⛔ Telegram alert or the Cloudflare hl summary")
 
 
 def _hl_slot_status(now_sgt=None) -> dict:

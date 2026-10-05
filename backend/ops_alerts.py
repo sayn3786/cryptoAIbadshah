@@ -129,6 +129,19 @@ def fmt_stale_entry(res: Dict[str, Any], sig: Dict[str, Any]) -> str:
             f"(limit {res.get('allowed_pct')}%, half the stop distance). Skipped rather than chased.")
 
 
+def fmt_low_vol(sig: Dict[str, Any]) -> str:
+    return (f"⏭ {sig.get('symbol')} {sig.get('direction', '')} not opened: quiet market "
+            f"(1H ATR {sig.get('atr_ratio', 0):.2f}x its usual). Strength "
+            f"{sig.get('confidence_score')} minus the {sig.get('low_vol_dock', 5):g}-point "
+            f"low-volatility dock is under the {sig.get('floor', 69):g} floor.")
+
+
+def notify_low_vol(skipped: List[Dict[str, Any]]) -> List[str]:
+    """Signals auto-exec skipped for low volatility, once each."""
+    return [send(fmt_low_vol(s), f"lowvol:{s.get('id')}:{s.get('candle_ts')}")
+            for s in skipped or []]
+
+
 def fmt_rejected(res: Dict[str, Any], sig: Dict[str, Any]) -> str:
     detail = str(res.get("detail") or res.get("error") or "")[:160]
     return (f"⛔ {res.get('coin') or sig.get('symbol')} {sig.get('direction', '')} "
