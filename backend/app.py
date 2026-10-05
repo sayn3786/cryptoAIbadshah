@@ -5076,9 +5076,30 @@ def _record_hl_slot_run(out, now_sgt=None):
 ROUTINE_RUN_REASONS = ("ALREADY_PLACED", "POSITION_EXISTS")
 
 
-def _hl_history_verdict(*, listed, placed, runs, stale_alert, slot_runs):
-    """One recorded signal's fate, from the evidence. Pure."""
+HL_LIVE_ORDER_STATES = ("open", "triggered")
+
+
+def _fmt_fill(fill):
+    t = fill.get("time")
+    when = (datetime.fromtimestamp(t / 1000, _SGT).strftime(" at %b %d %-I:%M%p SGT")
+            if t else "")
+    return f"filled {fill.get('sz'):g} @ {fill.get('px'):g}{when}"
+
+
+def _hl_history_verdict(*, listed, placed, runs, stale_alert, slot_runs, order=None):
+    """One recorded signal's fate, from the evidence. Pure. `order` is the
+    exchange's record ({"status", "fill"}) when it knows the order."""
     if placed is True:
+        order = order or {}
+        status, fill = order.get("status"), order.get("fill")
+        if fill:
+            return "opened", f"opened on HL: {_fmt_fill(fill)}"
+        if status == "filled":
+            return "opened", "opened on HL (filled; fill older than the fills read)"
+        if status in HL_LIVE_ORDER_STATES:
+            return "opened", f"order on HL, not filled yet ({status})"
+        if status:
+            return "order_failed", f"order reached HL but was {status}, never filled"
         return "opened", "opened on HL (the exchange knows the order)"
     if listed is False:
         return "not_listed", "not listed on Hyperliquid (skipped silently)"
@@ -5129,24 +5150,34 @@ def _hl_decisions(days=10, min_strength=None):
             datetime.now(timezone.utc) - timedelta(days=int(days)),
             strategy_names=list(kinds), min_strength=floor, limit=500)
         configured = _ha.configured()
-        table = {}
+        table, fills, fills_ok = {}, {}, None
         if configured:
             try:
                 table = _hm.asset_table()
             except Exception:
                 table = {}
+            try:                          # one read: every fill since the window began
+                fills = _ha.fills_by_oid(_ha.fills_since(
+                    int((datetime.now(timezone.utc) - timedelta(days=int(days) + 1))
+                        .timestamp() * 1000)))
+                fills_ok = True
+            except Exception:
+                fills_ok = False
 
         def one(r):
             sig = _ax.to_signal(r)
             coin = _hm.resolve_coin(sig.get("symbol"), table) if table else None
             listed = (coin is not None) if table else None
-            placed = None
+            placed, order = None, None
             if configured and listed is not False:
                 try:
-                    placed = _ha.order_known(_hx.client_order_id(
+                    st = _ha.order_status(_hx.client_order_id(
                         sig.get("id"), "open", sig.get("candle_ts")))
                 except Exception:
-                    placed = None
+                    st = None
+                placed = st.get("known") if st else None
+                if placed:
+                    order = {"status": st.get("status"), "fill": fills.get(st.get("oid"))}
             gen = r.get("generated_at")
             try:
                 gen_t = datetime.fromisoformat(str(gen).replace("Z", "+00:00"))
@@ -5158,7 +5189,7 @@ def _hl_decisions(days=10, min_strength=None):
                 listed=listed, placed=placed,
                 runs=_kv_json_list(_hl_signal_run_key(sig)),
                 stale_alert=_oa.was_sent(f"stale:{sig.get('id')}:{sig.get('candle_ts')}"),
-                slot_runs=slot_runs)
+                slot_runs=slot_runs, order=order)
             return {"published": gen_t.astimezone(_SGT).strftime("%b %d %-I%p SGT")
                     if gen_t else gen, "_t": gen_t.isoformat() if gen_t else str(gen),
                     "symbol": sig.get("symbol"), "direction": sig.get("direction"),
@@ -5174,6 +5205,10 @@ def _hl_decisions(days=10, min_strength=None):
         for x in out:
             counts[x["code"]] = counts.get(x["code"], 0) + 1
         return {"days": int(days), "floor": floor, "counts": counts, "signals": out,
+                # Which account and network the orders were looked up on: trades
+                # show under THIS address (the main account, not the API wallet).
+                "account": _ha._mask(_ha.account_address()) if configured else None,
+                "network": _ha._env(), "fills_read": fills_ok,
                 "elapsed_ms": int((_time.monotonic() - t0) * 1000)}
     except Exception:
         app.logger.exception("hl decisions failed")
