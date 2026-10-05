@@ -3343,6 +3343,9 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         # a missing symbol is explainable instead of silently absent.
         "expired_setups":   expired,
         "strength_diag":    _top_strength_diag(strength_diag),
+        # How much the sections a price-only backtest can't see moved strength
+        # across this scan — the live-vs-backtest gap.
+        "live_data_effect": _live_data_summary(strength_diag),
         **({"strength_diag_full": _top_strength_diag(strength_diag, n=60),
             "hl_extra_preview": [
                 f"{c['symbol']} {c.get('direction')} "
@@ -3730,6 +3733,53 @@ HL_EXTRA_MAX = 3        # auto-exec opens at most 3 per run anyway (HL_MAX_ORDER
 STRENGTH_DIAG_TOP = 6
 
 
+# Score sections that read data a price-only backtest does not have (order
+# flow, derivatives, sentiment, macro, on-chain). In the replay they are
+# silent; live they move the score. CVD is reported on its own: the replay
+# estimates it from candles, live reads real order flow.
+LIVE_DATA_SECTIONS = frozenset({
+    "funding", "open_interest", "oi_squeeze_fuel", "squeeze_priming", "order_book",
+    "netflow", "etf_flows", "macro", "tradfi", "market_regime", "gomining", "tao",
+    "long_short_ratio", "fear_greed", "news", "btc_onchain", "combo_funding_trend",
+    "combo_hash_ribbon", "combo_btc_cycle", "btc_cycle_top", "combo_macro_inflection",
+    "combo_etf_reversal"})
+SCORE_TO_STRENGTH = 100.0 / 220.0          # signals.MAX_SCORE
+
+
+def _live_data_split(breakdown, direction):
+    """Points the live-data sections (and CVD) moved the 2H score, signed
+    toward the trade (+ = helped it), with the strength they are worth and the
+    three largest. Pure."""
+    sgn = 1 if direction == "LONG" else -1
+    rel = {k: v * sgn for k, v in (breakdown or {}).items()
+           if k in LIVE_DATA_SECTIONS and v}
+    pts = sum(rel.values())
+    cvd = (breakdown or {}).get("cvd") or 0
+    return {"live_pts": round(pts, 1), "live_strength": round(pts * SCORE_TO_STRENGTH, 1),
+            "top": sorted(rel.items(), key=lambda kv: -abs(kv[1]))[:3],
+            "cvd_pts": round(cvd * sgn, 1)}
+
+
+def _live_data_summary(rows):
+    """Across a scan's candidates: how much the live-data sections moved
+    strength on average, how many they cost 5+ points, and which sections
+    did it. Pure."""
+    rows = [r for r in rows or [] if r and r.get("live")]
+    if not rows:
+        return {"candidates": 0}
+    eff = [r["live"]["live_strength"] for r in rows]
+    by_section = {}
+    for r in rows:
+        for k, v in r["live"]["top"]:
+            by_section[k] = by_section.get(k, 0) + v
+    return {"candidates": len(rows),
+            "avg_strength_effect": round(sum(eff) / len(eff), 1),
+            "cost_5_or_more": sum(1 for e in eff if e <= -5),
+            "helped_5_or_more": sum(1 for e in eff if e >= 5),
+            "top_sections_pts": [f"{k} {v:+g}" for k, v in
+                                 sorted(by_section.items(), key=lambda kv: kv[1])[:5]]}
+
+
 def _strength_diag(sym, h1, h2, screen):
     """One candidate's strength path, for the publish response (Cloudflare log):
     {"line", "before"}. None for a symbol with no direction (filtered early)."""
@@ -3747,6 +3797,13 @@ def _strength_diag(sym, h1, h2, screen):
         v = sig.get(key)
         if isinstance(v, (int, float)) and v:
             parts.append(f"{label} {v:+g}")
+    live = _live_data_split(sig.get("score_breakdown"), screen["direction"])
+    if sig.get("score_breakdown") is not None:
+        top = ", ".join(f"{k} {v:+g}" for k, v in live["top"])
+        parts.append(f"live-data {live['live_pts']:+g}pts ≈{live['live_strength']:+.0f}"
+                     + (f" ({top})" if top else ""))
+        if live["cvd_pts"]:
+            parts.append(f"cvd {live['cvd_pts']:+g}")
     if before is not None and final is not None:
         parts.append(f"{before:g}→{final:g}" if before != final else f"{final:g}")
     notes = screen.get("calibration_notes") or []
@@ -3756,7 +3813,8 @@ def _strength_diag(sym, h1, h2, screen):
         parts.append("chased")
     if not screen.get("ok") and screen.get("reason"):
         parts.append(f"rejected {screen['reason']}")
-    return {"line": " · ".join(parts), "before": before if before is not None else (final or 0)}
+    return {"line": " · ".join(parts), "before": before if before is not None else (final or 0),
+            "live": live if sig.get("score_breakdown") is not None else None}
 
 
 def _top_strength_diag(rows, n=STRENGTH_DIAG_TOP):
@@ -4042,6 +4100,7 @@ def api_cron_publish():
         # strength (BTC, structure, liquidation, the v53 caps), plus any v55
         # boosted HL extras: why a slot did or didn't reach the floor.
         "strength_diag": result.get("strength_diag"),
+        "live_data_effect": result.get("live_data_effect"),
         "hl_extra": persistence.get("hl_extra"),
     })
 
@@ -5066,6 +5125,7 @@ def api_hl_strength_diag():
         "top3_if_published_now": now_top3,
         "hl_extra_if_published_now": result.get("hl_extra_preview") or [],
         "strength_diag_now": (result.get("strength_diag_full") or [])[:n],
+        "live_data_effect_now": result.get("live_data_effect"),
     })
 
 
