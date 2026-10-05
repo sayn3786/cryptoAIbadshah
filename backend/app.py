@@ -5107,8 +5107,13 @@ def _hl_history_verdict(*, listed, placed, runs, stale_alert, slot_runs):
 
 def _hl_decisions(days=10, min_strength=None):
     """Every recorded signal at min_strength+ in the last `days` and what HL did
-    with it. Never raises."""
+    with it. One database read; the per-signal exchange and KV lookups run in
+    parallel so the request stays well inside the function time limit. Never
+    raises."""
     try:
+        import time as _time
+        from concurrent.futures import ThreadPoolExecutor
+        t0 = _time.monotonic()
         import db as _db
         if not _db.db_enabled():
             return {"error": "DB_NOT_CONFIGURED", "signals": []}
@@ -5119,15 +5124,10 @@ def _hl_decisions(days=10, min_strength=None):
         import ops_alerts as _oa
         import signal_publish as _sp
         floor = _ax.auto_min_strength() if min_strength is None else float(min_strength)
-        store = _signal_store()
-        now = datetime.now(timezone.utc)
-        rows = []
-        for d in range(int(days)):
-            until, since = now - timedelta(days=d), now - timedelta(days=d + 1)
-            for name, kind in ((_sp.STRATEGY_NAME, "published"),
-                               (_sp.HL_EXTRA_STRATEGY_NAME, "hl_extra")):
-                rows += [(kind, r) for r in store.list_published_between(
-                    since, until, strategy_name=name, limit=100)]
+        kinds = {_sp.STRATEGY_NAME: "published", _sp.HL_EXTRA_STRATEGY_NAME: "hl_extra"}
+        rows = _signal_store().list_recorded_since(
+            datetime.now(timezone.utc) - timedelta(days=int(days)),
+            strategy_names=list(kinds), min_strength=floor, limit=500)
         configured = _ha.configured()
         table = {}
         if configured:
@@ -5135,12 +5135,9 @@ def _hl_decisions(days=10, min_strength=None):
                 table = _hm.asset_table()
             except Exception:
                 table = {}
-        out, counts = [], {}
-        for kind, r in rows:
+
+        def one(r):
             sig = _ax.to_signal(r)
-            cs = sig.get("confidence_score")
-            if cs is None or cs < floor:
-                continue
             coin = _hm.resolve_coin(sig.get("symbol"), table) if table else None
             listed = (coin is not None) if table else None
             placed = None
@@ -5162,13 +5159,22 @@ def _hl_decisions(days=10, min_strength=None):
                 runs=_kv_json_list(_hl_signal_run_key(sig)),
                 stale_alert=_oa.was_sent(f"stale:{sig.get('id')}:{sig.get('candle_ts')}"),
                 slot_runs=slot_runs)
-            counts[code] = counts.get(code, 0) + 1
-            out.append({"published": gen_t.astimezone(_SGT).strftime("%b %d %-I%p SGT")
-                        if gen_t else gen,
-                        "symbol": sig.get("symbol"), "direction": sig.get("direction"),
-                        "strength": cs, "row": kind, "hl": text, "code": code})
-        out.sort(key=lambda x: str(x["published"]))
-        return {"days": int(days), "floor": floor, "counts": counts, "signals": out}
+            return {"published": gen_t.astimezone(_SGT).strftime("%b %d %-I%p SGT")
+                    if gen_t else gen, "_t": gen_t.isoformat() if gen_t else str(gen),
+                    "symbol": sig.get("symbol"), "direction": sig.get("direction"),
+                    "strength": sig.get("confidence_score"),
+                    "row": kinds.get(r.get("strategy_name"), r.get("strategy_name")),
+                    "hl": text, "code": code}
+
+        rows = [r for r in rows if (_ax._f(r.get("confidence_score")) or 0) >= floor]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            out = list(pool.map(one, rows))
+        out.sort(key=lambda x: x.pop("_t"))
+        counts = {}
+        for x in out:
+            counts[x["code"]] = counts.get(x["code"], 0) + 1
+        return {"days": int(days), "floor": floor, "counts": counts, "signals": out,
+                "elapsed_ms": int((_time.monotonic() - t0) * 1000)}
     except Exception:
         app.logger.exception("hl decisions failed")
         return {"error": "DECISIONS_FAILED", "signals": []}

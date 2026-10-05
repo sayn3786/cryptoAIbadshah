@@ -899,6 +899,43 @@ def list_published_between(since, until, *,
         return _work(s)
 
 
+def list_recorded_since(since, *, strategy_names: Iterable[str],
+                        min_strength: Optional[float] = None,
+                        environment: Optional[str] = None,
+                        limit: int = 500, session=None) -> List[Dict[str, Any]]:
+    """
+    Signals recorded (``generated_at``) since ``since`` under the given strategy
+    names, archived or not, optionally at ``min_strength``+, oldest first. One
+    statement, signal rows only (no targets or snapshots): the cheap read for a
+    report that only needs what was recorded and when.
+    """
+    since = _utc(since, "since")
+    names = [str(n).strip() for n in strategy_names or [] if str(n).strip()]
+    if not names:
+        return []
+    limit = max(1, min(int(limit or 500), 1000))
+
+    def _work(s):
+        env_sql, env_params = _environment_clause(s, environment)
+        where = ["generated_at >= :since", "strategy_name = ANY(:names)"]
+        params: Dict[str, Any] = {"since": since, "names": names, "limit": limit,
+                                  **env_params}
+        if min_strength is not None:
+            where.append("confidence_score >= :min_strength")
+            params["min_strength"] = min_strength
+        clause = " AND ".join(where) + env_sql
+        rows = s.execute(_sql(
+            f"SELECT * FROM signals WHERE {clause} "
+            f"ORDER BY generated_at ASC, id ASC LIMIT :limit"
+        ), params).all()
+        return [_row_to_dict(r) for r in rows]
+
+    if session is not None:
+        return _work(session)
+    with session_scope() as s:
+        return _work(s)
+
+
 def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
                                environment: Optional[str] = None,
                                limit: int = 500,
