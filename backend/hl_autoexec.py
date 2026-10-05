@@ -55,6 +55,63 @@ def auto_min_strength() -> float:
     return hl_execution._num_env("HL_AUTO_MIN_STRENGTH", DEFAULT_MIN_STRENGTH)
 
 
+# ── v56 low-volatility dock (HL only) ────────────────────────────────────────
+# Trades taken while the coin's 1H ATR sits under 0.8x its 120h median lost in
+# both backtest periods (indicator study: -0.52% / -0.26% a trade); docking
+# their strength 5 points before the floor check beat or matched live in both
+# (reweight_compare: +$1.05 / -$0.02, lower drawdown). The channel is
+# untouched; HL just skips a quiet-market signal that clears the floor by
+# less than the dock. HL_LOW_VOL_DOCK=0 turns it off.
+DEFAULT_LOW_VOL_DOCK = 5.0
+DEFAULT_LOW_VOL_RATIO = 0.8
+LOW_VOL_HISTORY = 120
+
+
+def low_vol_dock() -> float:
+    v = hl_execution._num_env("HL_LOW_VOL_DOCK", DEFAULT_LOW_VOL_DOCK)
+    return v if 0 <= v <= 20 else DEFAULT_LOW_VOL_DOCK
+
+
+def low_vol_ratio() -> float:
+    v = hl_execution._num_env("HL_LOW_VOL_RATIO", DEFAULT_LOW_VOL_RATIO)
+    return v if 0.1 <= v <= 1.0 else DEFAULT_LOW_VOL_RATIO
+
+
+def atr_ratio(candles_1h: List[Dict[str, Any]], *, period: int = 14,
+              history: int = LOW_VOL_HISTORY) -> Optional[float]:
+    """The latest ATR(period) of CLOSED 1H candles over the median of the
+    `history` ATRs before it — the backtest's volatility measure. None with
+    under half that history or unusable data."""
+    c = [x for x in candles_1h or [] if isinstance(x, dict)]
+    try:
+        trs = [max(float(b["high"]) - float(b["low"]),
+                   abs(float(b["high"]) - float(a["close"])),
+                   abs(float(b["low"]) - float(a["close"])))
+               for a, b in zip(c, c[1:])]
+    except (KeyError, TypeError, ValueError):
+        return None
+    atrs = [sum(trs[i - period:i]) / period for i in range(period, len(trs) + 1)]
+    if len(atrs) < history // 2:
+        return None
+    past = sorted(atrs[-history - 1:-1])
+    mid = past[len(past) // 2]
+    return atrs[-1] / mid if mid > 0 else None
+
+
+def low_vol_skip(sig: Dict[str, Any], ratio: Optional[float], *,
+                 floor: Optional[float] = None, dock: Optional[float] = None,
+                 threshold: Optional[float] = None) -> bool:
+    """True when a quiet market (ratio under the threshold) docks this signal's
+    strength below the floor. Unknown volatility never skips."""
+    floor = auto_min_strength() if floor is None else float(floor)
+    dock = low_vol_dock() if dock is None else float(dock)
+    threshold = low_vol_ratio() if threshold is None else float(threshold)
+    cs = _f(sig.get("confidence_score"))
+    if dock <= 0 or ratio is None or cs is None:
+        return False
+    return ratio < threshold and cs - dock < floor
+
+
 def gate_status(env: Optional[str] = None) -> Dict[str, Any]:
     """Why auto-exec would or would not run right now — without placing anything.
     `ready` is armed AND enabled; the arm reasons are surfaced for the operator."""

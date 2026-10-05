@@ -146,6 +146,11 @@ async function runJob(job, env, sleep) {
       for (const k of ["ran", "attempted", "executed", "reason", "error_code"]) {
         if (k in hl) out.hl[k] = hl[k];
       }
+      // v56: Confirmed signals HL skipped for a quiet market (low-vol dock).
+      if (Array.isArray(hl.skipped_low_vol) && hl.skipped_low_vol.length) {
+        out.hl.low_vol_skipped = hl.skipped_low_vol.map(x =>
+          `${x.symbol} ${x.direction} ${x.confidence_score} (ATR ${x.atr_ratio}x)`);
+      }
     }
     if (Array.isArray(r.body.results)) {
       out.results = r.body.results.map(x => ({ coin: x.coin, action: x.action,
