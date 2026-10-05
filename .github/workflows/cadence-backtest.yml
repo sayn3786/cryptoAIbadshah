@@ -65,6 +65,10 @@ name: Strategy backtests (private Telegram)
 #            (engulfing x1.5, liquidity grab + RSI divergence x0.5, CVD x0.5,
 #            low-volatility -5) on the live HL book; end_days_ago 0 and 135
 #            (backend/reweight_compare.py; ~20-30 min)
+#   recent   the last `days` (use 10) of 4h publishes replayed, slot by slot,
+#            next to what live recorded (read with APP_URL + CRON_SECRET):
+#            69+ signals, what the v53 caps held under the floor, and the
+#            live-vs-replay strength gap (backend/recent_signals.py; ~5-10 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -83,7 +87,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -136,6 +140,9 @@ jobs:
           # The tools import app for its symbol list; keep its slot pre-warm
           # thread from waking up inside a long run.
           DISABLE_REC_SCHEDULER:   "1"
+          # recent: reads the live app's recorded signals (never printed)
+          APP_URL:                 ${{ secrets.APP_URL }}
+          CRON_SECRET:             ${{ secrets.CRON_SECRET }}
           STUDY:                   ${{ inputs.study }}
           DAYS:                    ${{ inputs.days }}
           MIN_STRENGTH:            ${{ inputs.min_strength }}
@@ -172,7 +179,9 @@ jobs:
           esac
           # Output is only per-coin download counts and
           # "coins replayed: N; telegram: sent|NOT sent". No results.
-          if [ "$STUDY" = "reads" ]; then
+          if [ "$STUDY" = "recent" ]; then
+            python -m recent_signals --telegram --days "$DAYS"
+          elif [ "$STUDY" = "reads" ]; then
             python -m read_study --telegram --days 1500
           elif [ "$STUDY" = "factors" ]; then
             python -m factor_study --telegram --fetch-days 260
