@@ -61,6 +61,10 @@ name: Strategy backtests (private Telegram)
 #            Bollinger, patterns, combos, caps, brakes) vs trade outcomes, by
 #            half and by situation (coin trend, volatility, BTC trend);
 #            end_days_ago 0 and 135 (backend/indicator_study.py; ~20-30 min)
+#   reweight the score changes the indicator study backed in both periods
+#            (engulfing x1.5, liquidity grab + RSI divergence x0.5, CVD x0.5,
+#            low-volatility -5) on the live HL book; end_days_ago 0 and 135
+#            (backend/reweight_compare.py; ~20-30 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -79,7 +83,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -88,7 +92,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -162,6 +166,8 @@ jobs:
                      EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             indicators) MODULE=indicator_study
                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            reweight) MODULE=reweight_compare
+                      EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
