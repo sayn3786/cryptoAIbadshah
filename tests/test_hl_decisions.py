@@ -123,10 +123,13 @@ def test_decisions_report(mem_kv, monkeypatch):
                                row("c", "AAVE", 62.0, gen), row("d", "ICP", 87.0, gen)],
             sp.HL_EXTRA_STRATEGY_NAME: []}
 
+    calls = []
+
     class Store:
-        def list_published_between(self, since, until, strategy_name=None, limit=0):
-            g = datetime.fromisoformat(gen)
-            return rows[strategy_name] if since <= g < until else []
+        def list_recorded_since(self, since, strategy_names=(), min_strength=None, limit=0):
+            calls.append((since, tuple(strategy_names), min_strength))
+            out = [r for n in strategy_names for r in rows[n]]
+            return [r for r in out if float(r["confidence_score"]) >= (min_strength or 0)]
 
     monkeypatch.setattr(db, "db_enabled", lambda: True)
     monkeypatch.setattr(app, "_signal_store", lambda: Store())
@@ -149,6 +152,9 @@ def test_decisions_report(mem_kv, monkeypatch):
     assert by["ICP"]["code"] == "not_listed"
     assert out["counts"] == {"stale": 1, "opened": 1, "not_listed": 1}
     assert by["ENJ"]["published"].endswith("SGT")
+    assert len(calls) == 1 and calls[0][2] == 69                 # one database read
+    assert set(calls[0][1]) == {sp.STRATEGY_NAME, sp.HL_EXTRA_STRATEGY_NAME}
+    assert "elapsed_ms" in out
 
 
 def test_decisions_without_a_db(monkeypatch):
@@ -179,3 +185,12 @@ def test_was_sent(monkeypatch, mem_kv):
     keys.add("ops:local:stale:s1:7")
     assert ops_alerts.was_sent("stale:s1:7") is True
     assert ops_alerts.was_sent("stale:s1:8") is False
+
+
+def test_store_read_is_one_statement_with_archived_rows():
+    import inspect
+    import signal_store
+    src = inspect.getsource(signal_store.list_recorded_since)
+    assert src.count("s.execute(") == 1 and "archived_at" not in src
+    assert signal_store.list_recorded_since(datetime.now(timezone.utc),
+                                            strategy_names=[]) == []
