@@ -4912,6 +4912,14 @@ def _hl_signal_atr(symbol):
 
 
 def _hl_auto_execute_run():
+    """One auto-execute pass (see _hl_auto_execute_pass), logged per slot so
+    /api/hl/decisions can say later whether it ran. Never raises."""
+    out = _hl_auto_execute_pass()
+    _record_hl_slot_run(out)
+    return out
+
+
+def _hl_auto_execute_pass():
     """Run one auto-execute pass over the latest Confirmed-tier published set.
 
     Returns a summary dict (never raises). Gated on the arm switch AND the
@@ -4941,6 +4949,7 @@ def _hl_auto_execute_run():
         except Exception:
             app.logger.exception("low-vol alert failed")
     if not signals:
+        _record_hl_signal_runs([], [], skipped)
         return {"ok": True, "ran": True, "attempted": 0, "executed": 0,
                 "reason": "LOW_VOLATILITY", "results": [], "skipped_low_vol": skipped}
     if _ax.stop_atr_add() > 0:
@@ -4960,6 +4969,7 @@ def _hl_auto_execute_run():
         except Exception:
             open_orders = None             # the position manager still cleans up
         out = _ax.execute(signals, account_state=acct, open_orders=open_orders)
+    _record_hl_signal_runs(signals, out.get("results") or [], skipped)
     try:                                   # private trade/problem alerts; never fatal
         import ops_alerts
         ops_alerts.notify_execution(signals, out)
@@ -4998,6 +5008,170 @@ def _hl_low_vol_filter(signals, floor):
         else:
             kept.append(s_)
     return kept, skipped
+
+
+# ── HL run log (for /api/hl/decisions) ───────────────────────────────────────
+# What each auto-exec pass did, kept 14 days in KV: per slot (did it run, and
+# if not why) and per signal (each attempt's outcome). Without it, a signal
+# that never became a trade leaves no trace of why.
+HL_RUN_LOG_TTL = 14 * 24 * 3600
+HL_RUN_LOG_MAX = 6                         # attempts kept per key (catch-up re-runs)
+
+
+def _hl_signal_run_key(sig):
+    return f"hlrun:{_deploy_env()}:{sig.get('id')}:{sig.get('candle_ts')}"
+
+
+def _hl_slot_run_key(slot_start):
+    return f"hlslot:{_deploy_env()}:{slot_start.isoformat()}"
+
+
+def _kv_append_json(key, entry):
+    """Append `entry` to the JSON list at `key` (newest last, capped). Never raises."""
+    try:
+        import kv as _kv
+        try:
+            cur = json.loads(_kv.get_value(key) or "[]")
+            cur = cur if isinstance(cur, list) else []
+        except (TypeError, ValueError):
+            cur = []
+        cur = (cur + [entry])[-HL_RUN_LOG_MAX:]
+        _kv.set_value(key, json.dumps(cur), ttl_seconds=HL_RUN_LOG_TTL)
+    except Exception:                                    # noqa: BLE001
+        pass
+
+
+def _kv_json_list(key):
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(key) or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:                                    # noqa: BLE001
+        return []
+
+
+def _record_hl_signal_runs(signals, results, skipped):
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for sig, res in zip(signals or [], results or []):
+        e = {"at": at, "ok": bool(res.get("ok")), "reason": res.get("reason")}
+        for k in ("drift_pct", "allowed_pct"):
+            if res.get(k) is not None:
+                e[k] = res[k]
+        _kv_append_json(_hl_signal_run_key(sig), e)
+    for sig in skipped or []:
+        _kv_append_json(_hl_signal_run_key(sig), {"at": at, "ok": False,
+                                                  "reason": "LOW_VOLATILITY",
+                                                  "atr_ratio": sig.get("atr_ratio")})
+
+
+def _record_hl_slot_run(out, now_sgt=None):
+    out = out if isinstance(out, dict) else {}
+    now_sgt = now_sgt or datetime.now(_SGT)
+    _kv_append_json(_hl_slot_run_key(_slot_start(now_sgt)), {
+        "at": now_sgt.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        **{k: out.get(k) for k in ("ran", "attempted", "executed", "reason", "error_code")
+           if out.get(k) is not None}})
+
+
+ROUTINE_RUN_REASONS = ("ALREADY_PLACED", "POSITION_EXISTS")
+
+
+def _hl_history_verdict(*, listed, placed, runs, stale_alert, slot_runs):
+    """One recorded signal's fate, from the evidence. Pure."""
+    if placed is True:
+        return "opened", "opened on HL (the exchange knows the order)"
+    if listed is False:
+        return "not_listed", "not listed on Hyperliquid (skipped silently)"
+    real = [r for r in runs if r.get("reason") not in ROUTINE_RUN_REASONS] or runs
+    if real:
+        r = real[0]
+        if r.get("reason") == "STALE_ENTRY":
+            return "stale", (f"not opened: stale entry (price {r.get('drift_pct')}% from "
+                             f"entry, limit {r.get('allowed_pct')}%)")
+        if r.get("reason") == "LOW_VOLATILITY":
+            return "low_vol", f"not opened: quiet market (ATR {r.get('atr_ratio')}x)"
+        return "rejected", f"not opened: {r.get('reason')}"
+    if stale_alert:
+        return "stale", "not opened: stale entry (the ⏭ alert was sent)"
+    not_run = [r for r in slot_runs if not r.get("ran")]
+    if slot_runs and len(not_run) == len(slot_runs):
+        return "not_run", ("auto-exec didn't run for this slot ("
+                           f"{not_run[-1].get('reason') or not_run[-1].get('error_code') or '?'})")
+    if slot_runs:
+        return "not_attempted", "auto-exec ran but never attempted this signal"
+    if placed is None:
+        return "unknown", "unknown: the order lookup failed"
+    return "no_record", ("not placed, and no run record (before run logging, or the "
+                         "publish's HL step never ran)")
+
+
+def _hl_decisions(days=10, min_strength=None):
+    """Every recorded signal at min_strength+ in the last `days` and what HL did
+    with it. Never raises."""
+    try:
+        import db as _db
+        if not _db.db_enabled():
+            return {"error": "DB_NOT_CONFIGURED", "signals": []}
+        import hl_account as _ha
+        import hl_autoexec as _ax
+        import hl_execution as _hx
+        import hl_meta as _hm
+        import ops_alerts as _oa
+        import signal_publish as _sp
+        floor = _ax.auto_min_strength() if min_strength is None else float(min_strength)
+        store = _signal_store()
+        now = datetime.now(timezone.utc)
+        rows = []
+        for d in range(int(days)):
+            until, since = now - timedelta(days=d), now - timedelta(days=d + 1)
+            for name, kind in ((_sp.STRATEGY_NAME, "published"),
+                               (_sp.HL_EXTRA_STRATEGY_NAME, "hl_extra")):
+                rows += [(kind, r) for r in store.list_published_between(
+                    since, until, strategy_name=name, limit=100)]
+        configured = _ha.configured()
+        table = {}
+        if configured:
+            try:
+                table = _hm.asset_table()
+            except Exception:
+                table = {}
+        out, counts = [], {}
+        for kind, r in rows:
+            sig = _ax.to_signal(r)
+            cs = sig.get("confidence_score")
+            if cs is None or cs < floor:
+                continue
+            coin = _hm.resolve_coin(sig.get("symbol"), table) if table else None
+            listed = (coin is not None) if table else None
+            placed = None
+            if configured and listed is not False:
+                try:
+                    placed = _ha.order_known(_hx.client_order_id(
+                        sig.get("id"), "open", sig.get("candle_ts")))
+                except Exception:
+                    placed = None
+            gen = r.get("generated_at")
+            try:
+                gen_t = datetime.fromisoformat(str(gen).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                gen_t = None
+            slot_runs = (_kv_json_list(_hl_slot_run_key(_slot_start(gen_t.astimezone(_SGT))))
+                         if gen_t else [])
+            code, text = _hl_history_verdict(
+                listed=listed, placed=placed,
+                runs=_kv_json_list(_hl_signal_run_key(sig)),
+                stale_alert=_oa.was_sent(f"stale:{sig.get('id')}:{sig.get('candle_ts')}"),
+                slot_runs=slot_runs)
+            counts[code] = counts.get(code, 0) + 1
+            out.append({"published": gen_t.astimezone(_SGT).strftime("%b %d %-I%p SGT")
+                        if gen_t else gen,
+                        "symbol": sig.get("symbol"), "direction": sig.get("direction"),
+                        "strength": cs, "row": kind, "hl": text, "code": code})
+        out.sort(key=lambda x: str(x["published"]))
+        return {"days": int(days), "floor": floor, "counts": counts, "signals": out}
+    except Exception:
+        app.logger.exception("hl decisions failed")
+        return {"error": "DECISIONS_FAILED", "signals": []}
 
 
 def _hl_decision(sig, *, floor, table, held, known_fn):
@@ -5127,6 +5301,26 @@ def api_hl_strength_diag():
         "strength_diag_now": (result.get("strength_diag_full") or [])[:n],
         "live_data_effect_now": result.get("live_data_effect"),
     })
+
+
+@app.get("/api/hl/decisions")
+def api_hl_decisions():
+    """What HL did with every recorded signal at the floor (or ?min=) over the
+    last ?days= (default 10, max 14): opened (the exchange knows the order),
+    not listed, stale entry, quiet market, rejected, auto-exec didn't run, or
+    no record. Admin only (HL admin token, CRON_SECRET or an admin session)."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    try:
+        days = max(1, min(int(request.args.get("days", 10)), 14))
+    except ValueError:
+        days = 10
+    try:
+        min_s = float(request.args["min"]) if request.args.get("min") else None
+    except ValueError:
+        min_s = None
+    return jsonify({"ok": True, **_hl_decisions(days, min_s)})
 
 
 @app.get("/api/hl/auto-status")

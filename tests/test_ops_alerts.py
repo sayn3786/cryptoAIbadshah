@@ -123,7 +123,7 @@ def test_auto_exec_alerts_after_execute_and_survives_alert_errors(monkeypatch):
     import ops_alerts
     seen = []
     monkeypatch.setattr(ops_alerts, "notify_execution", lambda s, o: seen.append(o))
-    src = __import__("inspect").getsource(app._hl_auto_execute_run)
+    src = __import__("inspect").getsource(app._hl_auto_execute_pass)
     assert "notify_execution" in src and "never fatal" in src
     def boom(*a):
         raise RuntimeError("alert path broken")
