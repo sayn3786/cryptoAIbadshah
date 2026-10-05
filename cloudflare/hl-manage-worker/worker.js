@@ -86,7 +86,9 @@ const SUMMARY_KEYS = ["ok", "ran", "reason", "positions", "actions", "computed",
   "mode", "attempted", "counts", "week", "result",
   // publish: the slot's top candidates and what moved their strength, and any
   // HL-only extras (v55 boosted ones listed) — why a slot did or didn't trade.
-  "strength_diag", "hl_extra"];
+  "strength_diag", "hl_extra",
+  // how much the sections a price-only backtest can't see moved strength
+  "live_data_effect"];
 
 const RETRY_DELAY_MS = 20_000;       // a timed-out publish leaves the cache warmer
 

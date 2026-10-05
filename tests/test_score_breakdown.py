@@ -30,17 +30,20 @@ def test_names_are_the_engine_sections():
         bars = walk(300, seed=seed)
         seen |= set(generate_signal(
             candle_analysis.build_candle_analysis(bars, "1H", "SOL"))["score_breakdown"])
-    assert seen and seen <= {
-        "rsi_level", "rsi_slope", "roc", "candle_consistency", "cvd", "funding",
-        "open_interest", "oi_squeeze_fuel", "squeeze_priming", "fvg", "choch",
-        "liquidity_grab", "acc_setup", "trend_context", "flags", "reversal_patterns",
-        "engulfing", "macd", "trend_ema_supertrend_ichimoku", "ema200_retest",
-        "order_book", "netflow", "etf_flows", "macro", "tradfi", "market_regime",
-        "gomining", "tao", "long_short_ratio", "fear_greed", "news", "elliott",
-        "rsi_divergence", "trendlines", "sr_zones", "bollinger", "vwap", "stoch_rsi",
-        "volume", "btc_onchain", "reversal_radar", "group_caps", "confluence",
-        "combo_flow_trend", "combo_momentum_trend", "combo_flow_against_trend",
-        "combo_momentum_against_trend", "combo_funding_trend", "combo_supertrend_volume",
-        "combo_divergence_macd", "combo_bb_squeeze_volume", "combo_hash_ribbon",
-        "combo_btc_cycle", "btc_cycle_top", "combo_macro_inflection",
-        "combo_etf_reversal", "confluence_multiplier"}
+    assert seen and seen <= KNOWN
+
+
+KNOWN = {
+    "rsi_level", "rsi_slope", "roc", "candle_consistency", "cvd", "funding",
+    "open_interest", "oi_squeeze_fuel", "squeeze_priming", "fvg", "choch",
+    "liquidity_grab", "acc_setup", "trend_context", "flags", "reversal_patterns",
+    "engulfing", "macd", "trend_ema_supertrend_ichimoku", "ema200_retest",
+    "order_book", "netflow", "etf_flows", "macro", "tradfi", "market_regime",
+    "gomining", "tao", "long_short_ratio", "fear_greed", "news", "elliott",
+    "rsi_divergence", "trendlines", "sr_zones", "bollinger", "vwap", "stoch_rsi",
+    "volume", "btc_onchain", "reversal_radar", "group_caps", "confluence",
+    "combo_flow_trend", "combo_momentum_trend", "combo_flow_against_trend",
+    "combo_momentum_against_trend", "combo_funding_trend", "combo_supertrend_volume",
+    "combo_divergence_macd", "combo_bb_squeeze_volume", "combo_hash_ribbon",
+    "combo_btc_cycle", "btc_cycle_top", "combo_macro_inflection",
+    "combo_etf_reversal", "confluence_multiplier"}
