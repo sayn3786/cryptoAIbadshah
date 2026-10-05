@@ -175,6 +175,17 @@ def _post(text: str, session: Any = None) -> bool:
     return True
 
 
+def was_sent(key: str) -> Optional[bool]:
+    """Was an alert with this key sent (still within its dedupe TTL)? None
+    when the store can't be read. Never raises."""
+    try:
+        import kv
+        env = os.getenv("VERCEL_ENV", "") or "local"
+        return bool(kv.exists(f"ops:{env}:{key}"))
+    except Exception:                                    # noqa: BLE001
+        return None
+
+
 def send(text: str, key: str, *, ttl: int = DEDUP_TTL, session: Any = None) -> str:
     """Send once per `key`. Returns sent / duplicate / unconfigured / failed.
     Never raises."""
