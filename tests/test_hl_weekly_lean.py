@@ -100,3 +100,39 @@ def test_worker_summary_lists_the_skips():
     js = open(os.path.join(os.path.dirname(__file__), "..", "cloudflare", "hl-manage-worker",
                            "worker.js")).read()
     assert "hl.skipped_weekly_lean" in js and "weekly_lean_skipped" in js
+    assert "hl.weekly_lean_overridden" in js
+
+
+# ── the soft version: strong enough to trade against the lean ───────────────
+
+STRONG_BEAR = {"lean": "bearish", "strong": True, "bear": 11, "bull": 2}
+
+
+def test_an_85_plus_signal_still_opens_against_a_strong_lean(monkeypatch):
+    monkeypatch.delenv("HL_WEEKLY_LEAN_OVERRIDE", raising=False)
+    sigs = [{**SIGS[0], "id": "hi", "confidence_score": 88.0}, dict(SIGS[0]), dict(SIGS[1])]
+    kept, skipped, _ = app._hl_weekly_lean_filter(sigs, STRONG_BEAR)
+    assert [s["id"] for s in kept] == ["hi", "s1"] and kept[0]["lean_override"] is True
+    assert [s["id"] for s in skipped] == ["l1"]
+    edge = [{**SIGS[0], "confidence_score": 85.0}]
+    assert app._hl_weekly_lean_filter(edge, STRONG_BEAR)[1] == []    # 85 itself is kept
+
+
+@pytest.mark.parametrize("env, expect", [("0", None), ("101", None), ("80", 80.0),
+                                         ("junk", 85.0), ("", 85.0)])
+def test_override_setting(monkeypatch, env, expect):
+    monkeypatch.setenv("HL_WEEKLY_LEAN_OVERRIDE", env)
+    assert app._weekly_lean_override() == expect
+
+
+def test_strict_when_the_override_is_off(monkeypatch):
+    monkeypatch.setenv("HL_WEEKLY_LEAN_OVERRIDE", "0")
+    sigs = [{**SIGS[0], "confidence_score": 95.0}]
+    kept, skipped, _ = app._hl_weekly_lean_filter(sigs, STRONG_BEAR)
+    assert not kept and len(skipped) == 1
+
+
+def test_the_run_lists_overridden_signals():
+    import inspect
+    src = inspect.getsource(app._hl_auto_execute_pass)
+    assert 'out["weekly_lean_overridden"]' in src

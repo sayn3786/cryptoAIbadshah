@@ -5017,6 +5017,12 @@ def _hl_auto_execute_pass():
         out["skipped_low_vol"] = low_vol
     if against:
         out["skipped_weekly_lean"] = against
+    overridden = [s_ for s_ in signals if s_.get("lean_override")]
+    if overridden:
+        # Strong enough to trade against the strong weekly lean (soft v57).
+        out["weekly_lean_overridden"] = [
+            f"{s_.get('symbol')} {s_.get('direction')} {s_.get('confidence_score')}"
+            for s_ in overridden]
     return out
 
 
@@ -5030,10 +5036,25 @@ def _weekly_lean_filter_on() -> bool:
         "0", "false", "off", "no")
 
 
+# The soft version: a signal this strong still opens against a strong lean.
+# HL_WEEKLY_LEAN_OVERRIDE=0 (or anything over 100) makes the filter strict.
+DEFAULT_WEEKLY_LEAN_OVERRIDE = 85.0
+
+
+def _weekly_lean_override():
+    """The strength at or above which a signal is NOT skipped, or None (strict)."""
+    try:
+        v = float(os.getenv("HL_WEEKLY_LEAN_OVERRIDE", "") or DEFAULT_WEEKLY_LEAN_OVERRIDE)
+    except ValueError:
+        v = DEFAULT_WEEKLY_LEAN_OVERRIDE
+    return v if 0 < v <= 100 else None
+
+
 def _hl_weekly_lean_filter(signals, lean=None):
-    """(kept, skipped, lean): drops signals against a strong weekly lean.
-    No fresh stored lean, a mixed or non-strong lean, or the switch off: keeps
-    everything. Never raises."""
+    """(kept, skipped, lean): drops signals against a strong weekly lean,
+    unless their strength reaches the override (those are kept and marked
+    "lean_override"). No fresh stored lean, a mixed or non-strong lean, or the
+    switch off: keeps everything. Never raises."""
     try:
         if not _weekly_lean_filter_on():
             return signals, [], None
@@ -5041,9 +5062,14 @@ def _hl_weekly_lean_filter(signals, lean=None):
         if not lean or not lean.get("strong") or lean.get("lean") not in ("bullish", "bearish"):
             return signals, [], lean
         against = "SHORT" if lean["lean"] == "bullish" else "LONG"
+        override = _weekly_lean_override()
         kept, skipped = [], []
         for s_ in signals:
-            if str(s_.get("direction") or "").upper() == against:
+            cs = s_.get("confidence_score")
+            if str(s_.get("direction") or "").upper() == against and \
+                    override is not None and cs is not None and cs >= override:
+                kept.append({**s_, "lean_override": True})
+            elif str(s_.get("direction") or "").upper() == against:
                 skipped.append({**s_, "skip_reason": "AGAINST_WEEKLY_LEAN",
                                 "weekly_lean": lean["lean"], "lean_bear": lean.get("bear"),
                                 "lean_bull": lean.get("bull")})

@@ -16,7 +16,8 @@ to the 69 floor:
   against -5 / -10              a long while the weekly lean is bearish (a
                                 short while it's bullish) loses 5 / 10
   against: skip                 HL doesn't trade against it at all
-  against a strong lean: skip   ... only when the lean is strong
+  against a strong lean: skip   ... only when the lean is strong (v57 strict)
+  ... skip unless 85+ / 80+     ... but keep a signal that strong (v57 soft)
   with +5                       a trade with the lean gains 5
   against -10, with +5
 
@@ -46,14 +47,16 @@ DAY_MS = rs.DAY_MS
 FLOOR = 69.0
 SKIP = -1000.0
 
-VARIANTS = (                       # (label, against, with, strong lean only)
-    ("live (no change)", 0.0, 0.0, False),
-    ("against the weekly lean -5", -5.0, 0.0, False),
-    ("against the weekly lean -10", -10.0, 0.0, False),
-    ("against the weekly lean: skip", SKIP, 0.0, False),
-    ("against a strong weekly lean: skip", SKIP, 0.0, True),
-    ("with the weekly lean +5", 0.0, 5.0, False),
-    ("against -10, with +5", -10.0, 5.0, False),
+VARIANTS = (          # (label, against, with, strong lean only, keep at this strength+)
+    ("live (no change)", 0.0, 0.0, False, None),
+    ("against the weekly lean -5", -5.0, 0.0, False, None),
+    ("against the weekly lean -10", -10.0, 0.0, False, None),
+    ("against the weekly lean: skip", SKIP, 0.0, False, None),
+    ("against a strong weekly lean: skip (v57 strict)", SKIP, 0.0, True, None),
+    ("against a strong weekly lean: skip unless 85+ (v57 soft)", SKIP, 0.0, True, 85.0),
+    ("against a strong weekly lean: skip unless 80+", SKIP, 0.0, True, 80.0),
+    ("with the weekly lean +5", 0.0, 5.0, False, None),
+    ("against -10, with +5", -10.0, 5.0, False, None),
 )
 
 
@@ -65,14 +68,18 @@ def relation(direction: str, lean_word: str) -> Optional[str]:
 
 
 def adjust(cands: Sequence[Dict], leans: Dict[int, Dict], against: float,
-           aligned: float, strong_only: bool = False) -> List[Dict]:
+           aligned: float, strong_only: bool = False,
+           keep_from: Optional[float] = None) -> List[Dict]:
     """Candidates with strength (and the ranking's 1H/2H average) moved by
-    their relation to the day's weekly lean ({"lean", "strong"}). Pure."""
+    their relation to the day's weekly lean ({"lean", "strong"}); one at
+    `keep_from`+ strength is never docked against it. Pure."""
     out = []
     for c in cands:
         day = leans.get(c["slot_ms"] // DAY_MS * DAY_MS) or {"lean": "mixed", "strong": False}
         rel = relation(c["direction"], day["lean"]) \
             if (day.get("strong") or not strong_only) else None
+        if rel == "against" and keep_from is not None and (c.get("strength") or 0) >= keep_from:
+            rel = None
         delta = against if rel == "against" else aligned if rel == "with" else 0.0
         if delta:
             c = {**c, "strength": (c.get("strength") or 0) + delta,
@@ -109,8 +116,9 @@ def compare(market: Dict, daily: Dict[str, Sequence[Dict]], reads_fn, *,
     leans = daily_leans(timelines, day_list)
     base = {(c["symbol"], c["slot_ms"]) for c in uc.all_floor(cands, universe, floor)}
     rows = []
-    for label, against, aligned, strong_only in VARIANTS:
-        recs = uc.all_floor(adjust(cands, leans, against, aligned, strong_only), universe, floor)
+    for label, against, aligned, strong_only, keep_from in VARIANTS:
+        recs = uc.all_floor(adjust(cands, leans, against, aligned, strong_only, keep_from),
+                            universe, floor)
         keys = {(c["symbol"], c["slot_ms"]) for c in recs}
         b = rr.book(recs, market, floor=floor)
         rows.append({"label": label, "added": len(keys - base), "removed": len(base - keys),
