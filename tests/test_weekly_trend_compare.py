@@ -28,8 +28,12 @@ def c(sym, day, direction, strength=70.0, hour=4):
             "strength": strength, "avg_tf_strength": strength - 2}
 
 
+def L(word, strong=False):
+    return {"lean": word, "strong": strong}
+
+
 def test_adjust_by_the_days_lean():
-    leans = {0: "bearish", D: "bullish", 2 * D: "mixed"}
+    leans = {0: L("bearish"), D: L("bullish"), 2 * D: L("mixed")}
     cands = [c("A", 0, "LONG"), c("B", 0, "SHORT"), c("C", 1, "LONG"), c("D", 2, "LONG")]
     got = {x["symbol"]: x["strength"] for x in wt.adjust(cands, leans, -10.0, 5.0)}
     assert got == {"A": 60.0, "B": 75.0, "C": 75.0, "D": 70.0}
@@ -37,14 +41,20 @@ def test_adjust_by_the_days_lean():
     assert skip[0]["strength"] < 0 and skip[0]["avg_tf_strength"] < 0
 
 
+def test_strong_only_acts_on_strong_days():
+    leans = {0: L("bearish", True), D: L("bearish", False)}
+    cands = [c("A", 0, "LONG"), c("B", 1, "LONG")]
+    got = {x["symbol"]: x["strength"] for x in wt.adjust(cands, leans, wt.SKIP, 0.0, True)}
+    assert got["A"] < 0 and got["B"] == 70.0
+
+
 def test_daily_leans_from_the_reads_at_that_close():
-    bear = {"tf": "1W", "direction": "bearish", "kind": "indicator_flip", "type": "ema50",
-            "status": "active"}
+    bear = {"tf": "1W", "direction": "bearish", "kind": "divergence", "status": "active"}
     tl = {s: {"closes": [D], "reads": [[bear]]} for s in ("A", "B", "C")}
     tl["Z"] = {"closes": [5 * D], "reads": [[]]}               # no history yet on day 1
     got = wt.daily_leans(tl, [0, D])
-    assert got[0] == "mixed"                                   # before the first close
-    assert got[D] == "bearish"
+    assert got[0]["lean"] == "mixed"                           # before the first close
+    assert got[D]["lean"] == "bearish" and got[D]["strong"] is True
 
 
 def test_compare_reports_every_variant(stub):

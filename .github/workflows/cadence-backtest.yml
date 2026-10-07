@@ -73,10 +73,10 @@ name: Strategy backtests (private Telegram)
 #            up) over the last 730 daily closes vs the next day / week's
 #            basket and BTC returns, by half (backend/market_lean_study.py;
 #            ~30-60 min)
-#   weekly-trend  the weekly trend lean (1W EMA 50 / Ichimoku / MACD flips
-#            across coins) as an HL filter: dock trades against it, skip them,
-#            or boost trades with it, on the live HL book; end_days_ago 0 and
-#            135 (backend/weekly_trend_compare.py; ~20-30 min)
+#   weekly-trend  the 8 AM update's weekly market lean (all coins' 1W reads)
+#            as an HL filter: dock trades against it, skip them (always or only
+#            on a strong lean), or boost trades with it, on the live HL book;
+#            end_days_ago 0 and 135 (backend/weekly_trend_compare.py; ~20-30 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
