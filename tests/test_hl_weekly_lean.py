@@ -108,8 +108,16 @@ def test_worker_summary_lists_the_skips():
 STRONG_BEAR = {"lean": "bearish", "strong": True, "bear": 11, "bull": 2}
 
 
-def test_an_85_plus_signal_still_opens_against_a_strong_lean(monkeypatch):
+def test_strict_by_default(monkeypatch):
     monkeypatch.delenv("HL_WEEKLY_LEAN_OVERRIDE", raising=False)
+    assert app._weekly_lean_override() is None
+    sigs = [{**SIGS[0], "confidence_score": 95.0}]
+    kept, skipped, _ = app._hl_weekly_lean_filter(sigs, STRONG_BEAR)
+    assert not kept and len(skipped) == 1
+
+
+def test_an_85_plus_signal_still_opens_against_a_strong_lean(monkeypatch):
+    monkeypatch.setenv("HL_WEEKLY_LEAN_OVERRIDE", "85")
     sigs = [{**SIGS[0], "id": "hi", "confidence_score": 88.0}, dict(SIGS[0]), dict(SIGS[1])]
     kept, skipped, _ = app._hl_weekly_lean_filter(sigs, STRONG_BEAR)
     assert [s["id"] for s in kept] == ["hi", "s1"] and kept[0]["lean_override"] is True
@@ -119,7 +127,7 @@ def test_an_85_plus_signal_still_opens_against_a_strong_lean(monkeypatch):
 
 
 @pytest.mark.parametrize("env, expect", [("0", None), ("101", None), ("80", 80.0),
-                                         ("junk", 85.0), ("", 85.0)])
+                                         ("85", 85.0), ("junk", None), ("", None)])
 def test_override_setting(monkeypatch, env, expect):
     monkeypatch.setenv("HL_WEEKLY_LEAN_OVERRIDE", env)
     assert app._weekly_lean_override() == expect

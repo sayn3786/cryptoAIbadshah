@@ -5036,17 +5036,22 @@ def _weekly_lean_filter_on() -> bool:
         "0", "false", "off", "no")
 
 
-# The soft version: a signal this strong still opens against a strong lean.
-# HL_WEEKLY_LEAN_OVERRIDE=0 (or anything over 100) makes the filter strict.
-DEFAULT_WEEKLY_LEAN_OVERRIDE = 85.0
+# The soft version: a signal at HL_WEEKLY_LEAN_OVERRIDE+ strength still opens
+# against a strong lean. Strict by default: in the backtest the 85+ signals let
+# through lost in both periods (strict $19.44 / $8.03 vs soft-85 $16.33 /
+# $7.73, soft-80 worse still), so it is opt-in. Unset, 0 or over 100: strict.
+DEFAULT_WEEKLY_LEAN_OVERRIDE = None
 
 
 def _weekly_lean_override():
     """The strength at or above which a signal is NOT skipped, or None (strict)."""
+    raw = os.getenv("HL_WEEKLY_LEAN_OVERRIDE", "").strip()
+    if not raw:
+        return DEFAULT_WEEKLY_LEAN_OVERRIDE
     try:
-        v = float(os.getenv("HL_WEEKLY_LEAN_OVERRIDE", "") or DEFAULT_WEEKLY_LEAN_OVERRIDE)
+        v = float(raw)
     except ValueError:
-        v = DEFAULT_WEEKLY_LEAN_OVERRIDE
+        return DEFAULT_WEEKLY_LEAN_OVERRIDE
     return v if 0 < v <= 100 else None
 
 
