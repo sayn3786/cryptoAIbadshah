@@ -26,6 +26,25 @@ def _tf(r: Dict[str, Any]) -> Optional[str]:
     return r.get("timeframe") or r.get("tf")
 
 
+FAMILIES = ("RSI divergence", "hidden divergence", "RSI bottom/top", "MACD", "SuperTrend",
+            "EMA 50", "Ichimoku")
+_FLIP_FAMILY = {"macd": "MACD", "supertrend": "SuperTrend", "ema50": "EMA 50",
+                "ichimoku": "Ichimoku"}
+
+
+def family(r: Dict[str, Any]) -> Optional[str]:
+    """Which indicator family a read belongs to."""
+    k = r.get("kind")
+    if k == "divergence":
+        return ("hidden divergence" if str(r.get("label") or "").startswith("Hidden")
+                else "RSI divergence")
+    if k == "rsi_swing":
+        return "RSI bottom/top"
+    if k == "indicator_flip":
+        return _FLIP_FAMILY.get(r.get("type"))
+    return None
+
+
 def counts(r: Dict[str, Any]) -> bool:
     """Does this read count toward a coin's lean?"""
     return (r.get("direction") in ("bullish", "bearish")
@@ -34,21 +53,25 @@ def counts(r: Dict[str, Any]) -> bool:
             and r.get("status") not in ("played_out", "invalidated"))
 
 
-def coin_leans(reads: Iterable[Dict[str, Any]], tf: str) -> Dict[str, str]:
-    """{symbol: "bullish" | "bearish"} for the coins that lean on `tf`."""
+def coin_leans(reads: Iterable[Dict[str, Any]], tf: str,
+               fam: Optional[str] = None) -> Dict[str, str]:
+    """{symbol: "bullish" | "bearish"} for the coins that lean on `tf`
+    (only `fam`'s reads when given)."""
     net: Dict[str, int] = {}
     for r in reads or []:
-        if _tf(r) != tf or not counts(r):
+        if _tf(r) != tf or not counts(r) or (fam and family(r) != fam):
             continue
         sym = str(r.get("symbol") or "").upper()
         net[sym] = net.get(sym, 0) + (1 if r["direction"] == "bullish" else -1)
     return {s: ("bullish" if n > 0 else "bearish") for s, n in net.items() if n}
 
 
-def lean(reads: Iterable[Dict[str, Any]], tf: str, coins: int) -> Dict[str, Any]:
-    """{"tf", "bull", "bear", "coins", "net", "score", "lean"} for one timeframe.
-    `coins` is how many coins were scanned (a coin with no read is neutral)."""
-    leans = coin_leans(reads, tf)
+def lean(reads: Iterable[Dict[str, Any]], tf: str, coins: int,
+         fam: Optional[str] = None) -> Dict[str, Any]:
+    """{"tf", "bull", "bear", "coins", "net", "score", "lean"} for one timeframe
+    (one indicator family when `fam` is given). `coins` is how many coins were
+    scanned (a coin with no read is neutral)."""
+    leans = coin_leans(reads, tf, fam)
     bull = sum(1 for v in leans.values() if v == "bullish")
     bear = len(leans) - bull
     coins = max(int(coins or 0), len(leans), 1)
