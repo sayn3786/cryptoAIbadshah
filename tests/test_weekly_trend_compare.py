@@ -70,3 +70,16 @@ def test_workflow_runs_it():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     assert "weekly-trend) MODULE=weekly_trend_compare" in wf
+
+
+def test_keep_from_spares_a_strong_signal():
+    leans = {0: L("bearish", True)}
+    cands = [c("A", 0, "LONG", 88.0), c("B", 0, "LONG", 72.0)]
+    got = {x["symbol"]: x["strength"] for x in wt.adjust(cands, leans, wt.SKIP, 0.0, True, 85.0)}
+    assert got["A"] == 88.0 and got["B"] < 0
+
+
+def test_the_soft_and_strict_variants_are_both_reported():
+    labels = [v[0] for v in wt.VARIANTS]
+    assert "against a strong weekly lean: skip (v57 strict)" in labels
+    assert "against a strong weekly lean: skip unless 85+ (v57 soft)" in labels

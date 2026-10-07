@@ -153,6 +153,15 @@ async function runJob(job, env, sleep) {
         out.hl.low_vol_skipped = hl.skipped_low_vol.map(x =>
           `${x.symbol} ${x.direction} ${x.confidence_score} (ATR ${x.atr_ratio}x)`);
       }
+      // v57: signals HL skipped against a strong weekly market lean.
+      if (Array.isArray(hl.skipped_weekly_lean) && hl.skipped_weekly_lean.length) {
+        out.hl.weekly_lean_skipped = hl.skipped_weekly_lean.map(x =>
+          `${x.symbol} ${x.direction} ${x.confidence_score} (vs ${x.weekly_lean} 1W)`);
+      }
+      // soft v57: strong enough (HL_WEEKLY_LEAN_OVERRIDE+) to trade against it.
+      if (Array.isArray(hl.weekly_lean_overridden) && hl.weekly_lean_overridden.length) {
+        out.hl.weekly_lean_overridden = hl.weekly_lean_overridden;
+      }
     }
     if (Array.isArray(r.body.results)) {
       out.results = r.body.results.map(x => ({ coin: x.coin, action: x.action,

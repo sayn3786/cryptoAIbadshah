@@ -142,6 +142,19 @@ def notify_low_vol(skipped: List[Dict[str, Any]]) -> List[str]:
             for s in skipped or []]
 
 
+def fmt_against_lean(sig: Dict[str, Any]) -> str:
+    return (f"⏭ {sig.get('symbol')} {sig.get('direction', '')} not opened: against a strong "
+            f"{sig.get('weekly_lean')} weekly market lean ({sig.get('lean_bear')} coins "
+            f"bearish, {sig.get('lean_bull')} bullish on 1W). Strength "
+            f"{sig.get('confidence_score')}. Still in the channel; HL skips it (v57).")
+
+
+def notify_against_lean(skipped: List[Dict[str, Any]]) -> List[str]:
+    """Signals auto-exec skipped against a strong weekly lean, once each."""
+    return [send(fmt_against_lean(s), f"lean:{s.get('id')}:{s.get('candle_ts')}")
+            for s in skipped or []]
+
+
 def fmt_rejected(res: Dict[str, Any], sig: Dict[str, Any]) -> str:
     detail = str(res.get("detail") or res.get("error") or "")[:160]
     return (f"⛔ {res.get('coin') or sig.get('symbol')} {sig.get('direction', '')} "

@@ -3864,19 +3864,43 @@ def _store_daily_reads(reads, now_ms=None) -> bool:
         return False
 
 
-def _hl_bottom_reads(now_ms=None) -> dict:
-    """{SYMBOL: {directions}} of active 1D bottom/top reads from the stored
-    daily list, or {} when it is missing or older than DAILY_READS_MAX_AGE_MS."""
+def _stored_daily_reads(now_ms=None):
+    """The stored daily list ({"at", "reads": {SYMBOL: [[tf, kind, type,
+    direction], ...]}}), or None when it is missing, unreadable or older than
+    DAILY_READS_MAX_AGE_MS. Never raises."""
     try:
         import kv as _kv
         raw = _kv.get_value(DAILY_READS_KV_KEY)
         data = json.loads(raw) if raw else None
     except Exception:
-        return {}
+        return None
     if not isinstance(data, dict):
-        return {}
+        return None
     now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
     if now_ms - int(data.get("at") or 0) > DAILY_READS_MAX_AGE_MS:
+        return None
+    return data
+
+
+def _stored_weekly_lean(now_ms=None):
+    """Today's 8 AM weekly market lean (market_lean.weekly_lean over every
+    coin's stored 1W reads), or None without a fresh stored list."""
+    data = _stored_daily_reads(now_ms)
+    if data is None:
+        return None
+    import market_lean as _ml
+    reads = [{"symbol": sym, "tf": tf, "kind": kind, "type": typ, "direction": d,
+              "status": "active"}
+             for sym, rows in (data.get("reads") or {}).items()
+             for tf, kind, typ, d in rows]
+    return _ml.weekly_lean(reads, len(SCAN_SYMBOLS))
+
+
+def _hl_bottom_reads(now_ms=None) -> dict:
+    """{SYMBOL: {directions}} of active 1D bottom/top reads from the stored
+    daily list, or {} when it is missing or older than DAILY_READS_MAX_AGE_MS."""
+    data = _stored_daily_reads(now_ms)
+    if data is None:
         return {}
     out: dict = {}
     for sym, rows in (data.get("reads") or {}).items():
@@ -4949,10 +4973,20 @@ def _hl_auto_execute_pass():
             ops_alerts.notify_low_vol(skipped)
         except Exception:
             app.logger.exception("low-vol alert failed")
+    signals, against, _wk = _hl_weekly_lean_filter(signals)
+    if against:
+        try:                               # private alert; never fatal
+            import ops_alerts
+            ops_alerts.notify_against_lean(against)
+        except Exception:
+            app.logger.exception("weekly-lean alert failed")
+    low_vol, skipped = skipped, skipped + against
     if not signals:
         _record_hl_signal_runs([], [], skipped)
         return {"ok": True, "ran": True, "attempted": 0, "executed": 0,
-                "reason": "LOW_VOLATILITY", "results": [], "skipped_low_vol": skipped}
+                "reason": ("LOW_VOLATILITY" if not against else
+                           "AGAINST_WEEKLY_LEAN" if not low_vol else "FILTERED"),
+                "results": [], "skipped_low_vol": low_vol, "skipped_weekly_lean": against}
     if _ax.stop_atr_add() > 0:
         # v54: the placed stop sits HL_STOP_ATR_ADD x ATR(14, 2H) beyond the
         # signal's. No usable 2H data → the signal's own stop (never none).
@@ -4979,9 +5013,71 @@ def _hl_auto_execute_pass():
     out["ok"] = True
     out["ran"] = True
     out["min_strength"] = gate["min_strength"]
-    if skipped:
-        out["skipped_low_vol"] = skipped
+    if low_vol:
+        out["skipped_low_vol"] = low_vol
+    if against:
+        out["skipped_weekly_lean"] = against
+    overridden = [s_ for s_ in signals if s_.get("lean_override")]
+    if overridden:
+        # Strong enough to trade against the strong weekly lean (soft v57).
+        out["weekly_lean_overridden"] = [
+            f"{s_.get('symbol')} {s_.get('direction')} {s_.get('confidence_score')}"
+            for s_ in overridden]
     return out
+
+
+# v57 (HL only): skip a signal that points against a STRONG weekly market
+# lean (the 8 AM update's 1W lean, |score| >= 0.3: about a third of days). On
+# the live HL book this lifted Jan-May $13.32 -> $19.44 and Jun-Oct $5.58 ->
+# $8.03, with a lower drawdown in both (weekly_trend_compare). The channel is
+# unchanged. HL_WEEKLY_LEAN_FILTER=0 turns it off.
+def _weekly_lean_filter_on() -> bool:
+    return os.getenv("HL_WEEKLY_LEAN_FILTER", "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+# The soft version: a signal this strong still opens against a strong lean.
+# HL_WEEKLY_LEAN_OVERRIDE=0 (or anything over 100) makes the filter strict.
+DEFAULT_WEEKLY_LEAN_OVERRIDE = 85.0
+
+
+def _weekly_lean_override():
+    """The strength at or above which a signal is NOT skipped, or None (strict)."""
+    try:
+        v = float(os.getenv("HL_WEEKLY_LEAN_OVERRIDE", "") or DEFAULT_WEEKLY_LEAN_OVERRIDE)
+    except ValueError:
+        v = DEFAULT_WEEKLY_LEAN_OVERRIDE
+    return v if 0 < v <= 100 else None
+
+
+def _hl_weekly_lean_filter(signals, lean=None):
+    """(kept, skipped, lean): drops signals against a strong weekly lean,
+    unless their strength reaches the override (those are kept and marked
+    "lean_override"). No fresh stored lean, a mixed or non-strong lean, or the
+    switch off: keeps everything. Never raises."""
+    try:
+        if not _weekly_lean_filter_on():
+            return signals, [], None
+        lean = lean if lean is not None else _stored_weekly_lean()
+        if not lean or not lean.get("strong") or lean.get("lean") not in ("bullish", "bearish"):
+            return signals, [], lean
+        against = "SHORT" if lean["lean"] == "bullish" else "LONG"
+        override = _weekly_lean_override()
+        kept, skipped = [], []
+        for s_ in signals:
+            cs = s_.get("confidence_score")
+            if str(s_.get("direction") or "").upper() == against and \
+                    override is not None and cs is not None and cs >= override:
+                kept.append({**s_, "lean_override": True})
+            elif str(s_.get("direction") or "").upper() == against:
+                skipped.append({**s_, "skip_reason": "AGAINST_WEEKLY_LEAN",
+                                "weekly_lean": lean["lean"], "lean_bear": lean.get("bear"),
+                                "lean_bull": lean.get("bull")})
+            else:
+                kept.append(s_)
+        return kept, skipped, lean
+    except Exception:
+        return signals, [], None
 
 
 def _hl_low_vol_filter(signals, floor):
@@ -5060,9 +5156,13 @@ def _record_hl_signal_runs(signals, results, skipped):
                 e[k] = res[k]
         _kv_append_json(_hl_signal_run_key(sig), e)
     for sig in skipped or []:
-        _kv_append_json(_hl_signal_run_key(sig), {"at": at, "ok": False,
-                                                  "reason": "LOW_VOLATILITY",
-                                                  "atr_ratio": sig.get("atr_ratio")})
+        reason = sig.get("skip_reason") or "LOW_VOLATILITY"
+        e = {"at": at, "ok": False, "reason": reason}
+        if reason == "LOW_VOLATILITY":
+            e["atr_ratio"] = sig.get("atr_ratio")
+        else:
+            e.update({k: sig.get(k) for k in ("weekly_lean", "lean_bear", "lean_bull")})
+        _kv_append_json(_hl_signal_run_key(sig), e)
 
 
 def _record_hl_slot_run(out, now_sgt=None):
@@ -5112,6 +5212,10 @@ def _hl_history_verdict(*, listed, placed, runs, stale_alert, slot_runs, order=N
                              f"entry, limit {r.get('allowed_pct')}%)")
         if r.get("reason") == "LOW_VOLATILITY":
             return "low_vol", f"not opened: quiet market (ATR {r.get('atr_ratio')}x)"
+        if r.get("reason") == "AGAINST_WEEKLY_LEAN":
+            return "against_lean", (f"not opened: against a strong {r.get('weekly_lean')} "
+                                    f"weekly lean ({r.get('lean_bear')} coins bearish, "
+                                    f"{r.get('lean_bull')} bullish)")
         return "rejected", f"not opened: {r.get('reason')}"
     if stale_alert:
         return "stale", "not opened: stale entry (the ⏭ alert was sent)"
@@ -5237,8 +5341,9 @@ def _hl_decision(sig, *, floor, table, held, known_fn):
         return "not opened: a position on this coin was already open"
     if known is None:
         return "unknown: the order lookup failed"
-    return ("not opened: stale entry, a quiet market (low-volatility dock), a cap, or "
-            "an exchange reject — see the ⏭ / ⛔ Telegram alert or the Cloudflare hl summary")
+    return ("not opened: stale entry, a quiet market (low-volatility dock), against a "
+            "strong weekly lean, a cap, or an exchange reject — see the ⏭ / ⛔ Telegram "
+            "alert, /api/hl/decisions or the Cloudflare hl summary")
 
 
 def _hl_slot_status(now_sgt=None) -> dict:
