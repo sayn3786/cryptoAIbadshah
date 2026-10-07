@@ -30,7 +30,7 @@ import read_study as rs
 DAY_MS = rs.DAY_MS
 HORIZONS = (1, 7)
 MIN_DAYS = 15
-STRONG = 0.3
+STRONG = ml.STRONG
 
 
 def forward(daily: Sequence[Dict], idx: Dict[int, int], close_ms: int, h: int) -> Optional[float]:

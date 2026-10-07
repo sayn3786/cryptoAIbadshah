@@ -1,23 +1,24 @@
 """
-The weekly trend lean as an HL filter, on the live HL book.
+The weekly market lean as an HL filter, on the live HL book.
 
-The market lean study (730 daily closes) found the 1W trend flips — EMA 50,
-Ichimoku TK, MACD — added up across coins hold in both halves: a bullish
-lean was followed by +1.6% to +3.8% over the next 7 days, a bearish one by
--1.3% to -1.8%, and the effect already shows the next day. HL trades last a
-day or two; this asks whether trading WITH that lean (or not against it)
-lifts the live book.
+The market lean study (730 daily closes) found the 1W lean — all the coins'
+weekly reads added up, as the 8 AM update shows it — held both ways in both
+halves: bullish +1.5% / bearish -1.5% over the next 7 days, strong (score
+±0.3) +3.1% / -3.6%, and the strong lean already showed the next day (+0.5%
+/ -0.5%). HL trades last a day or two; this asks whether trading WITH that
+lean (or not against it) lifts the live book.
 
-The lean at each 4h publish is the one the 8 AM update showed that day (the
+The lean at each 4h publish is the one that day's 8 AM update showed (the
 coins' reads at the last daily close). Variants move the strength HL compares
 to the 69 floor:
 
-  live                       no change
-  against -5 / -10           a long while the weekly trend leans bearish (a
-                             short while it leans bullish) loses 5 / 10
-  against: skip              HL doesn't trade against it at all
-  aligned +5                 a trade with the lean gains 5
-  against -10, aligned +5
+  live                          no change
+  against -5 / -10              a long while the weekly lean is bearish (a
+                                short while it's bullish) loses 5 / 10
+  against: skip                 HL doesn't trade against it at all
+  against a strong lean: skip   ... only when the lean is strong
+  with +5                       a trade with the lean gains 5
+  against -10, with +5
 
 Then the live book: traded coins, every signal at 69+, v54 exits, $25 a
 trade, HL caps. Run on both periods (--end-days-ago 0 and 135); adopt only
@@ -45,13 +46,14 @@ DAY_MS = rs.DAY_MS
 FLOOR = 69.0
 SKIP = -1000.0
 
-VARIANTS = (
-    ("live (no change)", 0.0, 0.0),
-    ("against the weekly trend -5", -5.0, 0.0),
-    ("against the weekly trend -10", -10.0, 0.0),
-    ("against the weekly trend: skip", SKIP, 0.0),
-    ("with the weekly trend +5", 0.0, 5.0),
-    ("against -10, with +5", -10.0, 5.0),
+VARIANTS = (                       # (label, against, with, strong lean only)
+    ("live (no change)", 0.0, 0.0, False),
+    ("against the weekly lean -5", -5.0, 0.0, False),
+    ("against the weekly lean -10", -10.0, 0.0, False),
+    ("against the weekly lean: skip", SKIP, 0.0, False),
+    ("against a strong weekly lean: skip", SKIP, 0.0, True),
+    ("with the weekly lean +5", 0.0, 5.0, False),
+    ("against -10, with +5", -10.0, 5.0, False),
 )
 
 
@@ -62,13 +64,15 @@ def relation(direction: str, lean_word: str) -> Optional[str]:
     return "with" if (lean_word == "bullish") == (direction == "LONG") else "against"
 
 
-def adjust(cands: Sequence[Dict], leans: Dict[int, str], against: float,
-           aligned: float) -> List[Dict]:
+def adjust(cands: Sequence[Dict], leans: Dict[int, Dict], against: float,
+           aligned: float, strong_only: bool = False) -> List[Dict]:
     """Candidates with strength (and the ranking's 1H/2H average) moved by
-    their relation to the day's weekly trend lean. Pure."""
+    their relation to the day's weekly lean ({"lean", "strong"}). Pure."""
     out = []
     for c in cands:
-        rel = relation(c["direction"], leans.get(c["slot_ms"] // DAY_MS * DAY_MS, "mixed"))
+        day = leans.get(c["slot_ms"] // DAY_MS * DAY_MS) or {"lean": "mixed", "strong": False}
+        rel = relation(c["direction"], day["lean"]) \
+            if (day.get("strong") or not strong_only) else None
         delta = against if rel == "against" else aligned if rel == "with" else 0.0
         if delta:
             c = {**c, "strength": (c.get("strength") or 0) + delta,
@@ -77,14 +81,14 @@ def adjust(cands: Sequence[Dict], leans: Dict[int, str], against: float,
     return out
 
 
-def daily_leans(timelines: Dict[str, Dict], days: Sequence[int]) -> Dict[int, str]:
-    """{day start ms: the weekly trend lean the 8 AM update showed that day}."""
+def daily_leans(timelines: Dict[str, Dict], days: Sequence[int]) -> Dict[int, Dict]:
+    """{day start ms: the weekly lean the 8 AM update showed that day}."""
     out = {}
     for d in days:
         present = [s for s, tl in timelines.items() if tl and tl["closes"]
                    and tl["closes"][0] <= d]
         reads = [{**r, "symbol": s} for s in present for r in fs.reads_at(timelines[s], d)]
-        out[d] = ml.weekly_trend_lean(reads, len(present))["lean"]
+        out[d] = ml.weekly_lean(reads, len(present))
     return out
 
 
@@ -105,8 +109,8 @@ def compare(market: Dict, daily: Dict[str, Sequence[Dict]], reads_fn, *,
     leans = daily_leans(timelines, day_list)
     base = {(c["symbol"], c["slot_ms"]) for c in uc.all_floor(cands, universe, floor)}
     rows = []
-    for label, against, aligned in VARIANTS:
-        recs = uc.all_floor(adjust(cands, leans, against, aligned), universe, floor)
+    for label, against, aligned, strong_only in VARIANTS:
+        recs = uc.all_floor(adjust(cands, leans, against, aligned, strong_only), universe, floor)
         keys = {(c["symbol"], c["slot_ms"]) for c in recs}
         b = rr.book(recs, market, floor=floor)
         rows.append({"label": label, "added": len(keys - base), "removed": len(base - keys),
@@ -114,10 +118,11 @@ def compare(market: Dict, daily: Dict[str, Sequence[Dict]], reads_fn, *,
     at_floor = [c for c in cands if (c["symbol"], c["slot_ms"]) in base]
     rel = {"with": 0, "against": 0, "mixed": 0}
     for c in at_floor:
-        r = relation(c["direction"], leans.get(c["slot_ms"] // DAY_MS * DAY_MS, "mixed"))
-        rel[r or "mixed"] += 1
-    lean_days = {w: sum(1 for v in leans.values() if v == w)
+        day = leans.get(c["slot_ms"] // DAY_MS * DAY_MS) or {"lean": "mixed"}
+        rel[relation(c["direction"], day["lean"]) or "mixed"] += 1
+    lean_days = {w: sum(1 for v in leans.values() if v["lean"] == w)
                  for w in ("bullish", "mixed", "bearish")}
+    lean_days["strong"] = sum(1 for v in leans.values() if v.get("strong"))
     return {"window": {"start": pbt._iso(start), "end": pbt._iso(end), "days": round(span, 1)},
             "floor": floor, "at_floor": len(base), "relation": rel, "lean_days": lean_days,
             "rows": rows}
@@ -131,7 +136,7 @@ def verdict(result: Dict) -> str:
     better = [r for r in rows[1:] if r["pnl_usd"] > live["pnl_usd"]
               and r["max_dd_usd"] <= live["max_dd_usd"] * 1.25]
     if not better:
-        return (f"No weekly-trend filter beats live here (${live['pnl_usd']:+.2f}). Check the "
+        return (f"No weekly-lean filter beats live here (${live['pnl_usd']:+.2f}). Check the "
                 "other period before concluding.")
     best = max(better, key=lambda r: r["pnl_usd"])
     return (f"Best: {best['label']} (${best['pnl_usd']:+.2f} vs live ${live['pnl_usd']:+.2f}, "
@@ -141,10 +146,10 @@ def verdict(result: Dict) -> str:
 
 def render_telegram(result: Dict) -> str:
     w, rel, ld = result["window"], result["relation"], result["lean_days"]
-    lines = ["🧭 Weekly trend lean as an HL filter (v54, 69+, every 4h)",
+    lines = ["🧭 Weekly market lean as an HL filter (v54, 69+, every 4h)",
              f"{w['start'][:10]} → {w['end'][:10]} ({w['days']} days)",
-             f"Weekly trend (1W EMA 50 · Ichimoku · MACD flips) leaned bullish {ld['bullish']} "
-             f"days, bearish {ld['bearish']}, mixed {ld['mixed']}",
+             f"The 1W lean (all coins' weekly reads) was bullish {ld['bullish']} days, "
+             f"bearish {ld['bearish']}, mixed {ld['mixed']} (strong on {ld['strong']})",
              f"{result['at_floor']} signals at {result['floor']:g}+ today: {rel['with']} with the "
              f"lean, {rel['against']} against it, {rel['mixed']} on mixed days",
              "$25 a trade, HL caps", ""]

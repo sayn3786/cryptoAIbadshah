@@ -92,15 +92,27 @@ def market_lean(reads: Iterable[Dict[str, Any]], coins: int) -> Dict[str, Dict[s
 
 
 # The 2-year market lean study (Oct 2024 - Oct 2026, 730 daily closes): the
-# weekly lean's edge comes from the weekly TREND flips. A bullish / bearish
-# lean of each of these held over the next day and the next 7 days in both
-# halves; divergences and RSI tops/bottoms didn't drive it, and no 1D flip
-# family held (bearish daily flips were followed by bounces).
+# 1W lean from ALL the coins' weekly reads held both ways in both halves, and
+# more so when strong (|score| >= STRONG). The weekly trend flips (EMA 50,
+# Ichimoku, MACD) each held on their own, but added up together their bearish
+# side did not (-0.66%, not in both halves), so the update shows the
+# all-reads lean. No 1D lean or 1D flip family held (bearish daily flips were
+# followed by bounces); 1D RSI oversold bottoms did.
+STRONG = 0.3
+WEEKLY_RECORD = {("bullish", True): "next 7 days +3.1%, down 39% of the time",
+                 ("bullish", False): "next 7 days +1.5%, down 47% of the time",
+                 ("bearish", True): "next 7 days -3.6%, down 66% of the time",
+                 ("bearish", False): "next 7 days -1.5%, down 59% of the time"}
 WEEKLY_TREND_FAMILIES = ("EMA 50", "Ichimoku", "MACD")
-WEEKLY_TREND_RECORD = {"bullish": "next 7 days +1.6% to +3.8%, down 40-46% of the time",
-                       "bearish": "next 7 days -1.3% to -1.8%, down 58-61% of the time"}
 DAILY_BOTTOM_RECORD = "next 7 days +2.2% on average"
 BASELINE_RECORD = "an average week: +0.8%, down 50%"
+
+
+def weekly_lean(reads: Iterable[Dict[str, Any]], coins: int) -> Dict[str, Any]:
+    """The 1W lean from all the coins' weekly reads, with "strong" when the
+    net share of coins is STRONG or more."""
+    x = lean(reads, "1W", coins)
+    return {**x, "strong": x["lean"] != "mixed" and abs(x["score"]) >= STRONG}
 
 
 def weekly_trend_lean(reads: Iterable[Dict[str, Any]], coins: int) -> Dict[str, Any]:
@@ -121,16 +133,17 @@ _EMOJI = {"bullish": "🟢", "bearish": "🔴", "mixed": "⚪"}
 
 def render(reads: Iterable[Dict[str, Any]], coins: int) -> str:
     """The block at the top of the 8 AM update: what the 2-year study backs,
-    with its record, and the 1D breadth marked as having no edge."""
+    with the record of exactly that measure, and the 1D breadth marked as
+    having no edge."""
     reads = list(reads or [])
-    wk, d1 = weekly_trend_lean(reads, coins), lean(reads, "1D", coins)
+    wk, d1 = weekly_lean(reads, coins), lean(reads, "1D", coins)
     lines = ["📊 Market lean"]
-    head = (f"{_EMOJI[wk['lean']]} Weekly trend (1W EMA 50 · Ichimoku · MACD flips): "
-            f"{wk['lean']} · {wk['bear']} coins bearish, {wk['bull']} bullish")
-    lines.append(head)
-    if wk["lean"] in WEEKLY_TREND_RECORD:
-        lines.append(f"   historically {WEEKLY_TREND_RECORD[wk['lean']]} "
-                     f"({BASELINE_RECORD})")
+    word = wk["lean"] + (" (strong)" if wk["strong"] else "")
+    lines.append(f"{_EMOJI[wk['lean']]} 1W reads: {word} · {wk['bear']} coins bearish, "
+                 f"{wk['bull']} bullish")
+    rec = WEEKLY_RECORD.get((wk["lean"], wk["strong"]))
+    if rec:
+        lines.append(f"   historically {rec} ({BASELINE_RECORD})")
     lines.append(f"⚪ 1D reads: {d1['bear']} coins bearish, {d1['bull']} bullish · breadth "
                  "only, no next-day edge in 2 years")
     n = daily_bottoms(reads)

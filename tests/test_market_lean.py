@@ -69,24 +69,43 @@ def test_daily_bottoms_counts_coins_at_a_1d_oversold_bottom():
     assert ml.daily_bottoms(reads) == 2
 
 
+def test_weekly_lean_marks_strong():
+    reads = ([r(f"S{i}", "1W", "bearish") for i in range(11)]
+             + [r(f"B{i}", "1W", "bullish") for i in range(2)])
+    x = ml.weekly_lean(reads, 29)                                  # net -9/29 = -0.31
+    assert x["lean"] == "bearish" and x["strong"] is True
+    y = ml.weekly_lean(reads[:6], 29)                              # -6/29 = -0.21
+    assert y["lean"] == "bearish" and y["strong"] is False
+
+
 def test_render_and_the_digest_block():
-    reads = ([flip(f"S{i}", "1W", "bearish", "ema50") for i in range(9)]
-             + [flip("B0", "1W", "bullish", "macd"), flip("B1", "1W", "bullish", "ichimoku")]
+    reads = ([r(f"S{i}", "1W", "bearish") for i in range(11)]
+             + [r(f"B{i}", "1W", "bullish") for i in range(2)]
              + [r(f"D{i}", "1D", "bearish") for i in range(11)]
              + [r(f"U{i}", "1D", "bullish", "rsi_swing") for i in range(3)])
     text = ml.render(reads, 29)
-    assert "🔴 Weekly trend (1W EMA 50 · Ichimoku · MACD flips): bearish · 9 coins bearish, " \
-           "2 bullish" in text
-    assert "historically next 7 days -1.3% to -1.8%, down 58-61% of the time" in text
+    assert "🔴 1W reads: bearish (strong) · 11 coins bearish, 2 bullish" in text
+    assert "historically next 7 days -3.6%, down 66% of the time (an average week" in text
     assert "1D reads: 11 coins bearish, 3 bullish · breadth only, no next-day edge" in text
     assert "🟢 3 coins at a 1D RSI oversold bottom · historically next 7 days +2.2%" in text
     assert "history, not a forecast" in text
+    normal = ml.render(reads[6:13], 29)                            # 5 bearish, 2 bullish
+    assert "🔴 1W reads: bearish · 5 coins bearish, 2 bullish" in normal
+    mild = ml.render([r(f"S{i}", "1W", "bearish") for i in range(6)], 29)
+    assert "🔴 1W reads: bearish · 6 coins bearish" in mild
+    assert "next 7 days -1.5%, down 59%" in mild
     mixed = ml.render([r("A", "1D", "bearish")], 29)
     assert "historically" not in mixed.split("\n")[1] and "oversold bottom" not in mixed
     digest, _ = td.build_market_digest(reads, coins=29)
     assert digest.index("📊 Market lean") < digest.index("S0")          # first block
     plain, _ = td.build_market_digest(reads)                            # no coins: no block
     assert "Market lean" not in plain
+
+
+def test_every_record_shown_is_a_lean_that_held():
+    # the four records are the all-reads 1W lean, normal and strong, from the study
+    assert set(ml.WEEKLY_RECORD) == {("bullish", True), ("bullish", False),
+                                     ("bearish", True), ("bearish", False)}
 
 
 def test_the_daily_job_passes_the_coin_count():
