@@ -83,7 +83,7 @@ TABLE = {"BLUR": {"sz_decimals": 0}}
     (SIG, TABLE, set(), True, "opened on HL"),
     (SIG, TABLE, {"BLUR"}, False, "position on this coin was already open"),
     (SIG, TABLE, set(), None, "order lookup failed"),
-    (SIG, TABLE, set(), False, "stale entry, a quiet market (low-volatility dock), a cap, or an exchange reject"),
+    (SIG, TABLE, set(), False, "stale entry, a quiet market (low-volatility dock), against a strong weekly lean, a cap"),
 ])
 def test_hl_decision(sig, table, held, known, phrase):
     got = app._hl_decision(sig, floor=69.0, table=table, held=held, known_fn=lambda c: known)
