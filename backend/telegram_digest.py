@@ -215,22 +215,26 @@ FOOTER = ["⚠️ Not financial advice. A read is a heads-up, not a trigger — 
 
 def build_market_digest(alerts: List[Dict[str, Any]], *,
                         active: Optional[Dict[str, str]] = None,
-                        date_label: str = "") -> Tuple[str, bool]:
+                        date_label: str = "",
+                        coins: Optional[int] = None) -> Tuple[str, bool]:
     """(the whole update as one text, loud). Use build_market_digest_parts to
     send: it splits a long update into Telegram-sized messages."""
     parts, loud = build_market_digest_parts(alerts, active=active, date_label=date_label,
-                                            max_chars=None)
+                                            max_chars=None, coins=coins)
     return parts[0], loud
 
 
 def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
                               active: Optional[Dict[str, str]] = None,
                               date_label: str = "",
-                              max_chars: Optional[int] = MAX_MESSAGE_CHARS) -> Tuple[List[str], bool]:
+                              max_chars: Optional[int] = MAX_MESSAGE_CHARS,
+                              coins: Optional[int] = None) -> Tuple[List[str], bool]:
     """([message texts], loud). Every coin and read is included; with
     `max_chars`, blocks are packed into as many messages as needed, split only
-    between coin blocks. `active` maps symbol → open signal direction."""
+    between coin blocks. `active` maps symbol → open signal direction.
+    `coins` (how many coins were scanned) adds the market-lean block first."""
     active = {str(k).upper(): v for k, v in (active or {}).items()}
+    coins_scanned = coins
     confirmed = [a for a in alerts if not _forming(a)]
     forming = [a for a in alerts if _forming(a)]
 
@@ -277,6 +281,9 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
     rows.sort(key=lambda r: (-r[0], r[1]))
 
     blocks = []
+    if coins_scanned:
+        import market_lean
+        blocks.append(market_lean.render(market_lean.market_lean(alerts, coins_scanned)))
     for _score, sym, flag, tags, items in rows:
         blocks.append("\n".join([f"{flag}{sym}" + (f"  ({' · '.join(tags)})" if tags else "")]
                                 + [f"  {describe(a)}" for a in items]))

@@ -69,6 +69,10 @@ name: Strategy backtests (private Telegram)
 #            next to what live recorded (read with APP_URL + CRON_SECRET):
 #            69+ signals, what the v53 caps held under the floor, and the
 #            live-vs-replay strength gap (backend/recent_signals.py; ~5-10 min)
+#   market-lean  the 8 AM update's 1D / 1W market lean (coins' reads added
+#            up) over the last 730 daily closes vs the next day / week's
+#            basket and BTC returns, by half (backend/market_lean_study.py;
+#            ~30-60 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -87,7 +91,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -179,7 +183,9 @@ jobs:
           esac
           # Output is only per-coin download counts and
           # "coins replayed: N; telegram: sent|NOT sent". No results.
-          if [ "$STUDY" = "recent" ]; then
+          if [ "$STUDY" = "market-lean" ]; then
+            python -m market_lean_study --telegram --days 730
+          elif [ "$STUDY" = "recent" ]; then
             python -m recent_signals --telegram --days "$DAYS"
           elif [ "$STUDY" = "reads" ]; then
             python -m read_study --telegram --days 1500
