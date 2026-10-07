@@ -56,7 +56,8 @@ def day_rows(daily: Dict[str, Sequence[Dict]], timelines: Dict[str, Dict], *,
         lean = ml.market_lean(reads, len(present))
         fam = {tf: {f: ml.lean(reads, tf, len(present), f) for f in ml.FAMILIES}
                for tf in ml.TFS}
-        row = {"close_ms": t, "coins": len(present), "lean": lean, "fam": fam}
+        row = {"close_ms": t, "coins": len(present), "lean": lean, "fam": fam,
+               "trend": ml.weekly_trend_lean(reads, len(present))}
         for h in HORIZONS:
             rets = [x for s in present
                     if (x := forward(daily[s], idx[s], t, h)) is not None]
@@ -114,6 +115,9 @@ def analyse(rows: Sequence[Dict]) -> Dict:
         out["by_tf"][tf] = {w: _group(rows, halves, bases, w,
                                       lambda r, tf=tf: r["lean"][tf]["lean"])
                             for w in ("bullish", "mixed", "bearish")}
+        if tf == "1W" and all("trend" in r for r in rows):
+            out["trend"] = {w: _group(rows, halves, bases, w, lambda r: r["trend"]["lean"])
+                            for w in ("bullish", "mixed", "bearish")}
         if all("fam" in r for r in rows):
             out["by_family"][tf] = {
                 f: {w: _group(rows, halves, bases, w,
@@ -165,6 +169,13 @@ def render_telegram(res: Dict) -> str:
             x = res["by_tf"][tf][word]
             lines += _line(f"{word} (halves {_p(x['halves'][0])} / {_p(x['halves'][1])})",
                            x, x["holds"])
+        lines.append("")
+    if res.get("trend"):
+        lines.append("Weekly trend lean (1W EMA 50 · Ichimoku · MACD flips together, as "
+                     "the 8 AM update shows it):")
+        for w in ("bullish", "mixed", "bearish"):
+            x = res["trend"][w]
+            lines += _line(w, x, x["holds_7"] if w != "mixed" else None)
         lines.append("")
     if res.get("by_family"):
         lines += ["Per indicator: coins with a FRESH read of that family, added up the same "

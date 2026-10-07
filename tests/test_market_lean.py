@@ -47,14 +47,42 @@ def test_lean_thresholds(bull, bear, coins, word):
     assert x["score"] == pytest.approx((bull - bear) / coins, abs=0.001)
 
 
+def flip(sym, tf, direction, typ):
+    return r(sym, tf, direction, "indicator_flip", type=typ)
+
+
+def test_weekly_trend_lean_uses_only_the_trend_families():
+    reads = ([flip(f"S{i}", "1W", "bearish", "ema50") for i in range(6)]
+             + [flip("S6", "1W", "bearish", "ichimoku"), flip("S7", "1W", "bearish", "macd")]
+             + [flip("B0", "1W", "bullish", "macd")]
+             + [flip(f"X{i}", "1W", "bullish", "supertrend") for i in range(9)]   # not counted
+             + [r(f"Y{i}", "1W", "bullish", "rsi_swing") for i in range(9)])        # not counted
+    x = ml.weekly_trend_lean(reads, 29)
+    assert (x["bear"], x["bull"], x["lean"]) == (8, 1, "bearish")
+
+
+def test_daily_bottoms_counts_coins_at_a_1d_oversold_bottom():
+    reads = [r("A", "1D", "bullish", "rsi_swing"), r("A", "1D", "bullish", "rsi_swing"),
+             r("B", "1D", "bullish", "rsi_swing"), r("C", "1D", "bearish", "rsi_swing"),
+             r("D", "1W", "bullish", "rsi_swing"),
+             r("E", "1D", "bullish", "rsi_swing", status="played_out")]
+    assert ml.daily_bottoms(reads) == 2
+
+
 def test_render_and_the_digest_block():
-    reads = ([r(f"S{i}", "1D", "bearish") for i in range(11)]
-             + [r(f"B{i}", "1D", "bullish") for i in range(3)]
-             + [r(f"W{i}", "1W", "bullish") for i in range(6)] + [r("Z", "1W", "bearish")])
-    text = ml.render(ml.market_lean(reads, 29))
-    assert "🔴 1D: bearish · 11 coins bearish, 3 bullish, 15 neutral" in text
-    assert "🟢 1W: bullish · 1 coins bearish, 6 bullish, 22 neutral" in text
-    assert "Breadth, not a forecast." in text
+    reads = ([flip(f"S{i}", "1W", "bearish", "ema50") for i in range(9)]
+             + [flip("B0", "1W", "bullish", "macd"), flip("B1", "1W", "bullish", "ichimoku")]
+             + [r(f"D{i}", "1D", "bearish") for i in range(11)]
+             + [r(f"U{i}", "1D", "bullish", "rsi_swing") for i in range(3)])
+    text = ml.render(reads, 29)
+    assert "🔴 Weekly trend (1W EMA 50 · Ichimoku · MACD flips): bearish · 9 coins bearish, " \
+           "2 bullish" in text
+    assert "historically next 7 days -1.3% to -1.8%, down 58-61% of the time" in text
+    assert "1D reads: 11 coins bearish, 3 bullish · breadth only, no next-day edge" in text
+    assert "🟢 3 coins at a 1D RSI oversold bottom · historically next 7 days +2.2%" in text
+    assert "history, not a forecast" in text
+    mixed = ml.render([r("A", "1D", "bearish")], 29)
+    assert "historically" not in mixed.split("\n")[1] and "oversold bottom" not in mixed
     digest, _ = td.build_market_digest(reads, coins=29)
     assert digest.index("📊 Market lean") < digest.index("S0")          # first block
     plain, _ = td.build_market_digest(reads)                            # no coins: no block
@@ -123,7 +151,7 @@ def test_a_lean_that_flips_between_halves_does_not_hold():
 def test_workflow_runs_it():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
-    assert "market-lean]" in wf and "python -m market_lean_study --telegram --days 730" in wf
+    assert ", market-lean" in wf and "python -m market_lean_study --telegram --days 730" in wf
 
 
 # ── per indicator family ─────────────────────────────────────────────────────
@@ -178,3 +206,25 @@ def test_analyse_and_render_per_family():
     text = mls.render_telegram(res)
     assert "• 1W SuperTrend" in text and "🔴 bearish 40d: day -1.00% ✓ | 7d -1.00%" in text
     assert "held over 7 days in both halves, both ways: 1W SuperTrend" in text
+
+
+def test_study_reports_the_combined_weekly_trend_lean():
+    rows = []
+    for i in range(160):
+        word = ("bearish", "bullish", "mixed", "mixed")[i % 4]
+        x = row(i * D, "mixed", {"bearish": -1.0, "bullish": 1.0, "mixed": 0.0}[word])
+        x["trend"] = {"lean": word}
+        rows.append(x)
+    res = mls.analyse(rows)
+    assert res["trend"]["bearish"]["holds_7"] is True and res["trend"]["bullish"]["holds_7"]
+    assert "Weekly trend lean (1W EMA 50 · Ichimoku · MACD flips together" in \
+        mls.render_telegram(res)
+
+
+def test_day_rows_carry_the_weekly_trend_lean():
+    data = {"BTC": daily([100] * 10), "ETH": daily([10] * 10), "SOL": daily([5] * 10)}
+    f = {"tf": "1W", "direction": "bullish", "kind": "indicator_flip", "type": "ema50",
+         "status": "active"}
+    tl = {s: {"closes": [D], "reads": [[f]]} for s in ("ETH", "SOL")}
+    rows = mls.day_rows(data, tl, start_ms=D, end_ms=2 * D)
+    assert rows[0]["trend"]["lean"] == "bullish" and rows[0]["trend"]["bull"] == 2

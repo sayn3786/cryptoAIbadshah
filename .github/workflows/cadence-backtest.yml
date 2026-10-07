@@ -73,6 +73,10 @@ name: Strategy backtests (private Telegram)
 #            up) over the last 730 daily closes vs the next day / week's
 #            basket and BTC returns, by half (backend/market_lean_study.py;
 #            ~30-60 min)
+#   weekly-trend  the weekly trend lean (1W EMA 50 / Ichimoku / MACD flips
+#            across coins) as an HL filter: dock trades against it, skip them,
+#            or boost trades with it, on the live HL book; end_days_ago 0 and
+#            135 (backend/weekly_trend_compare.py; ~20-30 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -91,7 +95,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -100,7 +104,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -179,6 +183,8 @@ jobs:
                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             reweight) MODULE=reweight_compare
                       EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            weekly-trend) MODULE=weekly_trend_compare
+                          EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
