@@ -54,7 +54,9 @@ def day_rows(daily: Dict[str, Sequence[Dict]], timelines: Dict[str, Dict], *,
         reads = [{**r, "symbol": s} for s in present
                  for r in fs.reads_at(timelines.get(s), t)]
         lean = ml.market_lean(reads, len(present))
-        row = {"close_ms": t, "coins": len(present), "lean": lean}
+        fam = {tf: {f: ml.lean(reads, tf, len(present), f) for f in ml.FAMILIES}
+               for tf in ml.TFS}
+        row = {"close_ms": t, "coins": len(present), "lean": lean, "fam": fam}
         for h in HORIZONS:
             rets = [x for s in present
                     if (x := forward(daily[s], idx[s], t, h)) is not None]
@@ -76,18 +78,27 @@ def _stats(rows: Sequence[Dict]) -> Dict:
     return out
 
 
-def _holds(word: str, groups: Sequence[Sequence[Dict]], bases: Sequence[Dict]) -> Optional[bool]:
-    """Bullish beat / bearish trailed the average next day in every half."""
+def _holds(word: str, groups: Sequence[Sequence[Dict]], bases: Sequence[Dict],
+           key: str = "basket_1") -> Optional[bool]:
+    """Bullish beat / bearish trailed the average day (on `key`: the next day
+    or the next 7 days) in every half."""
     if word == "mixed":
         return None
     sign = 1 if word == "bullish" else -1
     for g, base in zip(groups, bases):
         if len(g) < MIN_DAYS:
             return None
-        s = _stats(g)["basket_1"]
-        if s is None or base["basket_1"] is None or sign * (s - base["basket_1"]) <= 0:
+        s = _stats(g)[key]
+        if s is None or base[key] is None or sign * (s - base[key]) <= 0:
             return False
     return True
+
+
+def _group(rows, halves, bases, word, pick) -> Dict:
+    g = [r for r in rows if pick(r) == word]
+    gh = [[r for r in h if pick(r) == word] for h in halves]
+    return {**_stats(g), "halves": [_stats(x)["basket_1"] for x in gh],
+            "holds": _holds(word, gh, bases), "holds_7": _holds(word, gh, bases, "basket_7")}
 
 
 def analyse(rows: Sequence[Dict]) -> Dict:
@@ -98,14 +109,17 @@ def analyse(rows: Sequence[Dict]) -> Dict:
     halves = ([r for r in rows if r["close_ms"] < mid], [r for r in rows if r["close_ms"] >= mid])
     bases = [_stats(h) for h in halves]
     out = {"days": len(rows), "start": rows[0]["close_ms"], "end": rows[-1]["close_ms"],
-           "all": _stats(rows), "by_tf": {}, "strong": {}, "combos": {}}
+           "all": _stats(rows), "by_tf": {}, "strong": {}, "combos": {}, "by_family": {}}
     for tf in ml.TFS:
-        out["by_tf"][tf] = {}
-        for word in ("bullish", "mixed", "bearish"):
-            g = [r for r in rows if r["lean"][tf]["lean"] == word]
-            gh = [[r for r in h if r["lean"][tf]["lean"] == word] for h in halves]
-            out["by_tf"][tf][word] = {**_stats(g), "halves": [_stats(x)["basket_1"] for x in gh],
-                                      "holds": _holds(word, gh, bases)}
+        out["by_tf"][tf] = {w: _group(rows, halves, bases, w,
+                                      lambda r, tf=tf: r["lean"][tf]["lean"])
+                            for w in ("bullish", "mixed", "bearish")}
+        if all("fam" in r for r in rows):
+            out["by_family"][tf] = {
+                f: {w: _group(rows, halves, bases, w,
+                              lambda r, tf=tf, f=f: r["fam"][tf][f]["lean"])
+                    for w in ("bullish", "bearish")}
+                for f in ml.FAMILIES}
         for word, cond in (("bullish", lambda s: s >= STRONG), ("bearish", lambda s: s <= -STRONG)):
             g = [r for r in rows if cond(r["lean"][tf]["score"])]
             gh = [[r for r in h if cond(r["lean"][tf]["score"])] for h in halves]
@@ -121,6 +135,10 @@ def analyse(rows: Sequence[Dict]) -> Dict:
 
 def _p(x: Optional[float]) -> str:
     return "–" if x is None else f"{x:+.2f}%"
+
+
+def _mark(h: Optional[bool]) -> str:
+    return {True: " ✓", False: " ✗", None: ""}[h]
 
 
 def _line(name: str, s: Dict, holds: Optional[bool] = None) -> List[str]:
@@ -148,6 +166,23 @@ def render_telegram(res: Dict) -> str:
             lines += _line(f"{word} (halves {_p(x['halves'][0])} / {_p(x['halves'][1])})",
                            x, x["holds"])
         lines.append("")
+    if res.get("by_family"):
+        lines += ["Per indicator: coins with a FRESH read of that family, added up the same "
+                  "way. ✓ = beat (bullish) / trailed (bearish) the average day in both "
+                  "halves, next day | next 7 days:"]
+        for tf in ml.TFS:
+            for f in ml.FAMILIES:
+                fx = res["by_family"][tf][f]
+                lines.append(f"• {tf} {f}")
+                for w, dot in (("bullish", "🟢"), ("bearish", "🔴")):
+                    x = fx[w]
+                    if not x["n"]:
+                        lines.append(f"  {dot} {w}: no days")
+                        continue
+                    lines.append(
+                        f"  {dot} {w} {x['n']}d: day {_p(x['basket_1'])}{_mark(x['holds'])} | "
+                        f"7d {_p(x['basket_7'])} (down {x['down_7']}%){_mark(x['holds_7'])}")
+        lines.append("")
     lines.append(f"Strong leans (score ±{STRONG}: net coins / coins):")
     for k, x in res["strong"].items():
         lines += _line(k, x, x["holds"])
@@ -158,6 +193,15 @@ def render_telegram(res: Dict) -> str:
             if res["by_tf"][tf][w]["holds"]]
     lines += ["", ("Holds in both halves: " + ", ".join(held)) if held else
               "No lean beat the average day in both halves: treat it as breadth only."]
+    if res.get("by_family"):
+        both = [f"{tf} {f}" for tf in ml.TFS for f in ml.FAMILIES
+                if res["by_family"][tf][f]["bullish"]["holds_7"]
+                and res["by_family"][tf][f]["bearish"]["holds_7"]]
+        one = [f"{tf} {f} {w}" for tf in ml.TFS for f in ml.FAMILIES for w in ("bullish", "bearish")
+               if res["by_family"][tf][f][w]["holds_7"] and f"{tf} {f}" not in both]
+        lines.append("Indicators whose lean held over 7 days in both halves, both ways: "
+                     + (", ".join(both) or "none"))
+        lines.append("One way only: " + (", ".join(one) or "none"))
     return "\n".join(lines)
 
 

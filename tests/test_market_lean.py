@@ -124,3 +124,57 @@ def test_workflow_runs_it():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     assert "market-lean]" in wf and "python -m market_lean_study --telegram --days 730" in wf
+
+
+# ── per indicator family ─────────────────────────────────────────────────────
+
+def test_family_of_each_read():
+    assert ml.family(r("A", "1D", "bullish", label="Bullish RSI Divergence")) == "RSI divergence"
+    assert ml.family(r("A", "1D", "bullish", label="Hidden Bullish RSI Divergence")) \
+        == "hidden divergence"
+    assert ml.family(r("A", "1D", "bullish", "rsi_swing")) == "RSI bottom/top"
+    for t, name in (("macd", "MACD"), ("supertrend", "SuperTrend"), ("ema50", "EMA 50"),
+                    ("ichimoku", "Ichimoku")):
+        assert ml.family(r("A", "1W", "bearish", "indicator_flip", type=t)) == name
+    assert ml.family(r("A", "1D", "bearish", "divergence_forming")) is None
+    assert set(ml.FAMILIES) == {"RSI divergence", "hidden divergence", "RSI bottom/top",
+                                "MACD", "SuperTrend", "EMA 50", "Ichimoku"}
+
+
+def test_family_lean_counts_only_that_family():
+    reads = [r("A", "1W", "bearish", "indicator_flip", type="supertrend"),
+             r("B", "1W", "bearish", "indicator_flip", type="supertrend"),
+             r("A", "1W", "bullish", "indicator_flip", type="macd"),
+             r("C", "1W", "bullish", "rsi_swing")]
+    st = ml.lean(reads, "1W", 10, "SuperTrend")
+    assert (st["bear"], st["bull"], st["lean"]) == (2, 0, "bearish")
+    assert ml.lean(reads, "1W", 10, "MACD")["bull"] == 1
+    assert ml.lean(reads, "1W", 10)["bull"] == 1          # A cancels out overall
+
+
+def test_day_rows_carry_family_leans():
+    data = {"BTC": daily([100] * 10), "ETH": daily([10] * 10), "SOL": daily([5] * 10)}
+    flip = {"tf": "1W", "direction": "bearish", "kind": "indicator_flip",
+            "type": "supertrend", "status": "active"}
+    tl = {s: {"closes": [D], "reads": [[flip]]} for s in ("ETH", "SOL")}
+    rows = mls.day_rows(data, tl, start_ms=D, end_ms=2 * D)
+    assert rows[0]["fam"]["1W"]["SuperTrend"]["lean"] == "bearish"
+    assert rows[0]["fam"]["1W"]["MACD"]["lean"] == "mixed"
+
+
+def test_analyse_and_render_per_family():
+    rows = []
+    for i in range(160):
+        word = ("bearish", "bullish", "mixed", "mixed")[i % 4]
+        x = row(i * D, word, {"bearish": -1.0, "bullish": 1.0, "mixed": 0.0}[word], tf="1W")
+        x["fam"] = {tf: {f: {"lean": "mixed", "score": 0.0} for f in ml.FAMILIES}
+                    for tf in ml.TFS}
+        x["fam"]["1W"]["SuperTrend"] = {"lean": word, "score": 0.0}
+        rows.append(x)
+    res = mls.analyse(rows)
+    st = res["by_family"]["1W"]["SuperTrend"]
+    assert st["bullish"]["holds_7"] is True and st["bearish"]["holds_7"] is True
+    assert res["by_family"]["1W"]["MACD"]["bullish"]["n"] == 0
+    text = mls.render_telegram(res)
+    assert "• 1W SuperTrend" in text and "🔴 bearish 40d: day -1.00% ✓ | 7d -1.00%" in text
+    assert "held over 7 days in both halves, both ways: 1W SuperTrend" in text
