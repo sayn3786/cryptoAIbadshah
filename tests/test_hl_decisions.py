@@ -138,8 +138,14 @@ def test_decisions_report(mem_kv, monkeypatch):
     monkeypatch.setattr(hl_meta, "resolve_coin",
                         lambda sym, table: sym if sym in table else None)
     import hl_execution as hx
-    placed = {hx.client_order_id("b", "open", "2026-09-29T12:00:00+00:00")}
-    monkeypatch.setattr(hl_account, "order_known", lambda cloid: cloid in placed)
+    placed = {hx.client_order_id("b", "open", "2026-09-29T12:00:00+00:00"): 555}
+    monkeypatch.setattr(hl_account, "order_status",
+                        lambda cloid: {"known": True, "status": "filled", "oid": placed[cloid]}
+                        if cloid in placed else {"known": False})
+    monkeypatch.setattr(hl_account, "fills_since", lambda start: [
+        {"oid": 555, "px": "0.80", "sz": "10", "time": 1759148000000},
+        {"oid": 555, "px": "0.82", "sz": "10", "time": 1759148001000}])
+    monkeypatch.setattr(hl_account, "account_address", lambda a=None: "0x1234567890abcdef1234")
     # ENJ: the pass logged a stale entry
     import hl_autoexec as ax
     app._record_hl_signal_runs([ax.to_signal(rows[sp.STRATEGY_NAME][0])],
@@ -155,6 +161,8 @@ def test_decisions_report(mem_kv, monkeypatch):
     assert len(calls) == 1 and calls[0][2] == 69                 # one database read
     assert set(calls[0][1]) == {sp.STRATEGY_NAME, sp.HL_EXTRA_STRATEGY_NAME}
     assert "elapsed_ms" in out
+    assert "filled 20 @ 0.81" in by["ADA"]["hl"]
+    assert out["account"] == "0x1234…1234" and out["fills_read"] is True
 
 
 def test_decisions_without_a_db(monkeypatch):
@@ -194,3 +202,88 @@ def test_store_read_is_one_statement_with_archived_rows():
     assert src.count("s.execute(") == 1 and "archived_at" not in src
     assert signal_store.list_recorded_since(datetime.now(timezone.utc),
                                             strategy_names=[]) == []
+
+
+# ── order status ─────────────────────────────────────────────────────────────
+
+def test_placed_verdicts_use_the_order_status():
+    def code(order):
+        return app._hl_history_verdict(listed=True, placed=True, runs=[], stale_alert=False,
+                                       slot_runs=[], order=order)
+    fill = {"px": 0.81, "sz": 20.0, "time": 1759148000000}
+    assert code({"status": "filled", "fill": fill})[0] == "opened"
+    assert "filled 20 @ 0.81 at" in code({"status": "filled", "fill": fill})[1]
+    assert code({"status": "filled", "fill": None})[0] == "opened"
+    assert code({"status": "open", "fill": None})[1].startswith("order on HL, not filled")
+    c, t = code({"status": "canceled", "fill": None})
+    assert c == "order_failed" and "canceled" in t
+    assert code({"status": "rejected", "fill": None})[0] == "order_failed"
+    assert code(None)[0] == "opened"
+
+
+class _Resp:
+    def __init__(self, body):
+        self.body = body
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self.body
+
+
+class _Sess:
+    def __init__(self, body):
+        self.body, self.sent = body, []
+
+    def post(self, url, json=None, timeout=None):
+        self.sent.append(json)
+        return _Resp(self.body)
+
+
+def test_order_status_parses_the_exchange_answer(monkeypatch):
+    import hl_account as ha
+    monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xabc0000000000000000000")
+    body = {"status": "order", "order": {"status": "canceled", "statusTimestamp": 9,
+            "order": {"oid": 77, "coin": "TAO", "side": "B", "origSz": "0.5",
+                      "timestamp": 8}}}
+    sess = _Sess(body)
+    got = ha.order_status("0xcloid", session=sess)
+    assert got == {"known": True, "status": "canceled", "oid": 77, "coin": "TAO", "side": "B",
+                   "orig_sz": 0.5, "placed_ms": 8, "status_ms": 9}
+    assert sess.sent[0] == {"type": "orderStatus", "user": "0xabc0000000000000000000",
+                            "oid": "0xcloid"}
+    assert ha.order_status("0xc", session=_Sess({"status": "unknownOid"})) == {"known": False}
+    assert ha.order_status("0xc", session=_Sess({"status": "weird"})) is None
+
+
+def test_fills_by_oid():
+    import hl_account as ha
+    got = ha.fills_by_oid([{"oid": 1, "px": "10", "sz": "1", "time": 5},
+                           {"oid": 1, "px": "12", "sz": "3", "time": 4},
+                           {"oid": 2, "px": "x", "sz": "1"}, "junk"])
+    assert got == {1: {"px": 11.5, "sz": 4.0, "time": 4.0}}
+
+
+def test_a_failed_fills_read_still_reports(mem_kv, monkeypatch):
+    import db
+    import hl_account
+    import hl_meta
+    monkeypatch.setattr(db, "db_enabled", lambda: True)
+
+    class Store:
+        def list_recorded_since(self, since, **kw):
+            return [row("a", "TAO", 74.1, datetime.now(timezone.utc).isoformat())]
+
+    monkeypatch.setattr(app, "_signal_store", lambda: Store())
+    monkeypatch.setattr(hl_account, "configured", lambda: True)
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {"TAO": {}})
+    monkeypatch.setattr(hl_meta, "resolve_coin", lambda sym, table: sym)
+
+    def boom(start):
+        raise RuntimeError("down")
+    monkeypatch.setattr(hl_account, "fills_since", boom)
+    monkeypatch.setattr(hl_account, "order_status",
+                        lambda c: {"known": True, "status": "filled", "oid": 1})
+    out = app._hl_decisions(days=2)
+    assert out["fills_read"] is False and out["signals"][0]["code"] == "opened"

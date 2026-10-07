@@ -364,6 +364,63 @@ def order_known(cloid: str, address: Optional[str] = None, *, env: Optional[str]
     return None
 
 
+def order_status(cloid: str, address: Optional[str] = None, *, env: Optional[str] = None,
+                 session: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+    """The exchange's record of the order with this client order id.
+
+    {"known": False} when Hyperliquid answers unknownOid; otherwise {"known":
+    True, "status" (filled / open / canceled / rejected / …), "oid", "coin",
+    "side", "orig_sz", "placed_ms", "status_ms"}. None if the lookup failed."""
+    addr = account_address(address)
+    if not addr or not cloid:
+        return None
+    try:
+        data = _post_info({"type": "orderStatus", "user": addr, "oid": cloid},
+                          env=env, session=session)
+    except Exception:                                    # noqa: BLE001
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("status") == "unknownOid":
+        return {"known": False}
+    if data.get("status") != "order":
+        return None
+    o = data.get("order") if isinstance(data.get("order"), dict) else {}
+    inner = o.get("order") if isinstance(o.get("order"), dict) else {}
+    return {"known": True, "status": o.get("status"), "oid": inner.get("oid"),
+            "coin": inner.get("coin"), "side": inner.get("side"),
+            "orig_sz": _num(inner.get("origSz")), "placed_ms": inner.get("timestamp"),
+            "status_ms": o.get("statusTimestamp")}
+
+
+def fills_by_oid(fills: Any) -> Dict[Any, Dict[str, Any]]:
+    """{oid: {"px": size-weighted average, "sz": total, "time": first fill ms}}. Pure."""
+    out: Dict[Any, Dict[str, Any]] = {}
+    for f in fills or []:
+        if not isinstance(f, dict):
+            continue
+        sz, px, t = _num(f.get("sz")), _num(f.get("px")), _num(f.get("time"))
+        if not sz or not px or f.get("oid") is None:
+            continue
+        cur = out.setdefault(f["oid"], {"notional": 0.0, "sz": 0.0, "time": t})
+        cur["notional"] += sz * px
+        cur["sz"] += sz
+        if t is not None and (cur["time"] is None or t < cur["time"]):
+            cur["time"] = t
+    return {k: {"px": round(v["notional"] / v["sz"], 8), "sz": round(v["sz"], 8),
+                "time": v["time"]} for k, v in out.items() if v["sz"]}
+
+
+def fills_since(start_ms: int, address: Optional[str] = None, *, env: Optional[str] = None,
+                session: Optional[Any] = None) -> List[Dict[str, Any]]:
+    """The account's fills since `start_ms` (raises on a failed read)."""
+    addr = account_address(address)
+    if not addr:
+        return []
+    return _post_info({"type": "userFillsByTime", "user": addr, "startTime": int(start_ms)},
+                      env=env, session=session) or []
+
+
 def all_mids(*, env: Optional[str] = None, session: Optional[Any] = None) -> Dict[str, Any]:
     """Every perp coin's current mid price, as returned by the info endpoint."""
     return _post_info({"type": "allMids"}, env=env, session=session) or {}
