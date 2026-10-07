@@ -106,5 +106,5 @@ def test_fetch_live_pages_until_older_than_since():
 def test_workflow_runs_it_with_the_live_read_secrets():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
-    assert "recent]" in wf and "python -m recent_signals --telegram" in wf
+    assert ", recent" in wf and "python -m recent_signals --telegram" in wf
     assert "APP_URL:                 ${{ secrets.APP_URL }}" in wf

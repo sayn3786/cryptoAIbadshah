@@ -3644,7 +3644,8 @@ def api_patterns_alert():
     result = _dispatch_once(
         "tg:daily-list", day_key,
         lambda: _send_pattern_alerts(reads, active=active,
-                                     date_label=now_sgt.strftime("%b %d")))
+                                     date_label=now_sgt.strftime("%b %d"),
+                                     coins=len(syms or SCAN_SYMBOLS)))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
