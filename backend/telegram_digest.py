@@ -283,7 +283,7 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
     blocks = []
     if coins_scanned:
         import market_lean
-        blocks.append(market_lean.render(market_lean.market_lean(alerts, coins_scanned)))
+        blocks.append(market_lean.render(alerts, coins_scanned))
     for _score, sym, flag, tags, items in rows:
         blocks.append("\n".join([f"{flag}{sym}" + (f"  ({' · '.join(tags)})" if tags else "")]
                                 + [f"  {describe(a)}" for a in items]))
