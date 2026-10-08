@@ -291,3 +291,46 @@ def test_analyse_reports_the_latest_lean_side_by_side():
     text = mls.render_telegram(res)
     assert "SIDE BY SIDE — latest closed candle only" in text
     assert "• 1W strong bearish 40d" in text and "(1W mixed on 80 of 160 days)" in text
+
+
+# ── checking a week: the last closes, and Monday closes ─────────────────────
+
+def lean_row(t, d1_word, d1_score, w1_word, w1_score, b1=None, b3=None, b7=None):
+    lean = {"1D": {"lean": d1_word, "score": d1_score, "bear": 14 if d1_word == "bearish" else 1,
+                   "bull": 1 if d1_word == "bearish" else 14},
+            "1W": {"lean": w1_word, "score": w1_score, "bear": 3, "bull": 20}}
+    return {"close_ms": t, "lean": lean, "basket_1": b1, "basket_3": b3, "basket_7": b7,
+            "btc_1": b1, "btc_3": b3, "btc_7": b7}
+
+
+MON = 4 * D          # epoch day 4 (1970-01-05) was a Monday
+
+
+def test_monday_is_the_weekly_close():
+    assert mls._monday({"close_ms": MON}) and not mls._monday({"close_ms": MON + D})
+
+
+def test_recent_table_keeps_the_last_closes_even_without_a_future():
+    rows = [lean_row(MON + i * D, "bearish", -0.45, "bullish", 0.59, -1.0, -2.0, -3.0)
+            for i in range(20)]
+    rows[-1].update(basket_1=None, basket_3=None, basket_7=None)
+    t = mls.recent_table(rows)
+    assert len(t) == mls.RECENT_DAYS and t[-1]["basket_1"] is None
+    assert t[0]["d1"] == ("bearish", 14, 1) and t[0]["w1"] == ("bullish", True, 3, 20)
+    text = "\n".join(mls.render_recent(t))
+    assert "1D bearish 14🔴/1🟢 · 1W bullish strong 3🔴/20🟢 → next 1d -1.00%" in text
+    assert "next: not yet" in text and " M:" in text
+
+
+def test_monday_section():
+    rows = []
+    for i in range(280):
+        word = "bearish" if i % 2 else "bullish"
+        rows.append(lean_row(i * D, word, -0.4 if word == "bearish" else 0.4, "bullish", 0.4,
+                             -1.0 if word == "bearish" else 1.0, 0.0, 0.0))
+    res = mls.analyse(rows)
+    mo = res["monday"]
+    assert mo["all"]["n"] == 40 and mo["1D bearish"]["n"] + mo["1D bullish"]["n"] == 40
+    assert mo["1D bearish · 1W bullish"]["n"] == mo["1D bearish"]["n"]
+    text = mls.render_telegram(res)
+    assert "MONDAY CLOSES ONLY" in text and "LAST 14 DAILY CLOSES" in text
