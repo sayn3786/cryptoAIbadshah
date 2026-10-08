@@ -56,8 +56,11 @@ def day_rows(daily: Dict[str, Sequence[Dict]], timelines: Dict[str, Dict], *,
         lean = ml.market_lean(reads, len(present))
         fam = {tf: {f: ml.lean(reads, tf, len(present), f) for f in ml.FAMILIES}
                for tf in ml.TFS}
+        latest = ml.latest_only(reads)
         row = {"close_ms": t, "coins": len(present), "lean": lean, "fam": fam,
-               "trend": ml.weekly_trend_lean(reads, len(present))}
+               "trend": ml.weekly_trend_lean(reads, len(present)),
+               # side by side: only the reads fired on the latest closed candle
+               "latest": ml.market_lean(latest, len(present))}
         for h in HORIZONS:
             rets = [x for s in present
                     if (x := forward(daily[s], idx[s], t, h)) is not None]
@@ -127,11 +130,22 @@ def analyse(rows: Sequence[Dict]) -> Dict:
         for word, cond in (("bullish", lambda s: s >= STRONG), ("bearish", lambda s: s <= -STRONG)):
             g = [r for r in rows if cond(r["lean"][tf]["score"])]
             gh = [[r for r in h if cond(r["lean"][tf]["score"])] for h in halves]
-            out["strong"][f"{tf} {word}"] = {**_stats(g), "holds": _holds(word, gh, bases)}
+            out["strong"][f"{tf} {word}"] = {**_stats(g), "holds": _holds(word, gh, bases),
+                                             "holds_7": _holds(word, gh, bases, "basket_7")}
     for d in ("bullish", "bearish"):
         for w in ("bullish", "bearish"):
             g = [r for r in rows if r["lean"]["1D"]["lean"] == d and r["lean"]["1W"]["lean"] == w]
             out["combos"][f"1D {d} · 1W {w}"] = _stats(g)
+    if all("latest" in r for r in rows):
+        out["latest"] = {}
+        for tf in ml.TFS:
+            out["latest"][tf] = {w: _group(rows, halves, bases, w,
+                                           lambda r, tf=tf: r["latest"][tf]["lean"])
+                                 for w in ("bullish", "mixed", "bearish")}
+            for w, cond in (("bullish", lambda x: x >= STRONG), ("bearish", lambda x: x <= -STRONG)):
+                pick = (lambda r, tf=tf, cond=cond, w=w:
+                        w if cond(r["latest"][tf]["score"]) else None)
+                out["latest"][tf][f"strong {w}"] = _group(rows, halves, bases, w, pick)
     return out
 
 
@@ -194,9 +208,26 @@ def render_telegram(res: Dict) -> str:
                         f"  {dot} {w} {x['n']}d: day {_p(x['basket_1'])}{_mark(x['holds'])} | "
                         f"7d {_p(x['basket_7'])} (down {x['down_7']}%){_mark(x['holds_7'])}")
         lines.append("")
+    if res.get("latest"):
+        lines += ["SIDE BY SIDE — latest closed candle only (reads that fired on the "
+                  "last 1D / 1W close; the lean above uses the last 5 closes, played-out "
+                  "excluded). ✓ = beat / trailed the average in both halves, day | 7d:"]
+        for tf in ml.TFS:
+            for w in ("bullish", "bearish", "strong bullish", "strong bearish"):
+                x = res["latest"][tf][w]
+                if not x["n"]:
+                    lines.append(f"• {tf} {w}: no days")
+                    continue
+                lines.append(f"• {tf} {w} {x['n']}d: day {_p(x['basket_1'])}{_mark(x['holds'])} | "
+                             f"7d {_p(x['basket_7'])} (down {x['down_7']}%){_mark(x['holds_7'])}")
+            m = res["latest"][tf]["mixed"]
+            lines.append(f"  ({tf} mixed on {m['n']} of {res['days']} days)")
+        lines.append("")
     lines.append(f"Strong leans (score ±{STRONG}: net coins / coins):")
     for k, x in res["strong"].items():
         lines += _line(k, x, x["holds"])
+        if x.get("holds_7") is not None:
+            lines.append(f"  7 days held in both halves: {'✓' if x['holds_7'] else '✗'}")
     lines += ["", "1D × 1W:"]
     for k, x in res["combos"].items():
         lines += _line(k, x)

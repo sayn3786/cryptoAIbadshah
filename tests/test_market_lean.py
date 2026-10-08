@@ -247,3 +247,47 @@ def test_day_rows_carry_the_weekly_trend_lean():
     tl = {s: {"closes": [D], "reads": [[f]]} for s in ("ETH", "SOL")}
     rows = mls.day_rows(data, tl, start_ms=D, end_ms=2 * D)
     assert rows[0]["trend"]["lean"] == "bullish" and rows[0]["trend"]["bull"] == 2
+
+
+# ── latest closed candle only (side by side) ─────────────────────────────────
+
+def test_event_age_and_latest_only():
+    assert ml.event_age(r("A", "1W", "bullish", "indicator_flip", bars_ago=0)) == 0
+    assert ml.event_age(r("A", "1W", "bullish", "indicator_flip", bars_ago=2)) == 2
+    assert ml.event_age(r("A", "1D", "bullish", "rsi_swing", age_candles=3)) == 0
+    assert ml.event_age(r("A", "1D", "bullish", "divergence", age_candles=5)) == 2
+    assert ml.event_age(r("A", "1D", "bullish")) is None
+    reads = [r("A", "1W", "bullish", "indicator_flip", bars_ago=0),
+             r("B", "1W", "bullish", "indicator_flip", bars_ago=1),
+             r("C", "1D", "bearish", "rsi_swing", age_candles=3)]
+    assert [x["symbol"] for x in ml.latest_only(reads)] == ["A", "C"]
+
+
+def test_the_confirm_offset_matches_the_update():
+    assert ml.PIVOT_CONFIRM_BARS == td.PIVOT_CONFIRM_BARS
+
+
+def test_day_rows_carry_the_latest_lean():
+    data = {"BTC": daily([100] * 10), "ETH": daily([10] * 10), "SOL": daily([5] * 10)}
+    f = {"tf": "1W", "direction": "bullish", "kind": "indicator_flip", "type": "ema50",
+         "status": "active"}
+    tl = {"ETH": {"closes": [D], "reads": [[{**f, "bars_ago": 0}]]},
+          "SOL": {"closes": [D], "reads": [[{**f, "bars_ago": 3}]]}}
+    rows = mls.day_rows(data, tl, start_ms=D, end_ms=2 * D)
+    assert rows[0]["lean"]["1W"]["bull"] == 2 and rows[0]["latest"]["1W"]["bull"] == 1
+
+
+def test_analyse_reports_the_latest_lean_side_by_side():
+    rows = []
+    for i in range(160):
+        word = ("bearish", "bullish", "mixed", "mixed")[i % 4]
+        x = row(i * D, word, {"bearish": -1.0, "bullish": 1.0, "mixed": 0.0}[word], tf="1W")
+        x["latest"] = {tf: {"lean": "mixed", "score": 0.0} for tf in ml.TFS}
+        x["latest"]["1W"] = {"lean": word, "score": {"bullish": 0.4, "bearish": -0.4}.get(word, 0.0)}
+        rows.append(x)
+    res = mls.analyse(rows)
+    lw = res["latest"]["1W"]
+    assert lw["bearish"]["holds_7"] is True and lw["strong bearish"]["n"] == 40
+    text = mls.render_telegram(res)
+    assert "SIDE BY SIDE — latest closed candle only" in text
+    assert "• 1W strong bearish 40d" in text and "(1W mixed on 80 of 160 days)" in text

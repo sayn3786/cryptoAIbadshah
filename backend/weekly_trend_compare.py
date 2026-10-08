@@ -58,6 +58,12 @@ VARIANTS = (          # (label, against, with, strong lean only, keep at this st
     ("with the weekly lean +5", 0.0, 5.0, False, None),
     ("against -10, with +5", -10.0, 5.0, False, None),
 )
+# The same v57 rules on the lean counted from the LATEST closed 1W candle only
+# (reads that fired on the last weekly close), side by side with the window.
+LATEST_VARIANTS = (
+    ("LATEST-candle lean: against a strong lean: skip", SKIP, 0.0, True, None),
+    ("LATEST-candle lean: against the lean: skip", SKIP, 0.0, False, None),
+)
 
 
 def relation(direction: str, lean_word: str) -> Optional[str]:
@@ -88,14 +94,16 @@ def adjust(cands: Sequence[Dict], leans: Dict[int, Dict], against: float,
     return out
 
 
-def daily_leans(timelines: Dict[str, Dict], days: Sequence[int]) -> Dict[int, Dict]:
-    """{day start ms: the weekly lean the 8 AM update showed that day}."""
+def daily_leans(timelines: Dict[str, Dict], days: Sequence[int], *,
+                latest: bool = False) -> Dict[int, Dict]:
+    """{day start ms: the weekly lean the 8 AM update showed that day} — from
+    only the reads fired on the latest closed candle when `latest`."""
     out = {}
     for d in days:
         present = [s for s, tl in timelines.items() if tl and tl["closes"]
                    and tl["closes"][0] <= d]
         reads = [{**r, "symbol": s} for s in present for r in fs.reads_at(timelines[s], d)]
-        out[d] = ml.weekly_lean(reads, len(present))
+        out[d] = ml.weekly_lean(ml.latest_only(reads) if latest else reads, len(present))
     return out
 
 
@@ -116,8 +124,10 @@ def compare(market: Dict, daily: Dict[str, Sequence[Dict]], reads_fn, *,
     leans = daily_leans(timelines, day_list)
     base = {(c["symbol"], c["slot_ms"]) for c in uc.all_floor(cands, universe, floor)}
     rows = []
-    for label, against, aligned, strong_only, keep_from in VARIANTS:
-        recs = uc.all_floor(adjust(cands, leans, against, aligned, strong_only, keep_from),
+    latest_leans = daily_leans(timelines, day_list, latest=True)
+    runs = [(v, leans) for v in VARIANTS] + [(v, latest_leans) for v in LATEST_VARIANTS]
+    for (label, against, aligned, strong_only, keep_from), use in runs:
+        recs = uc.all_floor(adjust(cands, use, against, aligned, strong_only, keep_from),
                             universe, floor)
         keys = {(c["symbol"], c["slot_ms"]) for c in recs}
         b = rr.book(recs, market, floor=floor)
@@ -131,6 +141,8 @@ def compare(market: Dict, daily: Dict[str, Sequence[Dict]], reads_fn, *,
     lean_days = {w: sum(1 for v in leans.values() if v["lean"] == w)
                  for w in ("bullish", "mixed", "bearish")}
     lean_days["strong"] = sum(1 for v in leans.values() if v.get("strong"))
+    lean_days["latest_strong"] = sum(1 for v in latest_leans.values() if v.get("strong"))
+    lean_days["latest_mixed"] = sum(1 for v in latest_leans.values() if v["lean"] == "mixed")
     return {"window": {"start": pbt._iso(start), "end": pbt._iso(end), "days": round(span, 1)},
             "floor": floor, "at_floor": len(base), "relation": rel, "lean_days": lean_days,
             "rows": rows}
@@ -157,7 +169,9 @@ def render_telegram(result: Dict) -> str:
     lines = ["🧭 Weekly market lean as an HL filter (v54, 69+, every 4h)",
              f"{w['start'][:10]} → {w['end'][:10]} ({w['days']} days)",
              f"The 1W lean (all coins' weekly reads) was bullish {ld['bullish']} days, "
-             f"bearish {ld['bearish']}, mixed {ld['mixed']} (strong on {ld['strong']})",
+             f"bearish {ld['bearish']}, mixed {ld['mixed']} (strong on {ld['strong']}); "
+             f"from the LATEST weekly candle only: mixed {ld['latest_mixed']}, strong on "
+             f"{ld['latest_strong']}",
              f"{result['at_floor']} signals at {result['floor']:g}+ today: {rel['with']} with the "
              f"lean, {rel['against']} against it, {rel['mixed']} on mixed days",
              "$25 a trade, HL caps", ""]

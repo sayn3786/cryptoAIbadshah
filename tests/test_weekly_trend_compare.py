@@ -62,7 +62,7 @@ def test_compare_reports_every_variant(stub):
     daily = {s: [{"timestamp": i * D, "open": 1, "high": 1, "low": 1, "close": 1,
                   "volume": 1} for i in range(10)] for s in m}
     res = wt.compare(m, daily, lambda closed, tf: [], core=list(m), days=5)
-    assert [r["label"] for r in res["rows"]] == [v[0] for v in wt.VARIANTS]
+    assert [r["label"] for r in res["rows"]] == [v[0] for v in wt.VARIANTS + wt.LATEST_VARIANTS]
     assert wt.render_telegram(res).startswith("🧭")
 
 
@@ -83,3 +83,14 @@ def test_the_soft_and_strict_variants_are_both_reported():
     labels = [v[0] for v in wt.VARIANTS]
     assert "against a strong weekly lean: skip (v57 strict)" in labels
     assert "against a strong weekly lean: skip unless 85+ (v57 soft)" in labels
+
+
+def test_latest_leans_count_only_reads_on_the_last_close():
+    old = {"tf": "1W", "direction": "bearish", "kind": "indicator_flip", "type": "ema50",
+           "status": "active", "bars_ago": 2}
+    new = {**old, "bars_ago": 0}
+    tl = {"A": {"closes": [D], "reads": [[old]]}, "B": {"closes": [D], "reads": [[old]]},
+          "C": {"closes": [D], "reads": [[new]]}}
+    window = wt.daily_leans(tl, [D])[D]
+    latest = wt.daily_leans(tl, [D], latest=True)[D]
+    assert window["bear"] == 3 and latest["bear"] == 1 and latest["lean"] == "mixed"

@@ -53,6 +53,28 @@ def counts(r: Dict[str, Any]) -> bool:
             and r.get("status") not in ("played_out", "invalidated"))
 
 
+# Divergences and RSI tops/bottoms are confirmed 3 closes after their pivot
+# (telegram_digest.PIVOT_CONFIRM_BARS); "confirmed N candles ago" = age - 3.
+PIVOT_CONFIRM_BARS = 3
+
+
+def event_age(r: Dict[str, Any]) -> Optional[int]:
+    """How many closed candles ago the read fired (0 = on the latest closed
+    candle): a flip's bars_ago, a divergence / RSI top-bottom's confirming
+    candle. None when unknown."""
+    if r.get("kind") == "indicator_flip":
+        v = r.get("bars_ago")
+    else:
+        a = r.get("age_candles")
+        v = max(a - PIVOT_CONFIRM_BARS, 0) if isinstance(a, int) else None
+    return v if isinstance(v, int) else None
+
+
+def latest_only(reads: Iterable[Dict[str, Any]]) -> list:
+    """Only the reads that fired on the latest closed candle of their timeframe."""
+    return [r for r in reads or [] if event_age(r) == 0]
+
+
 def _in(r: Dict[str, Any], fam) -> bool:
     if not fam:
         return True
