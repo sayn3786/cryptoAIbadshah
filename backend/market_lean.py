@@ -127,6 +127,9 @@ WEEKLY_RECORD = {("bullish", True): "next 7 days +3.1%, down 39% of the time",
                  ("bearish", False): "next 7 days -1.5%, down 59% of the time"}
 WEEKLY_TREND_FAMILIES = ("EMA 50", "Ichimoku", "MACD")
 DAILY_BOTTOM_RECORD = "next 7 days +2.2% on average"
+# 1D RSI overbought tops held both ways in both halves too, from fewer days
+# (31): next day -1.1%, next 7 days -0.7%, down 62% of the time.
+DAILY_TOP_RECORD = "next day -1.1%, next 7 days -0.7%, down 62% of the time (31 days, small sample)"
 BASELINE_RECORD = "an average week: +0.8%, down 50%"
 
 
@@ -142,12 +145,21 @@ def weekly_trend_lean(reads: Iterable[Dict[str, Any]], coins: int) -> Dict[str, 
     return lean(reads, "1W", coins, WEEKLY_TREND_FAMILIES)
 
 
-def daily_bottoms(reads: Iterable[Dict[str, Any]]) -> int:
-    """Coins at an active 1D RSI oversold bottom (the one daily read whose
-    market-wide lean held: next 7 days +2.2%)."""
+def _daily_rsi_marks(reads: Iterable[Dict[str, Any]], direction: str) -> int:
     return len({str(r.get("symbol") or "").upper() for r in reads or []
                 if _tf(r) == "1D" and counts(r) and family(r) == "RSI bottom/top"
-                and r.get("direction") == "bullish"})
+                and r.get("direction") == direction})
+
+
+def daily_bottoms(reads: Iterable[Dict[str, Any]]) -> int:
+    """Coins at an active 1D RSI oversold bottom (market-wide: next 7 days +2.2%)."""
+    return _daily_rsi_marks(reads, "bullish")
+
+
+def daily_tops(reads: Iterable[Dict[str, Any]]) -> int:
+    """Coins at an active 1D RSI overbought top (market-wide: next day -1.1%,
+    next 7 days -0.7%; small sample)."""
+    return _daily_rsi_marks(reads, "bearish")
 
 
 _EMOJI = {"bullish": "🟢", "bearish": "🔴", "mixed": "⚪"}
@@ -168,9 +180,14 @@ def render(reads: Iterable[Dict[str, Any]], coins: int) -> str:
         lines.append(f"   historically {rec} ({BASELINE_RECORD})")
     lines.append(f"⚪ 1D reads: {d1['bear']} coins bearish, {d1['bull']} bullish · breadth "
                  "only, no next-day edge in 2 years")
-    n = daily_bottoms(reads)
-    if n:
-        lines.append(f"🟢 {n} coin{'s' if n != 1 else ''} at a 1D RSI oversold bottom · "
-                     f"historically {DAILY_BOTTOM_RECORD}")
+    # The records are for days the RSI bottom/top reads, added up like the
+    # lean, leaned that way (about 3+ coins net) — quoted only then.
+    rsi = lean(reads, "1D", coins, "RSI bottom/top")["lean"]
+    for n, word, dot, what, rec in (
+            (daily_bottoms(reads), "bullish", "🟢", "oversold bottom", DAILY_BOTTOM_RECORD),
+            (daily_tops(reads), "bearish", "🔴", "overbought top", DAILY_TOP_RECORD)):
+        if n:
+            lines.append(f"{dot} {n} coin{'s' if n != 1 else ''} at a 1D RSI {what}"
+                         + (f" · historically {rec}" if rsi == word else ""))
     lines.append("From a 2-year backtest; history, not a forecast.")
     return "\n".join(lines)

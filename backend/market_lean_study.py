@@ -130,7 +130,22 @@ def recent_table(rows: Sequence[Dict], n: int = RECENT_DAYS) -> List[Dict]:
     return out
 
 
+STREAKS = (3, 5, 7)
+
+
+def add_streaks(rows: Sequence[Dict]) -> None:
+    """Mark each row with how many consecutive closes (ending with it) the 1D
+    lean has been bearish ("d1_bear_run") / bullish ("d1_bull_run"). In place."""
+    bear = bull = 0
+    for r in rows:
+        w = r["lean"]["1D"]["lean"]
+        bear = bear + 1 if w == "bearish" else 0
+        bull = bull + 1 if w == "bullish" else 0
+        r["d1_bear_run"], r["d1_bull_run"] = bear, bull
+
+
 def analyse(rows: Sequence[Dict]) -> Dict:
+    add_streaks(rows)
     recent = recent_table(rows)
     rows = [r for r in rows if r["basket_1"] is not None]
     if not rows:
@@ -141,6 +156,17 @@ def analyse(rows: Sequence[Dict]) -> Dict:
     out = {"days": len(rows), "start": rows[0]["close_ms"], "end": rows[-1]["close_ms"],
            "all": _stats(rows), "by_tf": {}, "strong": {}, "combos": {}, "by_family": {},
            "recent": recent}
+    # A 1D lean that persists: N+ closes in a row (this week: bearish for 9
+    # closes before the drop while the weekly lean stayed strong bullish).
+    out["streaks"] = {}
+    for n in STREAKS:
+        for w, key in (("bearish", "d1_bear_run"), ("bullish", "d1_bull_run")):
+            out["streaks"][f"1D {w} {n}+ closes in a row"] = _group(
+                rows, halves, bases, w, lambda r, key=key, n=n, w=w: w if r[key] >= n else None)
+            out["streaks"][f"1D {w} {n}+ in a row, 1W strong {'bullish' if w == 'bearish' else 'bearish'}"] = _group(
+                rows, halves, bases, w,
+                lambda r, key=key, n=n, w=w: w if r[key] >= n and abs(r["lean"]["1W"]["score"]) >= STRONG
+                and r["lean"]["1W"]["lean"] == ("bullish" if w == "bearish" else "bearish") else None)
     # Monday closes only (daily and weekly candles close together).
     mon = [r for r in rows if _monday(r)]
     if mon:
@@ -283,6 +309,17 @@ def render_telegram(res: Dict) -> str:
                              f"7d {_p(x['basket_7'])} (down {x['down_7']}%){_mark(x['holds_7'])}")
             m = res["latest"][tf]["mixed"]
             lines.append(f"  ({tf} mixed on {m['n']} of {res['days']} days)")
+        lines.append("")
+    if res.get("streaks"):
+        lines += ["1D LEAN THAT PERSISTS (N+ daily closes in a row). ✓ = beat / trailed the "
+                  "average in both halves, day | 3d | 7d:"]
+        for k, x in res["streaks"].items():
+            if not x["n"]:
+                lines.append(f"• {k}: no days")
+                continue
+            lines.append(f"• {k} {x['n']}d: day {_p(x['basket_1'])}{_mark(x['holds'])} | "
+                         f"3d {_p(x['basket_3'])} | 7d {_p(x['basket_7'])} "
+                         f"(down {x['down_7']}%){_mark(x['holds_7'])}")
         lines.append("")
     if res.get("monday"):
         mo = res["monday"]

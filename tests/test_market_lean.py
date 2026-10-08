@@ -334,3 +334,38 @@ def test_monday_section():
     assert mo["1D bearish · 1W bullish"]["n"] == mo["1D bearish"]["n"]
     text = mls.render_telegram(res)
     assert "MONDAY CLOSES ONLY" in text and "LAST 14 DAILY CLOSES" in text
+
+
+# ── 1D RSI overbought tops, and a 1D lean that persists ─────────────────────
+
+def test_daily_tops_line_and_its_record_only_when_the_tops_lean():
+    tops = [r(s, "1D", "bearish", "rsi_swing") for s in ("BTC", "SOL", "AAVE", "ICP")]
+    text = ml.render(tops + [r("ADA", "1D", "bullish", "rsi_swing")], 29)
+    assert ml.daily_tops(tops) == 4
+    assert ("🔴 4 coins at a 1D RSI overbought top · historically next day -1.1%, next 7 days "
+            "-0.7%, down 62% of the time (31 days, small sample)") in text
+    assert "🟢 1 coin at a 1D RSI oversold bottom\n" in text          # no record: no lean
+    one = ml.render(tops[:1], 29)
+    assert "🔴 1 coin at a 1D RSI overbought top\n" in one and "historically" not in one
+
+
+def test_streaks():
+    rows = [lean_row(i * D, w, 0.0, "bullish", 0.4)
+            for i, w in enumerate(["bearish"] * 6 + ["mixed", "bullish", "bullish"])]
+    mls.add_streaks(rows)
+    assert [x["d1_bear_run"] for x in rows] == [1, 2, 3, 4, 5, 6, 0, 0, 0]
+    assert [x["d1_bull_run"] for x in rows] == [0, 0, 0, 0, 0, 0, 0, 1, 2]
+
+
+def test_streak_section():
+    rows = []
+    for i in range(300):
+        word = "bearish" if (i // 10) % 2 else "bullish"           # 10-day runs
+        rows.append(lean_row(i * D, word, -0.4 if word == "bearish" else 0.4, "bullish", 0.4,
+                             -1.0 if word == "bearish" else 1.0, -1.0, -1.0))
+    res = mls.analyse(rows)
+    st = res["streaks"]
+    assert st["1D bearish 5+ closes in a row"]["n"] == 15 * 6
+    assert st["1D bearish 5+ in a row, 1W strong bullish"]["n"] == 15 * 6
+    assert st["1D bearish 5+ closes in a row"]["holds"] is True
+    assert "1D LEAN THAT PERSISTS" in mls.render_telegram(res)
