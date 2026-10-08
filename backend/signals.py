@@ -1,4 +1,5 @@
 import math
+import os
 from typing import Dict, List, Optional
 
 # Shared structure measurements. Imported (not re-implemented) so the numbers the
@@ -1138,6 +1139,33 @@ REVERSAL_MAX_PENALTY = 6         # unchanged from v50 — not tuned on the disco
 REVERSAL_FRESH_BARS = 4          # full penalty at or within this age
 REVERSAL_EXPIRE_BARS = 12        # zero penalty at or beyond this age (~24h on 2H)
 
+# Front-loaded recency (candidate, OFF until backtested): a read counts most on
+# the candle it is confirmed and less with every close after, instead of full
+# weight for a long window then a late fade.
+#   divergence: full when confirmed on the latest close or the one before,
+#     then -10% a close, down to 40% (the existing expiry fade still applies)
+#   RSI reversal brake: full only at 0-1 closes, then a straight fade to 0 at
+#     REVERSAL_EXPIRE_BARS (was full for 4 closes)
+# SIGNAL_RECENCY=front turns it on; the backtest flips RECENCY_FRONT_LOADED.
+RECENCY_FRONT_LOADED = os.getenv("SIGNAL_RECENCY", "").strip().lower() == "front"
+DIV_CONFIRM_BARS = 3             # detect_rsi_divergence's pivot_window
+DIV_RECENCY_FULL = 1
+DIV_RECENCY_STEP = 0.10
+DIV_RECENCY_FLOOR = 0.40
+REVERSAL_FRONT_FRESH_BARS = 1
+
+
+def divergence_recency(age_candles) -> float:
+    """Front-loaded weight for a CONFIRMED divergence by closes since it was
+    confirmed (age since the second pivot minus the pivot window). 1.0 when
+    front-loading is off or the age is unknown."""
+    if not RECENCY_FRONT_LOADED or not isinstance(age_candles, int):
+        return 1.0
+    c = max(age_candles - DIV_CONFIRM_BARS, 0)
+    if c <= DIV_RECENCY_FULL:
+        return 1.0
+    return max(DIV_RECENCY_FLOOR, 1.0 - (c - DIV_RECENCY_FULL) * DIV_RECENCY_STEP)
+
 
 def _reversal_freshness(bars_ago) -> float:
     """
@@ -1151,11 +1179,12 @@ def _reversal_freshness(bars_ago) -> float:
         return 0.0
     if not math.isfinite(b) or b < 0:      # NaN/inf/negative → treat as no penalty
         return 0.0
-    if b <= REVERSAL_FRESH_BARS:
+    fresh_bars = REVERSAL_FRONT_FRESH_BARS if RECENCY_FRONT_LOADED else REVERSAL_FRESH_BARS
+    if b <= fresh_bars:
         return 1.0
     if b >= REVERSAL_EXPIRE_BARS:
         return 0.0
-    return (REVERSAL_EXPIRE_BARS - b) / (REVERSAL_EXPIRE_BARS - REVERSAL_FRESH_BARS)
+    return (REVERSAL_EXPIRE_BARS - b) / (REVERSAL_EXPIRE_BARS - fresh_bars)
 
 
 def _latest_reversal_marker(rsi_markers):
@@ -1514,7 +1543,13 @@ def generate_signal(analysis: Dict) -> Dict:
 
     # ── Funding Rate ─────────────────────────────────────────────────────────
     _mark('funding', score)
-    # THE highest-reliability crypto-specific signal. Extreme negative funding
+    # v58: halved (extreme 30 -> 16, elevated 15 -> 8). Funding is a contrarian
+    # POSITIONING gauge: crowded longs/shorts can stay crowded for days, so it
+    # says little about the next 2-8 hours a signal trades on, and the same
+    # crowding is also read by the L/S ratio and the funding+trend combo. It
+    # has no price history, so it can't be backtested; the per-indicator
+    # breakdown recorded live is how its weight gets re-checked.
+    # Extreme negative funding
     # means shorts are paying longs — the market is max short, creating intense
     # squeeze risk. Documented by BitMEX traders, Arthur Hayes, Cobie, and
     # multiple quant studies on perpetual swap funding as a contrarian indicator.
@@ -1527,16 +1562,16 @@ def generate_signal(analysis: Dict) -> Dict:
     _fr_raw = (funding or {}).get("current", fr) or 0.0
     _fr_note = "" if _fr_iv == 8 else f" [native {_fr_raw:.4f}%/{_fr_iv:g}h]"
     if fr < -0.02:
-        score += 30; g['flow'] += 30
+        score += 16; g['flow'] += 16
         bull_reasons.append(f"Funding extremely negative ({fr:.4f}%/8h{_fr_note}) — market max short, very high squeeze probability")
     elif fr < -0.005:
-        score += 15; g['flow'] += 15
+        score += 8; g['flow'] += 8
         bull_reasons.append(f"Funding negative ({fr:.4f}%/8h{_fr_note}) — shorts paying longs, structurally favours longs")
     elif fr > 0.04:
-        score -= 30; g['flow'] -= 30
+        score -= 16; g['flow'] -= 16
         bear_reasons.append(f"Funding extremely high ({fr:.4f}%/8h{_fr_note}) — market max long, very high flush probability")
     elif fr > 0.015:
-        score -= 15; g['flow'] -= 15
+        score -= 8; g['flow'] -= 8
         bear_reasons.append(f"Funding elevated ({fr:.4f}%/8h{_fr_note}) — longs overextended, late-cycle caution")
 
     # ── Open Interest ─────────────────────────────────────────────────────────
@@ -1935,6 +1970,9 @@ def generate_signal(analysis: Dict) -> Dict:
     _mark('order_book', score)
     # Live bid/ask walls aggregated across exchanges. Timeframe-independent —
     # it's a market snapshot, not candle-derived. Not scaled by tf_macro_w.
+    # v58: cut to a third (strong 18 -> 6, heavy 10 -> 3, walls 8 -> 4). Resting
+    # orders near price change in seconds and can be pulled (spoofed), so a
+    # snapshot is weak evidence for a 2-8 hour trade; it stays a small tilt.
     ob = analysis.get("order_book") or {}
     ob_imbalance = ob.get("imbalance")
     ob_ratio     = ob.get("bid_ask_ratio", 1.0) or 1.0
@@ -1942,34 +1980,34 @@ def generate_signal(analysis: Dict) -> Dict:
     ob_big_ask   = ob.get("biggest_ask") or {}
 
     if ob_imbalance == "strong_bid":
-        score += 18; g['flow'] += 18
+        score += 6; g['flow'] += 6
         bull_reasons.append(
             f"Order book: strong bid pressure ({ob_ratio:.2f}× more bids than asks near price)"
         )
     elif ob_imbalance == "bid_heavy":
-        score += 10; g['flow'] += 10
+        score += 3; g['flow'] += 3
         bull_reasons.append(
             f"Order book: bid-heavy ({ob_ratio:.2f}×) — buyers dominating near price"
         )
     elif ob_imbalance == "strong_ask":
-        score -= 18; g['flow'] -= 18
+        score -= 6; g['flow'] -= 6
         bear_reasons.append(
             f"Order book: strong ask pressure ({ob_ratio:.2f}× more asks than bids near price)"
         )
     elif ob_imbalance == "ask_heavy":
-        score -= 10; g['flow'] -= 10
+        score -= 3; g['flow'] -= 3
         bear_reasons.append(
             f"Order book: ask-heavy ({ob_ratio:.2f}×) — sellers dominating near price"
         )
 
     # High-significance wall on bid = strong support; on ask = strong resistance
     if ob_big_bid.get("significance") == "high" and ob_big_bid.get("distance_pct", -99) > -2:
-        score += 8; g['flow'] += 8
+        score += 4; g['flow'] += 4
         bull_reasons.append(
             f"Large bid wall ${ob_big_bid.get('usd_value',0):,.0f} at ${ob_big_bid.get('price',0):,.2f} ({ob_big_bid.get('dist_label','Near')})"
         )
     if ob_big_ask.get("significance") == "high" and ob_big_ask.get("distance_pct", 99) < 2:
-        score -= 8; g['flow'] -= 8
+        score -= 4; g['flow'] -= 4
         bear_reasons.append(
             f"Large ask wall ${ob_big_ask.get('usd_value',0):,.0f} at ${ob_big_ask.get('price',0):,.2f} ({ob_big_ask.get('dist_label','Near')})"
         )
@@ -2186,22 +2224,24 @@ def generate_signal(analysis: Dict) -> Dict:
     # Contrarian indicator — crowd positioning from a single exchange (OKX).
     # Downweighted vs funding rate: funding measures actual money paid,
     # L/S ratio only measures account count on one exchange — less reliable.
+    # v58: cut further (14 -> 6, 8 -> 3): it reads the same crowding funding
+    # does, so full points double-counted one fact.
     ls = analysis.get("long_short") or {}
     ls_ratio   = ls.get("ratio")
     ls_long    = ls.get("long_pct", 50)
     ls_short   = ls.get("short_pct", 50)
     if ls_ratio is not None and ls_ratio > 0:
         if ls_ratio < 0.65:
-            score += 14; g['sentiment'] += 14
+            score += 6; g['sentiment'] += 6
             bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — crowd heavily short, contrarian long signal")
         elif ls_ratio < 0.85:
-            score += 8; g['sentiment'] += 8
+            score += 3; g['sentiment'] += 3
             bull_reasons.append(f"L/S ratio {ls_ratio} ({ls_short:.1f}% short) — moderate short bias, favours longs")
         elif ls_ratio > 2.5:
-            score -= 14; g['sentiment'] -= 14
+            score -= 6; g['sentiment'] -= 6
             bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd extremely long, contrarian short signal")
         elif ls_ratio > 1.5:
-            score -= 8; g['sentiment'] -= 8
+            score -= 3; g['sentiment'] -= 3
             bear_reasons.append(f"L/S ratio {ls_ratio} ({ls_long:.1f}% long) — crowd long-heavy, late-cycle caution")
 
     # ── Fear & Greed Index ────────────────────────────────────────────────────
@@ -2319,6 +2359,9 @@ def generate_signal(analysis: Dict) -> Dict:
     # window, then a linear fade to zero across the grace bars.
     div_fresh = rsi_div.get("freshness")
     div_fresh = 1.0 if div_fresh is None else max(0.0, min(1.0, float(div_fresh)))
+    if not div_forming:
+        # front-loaded recency (off unless SIGNAL_RECENCY=front)
+        div_fresh = min(div_fresh, divergence_recency(rsi_div.get("age_candles")))
 
     def _decay(raw):
         """Weight by freshness; never round a still-counting signal away to nothing."""
@@ -2832,7 +2875,7 @@ def generate_signal(analysis: Dict) -> Dict:
     _mark('combo_funding_trend', score + combo_pts)
     fr_val = _funding_8h(funding) or 0.0                 # per-8h normalized
     if abs(fr_val) >= 0.02 and gdir['trend'] == overall_dir and gdir['trend'] != 'neutral':
-        pts = 15
+        pts = 8   # v58: was 15 — counts extreme funding a second time
         combo_pts += pts if score > 0 else -pts
         if score > 0:
             bull_reasons.append(f"🔗 Extreme Funding+Trend aligned — max short positioning ({fr_val:.4f}%/8h) + bullish trend = extreme squeeze setup")
