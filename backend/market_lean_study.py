@@ -28,7 +28,7 @@ import market_lean as ml
 import read_study as rs
 
 DAY_MS = rs.DAY_MS
-HORIZONS = (1, 7)
+HORIZONS = (1, 3, 7)
 MIN_DAYS = 15
 STRONG = ml.STRONG
 
@@ -74,8 +74,8 @@ def day_rows(daily: Dict[str, Sequence[Dict]], timelines: Dict[str, Dict], *,
 def _stats(rows: Sequence[Dict]) -> Dict:
     out = {"n": len(rows)}
     for h in HORIZONS:
-        b = [r[f"basket_{h}"] for r in rows if r[f"basket_{h}"] is not None]
-        c = [r[f"btc_{h}"] for r in rows if r[f"btc_{h}"] is not None]
+        b = [r[f"basket_{h}"] for r in rows if r.get(f"basket_{h}") is not None]
+        c = [r[f"btc_{h}"] for r in rows if r.get(f"btc_{h}") is not None]
         out[f"basket_{h}"] = round(sum(b) / len(b), 3) if b else None
         out[f"down_{h}"] = round(100 * sum(x < 0 for x in b) / len(b), 1) if b else None
         out[f"btc_{h}"] = round(sum(c) / len(c), 3) if c else None
@@ -105,15 +105,60 @@ def _group(rows, halves, bases, word, pick) -> Dict:
             "holds": _holds(word, gh, bases), "holds_7": _holds(word, gh, bases, "basket_7")}
 
 
+RECENT_DAYS = 14
+
+
+def _monday(r: Dict) -> bool:
+    """The close at Monday 00:00 UTC (8 AM SGT Monday): the daily AND the
+    weekly candle close together."""
+    import datetime as _dt
+    return _dt.datetime.utcfromtimestamp(r["close_ms"] / 1000).weekday() == 0
+
+
+def recent_table(rows: Sequence[Dict], n: int = RECENT_DAYS) -> List[Dict]:
+    """The last `n` closes: what the 1D / 1W lean said and what followed
+    (None where the future hasn't happened yet). Pure."""
+    out = []
+    for r in list(rows)[-n:]:
+        d1, w1 = r["lean"]["1D"], r["lean"]["1W"]
+        out.append({"close_ms": r["close_ms"], "monday": _monday(r),
+                    "d1": (d1["lean"], d1.get("bear", 0), d1.get("bull", 0)),
+                    "w1": (w1["lean"], abs(w1["score"]) >= STRONG and w1["lean"] != "mixed",
+                           w1.get("bear", 0), w1.get("bull", 0)),
+                    **{f"basket_{h}": r.get(f"basket_{h}") for h in HORIZONS},
+                    **{f"btc_{h}": r.get(f"btc_{h}") for h in HORIZONS}})
+    return out
+
+
 def analyse(rows: Sequence[Dict]) -> Dict:
+    recent = recent_table(rows)
     rows = [r for r in rows if r["basket_1"] is not None]
     if not rows:
-        return {"days": 0}
+        return {"days": 0, "recent": recent}
     mid = rows[len(rows) // 2]["close_ms"]
     halves = ([r for r in rows if r["close_ms"] < mid], [r for r in rows if r["close_ms"] >= mid])
     bases = [_stats(h) for h in halves]
     out = {"days": len(rows), "start": rows[0]["close_ms"], "end": rows[-1]["close_ms"],
-           "all": _stats(rows), "by_tf": {}, "strong": {}, "combos": {}, "by_family": {}}
+           "all": _stats(rows), "by_tf": {}, "strong": {}, "combos": {}, "by_family": {},
+           "recent": recent}
+    # Monday closes only (daily and weekly candles close together).
+    mon = [r for r in rows if _monday(r)]
+    if mon:
+        out["monday"] = {"all": _stats(mon)}
+        for w in ("bullish", "bearish"):
+            out["monday"][f"1D {w}"] = _group(
+                rows, halves, bases, w,
+                lambda r, w=w: w if _monday(r) and r["lean"]["1D"]["lean"] == w else None)
+            out["monday"][f"1D strong {w}"] = _group(
+                rows, halves, bases, w,
+                lambda r, w=w: w if _monday(r) and (r["lean"]["1D"]["score"] >= STRONG
+                                                    if w == "bullish" else
+                                                    r["lean"]["1D"]["score"] <= -STRONG) else None)
+        for d in ("bullish", "bearish"):
+            for wk in ("bullish", "bearish"):
+                g = [r for r in mon if r["lean"]["1D"]["lean"] == d
+                     and r["lean"]["1W"]["lean"] == wk]
+                out["monday"][f"1D {d} · 1W {wk}"] = _stats(g)
     for tf in ml.TFS:
         out["by_tf"][tf] = {w: _group(rows, halves, bases, w,
                                       lambda r, tf=tf: r["lean"][tf]["lean"])
@@ -168,9 +213,25 @@ def _line(name: str, s: Dict, holds: Optional[bool] = None) -> List[str]:
             f"  next 7 days: basket {_p(s['basket_7'])} (down {s['down_7']}%) · BTC {_p(s['btc_7'])}"]
 
 
+def render_recent(recent: Sequence[Dict]) -> List[str]:
+    import datetime as _dt
+    lines = [f"LAST {len(recent)} DAILY CLOSES — what the 8 AM lean said and what followed "
+             "(basket = average coin; M = Monday, the weekly close too):"]
+    for x in recent:
+        t = _dt.datetime.utcfromtimestamp(x["close_ms"] / 1000) + _dt.timedelta(hours=8)
+        d1w, d1b, d1u = x["d1"]
+        w1w, strong, wb, wu = x["w1"]
+        nxt = " · ".join(f"next {h}d {_p(x[f'basket_{h}'])}" for h in HORIZONS
+                         if x[f"basket_{h}"] is not None) or "next: not yet"
+        lines.append(f"• {t:%b %d}{' M' if x['monday'] else ''}: 1D {d1w} {d1b}🔴/{d1u}🟢 · "
+                     f"1W {w1w}{' strong' if strong else ''} {wb}🔴/{wu}🟢 → {nxt}")
+    return lines
+
+
 def render_telegram(res: Dict) -> str:
     if not res.get("days"):
-        return "📊 Market lean study: no days to study."
+        return "\n".join(["📊 Market lean study: no days to study.", ""]
+                         + render_recent(res.get("recent") or []))
     import datetime as _dt
     d = lambda ms: _dt.datetime.utcfromtimestamp(ms / 1000).strftime("%Y-%m-%d")  # noqa: E731
     lines = ["📊 Market lean study: does the 8 AM lean predict the next day / week?",
@@ -223,6 +284,25 @@ def render_telegram(res: Dict) -> str:
             m = res["latest"][tf]["mixed"]
             lines.append(f"  ({tf} mixed on {m['n']} of {res['days']} days)")
         lines.append("")
+    if res.get("monday"):
+        mo = res["monday"]
+        lines += ["MONDAY CLOSES ONLY (8 AM SGT Monday, daily + weekly close together):"]
+        lines += _line("All Mondays", mo["all"])
+        for k in ("1D bearish", "1D strong bearish", "1D bullish", "1D strong bullish"):
+            x = mo[k]
+            if not x["n"]:
+                lines.append(f"• {k}: no Mondays")
+                continue
+            lines.append(f"• {k} {x['n']} Mondays: day {_p(x['basket_1'])}{_mark(x['holds'])} | "
+                         f"3d {_p(x['basket_3'])} | 7d {_p(x['basket_7'])} "
+                         f"(down {x['down_7']}%){_mark(x['holds_7'])}")
+        for k in ("1D bearish · 1W bullish", "1D bearish · 1W bearish",
+                  "1D bullish · 1W bullish", "1D bullish · 1W bearish"):
+            x = mo[k]
+            if x["n"]:
+                lines.append(f"• {k}: {x['n']} Mondays · 7d {_p(x['basket_7'])} "
+                             f"(down {x['down_7']}%)")
+        lines.append("")
     lines.append(f"Strong leans (score ±{STRONG}: net coins / coins):")
     for k, x in res["strong"].items():
         lines += _line(k, x, x["holds"])
@@ -231,6 +311,8 @@ def render_telegram(res: Dict) -> str:
     lines += ["", "1D × 1W:"]
     for k, x in res["combos"].items():
         lines += _line(k, x)
+    if res.get("recent"):
+        lines += [""] + render_recent(res["recent"])
     held = [f"{tf} {w}" for tf in ml.TFS for w in ("bullish", "bearish")
             if res["by_tf"][tf][w]["holds"]]
     lines += ["", ("Holds in both halves: " + ", ".join(held)) if held else
@@ -267,7 +349,8 @@ def main(argv=None) -> int:
     print("rebuilding the daily reads...", file=sys.stderr)
     timelines = {s: fs.read_timeline(d, appmod._daily_reads_for, since_ms=start_ms - DAY_MS)
                  for s, d in daily.items()}
-    res = analyse(day_rows(daily, timelines, start_ms=start_ms, end_ms=end_ms))
+    # end_ms + 1: include the close at end_ms itself (today's 8 AM close).
+    res = analyse(day_rows(daily, timelines, start_ms=start_ms, end_ms=end_ms + 1))
     text = render_telegram(res)
     if args.telegram:
         # Public repo, public Actions log: results go to the private chat only.
