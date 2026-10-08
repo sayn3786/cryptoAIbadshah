@@ -1,4 +1,5 @@
 import math
+import os
 from typing import Dict, List, Optional
 
 # Shared structure measurements. Imported (not re-implemented) so the numbers the
@@ -1138,6 +1139,33 @@ REVERSAL_MAX_PENALTY = 6         # unchanged from v50 — not tuned on the disco
 REVERSAL_FRESH_BARS = 4          # full penalty at or within this age
 REVERSAL_EXPIRE_BARS = 12        # zero penalty at or beyond this age (~24h on 2H)
 
+# Front-loaded recency (candidate, OFF until backtested): a read counts most on
+# the candle it is confirmed and less with every close after, instead of full
+# weight for a long window then a late fade.
+#   divergence: full when confirmed on the latest close or the one before,
+#     then -10% a close, down to 40% (the existing expiry fade still applies)
+#   RSI reversal brake: full only at 0-1 closes, then a straight fade to 0 at
+#     REVERSAL_EXPIRE_BARS (was full for 4 closes)
+# SIGNAL_RECENCY=front turns it on; the backtest flips RECENCY_FRONT_LOADED.
+RECENCY_FRONT_LOADED = os.getenv("SIGNAL_RECENCY", "").strip().lower() == "front"
+DIV_CONFIRM_BARS = 3             # detect_rsi_divergence's pivot_window
+DIV_RECENCY_FULL = 1
+DIV_RECENCY_STEP = 0.10
+DIV_RECENCY_FLOOR = 0.40
+REVERSAL_FRONT_FRESH_BARS = 1
+
+
+def divergence_recency(age_candles) -> float:
+    """Front-loaded weight for a CONFIRMED divergence by closes since it was
+    confirmed (age since the second pivot minus the pivot window). 1.0 when
+    front-loading is off or the age is unknown."""
+    if not RECENCY_FRONT_LOADED or not isinstance(age_candles, int):
+        return 1.0
+    c = max(age_candles - DIV_CONFIRM_BARS, 0)
+    if c <= DIV_RECENCY_FULL:
+        return 1.0
+    return max(DIV_RECENCY_FLOOR, 1.0 - (c - DIV_RECENCY_FULL) * DIV_RECENCY_STEP)
+
 
 def _reversal_freshness(bars_ago) -> float:
     """
@@ -1151,11 +1179,12 @@ def _reversal_freshness(bars_ago) -> float:
         return 0.0
     if not math.isfinite(b) or b < 0:      # NaN/inf/negative → treat as no penalty
         return 0.0
-    if b <= REVERSAL_FRESH_BARS:
+    fresh_bars = REVERSAL_FRONT_FRESH_BARS if RECENCY_FRONT_LOADED else REVERSAL_FRESH_BARS
+    if b <= fresh_bars:
         return 1.0
     if b >= REVERSAL_EXPIRE_BARS:
         return 0.0
-    return (REVERSAL_EXPIRE_BARS - b) / (REVERSAL_EXPIRE_BARS - REVERSAL_FRESH_BARS)
+    return (REVERSAL_EXPIRE_BARS - b) / (REVERSAL_EXPIRE_BARS - fresh_bars)
 
 
 def _latest_reversal_marker(rsi_markers):
@@ -2330,6 +2359,9 @@ def generate_signal(analysis: Dict) -> Dict:
     # window, then a linear fade to zero across the grace bars.
     div_fresh = rsi_div.get("freshness")
     div_fresh = 1.0 if div_fresh is None else max(0.0, min(1.0, float(div_fresh)))
+    if not div_forming:
+        # front-loaded recency (off unless SIGNAL_RECENCY=front)
+        div_fresh = min(div_fresh, divergence_recency(rsi_div.get("age_candles")))
 
     def _decay(raw):
         """Weight by freshness; never round a still-counting signal away to nothing."""
