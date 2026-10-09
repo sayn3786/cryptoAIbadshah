@@ -1,5 +1,19 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Prospective publication evidence (migration `016`)
+
+Migration `016` adds append-only `publication_attempts`,
+`publication_attempt_signals`, and `publication_receipts`. These record Telegram
+request/response timing and provider acknowledgment, not recipient delivery or
+broker fills. No historical timestamps are backfilled. Monitor-generated entry
+fills are separately tagged as unverified candle simulations.
+
+`PUBLICATION_EVIDENCE_ENABLED` defaults to false. Deploy with it disabled, apply
+and verify the migration, then enable only after rollout approval. When enabled,
+missing persisted signal IDs or an unavailable ledger block recommendation sends.
+See [publication evidence rollout](PUBLICATION_EVIDENCE.md) for failure semantics
+and staged verification.
+
 ## Two-hour research transition
 
 New research records use two-hour collection slots (`candles_1h_2h_slots_v3`)
