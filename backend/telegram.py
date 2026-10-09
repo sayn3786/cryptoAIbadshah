@@ -375,15 +375,50 @@ def send_daily_recs(recs_data: Dict) -> bool:
     body = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     if not loud:
         body["disable_notification"] = True
+    import publication_evidence as evidence
+    attempt = None
+    if evidence.enabled():
+        recs = recs_data.get("recommendations") or []
+        ids = [r.get("signal_id") for r in recs if r.get("direction") in ("LONG", "SHORT")]
+        try:
+            if not ids or any(not i for i in ids):
+                raise ValueError("MISSING_SIGNAL_IDS")
+            attempt = evidence.begin(ids, text)
+        except Exception:
+            print("[telegram] Publication evidence unavailable; recommendation send blocked")
+            return False
+    accepted = False
     try:
         resp = requests.post(
             f"{TELEGRAM_API}/bot{token}/sendMessage",
             json=body,
             timeout=15,
         )
+        from datetime import datetime, timezone
+        response_received_at = datetime.now(timezone.utc)
         resp.raise_for_status()
+        if attempt:
+            result = resp.json()
+            msg = result.get("result") or {}
+            message_id = msg.get("message_id")
+            accepted = (result.get("ok") is True and isinstance(message_id, int)
+                        and not isinstance(message_id, bool) and message_id > 0)
+            if not accepted:
+                evidence.finish(attempt, "REJECTED" if result.get("ok") is False else "UNKNOWN", now=response_received_at)
+                return False
+            date = msg.get("date")
+            provider_at = (datetime.fromtimestamp(date, timezone.utc)
+                           if isinstance(date, int) and not isinstance(date, bool) and date > 0 else None)
+            evidence.finish(attempt, "ACCEPTED", message_id=message_id, provider_at=provider_at, now=response_received_at)
         print(f"[telegram] Message sent to {chat_id}")
         return True
-    except Exception as e:
-        print(f"[telegram] ERROR sending message: {e}")
+    except Exception:
+        if attempt and not accepted:
+            try:
+                evidence.finish(attempt, "UNKNOWN")
+            except Exception:
+                pass  # Durable attempt remains unresolved; never fabricate a receipt.
+        print("[telegram] Send or publication receipt failed; outcome may be unknown")
+        if accepted:
+            return True  # Avoid retry solely because receipt storage failed.
         return False
