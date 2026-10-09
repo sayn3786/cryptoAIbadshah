@@ -6185,6 +6185,33 @@ def api_signals_postmortem_report():
         return _db_error_response(exc)
 
 
+@app.get("/api/signals/indicator-attribution")
+def api_signals_indicator_attribution():
+    """Which parts of the strength score earned their points on REAL closed
+    signals: per section (incl. the live-only funding / order book /
+    long-short ones), the realised return when it pushed with the trade vs
+    against / silent, and the edge. Uses signals recorded since the score
+    breakdown started being stored. Query: limit (default 1000), min_with
+    (default 10), strategy_version. Admin only."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    guard = _db_guard()
+    if guard:
+        return guard
+    import live_attribution as _la
+    store = _signal_store()
+    try:
+        rows = store.list_closed_with_snapshots(
+            strategy_version=request.args.get("strategy_version"),
+            include_archived=True,
+            limit=_int_arg("limit", 1000, 1, 1000))
+        return jsonify({"ok": True, **_la.report(
+            rows, min_with=_int_arg("min_with", _la.MIN_WITH, 1, 1000))})
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.get("/api/signals/analytics")
 def api_signals_analytics():
     """

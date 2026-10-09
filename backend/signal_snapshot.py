@@ -437,6 +437,15 @@ def build_snapshot(analysis: Dict[str, Any],
         "reversal_radar": redact(signal.get("reversal_radar")),
         "options_bias": signal.get("options_bias"),
         "options_in_window": signal.get("options_in_window"),
+        # Per-indicator attribution of the 2H score (signed, + bull; summing to
+        # engine_score) and the direction-relative strength brakes, so each
+        # section — including the live-only funding / order book / long-short
+        # ones a backtest can't see — can be measured against real outcomes.
+        "engine_score": _num(signal.get("score")),
+        "score_breakdown": redact(signal.get("score_breakdown")),
+        "strength_adjustments": {k: _num(signal.get(k)) for k in (
+            "structure_adjustment", "liquidation_adjustment", "rsi_reversal_adjustment",
+            "obv_adjustment", "fib_adjustment", "options_adjustment")},
     }
     if extra_context:
         market_context.update(redact(extra_context))
