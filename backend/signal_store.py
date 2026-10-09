@@ -1137,7 +1137,7 @@ def record_stop_move(signal_id, new_stop, moved_at, *, reason="BREAKEVEN",
 
 
 def record_entry_fill(signal_id, fill_price, filled_at, *,
-                      source_ts=None, session=None) -> Dict[str, Any]:
+                      source_ts=None, session=None, metadata=None) -> Dict[str, Any]:
     """
     Price reached the entry: the working order became a position.
 
@@ -1170,7 +1170,7 @@ def record_entry_fill(signal_id, fill_price, filled_at, *,
         """), {"at": at_t, "price": price_d, "sid": str(signal_id), "cur": current})
 
         _insert_event(s, signal_id, "ENTRY_FILLED", at_t, price=price_d,
-                      metadata={"previous_status": current},
+                      metadata={**(metadata or {}), "previous_status": current},
                       idempotency_key=key)
         return {"signal": _row_to_dict(_lock_signal(s, signal_id)),
                 "applied": True, "duplicate": False, "status": "OPEN"}

@@ -356,7 +356,9 @@ def apply_actions(store, signal_id, actions: Sequence[Action],
             if kind == "ENTRY_FILLED":
                 res = store.record_entry_fill(
                     signal_id, action["price"], action["at"],
-                    source_ts=action["source_ts"], session=session)
+                    source_ts=action["source_ts"], session=session,
+                    metadata={"execution_evidence":"candle_simulation",
+                              "broker_fill_verified":False})
             elif kind == "STOP_MOVED":
                 res = store.record_stop_move(
                     signal_id, action["price"], action["at"],
