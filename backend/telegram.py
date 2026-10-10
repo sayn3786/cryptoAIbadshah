@@ -87,7 +87,8 @@ def build_rec_message(recs_data: Dict) -> str:
             exh         = r.get("exhaustion_alert")
 
             tp_lines = []
-            for j, (tp, pct) in enumerate(zip(tps, tp_pct), 1):
+            for j, tp in enumerate(tps, 1):
+                pct = tp_pct[j - 1] if j <= len(tp_pct) else None
                 if tp is not None:
                     tp_lines.append(f"  🎯 TP{j}: {_fmt_price(tp)}" + (f" (+{_pct(pct)})" if pct else ""))
 

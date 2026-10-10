@@ -3579,20 +3579,10 @@ def api_telegram_send():
         return jsonify({"ok": False, "error": "Bot not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env"}), 400
 
     key = _rec_cache_key()
-    with _rec_lock:
-        mem = _rec_cache_load()
-    if mem.get("key") == key and mem.get("data"):
-        result = mem["data"]
-    else:
-        result = _compute_recommendations()
-        if result.get("actionable", True) and result.get("slot_current", True):
-            with _rec_lock:
-                _rec_cache_save(key, result)
-
-    # Dispatching to Telegram IS publishing. A set that could not be persisted
-    # must not be sent to subscribers.
-    if not result.get("actionable", True):
-        return _not_actionable(result)
+    result = _telegram_persisted_slot()
+    if result is None:
+        return jsonify({"ok": False, "error": "No valid persisted current slot available",
+                        "error_code": "PERSISTED_SLOT_UNAVAILABLE"}), 503
 
     # A person pressing the button means it, so this is NOT gated on the
     # per-slot dedup — but a successful send does claim the slot, so the cron
@@ -3693,7 +3683,22 @@ def api_twitter_send():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-def _send_recs_with_context(result):
+def _telegram_persisted_slot():
+    """Fail closed: Telegram must use the recorded slot, never a recomputation."""
+    try:
+        slot = _published_slot()
+        recs = slot.get("recommendations") or []
+        if not slot.get("published") or not recs:
+            return None
+        if any(not r.get("signal_id") or not r.get("persisted") for r in recs):
+            return None
+        return _slot_envelope(slot)
+    except Exception:
+        app.logger.exception("Telegram persisted slot unavailable")
+        return None
+
+
+def _send_recs_with_context():
     """Send the daily signal post with its status context: which signals are
     new since the last post, still valid or already passed, which closed since
     the last post, and the last 7 days' record. The context is best-effort: a
@@ -3703,7 +3708,9 @@ def _send_recs_with_context(result):
     import kv as _kv
     import telegram_digest as _td
     env = _deploy_env()
-    data = dict(result or {})
+    data = _telegram_persisted_slot()
+    if data is None:
+        return False
     recs = data.get("recommendations") or []
     now = datetime.now(timezone.utc)
     try:
@@ -4274,13 +4281,10 @@ def api_cron_daily():
 
     slot_key = _rec_cache_key()
 
-    # Telegram. Nothing to announce if the set could not be computed — sending
-    # the previous run's `result` would publish a stale set.
-    if result is None:
-        results["telegram"] = "skipped (no recommendations computed)"
-    else:
-        results["telegram"] = _dispatch_once(
-            "tg:recs", slot_key, lambda: _send_recs_with_context(result))
+    # Read the recorded current slot independently of the computation above.
+    # A retry may recompute different prices or fail after an earlier publish.
+    results["telegram"] = _dispatch_once(
+        "tg:recs", slot_key, _send_recs_with_context)
 
     # Twitter — BTC + ETH 1D. The two analyses are built INSIDE the closure, so
     # a run that is going to skip does not pay for them. That also makes a retry
