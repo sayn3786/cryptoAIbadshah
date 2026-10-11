@@ -208,6 +208,25 @@ def test_daily_post_is_silent_unless_it_has_a_new_signal(monkeypatch):
 
 # ── schedule ─────────────────────────────────────────────────────────────────
 
+def test_recommendations_reuse_hl_alert_destination(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "legacy-channel")
+    monkeypatch.setenv("PUBLICATION_EVIDENCE_ENABLED", "false")
+    bodies = []
+    class R:
+        def raise_for_status(self): pass
+    monkeypatch.setattr(tg.requests, "post", lambda url, json=None, timeout=None: bodies.append(json) or R())
+    for alert, report, expected in [
+        ("private-alert", "private-report", "private-alert"),
+        ("", "private-report", "private-report"),
+        ("", "", "legacy-channel"),
+    ]:
+        monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", alert)
+        monkeypatch.setenv("TELEGRAM_REPORT_CHAT_ID", report)
+        assert tg.send_daily_recs({"recommendations": [REC]})
+        assert bodies[-1]["chat_id"] == expected
+        assert tg.os.getenv("TELEGRAM_CHAT_ID") == "legacy-channel"
+
 def test_daily_update_runs_once_after_the_1d_close():
     from _worker_schedule import worker_schedule
     assert worker_schedule()["patterns"] == [(0, 15)]      # 8:15 AM SGT
