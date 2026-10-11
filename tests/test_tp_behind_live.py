@@ -125,6 +125,9 @@ def _analysis(direction, entry, sl, tps, live, rr):
 @pytest.fixture()
 def engine_stub(monkeypatch):
     """_compute_recommendations with the network and BTC context stubbed out."""
+    # These test the TP-behind / ladder rules, not the channel floor: publish
+    # every top pick whatever its strength.
+    monkeypatch.setenv("CHANNEL_MIN_STRENGTH", "0")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_REQUIRED", raising=False)
     monkeypatch.setattr(appmod, "get_btc_mining_signals",

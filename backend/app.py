@@ -2736,6 +2736,67 @@ def _published_slot(now_sgt=None) -> dict:
     }
 
 
+# ── Channel: Confirmed-tier only (option 1) ──────────────────────────────────
+def _channel_min_strength() -> float:
+    """The strength a top-three pick needs to be a channel trade signal
+    (CHANNEL_MIN_STRENGTH; default the Confirmed floor, 69; 0 = every pick)."""
+    try:
+        v = float(os.getenv("CHANNEL_MIN_STRENGTH", "") or rec_policy.CONFIRMED_TIER_FLOOR)
+    except ValueError:
+        return float(rec_policy.CONFIRMED_TIER_FLOOR)
+    return v if 0 <= v <= 100 else float(rec_policy.CONFIRMED_TIER_FLOOR)
+
+
+def _split_channel(top):
+    """(trade signals, watchlist) from the slot's top picks. Pure apart from
+    the setting. The watchlist keeps only what the post needs."""
+    floor = _channel_min_strength()
+    signals, watch = [], []
+    for r in top or []:
+        s_ = r.get("display_strength") or r.get("strength") or 0
+        if s_ >= floor:
+            signals.append(r)
+        else:
+            watch.append({"symbol": r.get("symbol"), "direction": r.get("direction"),
+                          "strength": round(float(s_), 1)})
+    return signals, watch
+
+
+def _slot_decided_key(now_sgt=None):
+    return f"slot_decided:{_deploy_env()}:{_slot_start(now_sgt or datetime.now(_SGT)).isoformat()}"
+
+
+def _mark_slot_decided(now_sgt, watchlist) -> None:
+    """Record that this slot's publish has run (with its watchlist), so later
+    runs in the slot publish nothing new even when no pick reached the floor.
+    Never raises."""
+    try:
+        import kv as _kv
+        _kv.set_value(_slot_decided_key(now_sgt), json.dumps({"watchlist": watchlist or []}),
+                      ttl_seconds=2 * 86_400)
+    except Exception:
+        pass
+
+
+def _slot_decided(now_sgt=None) -> bool:
+    try:
+        import kv as _kv
+        return _kv.get_value(_slot_decided_key(now_sgt)) is not None
+    except Exception:
+        return False
+
+
+def _slot_watchlist(now_sgt=None) -> list:
+    """The watchlist recorded at this slot's publish ([] when none). Never raises."""
+    try:
+        import kv as _kv
+        raw = _kv.get_value(_slot_decided_key(now_sgt))
+        w = (json.loads(raw) or {}).get("watchlist") if raw else []
+        return w if isinstance(w, list) else []
+    except Exception:
+        return []
+
+
 def _slot_already_published(now_sgt=None) -> bool:
     """
     Has the current 4H slot already recorded a set?
@@ -3126,7 +3187,12 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
     candidates = rec_policy.rank_candidates(candidates)
     top = rec_policy.select_publishable(candidates)
 
-    intraday_recs = top[:3]
+    # Option 1 (channel): only the top three's Confirmed-tier picks (strength
+    # >= CHANNEL_MIN_STRENGTH, the HL floor) become recorded, posted trade
+    # signals; the rest of the top three is a watchlist, shown in the post but
+    # never recorded. The channel backtest (two 125-day periods): the published
+    # top three summed -397%, the 69+ picks -16% (Jan-May +27%).
+    intraday_recs, watchlist = _split_channel(top[:3])
 
     # ── Persist before publishing ────────────────────────────────────────
     # Each recommendation is written with its targets, decision snapshot and
@@ -3162,7 +3228,7 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
             _persist = {"all_actionable": False, "persisted": 0, "duplicates": 0,
                         "failed": [], "error_code": None, "skipped_reason": "DRY_RUN"}
             raise _SkipPersistence
-        if intraday_recs and _slot_already_published(now_sgt):
+        if _slot_decided(now_sgt) or (intraday_recs and _slot_already_published(now_sgt)):
             _persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
                         "failed": [], "error_code": None,
                         "skipped_reason": "SLOT_ALREADY_PUBLISHED"}
@@ -3173,6 +3239,11 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
             _r.setdefault("generated_at_utc", now)
         _out = _sp.persist_recommendations(intraday_recs, _analyses)
         _persist = {k: v for k, v in _out.items() if k != "results"}
+        if _out["all_actionable"]:
+            # This slot has decided (even with no 69+ pick): later runs in the
+            # slot must not publish a mid-slot signal. The watchlist rides along
+            # for the post, which reads the RECORDED set.
+            _mark_slot_decided(now_sgt, watchlist)
         for _r, _res in zip(intraday_recs, _out["results"]):
             _r["signal_id"]  = _res.get("signal_id")
             _r["persisted"]  = bool(_res.get("ok"))
@@ -3338,6 +3409,10 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         "btc_1d_str":       0,
         "options_expiry":   _opts,
         "recommendations":  intraday_recs,
+        # The rest of the slot's top three: below the channel floor, shown as a
+        # watchlist in the post, never recorded or traded.
+        "watchlist":        watchlist,
+        "channel_min_strength": _channel_min_strength(),
         # Candidates that passed every other gate but whose first target price
         # had already traded through by the time the set was built. Surfaced so
         # a missing symbol is explainable instead of silently absent.
@@ -3713,6 +3788,7 @@ def _send_recs_with_context():
         return False
     recs = data.get("recommendations") or []
     now = datetime.now(timezone.utc)
+    data["watchlist"] = _slot_watchlist()
     try:
         prev_raw = _kv.get_value(f"tg:lastpost:{env}")
         prev = _json.loads(prev_raw) if prev_raw else None

@@ -37,6 +37,17 @@ def _htf_badge(htf: Dict) -> str:
     return f"📊 HTF: {badges} {status}".strip()
 
 
+def watchlist_line(watch) -> Optional[str]:
+    """The slot's top picks below the channel floor: names only, no entry, stop
+    or targets — they are not trades."""
+    items = [w for w in (watch or []) if isinstance(w, dict) and w.get("symbol")]
+    if not items:
+        return None
+    parts = [f"{w['symbol']} {_dir_icon(w.get('direction'))} {w.get('direction')} "
+             f"{w.get('strength')}" for w in items]
+    return ("👀 *Watchlist* _(below 69 — not a trade, no entry)_: " + " · ".join(parts))
+
+
 def build_rec_message(recs_data: Dict) -> str:
     """Format /api/recommendations payload into a Telegram message."""
     recs       = recs_data.get("recommendations", [])
@@ -129,6 +140,10 @@ def build_rec_message(recs_data: Dict) -> str:
                         f"— {_icon} price {'up' if _etype == 'pump' else 'down'} {abs(_roc):.1f}%: _{_detail}_"
                     )
             lines += [l for l in block if l is not None]
+
+    _watch = watchlist_line(recs_data.get("watchlist"))
+    if _watch:
+        lines += ["", _watch]
 
     _closed = closed_lines(recs_data.get("recent_closed") or [])
     if _closed:
