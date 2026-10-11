@@ -359,9 +359,10 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "",
 
 
 def send_daily_recs(recs_data: Dict) -> bool:
-    """Send the daily recommendation message to the configured Telegram channel."""
+    """Send recommendations to the private HL-alert destination when configured."""
+    from ops_alerts import chat_id as alert_chat_id
     token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = alert_chat_id() or os.getenv("TELEGRAM_CHAT_ID", "")
 
     if not token or not chat_id:
         print("[telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — skipping")
