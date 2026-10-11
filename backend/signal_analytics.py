@@ -272,6 +272,14 @@ def excursion_report(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
                    "mfe": _excursion_stats(losers, "mfe_pct"),
                    "mae": _excursion_stats(losers, "mae_pct")},
         "candidate_stop_floor_pct": tighter,
+        # The rows behind the most extreme adverse excursions, so an impossible
+        # one (a bad price print, a mis-scaled ladder) can be traced and fixed.
+        "worst_mae_rows": [
+            {k: r.get(k) for k in ("id", "symbol", "direction", "entry_price", "stop_loss",
+                                   "mae_pct", "mfe_pct", "realized_return_pct", "status",
+                                   "generated_at", "closed_at")}
+            for r in sorted((r for r in rows if _f(r.get("mae_pct")) is not None),
+                            key=lambda r: _f(r.get("mae_pct")))[:3]],
         "note": (
             "candidate_stop_floor_pct is the winners' 75th-percentile adverse "
             "excursion — a stop inside this would have stopped out a quarter of "
