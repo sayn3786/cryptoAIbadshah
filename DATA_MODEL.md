@@ -558,6 +558,7 @@ mutation endpoints stay **closed**, not open.
 | GET | `/api/signals/<id>` | public | One signal with targets, snapshot, events, postmortem. |
 | POST | `/api/signals/monitor` | internal | Advance the lifecycle. `max_age_hours`, `fill_window_hours`, `limit`. |
 | POST | `/api/signals/<id>/archive` | internal | |
+| POST | `/api/signals/<id>/void` | internal | Void a CLOSED signal whose outcome came from bad data (e.g. demo candles): every statistic (analytics, postmortem, weekly report, paper account, tracker history) leaves it out. The signal row is unchanged; the void is an append-only row in `signal_voids` (migration `017`). Body: `reason` (3–300 chars). Idempotent. |
 | POST | `/api/signals/<id>/postmortem` | internal | |
 | GET | `/api/db/health` | public | Code only — no DSN, host or user. |
 | GET | `/api/db/usage` | internal | Storage and row counts, split by environment. |

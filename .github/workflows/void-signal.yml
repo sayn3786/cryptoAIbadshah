@@ -1,0 +1,50 @@
+name: Void a signal (bad data)
+
+# Manual only: Actions tab -> "Void a signal (bad data)" -> Run workflow.
+# Marks a CLOSED signal whose outcome came from bad data (e.g. synthetic demo
+# candles) as void, so every statistic leaves it out. The signal row is not
+# changed; the void is an append-only record (migration 017 must be applied).
+# Public repo: the log prints only ok / error_code / status, never the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      signal_id:
+        description: "Signal id (uuid) — from /api/signals/analytics worst_mae_rows etc."
+        required: true
+      reason:
+        description: "Why it is void (3-300 chars)"
+        required: true
+        default: "stopped out by synthetic demo candles (monitor bug fixed in #311)"
+
+jobs:
+  void:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Void it
+        env:
+          APP_URL:     ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SIGNAL_ID:   ${{ inputs.signal_id }}
+          REASON:      ${{ inputs.reason }}
+        run: |
+          if ! printf '%s' "$SIGNAL_ID" | grep -Eq '^[0-9a-fA-F-]{36}$'; then
+            echo "::error::signal_id must be a uuid"; exit 1
+          fi
+          BODY=$(python3 -c 'import json, os; print(json.dumps({"reason": os.environ["REASON"]}))')
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST "$APP_URL/api/signals/$SIGNAL_ID/void" \
+            -H "x-cron-secret: $CRON_SECRET" -H "Content-Type: application/json" \
+            -d "$BODY" --max-time 60)
+          HTTP_STATUS=$(printf '%s' "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          printf '%s' "$RESPONSE" | sed '/HTTP_STATUS:/d' | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              d = {}
+          print({k: d.get(k) for k in ("ok", "voided", "created", "status", "error_code")})
+          '
+          echo "HTTP $HTTP_STATUS"
+          [ "$HTTP_STATUS" = "200" ]
