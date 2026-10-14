@@ -666,6 +666,21 @@ def _fetch_closed_spot(sym: str, tf: str):
     return closed
 
 
+def _monitor_candles(sym: str, tf: str):
+    """Closed candles for the signal monitor, REFUSING data it must never act
+    on: when every live source failed the client falls back to synthetic demo
+    candles (mock_data: ADA at 0.72 — 3x the real price), and the monitor read
+    them as real, stopping out two ADA shorts that never hit their stop (Oct 2
+    and Oct 4). Demo, stale or empty data raises, so the monitor skips the
+    symbol this run (an error, not a decision) and the next run retries."""
+    closed, why = _fetch_alert_candles(sym, tf)
+    if why == "no_pair":
+        raise KeyError(f"no exchange pair for {sym!r} (not in SYMBOLS or RETIRED_SYMBOLS)")
+    if why:
+        raise RuntimeError(f"unusable candles for {sym} {tf}: {why}")
+    return closed
+
+
 def _fetch_alert_candles(sym: str, tf: str):
     """(closed candles, skip_reason) for the Telegram alert scan.
 
@@ -6729,7 +6744,7 @@ def api_signals_monitor():
         # Closed candles only. A forming candle can un-touch a level before it
         # closes, and recording a hit from one would write an outcome the market
         # never confirmed.
-        return _fetch_closed_spot(symbol, timeframe or "2H")
+        return _monitor_candles(symbol, timeframe or "2H")
 
     try:
         summary = monitor.run_monitor(
