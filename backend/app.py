@@ -6787,6 +6787,31 @@ def api_signal_detail(signal_id):
     return jsonify(sig)
 
 
+@app.post("/api/signals/<signal_id>/void")
+def api_signal_void(signal_id):
+    """Void a CLOSED signal whose outcome came from bad data, so every
+    statistic leaves it out. Internal only. Body or query: reason (3-300
+    chars). The signal row is not changed; the void is an append-only record
+    (migration 017). Idempotent."""
+    unauth = _require_internal()
+    if unauth:
+        return unauth
+    guard = _db_guard()
+    if guard:
+        return guard
+    body = request.get_json(silent=True) or {}
+    reason = body.get("reason") or request.args.get("reason") or ""
+    store = _signal_store()
+    try:
+        return jsonify({"ok": True, **store.void_signal(signal_id, reason=reason)})
+    except store.InvalidTransition as exc:
+        return jsonify({"ok": False, "error": str(exc), "error_code": "INVALID_TRANSITION"}), 409
+    except store.SignalValidationError as exc:
+        return jsonify({"ok": False, "error": str(exc), "error_code": "BAD_REQUEST"}), 400
+    except Exception as exc:
+        return _db_error_response(exc)
+
+
 @app.post("/api/signals/<signal_id>/archive")
 def api_signal_archive(signal_id):
     """Soft-archive a COMPLETED signal. Internal only. Nothing is deleted."""

@@ -39,7 +39,7 @@ __all__ = [
     "attach_targets", "record_entry_fill", "record_excursion",
     "record_stop_move", "weighted_return", "WORKING_STATUSES",
     "record_target_hit", "record_stop_loss_hit", "close_signal",
-    "expire_signal", "cancel_signal", "upsert_postmortem", "archive_signal",
+    "expire_signal", "cancel_signal", "upsert_postmortem", "archive_signal", "void_signal",
     "list_postmortems", "usage_report",
 ]
 
@@ -356,6 +356,30 @@ def has_environment_column(session) -> bool:
             # older schema: writes still succeed, just untagged.
             _ENV_COLUMN = False
     return _ENV_COLUMN
+
+
+_VOIDS_TABLE: Optional[bool] = None
+
+
+def has_voids_table(session) -> bool:
+    """True when the signal_voids table exists (migration 017). Same reasoning
+    as has_environment_column: the code must run on both sides of the
+    migration, so before it nothing is excluded and voiding is refused."""
+    global _VOIDS_TABLE
+    if _VOIDS_TABLE is None:
+        try:
+            _VOIDS_TABLE = bool(session.execute(_sql(
+                "SELECT to_regclass('signal_voids') IS NOT NULL")).scalar())
+        except Exception:
+            _VOIDS_TABLE = False
+    return _VOIDS_TABLE
+
+
+def _void_clause(session, include_voided: bool = False) -> str:
+    """SQL fragment excluding signals voided as data errors (none before 017)."""
+    if include_voided or not has_voids_table(session):
+        return ""
+    return " AND id NOT IN (SELECT signal_id FROM signal_voids)"
 
 
 def has_entry_fill_columns(session) -> bool:
@@ -714,6 +738,7 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
                  strategy_name: Optional[str] = None,
                  include_archived: bool = False,
                  environment: Optional[str] = None,
+                 include_voided: bool = False,
                  limit: int = DEFAULT_PAGE_SIZE,
                  offset: int = 0,
                  stalest_first: bool = False,
@@ -767,7 +792,7 @@ def list_signals(*, statuses: Optional[Iterable[str]] = None,
 
     def _work(s):
         env_sql, env_params = _environment_clause(s, environment)
-        clause = base + env_sql
+        clause = base + env_sql + _void_clause(s, include_voided)
         p = {**params, **env_params}
         # A caller that does not paginate does not need the count, and on a
         # remote database every avoidable statement is a round trip.
@@ -943,9 +968,12 @@ def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
                                offset: int = 0,
                                min_strength: Optional[float] = None,
                                max_strength: Optional[float] = None,
+                               include_voided: bool = False,
                                session=None) -> List[Dict[str, Any]]:
     """
     Terminal signals with their decision snapshot attached — the postmortem feed.
+    Signals voided as data errors (signal_voids) are left out unless
+    ``include_voided``.
 
     Only closed rows (``TERMINAL_STATUSES``), newest first, each carrying its
     stored ``indicator_values`` and ``market_context`` under ``snapshot`` plus
@@ -987,7 +1015,7 @@ def list_closed_with_snapshots(*, strategy_version: Optional[str] = None,
         if strategy_version:
             where.append("strategy_version = :sver")
             params["sver"] = strategy_version.strip()
-        clause = " AND ".join(where) + env_sql
+        clause = " AND ".join(where) + env_sql + _void_clause(s, include_voided)
         rows = s.execute(_sql(
             f"SELECT * FROM signals WHERE {clause} "
             f"ORDER BY closed_at DESC NULLS LAST, generated_at DESC, id DESC LIMIT :limit OFFSET :offset"
@@ -1529,6 +1557,46 @@ def list_postmortems(*, outcome: Optional[str] = None,
         return {"items": items, "limit": limit, "offset": offset,
                 "total": int(total),
                 "has_more": offset + len(items) < int(total)}
+
+    if session is not None:
+        return _work(session)
+    with session_scope() as s:
+        return _work(s)
+
+
+def void_signal(signal_id, *, reason: str, session=None) -> Dict[str, Any]:
+    """
+    Void a CLOSED signal whose outcome came from bad data (e.g. synthetic demo
+    candles) so every statistic leaves it out. Nothing on the signal changes —
+    a terminal row stays terminal; the void is an append-only row in
+    signal_voids (migration 017), which is the audit record. Idempotent.
+
+    Raises SignalValidationError (no such signal, a reason under 3 characters,
+    or the migration not applied) and InvalidTransition (the signal is still
+    working: let it finish, or cancel it).
+    """
+    reason = (reason or "").strip()
+    if len(reason) < 3 or len(reason) > 300:
+        raise SignalValidationError("reason must be 3-300 characters")
+
+    def _work(s):
+        if not has_voids_table(s):
+            raise SignalValidationError("signal_voids does not exist: apply migration 017")
+        row = s.execute(_sql("SELECT status FROM signals WHERE id = CAST(:id AS uuid)"),
+                        {"id": str(signal_id)}).first()
+        if row is None:
+            raise SignalValidationError(f"no signal {signal_id}")
+        status = row[0]
+        if status not in TERMINAL_STATUSES:
+            raise InvalidTransition(f"{status} is still working; only a closed signal can be voided")
+        created = s.execute(_sql("""
+            INSERT INTO signal_voids (signal_id, reason)
+            VALUES (CAST(:id AS uuid), :reason)
+            ON CONFLICT (signal_id) DO NOTHING
+            RETURNING signal_id
+        """), {"id": str(signal_id), "reason": reason}).first() is not None
+        return {"signal_id": str(signal_id), "voided": True, "created": created,
+                "status": status, "reason": reason}
 
     if session is not None:
         return _work(session)
