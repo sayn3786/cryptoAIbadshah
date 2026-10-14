@@ -4158,7 +4158,10 @@ def api_cron_publish():
     # and running it only to discover the slot was already published is the
     # whole cost of the job for nothing. Checking first is what makes it cheap
     # enough to schedule hourly, which is what absorbs the cron delay.
-    if _slot_already_published():
+    if _slot_already_published() or _slot_decided():
+        # (_slot_decided: the slot's publish ran but no top pick reached the
+        # channel floor, so no channel row exists — HL extras may still have
+        # been recorded and must still be traded.)
         # Auto-exec used to run ONLY in the request that persisted the slot. A
         # publish killed by the 60s platform limit after persisting (or any
         # slot published elsewhere) then never traded, because every retry
@@ -4185,7 +4188,10 @@ def api_cron_publish():
     # inside open_position). A Hyperliquid failure must never fail publishing —
     # the signals are already persisted; execution is a downstream side effect.
     hl_auto = None
-    if persistence.get("persisted"):
+    # Run whenever this request recorded the slot — channel signals, HL-only
+    # extras, or neither (it is a no-op then). Gating on channel rows alone
+    # skipped every slot whose only 69+ signals were HL extras.
+    if result.get("slot_current", True) and not persistence.get("skipped_reason"):
         try:
             hl_auto = _hl_auto_execute_run()
         except Exception:
@@ -5309,7 +5315,9 @@ def _hl_history_verdict(*, listed, placed, runs, stale_alert, slot_runs, order=N
         return "not_run", ("auto-exec didn't run for this slot ("
                            f"{not_run[-1].get('reason') or not_run[-1].get('error_code') or '?'})")
     if slot_runs:
-        return "not_attempted", "auto-exec ran but never attempted this signal"
+        seen = ", ".join(f"{r.get('reason') or ('ran' if r.get('ran') else 'not run')}"
+                         f" (attempted {r.get('attempted', '?')})" for r in slot_runs[-3:])
+        return "not_attempted", f"auto-exec ran but never attempted this signal — runs: {seen}"
     if placed is None:
         return "unknown", "unknown: the order lookup failed"
     return "no_record", ("not placed, and no run record (before run logging, or the "
