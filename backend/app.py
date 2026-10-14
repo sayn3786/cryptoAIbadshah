@@ -5116,10 +5116,15 @@ def _hl_auto_execute_pass():
 # lean (the 8 AM update's 1W lean, |score| >= 0.3: about a third of days). On
 # the live HL book this lifted Jan-May $13.32 -> $19.44 and Jun-Oct $5.58 ->
 # $8.03, with a lower drawdown in both (weekly_trend_compare). The channel is
-# unchanged. HL_WEEKLY_LEAN_FILTER=0 turns it off.
+# unchanged.
+# OFF by default since Oct 14: the weekly lean lags at turns — it read
+# "strong bullish" for two weeks of falling prices (Oct 1-14) and the filter
+# skipped every 69+ short (AVAX 97.9, ALGO 78, XLM 77.5), and on a later
+# window its Jun-Oct backtest edge was negative (-$1.03). HL_WEEKLY_LEAN_FILTER=1
+# turns it back on.
 def _weekly_lean_filter_on() -> bool:
-    return os.getenv("HL_WEEKLY_LEAN_FILTER", "1").strip().lower() not in (
-        "0", "false", "off", "no")
+    return os.getenv("HL_WEEKLY_LEAN_FILTER", "").strip().lower() in (
+        "1", "true", "on", "yes")
 
 
 # The soft version: a signal at HL_WEEKLY_LEAN_OVERRIDE+ strength still opens

@@ -17,6 +17,24 @@ from test_hl_low_vol import NORMAL, _ready_run                         # noqa: E
 from test_ops_alerts import sent                                       # noqa: E402,F401
 
 
+@pytest.fixture(autouse=True)
+def filter_on(monkeypatch):
+    """v57 is off by default; these tests exercise it switched on."""
+    monkeypatch.setenv("HL_WEEKLY_LEAN_FILTER", "1")
+
+
+def test_off_by_default(monkeypatch):
+    monkeypatch.delenv("HL_WEEKLY_LEAN_FILTER", raising=False)
+    assert app._weekly_lean_filter_on() is False
+    sigs = [dict(s) for s in SIGS]
+    kept, skipped, lean = app._hl_weekly_lean_filter(
+        sigs, {"lean": "bearish", "strong": True, "bear": 11, "bull": 2})
+    assert len(kept) == 2 and not skipped and lean is None
+    for v in ("1", "true", "on", "yes"):
+        monkeypatch.setenv("HL_WEEKLY_LEAN_FILTER", v)
+        assert app._weekly_lean_filter_on() is True
+
+
 @pytest.fixture
 def mem_kv(monkeypatch):
     import kv
