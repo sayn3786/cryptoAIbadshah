@@ -280,6 +280,14 @@ def excursion_report(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
                                    "generated_at", "closed_at")}
             for r in sorted((r for r in rows if _f(r.get("mae_pct")) is not None),
                             key=lambda r: _f(r.get("mae_pct")))[:3]],
+        # ... and the largest favourable ones: a demo-data price below the real
+        # one can fake a short's target hit just as one above faked a stop.
+        "best_mfe_rows": [
+            {k: r.get(k) for k in ("id", "symbol", "direction", "entry_price", "stop_loss",
+                                   "mae_pct", "mfe_pct", "realized_return_pct", "status",
+                                   "generated_at", "closed_at")}
+            for r in sorted((r for r in rows if _f(r.get("mfe_pct")) is not None),
+                            key=lambda r: -_f(r.get("mfe_pct")))[:3]],
         "note": (
             "candidate_stop_floor_pct is the winners' 75th-percentile adverse "
             "excursion — a stop inside this would have stopped out a quarter of "

@@ -384,7 +384,7 @@ def test_tracker_is_read_only(client, fake, monkeypatch):
 def test_monitor_is_internal_only(client, fake, monkeypatch):
     assert client.post("/api/signals/monitor").status_code == 401
     monkeypatch.setenv("CRON_SECRET", "right")
-    monkeypatch.setattr(appmod, "_fetch_closed_spot", lambda sym, tf: [])
+    monkeypatch.setattr(appmod, "_monitor_candles", lambda sym, tf: [])
     r = client.post("/api/signals/monitor", headers={"x-cron-secret": "right"})
     assert r.status_code == 200
     assert set(r.get_json()) >= {"checked", "targets_hit", "stopped", "expired"}
@@ -396,7 +396,7 @@ def test_monitor_reports_rather_than_crashing_on_a_data_failure(client, fake,
 
     def boom(sym, tf):
         raise RuntimeError("no candles")
-    monkeypatch.setattr(appmod, "_fetch_closed_spot", boom)
+    monkeypatch.setattr(appmod, "_monitor_candles", boom)
     r = client.post("/api/signals/monitor", headers={"x-cron-secret": "right"})
     assert r.status_code == 200, "one bad symbol must not fail the whole run"
     assert r.get_json()["errors"]
