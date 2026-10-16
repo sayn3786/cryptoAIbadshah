@@ -72,7 +72,7 @@ def build_rec_message(recs_data: Dict) -> str:
             btc_str = fb_str
 
     lines = [
-        f"🌟 *CryptoMonk Daily Trades* — {date_label}",
+        f"🌟 *CryptoStarsSpace Daily Trades* — {date_label}",
         f"⏰ Valid until {valid_fmt}",
         "",
         f"{'🟢' if btc_dir == 'LONG' else '🔴' if btc_dir == 'SHORT' else '⚪'} *BTC Signal: {btc_dir} ({btc_str}/100)*{btc_note}",

@@ -60,6 +60,14 @@ def test_token_passes_auth_on_monitor(client, monkeypatch):
     assert r.status_code not in (401, 403), r.get_data(as_text=True)
 
 
+def test_token_opens_only_post_telegram_notification(client, monkeypatch):
+    monkeypatch.setattr(app, "_notify_persisted_slot", lambda: (
+        {"ok": True, "reason": "NO_QUALIFYING_SIGNALS"}, 200))
+    assert client.post("/api/cron/telegram", headers=H).status_code == 200
+    assert client.post("/api/cron/telegram", headers={"x-scheduler-token": "wrong"}).status_code == 401
+    assert client.get("/api/cron/telegram", headers=H).status_code in (401, 405)
+
+
 def test_token_passes_auth_on_pattern_alerts(client, monkeypatch):
     r = client.post("/api/patterns/alert?dry=1&symbols=NONE", headers=H)
     assert r.status_code not in (401, 403), r.get_data(as_text=True)

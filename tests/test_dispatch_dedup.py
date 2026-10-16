@@ -142,9 +142,10 @@ def test_the_twitter_analyses_are_built_inside_the_closure():
 def test_the_cron_dispatches_through_the_guard():
     import inspect
     src = inspect.getsource(appmod.api_cron_daily)
-    assert src.count("_dispatch_once(") == 2, "telegram AND twitter must be guarded"
+    assert src.count("_dispatch_once(") == 1, "twitter must be guarded"
     # The guarded send adds the post's status context, then sends.
-    assert '"tg:recs", slot_key, _send_recs_with_context' in src
+    assert "_notify_persisted_slot()" in src
+    assert '_dispatch_once("tg:recs"' in inspect.getsource(appmod._notify_persisted_slot)
     assert "_send_telegram_recs(" in inspect.getsource(appmod._send_recs_with_context)
 
 
