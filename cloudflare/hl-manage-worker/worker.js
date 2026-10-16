@@ -8,6 +8,7 @@
 //   hh:02, hh:12, hh:32  publish signals    POST /api/cron/publish  (+ HL auto-exec)
 //   hh:05, hh:35         outcome monitor    POST /api/signals/monitor
 //   00:07, 08:07, 12:07  Telegram daily     POST /api/cron/daily
+//   hh:07, hh:17, hh:37  persisted Telegram POST /api/cron/telegram (slot dedup)
 //   00:15                daily update       POST /api/patterns/alert  (1D/1W list → Telegram)
 //   00:20                TAO snapshot       POST /api/cron/tao-snapshot
 //   01:30                data snapshots     POST /api/cron/etf-snapshot, /api/cron/market-snapshot
@@ -55,6 +56,10 @@ const JOBS = [
     due: ({ m }) => m === 5 || m === 35 },
   { name: "daily", path: "/api/cron/daily", ...S, retries: 2,
     due: ({ h, m }) => (h === 0 || h === 8 || h === 12) && m === 7 },
+  // All publication slots, including late publication retries. Same app-side
+  // dedup key as the daily/manual sends; never computes or executes trades.
+  { name: "telegram", path: "/api/cron/telegram", ...S, retries: 2,
+    due: ({ m }) => m === 7 || m === 17 || m === 37 },
   // Once a day after the 1D close: the 1D/1W Market Update list.
   { name: "patterns", path: "/api/patterns/alert", ...S, retries: 1,
     due: ({ h, m }) => h === 0 && m === 15 },
@@ -83,7 +88,7 @@ const JOBS = [
 // raw body.
 const SUMMARY_KEYS = ["ok", "ran", "reason", "positions", "actions", "computed",
   "persisted", "duplicates", "skipped_reason", "error_code", "slot_current",
-  "mode", "attempted", "counts", "week", "result",
+  "mode", "attempted", "counts", "week", "result", "telegram", "watchlist_count",
   // publish: the slot's top candidates and what moved their strength, and any
   // HL-only extras (v55 boosted ones listed) — why a slot did or didn't trade.
   "strength_diag", "hl_extra",
@@ -195,7 +200,7 @@ const HINTS = {
 
 function failed(r) {
   if (r.error && r.status === undefined) return true;                  // not configured
-  if (r.status === 200) return false;
+  if (r.status === 200) return r.ok === false;
   if (r.error_code && BENIGN_CODES.has(r.error_code)) return false;
   return true;
 }

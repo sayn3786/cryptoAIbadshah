@@ -3485,7 +3485,7 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
 
 _SGT = timezone(timedelta(hours=8))
 
-def _rec_cache_key() -> str:
+def _rec_cache_key(now_sgt=None) -> str:
     """
     Cache key tied to the six daily signal slots (SGT), one per 4H candle close:
 
@@ -3496,7 +3496,7 @@ def _rec_cache_key() -> str:
     identical between bars rather than changing every 30 minutes. Six slots of
     three trades is the eighteen-a-day ceiling.
     """
-    sgt  = datetime.now(_SGT)
+    sgt  = now_sgt or datetime.now(_SGT)
     # Six slots a day, on the 4H boundaries: 00, 04, 08, 12, 16, 20 SGT. The
     # published set changes when a 4H candle closes and not in between, so a day
     # holds at most six sets of three — eighteen trades.
@@ -3788,7 +3788,7 @@ def _telegram_persisted_slot():
         return None
 
 
-def _send_recs_with_context():
+def _send_recs_with_context(data=None):
     """Send the daily signal post with its status context: which signals are
     new since the last post, still valid or already passed, which closed since
     the last post, and the last 7 days' record. The context is best-effort: a
@@ -3798,7 +3798,7 @@ def _send_recs_with_context():
     import kv as _kv
     import telegram_digest as _td
     env = _deploy_env()
-    data = _telegram_persisted_slot()
+    data = data if data is not None else _telegram_persisted_slot()
     if data is None:
         return False
     recs = data.get("recommendations") or []
@@ -4343,6 +4343,36 @@ def api_cron_weekly_report():
                     "errors": errors})
 
 
+def _notify_persisted_slot():
+    """Notify only the recorded slot; no analysis, trading or external posts."""
+    slot = _published_slot()
+    if not slot.get("published"):
+        if slot.get("reason") in ("DB_NOT_CONFIGURED", "DB_READ_FAILED"):
+            return {"ok": False, "reason": slot["reason"]}, 503
+        return {"ok": True, "telegram": "skipped", "reason": (
+            "NO_QUALIFYING_SIGNALS" if _slot_decided() else "AWAITING_PUBLICATION"),
+            "watchlist_count": len(_slot_watchlist())}, 200
+    recs = slot.get("recommendations") or []
+    if not recs or any(not r.get("signal_id") or not r.get("persisted") for r in recs):
+        return {"ok": False, "reason": "INVALID_PERSISTED_SLOT"}, 503
+    data = _slot_envelope(slot)
+    # Retain the same slot key as manual/daily sends, preventing cross-job duplicates.
+    slot_time = datetime.fromisoformat(slot["slot_start"]).astimezone(_SGT)
+    result = _dispatch_once("tg:recs", _rec_cache_key(slot_time),
+                            lambda: _send_recs_with_context(data))
+    ok = result == "sent" or result.startswith("skipped")
+    return {"ok": ok, "telegram": result,
+            "reason": None if ok else "TELEGRAM_SEND_FAILED"}, 200 if ok else 503
+
+
+@app.post("/api/cron/telegram")
+def api_cron_telegram():
+    if not (_scheduler_token_ok() or (os.getenv("CRON_SECRET") and _cron_authorized())):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    result, status = _notify_persisted_slot()
+    return jsonify(result), status
+
+
 @app.get("/api/cron/daily")
 @app.post("/api/cron/daily")
 def api_cron_daily():
@@ -4380,8 +4410,9 @@ def api_cron_daily():
 
     # Read the recorded current slot independently of the computation above.
     # A retry may recompute different prices or fail after an earlier publish.
-    results["telegram"] = _dispatch_once(
-        "tg:recs", slot_key, _send_recs_with_context)
+    notification, notification_status = _notify_persisted_slot()
+    results["telegram"] = notification.get("telegram", "failed")
+    results["telegram_reason"] = notification.get("reason")
 
     # Twitter — BTC + ETH 1D. The two analyses are built INSIDE the closure, so
     # a run that is going to skip does not pay for them. That also makes a retry
@@ -4399,7 +4430,9 @@ def api_cron_daily():
     # can time the other out.
 
     print(f"[cron/daily] {results}")
-    return jsonify({"ok": True, "results": results})
+    telegram_ok = notification_status == 200
+    response = jsonify({"ok": telegram_ok, "results": results})
+    return response if telegram_ok else (response, 503)
 
 
 @app.get("/api/cron/tao-snapshot")
@@ -5738,7 +5771,7 @@ def _hl_manage_token_ok() -> bool:
 # with SCHEDULER_TOKEN: publishing (which also runs HL auto-exec), the outcome
 # monitor, the daily Telegram/Twitter run, pattern alerts, the daily data
 # snapshots and the ML research collect/label jobs. POST only.
-_SCHEDULER_PATHS = ("/api/cron/publish", "/api/signals/monitor",
+_SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/monitor",
                     "/api/cron/daily", "/api/patterns/alert",
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
