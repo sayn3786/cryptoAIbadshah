@@ -69,6 +69,33 @@ def _weight(a: Dict[str, Any]) -> float:
     return w
 
 
+FRESH_MARK = "🆕"
+
+
+def _live_age(a: Dict[str, Any]) -> Optional[int]:
+    """Closed candles since a LIVE read fired (0 = the latest close); None for
+    a played-out / invalidated / failed read or an unknown age."""
+    if a.get("event") == "failed" or a.get("status") in ("played_out", "invalidated"):
+        return None
+    import market_lean
+    return market_lean.event_age(a)
+
+
+def _freshness(live: List[Dict[str, Any]]) -> tuple:
+    """Sort key for a coin: (newest live read's age, 1W-fresh first). Coins
+    with nothing live sort last."""
+    ages = [(x, a.get("timeframe")) for a in live
+            if (x := _live_age(a)) is not None]
+    if not ages:
+        return (99, 1)
+    newest = min(x for x, _ in ages)
+    return (newest, 0 if any(x == newest and tf == "1W" for x, tf in ages) else 1)
+
+
+def _fresh_prefix(a: Dict[str, Any]) -> str:
+    return f"{FRESH_MARK} " if _live_age(a) == 0 else ""
+
+
 def describe(a: Dict[str, Any]) -> str:
     """One line for one alert (without the coin name). A played-out read is
     marked, and says when it drops off the list."""
@@ -276,17 +303,23 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
                 score += 3
                 if any(TF_WEIGHT.get(a.get("timeframe"), 0) >= 2 for a in live):
                     loud = True
-        rows.append((score, sym, flag, tags, items))
+        rows.append((score, sym, flag, tags, items, _freshness(live)))
 
-    rows.sort(key=lambda r: (-r[0], r[1]))
+    # Newest first: coins with a read on the LATEST closed candle lead (a fresh
+    # 1W close ahead of a fresh 1D one), then by how recent their newest live
+    # read is; the read weight (⭐ / ⚠️ / timeframe) breaks ties.
+    rows.sort(key=lambda r: (r[5], -r[0], r[1]))
 
     blocks = []
     if coins_scanned:
         import market_lean
         blocks.append(market_lean.render(alerts, coins_scanned))
-    for _score, sym, flag, tags, items in rows:
+    if any(r[5][0] == 0 for r in rows):
+        blocks.append(f"{FRESH_MARK} = fired on the latest closed candle · those coins are "
+                      "listed first, newest to oldest")
+    for _score, sym, flag, tags, items, _fresh in rows:
         blocks.append("\n".join([f"{flag}{sym}" + (f"  ({' · '.join(tags)})" if tags else "")]
-                                + [f"  {describe(a)}" for a in items]))
+                                + [f"  {_fresh_prefix(a)}{describe(a)}" for a in items]))
     if forming:
         forming.sort(key=lambda a: -TF_WEIGHT.get(a.get("timeframe"), 1))
         blocks.append("\n".join(["⏳ Forming (not confirmed yet):"]
