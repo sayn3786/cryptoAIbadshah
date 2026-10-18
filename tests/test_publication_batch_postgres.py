@@ -1,9 +1,10 @@
 """Real PostgreSQL batch atomicity and immutability; disposable DB only."""
 from pathlib import Path
 import copy
+import uuid
 import pytest
-from sqlalchemy import text
-from test_signal_database import engine, store, TEST_URL
+from sqlalchemy import text, event
+from test_signal_database import engine, TEST_URL
 from test_publication_batch import SLOT
 import publication_batch as batch
 
@@ -11,18 +12,37 @@ pytestmark = pytest.mark.skipif(not TEST_URL, reason="disposable PostgreSQL requ
 
 
 @pytest.fixture
-def prepared(engine, store, monkeypatch):
+def prepared(engine, monkeypatch):
     monkeypatch.setenv("DB_REQUIRED", "true")
-    migration = Path(__file__).resolve().parents[1] / "database/migrations/018_publication_batches.sql"
+    schema = "batch_test_" + uuid.uuid4().hex
+    migrations = Path(__file__).resolve().parents[1] / "database/migrations"
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        conn.exec_driver_sql(migration.read_text())
+        conn.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+        conn.exec_driver_sql(f'SET search_path TO "{schema}", public')
+        for name in ("001_initial_signal_schema.sql", "018_publication_batches.sql"):
+            conn.exec_driver_sql((migrations / name).read_text())
+    def set_path(connection, record):
+        with connection.cursor() as cur:
+            cur.execute(f'SET search_path TO "{schema}", public')
+        connection.commit()  # SET must not leave psycopg in a transaction
+    event.listen(engine, "connect", set_path)
+    engine.dispose()
+    import signal_store
+    signal_store.reset_capabilities()
     recs = [{"symbol": symbol, "direction": "LONG", "entry": "100.123456789",
              "sl": "95", "tp_targets": ["110", "115", "120"],
              "timeframe": "2H", "generated_at_utc": SLOT} for symbol in ("BTC", "ETH")]
     analyses = {r["symbol"]: {"signal_candle_closed_at": int(SLOT.timestamp() * 1000),
                               "data_source": "okx"} for r in recs}
     batch.freeze(SLOT, recs, analyses, [])
-    return engine
+    try:
+        yield engine
+    finally:
+        signal_store.reset_capabilities()
+        event.remove(engine, "connect", set_path)
+        engine.dispose()
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
 
 
 def test_real_rollback_replay_and_immutable_intent(prepared, monkeypatch):
