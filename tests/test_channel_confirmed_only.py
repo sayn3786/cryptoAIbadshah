@@ -85,7 +85,8 @@ def test_engine_sends_a_sub_floor_pick_to_the_watchlist(engine_stub, monkeypatch
 def test_the_publish_path_gates_on_the_decided_slot():
     import inspect
     src = inspect.getsource(app._compute_recommendations)
-    assert "if _slot_decided(now_sgt) or (intraday_recs and _slot_already_published(now_sgt)):" in src
+    assert "if _slot_decided(now_sgt):" in src
+    assert "PUBLICATION_RECOVERY_REQUIRED" in src
     assert "_mark_slot_decided(now_sgt, watchlist)" in src
     send = inspect.getsource(app._send_recs_with_context)
     assert 'data["watchlist"] = _slot_watchlist()' in send

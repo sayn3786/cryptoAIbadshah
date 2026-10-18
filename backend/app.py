@@ -2795,6 +2795,12 @@ def _mark_slot_decided(now_sgt, watchlist) -> None:
 
 def _slot_decided(now_sgt=None) -> bool:
     try:
+        import db as _db
+        if _db.db_enabled():
+            import publication_batch
+            batch = publication_batch.load(_slot_start(now_sgt or datetime.now(_SGT)))
+            if batch is not None:
+                return batch["completed_at"] is not None
         import kv as _kv
         return _kv.get_value(_slot_decided_key(now_sgt)) is not None
     except Exception:
@@ -3243,17 +3249,31 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
             _persist = {"all_actionable": False, "persisted": 0, "duplicates": 0,
                         "failed": [], "error_code": None, "skipped_reason": "DRY_RUN"}
             raise _SkipPersistence
-        if _slot_decided(now_sgt) or (intraday_recs and _slot_already_published(now_sgt)):
+        if _slot_decided(now_sgt):
             _persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
                         "failed": [], "error_code": None,
                         "skipped_reason": "SLOT_ALREADY_PUBLISHED"}
+            raise _SkipPersistence
+        if _slot_already_published(now_sgt):
+            _persist = {"all_actionable": False, "persisted": 0, "duplicates": 0,
+                        "failed": [], "error_code": "PUBLICATION_RECOVERY_REQUIRED"}
             raise _SkipPersistence
         _analyses = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
                      for r in intraday_recs}
         for _r in intraday_recs:
             _r.setdefault("generated_at_utc", now)
-        _out = _sp.persist_recommendations(intraday_recs, _analyses)
-        _persist = {k: v for k, v in _out.items() if k != "results"}
+        import db as _db_batch
+        if _db_batch.db_enabled():
+            import publication_batch
+            publication_batch.freeze(_slot_start(now_sgt), intraday_recs, _analyses, watchlist)
+            _out = publication_batch.resume(_slot_start(now_sgt))
+            # A concurrent publisher may have frozen a different scan first.
+            # Always retain the winning original decision, including prices.
+            intraday_recs = _out["payload"]["recommendations"]
+            watchlist = _out["payload"]["watchlist"]
+        else:
+            _out = _sp.persist_recommendations(intraday_recs, _analyses)
+        _persist = {k: v for k, v in _out.items() if k not in ("results", "payload")}
         if _out["all_actionable"]:
             # This slot has decided (even with no 69+ pick): later runs in the
             # slot must not publish a mid-slot signal. The watchlist rides along
@@ -3358,7 +3378,7 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         import db as _db
         _msg = _db.sanitize_db_error(_exc)
         print(f"[recs] persistence layer error: {_msg}")
-        _persist = {"all_actionable": not _db.db_required(), "persisted": 0,
+        _persist = {"all_actionable": False, "persisted": 0,
                     "duplicates": 0, "failed": [r["symbol"] for r in intraday_recs],
                     "error_code": "PERSISTENCE_ERROR"}
 
@@ -4173,7 +4193,28 @@ def api_cron_publish():
     # and running it only to discover the slot was already published is the
     # whole cost of the job for nothing. Checking first is what makes it cheap
     # enough to schedule hourly, which is what absorbs the cron delay.
-    if _slot_already_published() or _slot_decided():
+    import db as _batch_db
+    if _batch_db.db_enabled():
+        try:
+            import publication_batch
+            slot_start = _slot_start(datetime.now(_SGT))
+            recovered = publication_batch.resume(slot_start)
+            if recovered is not None:
+                _mark_slot_decided(slot_start, recovered["payload"]["watchlist"])
+                return jsonify({"ok": True, "computed": 0,
+                                "persisted": recovered["persisted"],
+                                "duplicates": recovered["duplicates"],
+                                "skipped_reason": recovered.get("skipped_reason"),
+                                "recovered": True,
+                                "hl_auto_execute": _hl_auto_execute_catch_up()})
+        except Exception as exc:
+            app.logger.warning("publication recovery failed: %s", _batch_db.sanitize_db_error(exc))
+            return jsonify({"ok": False, "error_code": "PUBLICATION_RECOVERY_FAILED"}), 503
+        if _slot_already_published() and not _slot_decided():
+            # Legacy partial rows have no frozen intent. Never invent missing
+            # trades or assert completeness from row count alone.
+            return jsonify({"ok": False, "error_code": "PUBLICATION_INTENT_MISSING"}), 503
+    if _slot_decided() or (_slot_already_published() and not _batch_db.db_enabled()):
         # (_slot_decided: the slot's publish ran but no top pick reached the
         # channel floor, so no channel row exists — HL extras may still have
         # been recorded and must still be traded.)
@@ -4206,7 +4247,8 @@ def api_cron_publish():
     # Run whenever this request recorded the slot — channel signals, HL-only
     # extras, or neither (it is a no-op then). Gating on channel rows alone
     # skipped every slot whose only 69+ signals were HL extras.
-    if result.get("slot_current", True) and not persistence.get("skipped_reason"):
+    if (result.get("actionable", True) and result.get("slot_current", True)
+            and not persistence.get("skipped_reason")):
         try:
             hl_auto = _hl_auto_execute_run()
         except Exception:

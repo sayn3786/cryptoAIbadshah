@@ -23,7 +23,8 @@ returns `NO_QUALIFYING_SIGNALS` (with watchlist count); an undecided slot return
 `AWAITING_PUBLICATION`. Neither sends a trade alert or creates a trade receipt.
 Database or Telegram failures return a non-success status for retry/alert handling.
 Deploy the application endpoint to Vercel **before** deploying the updated Worker.
-No database migration or new secret is required. Watchlist-only messages remain
+Migration `018_publication_batches.sql` is required before the Vercel deploy;
+no new secret is required. Watchlist-only messages remain
 unsent: the publication ledger requires actual persisted signal IDs.
 
 Why: GitHub's schedules are best-effort. Publishing ran 1–3 hours late or not

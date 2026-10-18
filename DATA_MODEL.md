@@ -1,5 +1,19 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Durable publication batches (migration `018`)
+
+Apply `018_publication_batches.sql` **before deploying this code**, then deploy
+Vercel before the updated Cloudflare Worker. `publication_batches` stores the
+first frozen channel decision per `(environment, slot_start)`: original
+recommendations, analyses, watchlist, strategy version and creation timestamp.
+Only `completed_at` can change, once. Signal writes and completion commit in one
+transaction. Failed writes leave the frozen intent available for a retry without
+recomputation. A strategy-version mismatch fails closed. Legacy partial slots
+without an intent remain blocked (`PUBLICATION_INTENT_MISSING`); they must not
+be relabeled complete or repaired with freshly computed prices.
+
+No production migration is automatic. On rollback, retain this additive table.
+
 ## Prospective publication evidence (migration `016`)
 
 Migration `016` adds append-only `publication_attempts`,
@@ -666,7 +680,7 @@ SELECT environment, count(*), max(generated_at) FROM signals GROUP BY environmen
 | `database/migrations/` | `001`–`008`, plus review-only rollbacks. |
 | `database/migrate.py` | Explicit CLI runner. Never automatic. |
 
-**Deploy order for a migration: deploy the code first, then migrate.** Every
+**Deploy order depends on the migration. `018` must run before this code.** Every
 migration is written so the running code probes for what it needs and degrades
 rather than failing. `002` is the exception that proves the rule — it replaces an
 index the older code named directly, so migrating ahead of the deploy breaks
