@@ -9,12 +9,23 @@ decides which jobs run:
 | hh:02, hh:12, hh:32 | **Publish signals** (+ HL auto-exec entry) | `POST /api/cron/publish` | `SCHEDULER_TOKEN` |
 | hh:05, hh:35 | Outcome monitor (TP/SL hits, expiry) | `POST /api/signals/monitor` | `SCHEDULER_TOKEN` |
 | 00:07, 08:07, 12:07 | Telegram daily signals (+ Twitter) | `POST /api/cron/daily` | `SCHEDULER_TOKEN` |
+| Every hour :07, :17, :37 | Notify current persisted signal slot; deduplicated with daily/manual sends | `POST /api/cron/telegram` | `SCHEDULER_TOKEN` |
 | 00:15, 08:15, 16:15 | Pattern alerts → Telegram | `POST /api/patterns/alert` | `SCHEDULER_TOKEN` |
 | 00:20 | TAO snapshot | `POST /api/cron/tao-snapshot` | `SCHEDULER_TOKEN` |
 | 01:30 | ETF-flow and market snapshots | `POST /api/cron/etf-snapshot`, `/api/cron/market-snapshot` | `SCHEDULER_TOKEN` |
 | every 2h at :10 (00:10, 02:10, …) | ML research collect | `POST /api/research/ml/collect` | `SCHEDULER_TOKEN` |
 | 01:15, 03:15, … | ML research label | `POST /api/research/ml/label` | `SCHEDULER_TOKEN` |
 | Sunday 06:17 | Weekly report → **private** Telegram chat | `POST /api/cron/weekly-report` | `SCHEDULER_TOKEN` |
+
+The Telegram-only job does not recompute recommendations, call Twitter, or run HL.
+It covers all six 4-hour slots and late publication retries. An empty decided slot
+returns `NO_QUALIFYING_SIGNALS` (with watchlist count); an undecided slot returns
+`AWAITING_PUBLICATION`. Neither sends a trade alert or creates a trade receipt.
+Database or Telegram failures return a non-success status for retry/alert handling.
+Deploy the application endpoint to Vercel **before** deploying the updated Worker.
+Migration `018_publication_batches.sql` is required before the Vercel deploy;
+no new secret is required. Watchlist-only messages remain
+unsent: the publication ledger requires actual persisted signal IDs.
 
 Why: GitHub's schedules are best-effort. Publishing ran 1–3 hours late or not
 at all, which made signals late and HL entries stale. Vercel's free-plan cron

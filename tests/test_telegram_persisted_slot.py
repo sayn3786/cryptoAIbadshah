@@ -22,6 +22,7 @@ def stored(monkeypatch):
             "slot_start": "2026-10-01T08:00:00+08:00",
             "slot_end": "2026-10-01T12:00:00+08:00"}
     monkeypatch.setattr(appmod, "_published_slot", lambda: slot)
+    monkeypatch.setattr(appmod, "_slot_decided", lambda now_sgt=None: True)
     def forbidden(*a, **k):
         raise AssertionError("must not read cached or recomputed recommendations")
     monkeypatch.setattr(appmod, "_compute_recommendations", forbidden)
@@ -98,3 +99,113 @@ def test_scheduled_route_ignores_recomputed_prices(stored, monkeypatch, compute_
         response = appmod.api_cron_daily().get_json()
     assert response["results"]["telegram"] == "sent"
     assert sent[0]["recommendations"] == slot["recommendations"]
+
+
+def test_notification_job_deduplicates_and_does_not_compute(stored, monkeypatch):
+    slot, sent = stored
+    claimed = set()
+    def claim(key, **kwargs):
+        if key in claimed:
+            return False
+        claimed.add(key)
+        return True
+    monkeypatch.setattr(kv, "claim", claim)
+    first, status = appmod._notify_persisted_slot()
+    assert status == 200 and first["telegram"] == "sent"
+    second, status = appmod._notify_persisted_slot()
+    assert status == 200 and second["telegram"].startswith("skipped")
+    assert len(sent) == 1
+    assert sent[0]["recommendations"] == slot["recommendations"]
+
+
+@pytest.mark.parametrize("decided,reason", [(True, "NO_QUALIFYING_SIGNALS"),
+                                            (False, "AWAITING_PUBLICATION")])
+def test_empty_slot_is_explicit_not_a_send_failure(stored, monkeypatch, decided, reason):
+    slot, sent = stored
+    slot.update(published=False, recommendations=[], reason="NOT_PUBLISHED_YET")
+    monkeypatch.setattr(appmod, "_slot_decided", lambda: decided)
+    monkeypatch.setattr(appmod, "_slot_watchlist", lambda: [{"symbol": "BTC"}])
+    result, status = appmod._notify_persisted_slot()
+    assert status == 200 and result["reason"] == reason
+    assert result["watchlist_count"] == 1 and not sent
+
+
+def test_notification_failure_is_503_and_retry_releases_claim(stored, monkeypatch):
+    released = []
+    monkeypatch.setattr(kv, "release", released.append)
+    monkeypatch.setattr(appmod, "_send_telegram_recs", lambda data: False)
+    result, status = appmod._notify_persisted_slot()
+    assert status == 503 and result["ok"] is False
+    assert result["reason"] == "TELEGRAM_SEND_FAILED" and released
+
+
+def test_partial_publication_never_claims_or_sends_until_complete(stored, monkeypatch):
+    slot, sent = stored
+    checked = []
+    complete = False
+    def decided(when):
+        checked.append(when.isoformat())
+        return complete
+    monkeypatch.setattr(appmod, "_slot_decided", decided)
+    claims = []
+    monkeypatch.setattr(kv, "claim", lambda *a, **k: claims.append(a) or True)
+    result, status = appmod._notify_persisted_slot()
+    assert status == 503 and result["reason"] == "PUBLICATION_INCOMPLETE"
+    assert not sent and not claims
+    assert checked == [slot["slot_start"]]
+    complete = True
+    result, status = appmod._notify_persisted_slot()
+    assert status == 200 and result["telegram"] == "sent"
+    assert len(sent) == 1 and len(claims) == 1
+
+
+def test_database_failure_is_not_empty_slot(stored):
+    slot, sent = stored
+    slot.update(published=False, recommendations=[], reason="DB_READ_FAILED")
+    result, status = appmod._notify_persisted_slot()
+    assert status == 503 and result["reason"] == "DB_READ_FAILED" and not sent
+
+
+def test_notification_route_requires_auth(monkeypatch):
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    monkeypatch.setattr(appmod, "_scheduler_token_ok", lambda: False)
+    with appmod.app.test_request_context(method="POST"):
+        response, status = appmod.api_cron_telegram()
+    assert status == 401
+
+
+def test_daily_route_reports_send_failure(stored, monkeypatch):
+    monkeypatch.setattr(appmod, "_cron_authorized", lambda: True)
+    monkeypatch.setattr(appmod, "_notify_persisted_slot", lambda: (
+        {"ok": False, "telegram": "failed", "reason": "TELEGRAM_SEND_FAILED"}, 503))
+    monkeypatch.setattr(appmod, "_dispatch_once", lambda *a: "skipped")
+    with appmod.app.test_request_context():
+        response, status = appmod.api_cron_daily()
+    assert status == 503 and response.get_json()["ok"] is False
+
+
+def test_send_uses_frozen_watchlist_not_cache(stored, monkeypatch):
+    import db
+    import publication_batch
+    slot, sent = stored
+    monkeypatch.setattr(db, "db_enabled", lambda: True)
+    seen = []
+    watchlist = [{"symbol": "ETH", "strength": 55}]
+    def load(when):
+        seen.append(when.isoformat())
+        return {"payload": {"watchlist": watchlist}}
+    monkeypatch.setattr(publication_batch, "load", load)
+    monkeypatch.setattr(appmod, "_slot_watchlist", lambda *a: pytest.fail("cache must not override intent"))
+    assert appmod._send_recs_with_context()
+    assert sent[0]["watchlist"] == watchlist
+    assert seen == [slot["slot_start"]]
+
+
+def test_watchlist_database_failure_does_not_send(stored, monkeypatch):
+    import db
+    import publication_batch
+    monkeypatch.setattr(db, "db_enabled", lambda: True)
+    def fail(slot): raise RuntimeError("database unavailable")
+    monkeypatch.setattr(publication_batch, "load", fail)
+    assert not appmod._send_recs_with_context()
+    assert stored[1] == []

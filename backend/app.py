@@ -2795,6 +2795,12 @@ def _mark_slot_decided(now_sgt, watchlist) -> None:
 
 def _slot_decided(now_sgt=None) -> bool:
     try:
+        import db as _db
+        if _db.db_enabled():
+            import publication_batch
+            batch = publication_batch.load(_slot_start(now_sgt or datetime.now(_SGT)))
+            if batch is not None:
+                return batch["completed_at"] is not None
         import kv as _kv
         return _kv.get_value(_slot_decided_key(now_sgt)) is not None
     except Exception:
@@ -3243,17 +3249,37 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
             _persist = {"all_actionable": False, "persisted": 0, "duplicates": 0,
                         "failed": [], "error_code": None, "skipped_reason": "DRY_RUN"}
             raise _SkipPersistence
-        if _slot_decided(now_sgt) or (intraday_recs and _slot_already_published(now_sgt)):
+        if _slot_decided(now_sgt):
             _persist = {"all_actionable": True, "persisted": 0, "duplicates": 0,
                         "failed": [], "error_code": None,
                         "skipped_reason": "SLOT_ALREADY_PUBLISHED"}
+            raise _SkipPersistence
+        if _slot_already_published(now_sgt):
+            _persist = {"all_actionable": False, "persisted": 0, "duplicates": 0,
+                        "failed": [], "error_code": "PUBLICATION_RECOVERY_REQUIRED"}
             raise _SkipPersistence
         _analyses = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
                      for r in intraday_recs}
         for _r in intraday_recs:
             _r.setdefault("generated_at_utc", now)
-        _out = _sp.persist_recommendations(intraday_recs, _analyses)
-        _persist = {k: v for k, v in _out.items() if k != "results"}
+        import db as _db_batch
+        if _db_batch.db_enabled():
+            import publication_batch
+            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())
+            for _r in _extra:
+                _r.setdefault("generated_at_utc", now)
+            _xa = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
+                   for r in _extra}
+            publication_batch.freeze(_slot_start(now_sgt), intraday_recs, _analyses, watchlist,
+                                     hl_extras=_extra, hl_analyses=_xa)
+            _out = publication_batch.resume(_slot_start(now_sgt))
+            # A concurrent publisher may have frozen a different scan first.
+            # Always retain the winning original decision, including prices.
+            intraday_recs = _out["payload"]["recommendations"]
+            watchlist = _out["payload"]["watchlist"]
+        else:
+            _out = _sp.persist_recommendations(intraday_recs, _analyses)
+        _persist = {k: v for k, v in _out.items() if k not in ("results", "payload")}
         if _out["all_actionable"]:
             # This slot has decided (even with no 69+ pick): later runs in the
             # slot must not publish a mid-slot signal. The watchlist rides along
@@ -3275,7 +3301,10 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         # never posted: the channel reads filter on the top three's name.
         # Best-effort — a failure here never affects the published set.
         try:
-            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())
+            # Database-backed extras were frozen and committed with the channel
+            # above. Never recompute or separately persist them after recovery.
+            _extra = ([] if _db_batch.db_enabled() else
+                      _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads()))
             if _extra:
                 for _r in _extra:
                     _r.setdefault("generated_at_utc", now)
@@ -3358,7 +3387,7 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         import db as _db
         _msg = _db.sanitize_db_error(_exc)
         print(f"[recs] persistence layer error: {_msg}")
-        _persist = {"all_actionable": not _db.db_required(), "persisted": 0,
+        _persist = {"all_actionable": False, "persisted": 0,
                     "duplicates": 0, "failed": [r["symbol"] for r in intraday_recs],
                     "error_code": "PERSISTENCE_ERROR"}
 
@@ -3485,7 +3514,7 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
 
 _SGT = timezone(timedelta(hours=8))
 
-def _rec_cache_key() -> str:
+def _rec_cache_key(now_sgt=None) -> str:
     """
     Cache key tied to the six daily signal slots (SGT), one per 4H candle close:
 
@@ -3496,7 +3525,7 @@ def _rec_cache_key() -> str:
     identical between bars rather than changing every 30 minutes. Six slots of
     three trades is the eighteen-a-day ceiling.
     """
-    sgt  = datetime.now(_SGT)
+    sgt  = now_sgt or datetime.now(_SGT)
     # Six slots a day, on the 4H boundaries: 00, 04, 08, 12, 16, 20 SGT. The
     # published set changes when a 4H candle closes and not in between, so a day
     # holds at most six sets of three — eighteen trades.
@@ -3788,7 +3817,7 @@ def _telegram_persisted_slot():
         return None
 
 
-def _send_recs_with_context():
+def _send_recs_with_context(data=None):
     """Send the daily signal post with its status context: which signals are
     new since the last post, still valid or already passed, which closed since
     the last post, and the last 7 days' record. The context is best-effort: a
@@ -3798,12 +3827,25 @@ def _send_recs_with_context():
     import kv as _kv
     import telegram_digest as _td
     env = _deploy_env()
-    data = _telegram_persisted_slot()
+    data = data if data is not None else _telegram_persisted_slot()
     if data is None:
         return False
     recs = data.get("recommendations") or []
     now = datetime.now(timezone.utc)
-    data["watchlist"] = _slot_watchlist()
+    # Pin context to the original slot, including across a boundary/cold start.
+    # A failed durable read must not claim a successful, incomplete send.
+    try:
+        import db as _watch_db
+        slot_time = datetime.fromisoformat(data["generated_at"])
+        batch = None
+        if _watch_db.db_enabled():
+            import publication_batch
+            batch = publication_batch.load(_slot_start(slot_time))
+        data["watchlist"] = (batch["payload"]["watchlist"] if batch is not None
+                             else _slot_watchlist(slot_time))
+    except Exception:
+        app.logger.exception("Telegram durable watchlist unavailable")
+        return False
     try:
         prev_raw = _kv.get_value(f"tg:lastpost:{env}")
         prev = _json.loads(prev_raw) if prev_raw else None
@@ -4173,7 +4215,28 @@ def api_cron_publish():
     # and running it only to discover the slot was already published is the
     # whole cost of the job for nothing. Checking first is what makes it cheap
     # enough to schedule hourly, which is what absorbs the cron delay.
-    if _slot_already_published() or _slot_decided():
+    import db as _batch_db
+    if _batch_db.db_enabled():
+        try:
+            import publication_batch
+            slot_start = _slot_start(datetime.now(_SGT))
+            recovered = publication_batch.resume(slot_start)
+            if recovered is not None:
+                _mark_slot_decided(slot_start, recovered["payload"]["watchlist"])
+                return jsonify({"ok": True, "computed": 0,
+                                "persisted": recovered["persisted"],
+                                "duplicates": recovered["duplicates"],
+                                "skipped_reason": recovered.get("skipped_reason"),
+                                "recovered": True,
+                                "hl_auto_execute": _hl_auto_execute_catch_up()})
+        except Exception as exc:
+            app.logger.warning("publication recovery failed: %s", _batch_db.sanitize_db_error(exc))
+            return jsonify({"ok": False, "error_code": "PUBLICATION_RECOVERY_FAILED"}), 503
+        if _slot_already_published() and not _slot_decided():
+            # Legacy partial rows have no frozen intent. Never invent missing
+            # trades or assert completeness from row count alone.
+            return jsonify({"ok": False, "error_code": "PUBLICATION_INTENT_MISSING"}), 503
+    if _slot_decided() or (_slot_already_published() and not _batch_db.db_enabled()):
         # (_slot_decided: the slot's publish ran but no top pick reached the
         # channel floor, so no channel row exists — HL extras may still have
         # been recorded and must still be traded.)
@@ -4206,7 +4269,8 @@ def api_cron_publish():
     # Run whenever this request recorded the slot — channel signals, HL-only
     # extras, or neither (it is a no-op then). Gating on channel rows alone
     # skipped every slot whose only 69+ signals were HL extras.
-    if result.get("slot_current", True) and not persistence.get("skipped_reason"):
+    if (result.get("actionable", True) and result.get("slot_current", True)
+            and not persistence.get("skipped_reason")):
         try:
             hl_auto = _hl_auto_execute_run()
         except Exception:
@@ -4343,6 +4407,40 @@ def api_cron_weekly_report():
                     "errors": errors})
 
 
+def _notify_persisted_slot():
+    """Notify only the recorded slot; no analysis, trading or external posts."""
+    slot = _published_slot()
+    if not slot.get("published"):
+        if slot.get("reason") in ("DB_NOT_CONFIGURED", "DB_READ_FAILED"):
+            return {"ok": False, "reason": slot["reason"]}, 503
+        return {"ok": True, "telegram": "skipped", "reason": (
+            "NO_QUALIFYING_SIGNALS" if _slot_decided() else "AWAITING_PUBLICATION"),
+            "watchlist_count": len(_slot_watchlist())}, 200
+    recs = slot.get("recommendations") or []
+    if not recs or any(not r.get("signal_id") or not r.get("persisted") for r in recs):
+        return {"ok": False, "reason": "INVALID_PERSISTED_SLOT"}, 503
+    data = _slot_envelope(slot)
+    # Retain the same slot key as manual/daily sends, preventing cross-job duplicates.
+    slot_time = datetime.fromisoformat(slot["slot_start"]).astimezone(_SGT)
+    # Rows can exist after a partially failed batch. Only the successful
+    # publication marker proves the whole slot is ready to notify.
+    if not _slot_decided(slot_time):
+        return {"ok": False, "reason": "PUBLICATION_INCOMPLETE"}, 503
+    result = _dispatch_once("tg:recs", _rec_cache_key(slot_time),
+                            lambda: _send_recs_with_context(data))
+    ok = result == "sent" or result.startswith("skipped")
+    return {"ok": ok, "telegram": result,
+            "reason": None if ok else "TELEGRAM_SEND_FAILED"}, 200 if ok else 503
+
+
+@app.post("/api/cron/telegram")
+def api_cron_telegram():
+    if not (_scheduler_token_ok() or (os.getenv("CRON_SECRET") and _cron_authorized())):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    result, status = _notify_persisted_slot()
+    return jsonify(result), status
+
+
 @app.get("/api/cron/daily")
 @app.post("/api/cron/daily")
 def api_cron_daily():
@@ -4380,8 +4478,9 @@ def api_cron_daily():
 
     # Read the recorded current slot independently of the computation above.
     # A retry may recompute different prices or fail after an earlier publish.
-    results["telegram"] = _dispatch_once(
-        "tg:recs", slot_key, _send_recs_with_context)
+    notification, notification_status = _notify_persisted_slot()
+    results["telegram"] = notification.get("telegram", "failed")
+    results["telegram_reason"] = notification.get("reason")
 
     # Twitter — BTC + ETH 1D. The two analyses are built INSIDE the closure, so
     # a run that is going to skip does not pay for them. That also makes a retry
@@ -4399,7 +4498,9 @@ def api_cron_daily():
     # can time the other out.
 
     print(f"[cron/daily] {results}")
-    return jsonify({"ok": True, "results": results})
+    telegram_ok = notification_status == 200
+    response = jsonify({"ok": telegram_ok, "results": results})
+    return response if telegram_ok else (response, 503)
 
 
 @app.get("/api/cron/tao-snapshot")
@@ -5738,7 +5839,7 @@ def _hl_manage_token_ok() -> bool:
 # with SCHEDULER_TOKEN: publishing (which also runs HL auto-exec), the outcome
 # monitor, the daily Telegram/Twitter run, pattern alerts, the daily data
 # snapshots and the ML research collect/label jobs. POST only.
-_SCHEDULER_PATHS = ("/api/cron/publish", "/api/signals/monitor",
+_SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/monitor",
                     "/api/cron/daily", "/api/patterns/alert",
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",

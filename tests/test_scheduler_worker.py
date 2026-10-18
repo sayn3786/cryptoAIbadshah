@@ -23,6 +23,8 @@ const w = await import(process.argv[1]);
 console.log = () => {};          // the scheduled handler logs; keep stdout for the JSON result
 const at = (h, m) => new Date(Date.UTC(2026, 8, 26, h, m));
 const out = {};
+out.telegramSchedule = Array.from({length:24}, (_, h) =>
+  [7,17,37].every(m => w.dueJobs(at(h,m)).includes("telegram")));
 out.due = Object.fromEntries([[0,2],[0,5],[0,7],[0,15],[4,2],[4,12],[4,32],[4,35],
   [8,7],[12,7],[16,15],[3,59],[13,33],[0,10],[0,20],[1,15],[1,30],[5,15],[2,10]].map(([h,m]) => [`${h}:${m}`, w.dueJobs(at(h,m))]));
 
@@ -72,6 +74,9 @@ out.alerts = {
   mgrAt31:    w.alertFor({ job: "manage", status: 0, attempts: 1 }, at(4, 31)),
   mlOff:      w.alertFor({ job: "ml-collect", status: 503, error_code: "FEATURE_DISABLED" }, at(4, 10)),
   ok:         w.alertFor({ job: "daily", status: 200 }, at(0, 7)),
+  falseOk:    w.alertFor({ job: "telegram", status: 200, ok: false }, at(4, 37)),
+  tgEarly:    [7, 17].map(m => w.alertFor({ job: "telegram", status: 503 }, at(4, m))),
+  tgLast:     w.alertFor({ job: "telegram", status: 503 }, at(4, 37)),
   daily504:   w.alertFor({ job: "daily", status: 504, attempts: 3 }, at(0, 7)),
 };
 const tg = [];
@@ -111,14 +116,16 @@ def result(tmp_path_factory):
 
 def test_schedule(result):
     due = result["due"]
+    assert all(result["telegramSchedule"])
+    assert result["alerts"]["falseOk"] is not None
     assert due["0:2"] == ["manage", "publish"]            # right after the 4H close
     assert due["0:5"] == ["manage", "monitor"]
-    assert due["0:7"] == ["manage", "daily"]              # Telegram 08:07 SGT
+    assert due["0:7"] == ["manage", "daily", "telegram"]
     assert due["0:15"] == ["manage", "patterns"]
     assert due["4:12"] == ["manage", "publish"] and due["4:32"] == ["manage", "publish"]
     assert due["4:35"] == ["manage", "monitor"]
-    assert due["8:7"] == ["manage", "daily"]
-    assert due["12:7"] == ["manage", "daily"]             # moved from Vercel's 12:05 cron
+    assert due["8:7"] == ["manage", "daily", "telegram"]
+    assert due["12:7"] == ["manage", "daily", "telegram"]
     assert due["16:15"] == ["manage"]                     # daily list runs at 00:15 only
     assert due["3:59"] == ["manage"] and due["13:33"] == ["manage"]
     assert due["0:10"] == ["manage", "ml-collect"] and due["2:10"] == ["manage", "ml-collect"]
@@ -179,6 +186,8 @@ def test_problem_alert_rules(result):
     assert a["pub401at02"] is None                     # :12/:32 may still recover
     assert a["mgrAt30"] and a["mgrAt31"] is None       # every-minute job: at most twice an hour
     assert a["mlOff"] is None and a["ok"] is None
+    assert a["tgEarly"] == [None, None]
+    assert "telegram failed" in a["tgLast"]
     assert "after 3 attempts" in a["daily504"] and "60 s timeout" in a["daily504"]
 
 
