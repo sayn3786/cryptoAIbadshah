@@ -74,7 +74,9 @@ out.alerts = {
   mgrAt31:    w.alertFor({ job: "manage", status: 0, attempts: 1 }, at(4, 31)),
   mlOff:      w.alertFor({ job: "ml-collect", status: 503, error_code: "FEATURE_DISABLED" }, at(4, 10)),
   ok:         w.alertFor({ job: "daily", status: 200 }, at(0, 7)),
-  falseOk:    w.alertFor({ job: "telegram", status: 200, ok: false }, at(4, 7)),
+  falseOk:    w.alertFor({ job: "telegram", status: 200, ok: false }, at(4, 37)),
+  tgEarly:    [7, 17].map(m => w.alertFor({ job: "telegram", status: 503 }, at(4, m))),
+  tgLast:     w.alertFor({ job: "telegram", status: 503 }, at(4, 37)),
   daily504:   w.alertFor({ job: "daily", status: 504, attempts: 3 }, at(0, 7)),
 };
 const tg = [];
@@ -184,6 +186,8 @@ def test_problem_alert_rules(result):
     assert a["pub401at02"] is None                     # :12/:32 may still recover
     assert a["mgrAt30"] and a["mgrAt31"] is None       # every-minute job: at most twice an hour
     assert a["mlOff"] is None and a["ok"] is None
+    assert a["tgEarly"] == [None, None]
+    assert "telegram failed" in a["tgLast"]
     assert "after 3 attempts" in a["daily504"] and "60 s timeout" in a["daily504"]
 
 

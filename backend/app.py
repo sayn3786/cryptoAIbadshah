@@ -4358,6 +4358,10 @@ def _notify_persisted_slot():
     data = _slot_envelope(slot)
     # Retain the same slot key as manual/daily sends, preventing cross-job duplicates.
     slot_time = datetime.fromisoformat(slot["slot_start"]).astimezone(_SGT)
+    # Rows can exist after a partially failed batch. Only the successful
+    # publication marker proves the whole slot is ready to notify.
+    if not _slot_decided(slot_time):
+        return {"ok": False, "reason": "PUBLICATION_INCOMPLETE"}, 503
     result = _dispatch_once("tg:recs", _rec_cache_key(slot_time),
                             lambda: _send_recs_with_context(data))
     ok = result == "sent" or result.startswith("skipped")

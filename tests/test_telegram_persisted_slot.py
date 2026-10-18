@@ -22,6 +22,7 @@ def stored(monkeypatch):
             "slot_start": "2026-10-01T08:00:00+08:00",
             "slot_end": "2026-10-01T12:00:00+08:00"}
     monkeypatch.setattr(appmod, "_published_slot", lambda: slot)
+    monkeypatch.setattr(appmod, "_slot_decided", lambda now_sgt=None: True)
     def forbidden(*a, **k):
         raise AssertionError("must not read cached or recomputed recommendations")
     monkeypatch.setattr(appmod, "_compute_recommendations", forbidden)
@@ -136,6 +137,26 @@ def test_notification_failure_is_503_and_retry_releases_claim(stored, monkeypatc
     result, status = appmod._notify_persisted_slot()
     assert status == 503 and result["ok"] is False
     assert result["reason"] == "TELEGRAM_SEND_FAILED" and released
+
+
+def test_partial_publication_never_claims_or_sends_until_complete(stored, monkeypatch):
+    slot, sent = stored
+    checked = []
+    complete = False
+    def decided(when):
+        checked.append(when.isoformat())
+        return complete
+    monkeypatch.setattr(appmod, "_slot_decided", decided)
+    claims = []
+    monkeypatch.setattr(kv, "claim", lambda *a, **k: claims.append(a) or True)
+    result, status = appmod._notify_persisted_slot()
+    assert status == 503 and result["reason"] == "PUBLICATION_INCOMPLETE"
+    assert not sent and not claims
+    assert checked == [slot["slot_start"]]
+    complete = True
+    result, status = appmod._notify_persisted_slot()
+    assert status == 200 and result["telegram"] == "sent"
+    assert len(sent) == 1 and len(claims) == 1
 
 
 def test_database_failure_is_not_empty_slot(stored):

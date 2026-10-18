@@ -186,6 +186,7 @@ const ALERT_WHEN = {
   manage: ({ m }) => m % 30 === 0,        // every-minute job: at most twice an hour
   publish: ({ m }) => m === 32,           // the hour's last try: :02/:12 may still recover
   monitor: ({ m }) => m === 35,           // at most hourly
+  telegram: ({ m }) => m === 37,         // hourly, after earlier notification retries
 };
 
 const HINTS = {
