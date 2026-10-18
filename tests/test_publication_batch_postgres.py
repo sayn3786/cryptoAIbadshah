@@ -49,6 +49,8 @@ def prepared(engine, monkeypatch):
 
 @pytest.mark.parametrize("failed_symbol", ["ETH", "SOL"])
 def test_real_rollback_replay_and_immutable_intent(prepared, monkeypatch, failed_symbol):
+    with prepared.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM schema_migrations WHERE version='018'")).scalar() == 1
     original = batch.signal_publish.persist_recommendation
     frozen = copy.deepcopy(batch.load(SLOT)["payload"])
     def failing(rec, analysis, **kwargs):

@@ -28,4 +28,7 @@ END $$;
 DROP TRIGGER IF EXISTS publication_batch_guard ON publication_batches;
 CREATE TRIGGER publication_batch_guard BEFORE UPDATE OR DELETE ON publication_batches
     FOR EACH ROW EXECUTE FUNCTION guard_publication_batch();
+INSERT INTO schema_migrations(version, description)
+VALUES ('018', 'Durable immutable publication batches and atomic recovery')
+ON CONFLICT(version) DO NOTHING;
 COMMIT;
