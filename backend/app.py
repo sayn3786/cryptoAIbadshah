@@ -3265,7 +3265,13 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         import db as _db_batch
         if _db_batch.db_enabled():
             import publication_batch
-            publication_batch.freeze(_slot_start(now_sgt), intraday_recs, _analyses, watchlist)
+            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())
+            for _r in _extra:
+                _r.setdefault("generated_at_utc", now)
+            _xa = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
+                   for r in _extra}
+            publication_batch.freeze(_slot_start(now_sgt), intraday_recs, _analyses, watchlist,
+                                     hl_extras=_extra, hl_analyses=_xa)
             _out = publication_batch.resume(_slot_start(now_sgt))
             # A concurrent publisher may have frozen a different scan first.
             # Always retain the winning original decision, including prices.
@@ -3295,7 +3301,10 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         # never posted: the channel reads filter on the top three's name.
         # Best-effort — a failure here never affects the published set.
         try:
-            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())
+            # Database-backed extras were frozen and committed with the channel
+            # above. Never recompute or separately persist them after recovery.
+            _extra = ([] if _db_batch.db_enabled() else
+                      _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads()))
             if _extra:
                 for _r in _extra:
                     _r.setdefault("generated_at_utc", now)
@@ -3823,7 +3832,20 @@ def _send_recs_with_context(data=None):
         return False
     recs = data.get("recommendations") or []
     now = datetime.now(timezone.utc)
-    data["watchlist"] = _slot_watchlist()
+    # Pin context to the original slot, including across a boundary/cold start.
+    # A failed durable read must not claim a successful, incomplete send.
+    try:
+        import db as _watch_db
+        slot_time = datetime.fromisoformat(data["generated_at"])
+        batch = None
+        if _watch_db.db_enabled():
+            import publication_batch
+            batch = publication_batch.load(_slot_start(slot_time))
+        data["watchlist"] = (batch["payload"]["watchlist"] if batch is not None
+                             else _slot_watchlist(slot_time))
+    except Exception:
+        app.logger.exception("Telegram durable watchlist unavailable")
+        return False
     try:
         prev_raw = _kv.get_value(f"tg:lastpost:{env}")
         prev = _json.loads(prev_raw) if prev_raw else None

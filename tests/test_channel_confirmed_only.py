@@ -89,4 +89,4 @@ def test_the_publish_path_gates_on_the_decided_slot():
     assert "PUBLICATION_RECOVERY_REQUIRED" in src
     assert "_mark_slot_decided(now_sgt, watchlist)" in src
     send = inspect.getsource(app._send_recs_with_context)
-    assert 'data["watchlist"] = _slot_watchlist()' in send
+    assert 'batch["payload"]["watchlist"]' in send

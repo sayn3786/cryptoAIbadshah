@@ -182,3 +182,30 @@ def test_daily_route_reports_send_failure(stored, monkeypatch):
     with appmod.app.test_request_context():
         response, status = appmod.api_cron_daily()
     assert status == 503 and response.get_json()["ok"] is False
+
+
+def test_send_uses_frozen_watchlist_not_cache(stored, monkeypatch):
+    import db
+    import publication_batch
+    slot, sent = stored
+    monkeypatch.setattr(db, "db_enabled", lambda: True)
+    seen = []
+    watchlist = [{"symbol": "ETH", "strength": 55}]
+    def load(when):
+        seen.append(when.isoformat())
+        return {"payload": {"watchlist": watchlist}}
+    monkeypatch.setattr(publication_batch, "load", load)
+    monkeypatch.setattr(appmod, "_slot_watchlist", lambda *a: pytest.fail("cache must not override intent"))
+    assert appmod._send_recs_with_context()
+    assert sent[0]["watchlist"] == watchlist
+    assert seen == [slot["slot_start"]]
+
+
+def test_watchlist_database_failure_does_not_send(stored, monkeypatch):
+    import db
+    import publication_batch
+    monkeypatch.setattr(db, "db_enabled", lambda: True)
+    def fail(slot): raise RuntimeError("database unavailable")
+    monkeypatch.setattr(publication_batch, "load", fail)
+    assert not appmod._send_recs_with_context()
+    assert stored[1] == []

@@ -124,3 +124,29 @@ def test_completed_batch_survives_missing_kv_marker(monkeypatch):
     assert app._slot_decided(SLOT)
     monkeypatch.setattr(batch, "load", lambda slot: {"completed_at": None})
     assert not app._slot_decided(SLOT)
+
+
+@pytest.mark.parametrize("fail_symbol", ["BTC", "SOL"])
+def test_recovery_preserves_hl_extras_and_strategy(journal, monkeypatch, fail_symbol):
+    batch.freeze(SLOT, [{"symbol": "BTC", "entry": "100.1"}], {"BTC": {}}, [],
+                 hl_extras=[{"symbol": "SOL", "entry": "20.2"}], hl_analyses={"SOL": {}})
+    failing = True
+    calls = []
+    def persist(rec, analysis, session, strategy_name=batch.signal_publish.STRATEGY_NAME):
+        if failing and rec["symbol"] == fail_symbol:
+            return {"ok": False}
+        calls.append((rec["symbol"], rec["entry"], strategy_name))
+        journal["signals"].append(rec["symbol"])
+        return {"ok": True, "signal_id": rec["symbol"], "created": True}
+    monkeypatch.setattr(batch.signal_publish, "persist_recommendation", persist)
+    with pytest.raises(RuntimeError):
+        batch.resume(SLOT)
+    assert journal["signals"] == [] and journal["row"]["completed_at"] is None
+    failing = False
+    result = batch.resume(SLOT)
+    assert calls[-1] == ("SOL", "20.2", batch.signal_publish.HL_EXTRA_STRATEGY_NAME)
+    assert len(result["results"]) == 1  # channel result mapping excludes extras
+    assert result["hl_extra"]["persisted"] == 1
+    count = len(calls)
+    batch.resume(SLOT)
+    assert len(calls) == count

@@ -6,6 +6,11 @@ Apply `018_publication_batches.sql` **before deploying this code**, then deploy
 Vercel before the updated Cloudflare Worker. `publication_batches` stores the
 first frozen channel decision per `(environment, slot_start)`: original
 recommendations, analyses, watchlist, strategy version and creation timestamp.
+The payload also freezes HL-only candidates and their analyses. Channel and
+HL-extra writes commit together; an extra write failure blocks completion until
+retry succeeds. Extras retain their separate strategy name and are never added
+to the channel message. Telegram reads the frozen watchlist for the exact slot,
+not a possibly missing or newer cache entry. Migration `018` is unchanged.
 Only `completed_at` can change, once. Signal writes and completion commit in one
 transaction. Failed writes leave the frozen intent available for a retry without
 recomputation. A strategy-version mismatch fails closed. Legacy partial slots

@@ -34,7 +34,9 @@ def prepared(engine, monkeypatch):
              "timeframe": "2H", "generated_at_utc": SLOT} for symbol in ("BTC", "ETH")]
     analyses = {r["symbol"]: {"signal_candle_closed_at": int(SLOT.timestamp() * 1000),
                               "data_source": "okx"} for r in recs}
-    batch.freeze(SLOT, recs, analyses, [])
+    extra = {**recs[0], "symbol": "SOL"}
+    batch.freeze(SLOT, recs, analyses, [], hl_extras=[extra],
+                 hl_analyses={"SOL": analyses["BTC"]})
     try:
         yield engine
     finally:
@@ -45,11 +47,12 @@ def prepared(engine, monkeypatch):
             conn.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
 
 
-def test_real_rollback_replay_and_immutable_intent(prepared, monkeypatch):
+@pytest.mark.parametrize("failed_symbol", ["ETH", "SOL"])
+def test_real_rollback_replay_and_immutable_intent(prepared, monkeypatch, failed_symbol):
     original = batch.signal_publish.persist_recommendation
     frozen = copy.deepcopy(batch.load(SLOT)["payload"])
     def failing(rec, analysis, **kwargs):
-        if rec["symbol"] == "ETH":
+        if rec["symbol"] == failed_symbol:
             return {"ok": False}
         return original(rec, analysis, **kwargs)
     monkeypatch.setattr(batch.signal_publish, "persist_recommendation", failing)
@@ -64,7 +67,8 @@ def test_real_rollback_replay_and_immutable_intent(prepared, monkeypatch):
     assert batch.resume(SLOT)["persisted"] == 2
     assert batch.resume(SLOT)["skipped_reason"] == "SLOT_ALREADY_PUBLISHED"
     with prepared.connect() as conn:
-        assert conn.execute(text("SELECT count(*) FROM signals")).scalar() == 2
+        assert conn.execute(text("SELECT count(*) FROM signals")).scalar() == 3
+        assert conn.execute(text("SELECT strategy_name FROM signals WHERE symbol='SOL'")).scalar() == batch.signal_publish.HL_EXTRA_STRATEGY_NAME
         price = conn.execute(text("SELECT entry_price FROM signals LIMIT 1")).scalar()
         assert str(price).startswith("100.123456789")
     with pytest.raises(Exception):
