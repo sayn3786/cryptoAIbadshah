@@ -84,6 +84,10 @@ name: Strategy backtests (private Telegram)
 #            as an HL filter: dock trades against it, skip them (always or only
 #            on a strong lean), or boost trades with it, on the live HL book;
 #            end_days_ago 0 and 135 (backend/weekly_trend_compare.py; ~20-30 min)
+#   divergence  RSI divergence by the book: its points count only near 30/70,
+#            only after a break of structure, both, or not at all, on the live
+#            HL book; end_days_ago 0 and 135
+#            (backend/divergence_gate_compare.py; ~20-30 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -102,7 +106,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -111,7 +115,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -196,6 +200,8 @@ jobs:
                      EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             channel-exits) MODULE=channel_exit_compare
                            EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            divergence) MODULE=divergence_gate_compare
+                        EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
