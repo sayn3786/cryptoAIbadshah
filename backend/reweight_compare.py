@@ -75,16 +75,19 @@ def _toward(breakdown: Dict[str, float], delta: float) -> float:
 
 
 def reweighted(c: Dict, mults: Dict[str, float], *, low_vol: bool = False,
-               h1_mults: Optional[Dict[str, float]] = None) -> float:
+               h1_mults: Optional[Dict[str, float]] = None,
+               add: float = 0.0, h1_add: float = 0.0) -> float:
     """The strength HL compares to the floor, with `mults` applied (`h1_mults`
-    on the 1H reading when given) and the v53 caps re-applied; docked
+    on the 1H reading when given), signed score changes `add` / `h1_add` (+
+    bull) on the 2H / 1H scores, and the v53 caps re-applied; docked
     LOW_VOL_DOCK when `low_vol`. Pure."""
     s = float(c.get("strength") or 0)
     h1_mults = mults if h1_mults is None else h1_mults
-    if mults or h1_mults:
-        d2 = _toward(c.get("score_breakdown") or {}, score_delta(c.get("score_breakdown") or {}, mults))
+    if mults or h1_mults or add or h1_add:
+        d2 = _toward(c.get("score_breakdown") or {},
+                     score_delta(c.get("score_breakdown") or {}, mults) + add)
         d1 = _toward(c.get("h1_score_breakdown") or {},
-                     score_delta(c.get("h1_score_breakdown") or {}, h1_mults))
+                     score_delta(c.get("h1_score_breakdown") or {}, h1_mults) + h1_add)
         raw = c.get("strength_before_calibration")
         raw = float(raw if raw is not None else s)
         h1, h2 = c.get("h1_strength"), c.get("h2_strength")
