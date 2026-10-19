@@ -454,7 +454,22 @@ def _tf_reading(symbol: str, timeframe: str, window: List[Dict],
         # Decision-time context the live postmortem scores (signal_snapshot's
         # fib summary), so a replay can test filtering on it.
         "fib": _fib_context(analysis),
+        # The RSI divergence's pivots and the latest break of structure, so a
+        # backtest can gate the divergence's points on the textbook rules.
+        "div": _div_context(analysis),
     }
+
+
+def _div_context(analysis: Dict) -> Dict:
+    d = analysis.get("rsi_divergence") or {}
+    pts = d.get("points") or {}
+    bos = analysis.get("bos_streak") or {}
+    return {"type": d.get("type"), "status": d.get("status"),
+            "prev_rsi": (pts.get("prev") or {}).get("rsi"),
+            "curr_rsi": (pts.get("curr") or {}).get("rsi"),
+            "curr_ts": (pts.get("curr") or {}).get("timestamp"),
+            "bos_dir": bos.get("direction"), "bos_ts": bos.get("last_ts"),
+            "bos_held": bos.get("held")}
 
 
 def _fib_context(analysis: Dict) -> Dict:
@@ -843,6 +858,8 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
                 # brakes, for indicator_study. Report only.
                 "score_breakdown": dict(sig.get("score_breakdown") or {}),
                 "h1_score_breakdown": dict((h1.get("sig") or {}).get("score_breakdown") or {}),
+                "h1_div": h1.get("div") or {},
+                "h2_div": h2.get("div") or {},
                 "strength_adjustments": {k: sig.get(k) or 0 for k in (
                     "structure_adjustment", "liquidation_adjustment",
                     "rsi_reversal_adjustment", "obv_adjustment", "fib_adjustment",
