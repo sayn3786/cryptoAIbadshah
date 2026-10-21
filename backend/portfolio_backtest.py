@@ -859,6 +859,12 @@ def replay(market: Dict[str, Dict[str, List[Dict]]], *,
                 "score_breakdown": dict(sig.get("score_breakdown") or {}),
                 "h1_score_breakdown": dict((h1.get("sig") or {}).get("score_breakdown") or {}),
                 "h1_div": h1.get("div") or {},
+                # Pattern-breakout points by volume grade and the liquidity
+                # grab's volume, per timeframe (breakout_volume_compare).
+                "h2_bvol": dict(sig.get("breakout_volume_points") or {}),
+                "h1_bvol": dict((h1.get("sig") or {}).get("breakout_volume_points") or {}),
+                "h2_grab": dict(sig.get("liq_grab_volume") or {}),
+                "h1_grab": dict((h1.get("sig") or {}).get("liq_grab_volume") or {}),
                 "h2_div": h2.get("div") or {},
                 "strength_adjustments": {k: sig.get(k) or 0 for k in (
                     "structure_adjustment", "liquidation_adjustment",

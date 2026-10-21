@@ -92,6 +92,11 @@ name: Strategy backtests (private Telegram)
 #            lines, or score the short cross on EMA 9 instead of 7, on the live
 #            HL book (low-vol dock included); end_days_ago 0 and 135
 #            (backend/ema_flat_compare.py; ~20-30 min)
+#   breakout-volume  fake breakouts: pattern-breakout points by the break's
+#            volume (weak 0, strong x1.25) and liquidity grabs only on
+#            above-average volume, on the live HL book (low-vol dock
+#            included); end_days_ago 0 and 135
+#            (backend/breakout_volume_compare.py; ~20-30 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -110,7 +115,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -119,7 +124,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -208,6 +213,8 @@ jobs:
                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             ema-flat) MODULE=ema_flat_compare
                       EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            breakout-volume) MODULE=breakout_volume_compare
+                             EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and

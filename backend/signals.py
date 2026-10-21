@@ -1,6 +1,6 @@
 import math
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # Shared structure measurements. Imported (not re-implemented) so the numbers the
 # Market Structure panel displays and the numbers this module scores are the
@@ -814,6 +814,25 @@ def _counter_trend_break(analysis: Dict, want: str) -> Optional[Dict]:
             "volume_ratio": (bv or {}).get("ratio")}
 
 
+def _note_breakout_vol(acc: Dict[str, float], bv: Optional[Dict], pts: float) -> None:
+    """Credit a pattern breakout's signed points to its volume grade."""
+    level = (bv or {}).get("level") or "unknown"
+    acc[level] = acc.get(level, 0) + pts
+
+
+def _candle_volume_ratio(candles: List[Dict], candles_ago) -> Optional[float]:
+    """A closed candle's volume vs the average of the 20 before it."""
+    if not isinstance(candles_ago, int) or candles_ago < 0:
+        return None
+    i = len(candles) - 1 - candles_ago
+    if i < 1:
+        return None
+    base = [float(c.get("volume") or 0) for c in candles[max(0, i - 20):i]]
+    avg = sum(base) / len(base) if base else 0
+    vol = float(candles[i].get("volume") or 0)
+    return round(vol / avg, 2) if avg > 0 and vol > 0 else None
+
+
 def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
     """Exhaustion / reversal detector — flips the question from "go with the
     trend?" to "is this trend running out of fuel?".
@@ -1268,6 +1287,12 @@ def generate_signal(analysis: Dict) -> Dict:
     # only: nothing below reads it.
     score_breakdown: Dict[str, float] = {}
     _mark_at: List = [None, 0]
+    # Pattern-breakout points (flags, reversal patterns, triangles / wedges;
+    # signed, + bull) by the breakout candle's volume grade, and the liquidity
+    # grab's points with its candle's volume vs the 20 before. Report only,
+    # for breakout_volume_compare.
+    breakout_vol_pts: Dict[str, float] = {}
+    liq_grab_vol: Dict[str, Any] = {}
 
     def _mark(name, now):
         prev, at = _mark_at
@@ -1694,6 +1719,9 @@ def generate_signal(analysis: Dict) -> Dict:
     if liq_sig != "none":
         freshness = max(0, 1 - liq_grab.get("candles_ago", 99) / 5)  # decays faster
         _liq_pts  = round(15 * freshness)
+        liq_grab_vol = {"points": _liq_pts if liq_sig == "bullish" else -_liq_pts,
+                        "volume_ratio": _candle_volume_ratio(
+                            analysis.get("candles") or [], liq_grab.get("candles_ago"))}
         if liq_sig == "bullish":
             score += _liq_pts; g['pattern'] += _liq_pts
             bull_reasons.append(f"Bullish liq. grab — {liq_grab.get('label', '')}")
@@ -1781,6 +1809,7 @@ def generate_signal(analysis: Dict) -> Dict:
                     f"(+{f['pole_pct']}% pole, target ${f['target']:,.4f})"
                 )
             score += pts; g['pattern'] += pts
+            _note_breakout_vol(breakout_vol_pts, f.get("breakout_volume"), pts)
         else:
             # Discount if strong bullish trend context
             if t_bull >= 25:
@@ -1797,6 +1826,7 @@ def generate_signal(analysis: Dict) -> Dict:
                     f"({f['pole_pct']}% pole, target ${f['target']:,.4f})"
                 )
             score -= pts; g['pattern'] -= pts
+            _note_breakout_vol(breakout_vol_pts, f.get("breakout_volume"), -pts)
 
     # ── Reversal & converging-trendline patterns (CONFIRMED only) ─────────────
     _mark('reversal_patterns', score)
@@ -1841,6 +1871,8 @@ def generate_signal(analysis: Dict) -> Dict:
             score += _pts; g['pattern'] += _pts; bull_reasons.append(_label)
         else:
             score -= _pts; g['pattern'] -= _pts; bear_reasons.append(_label)
+        _note_breakout_vol(breakout_vol_pts, _pat.get("breakout_volume"),
+                           _pts if _d == "bullish" else -_pts)
 
     # ── Engulfing Patterns ────────────────────────────────────────────────────
     _mark('engulfing', score)
@@ -3838,6 +3870,8 @@ def generate_signal(analysis: Dict) -> Dict:
         # Which section moved the score how much (before MAX_SCORE scaling),
         # and the two v50 brakes not echoed elsewhere. Report only.
         "score_breakdown":      score_breakdown,
+        "breakout_volume_points": breakout_vol_pts,
+        "liq_grab_volume":      liq_grab_vol,
         "obv_adjustment":       obv_adj,
         "fib_adjustment":       fib_adj,
         # Whether the stop had to be moved clear of a liquidity pool, or could
