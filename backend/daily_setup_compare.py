@@ -19,6 +19,9 @@ compares to the 69 floor:
   with +5 / +10     a signal the setup's way gains 5 / 10
   against -10       a signal against it loses 10
   both              +10 with, -10 against
+  breakdown only    next day, +5 for SHORTs after a 🔴 breakdown (the
+                    reliable-hit family); momentum setups ignored
+  momentum only     next day, +5 for LONGs after a 🟢 momentum day
 
 All on top of live (HL's low-volatility dock, -5). Then the live book: traded
 coins, every signal at 69+, v54 exits, $25 a trade, HL caps. Run on both
@@ -50,15 +53,17 @@ FLOOR = 69.0
 BULL_CONFIRM = ("engine", "fvg", "volume", "trendlines")
 BEAR_CONFIRM = ("stoch_rsi", "liquidity_grab", "macd", "engulfing", "bollinger")
 
-VARIANTS = (          # (label, days the setup counts, with, against)
-    ("live (low-vol -5)", 1, 0.0, 0.0),
-    ("next day: with +5", 1, 5.0, 0.0),
-    ("next day: with +10", 1, 10.0, 0.0),
-    ("next day: against -10", 1, 0.0, -10.0),
-    ("next day: with +10, against -10", 1, 10.0, -10.0),
-    ("3 days: with +10", 3, 10.0, 0.0),
-    ("3 days: against -10", 3, 0.0, -10.0),
-    ("3 days: with +10, against -10", 3, 10.0, -10.0),
+VARIANTS = (          # (label, days the setup counts, with, against, only this setup)
+    ("live (low-vol -5)", 1, 0.0, 0.0, None),
+    ("next day: with +5", 1, 5.0, 0.0, None),
+    ("next day: with +10", 1, 10.0, 0.0, None),
+    ("next day: against -10", 1, 0.0, -10.0, None),
+    ("next day: with +10, against -10", 1, 10.0, -10.0, None),
+    ("3 days: with +10", 3, 10.0, 0.0, None),
+    ("3 days: against -10", 3, 0.0, -10.0, None),
+    ("3 days: with +10, against -10", 3, 10.0, -10.0, None),
+    ("next day: 🔴 breakdown only, SHORTs +5", 1, 5.0, 0.0, -1),
+    ("next day: 🟢 momentum only, LONGs +5", 1, 5.0, 0.0, 1),
 )
 
 
@@ -111,10 +116,12 @@ def strength(c: Dict, d: int, low_vol: bool, with_: float, against: float) -> fl
 
 
 def apply(cands: Sequence[Dict], setups: Dict[str, List[tuple]], vol: Dict,
-          days: int, with_: float, against: float) -> List[Dict]:
+          days: int, with_: float, against: float, only: Optional[int] = None) -> List[Dict]:
     out = []
     for c in cands:
         d = active(setups.get(c["symbol"]) or [], c["slot_ms"], days)
+        if only is not None and d != only:
+            d = 0
         s = strength(c, d, vol.get((c["symbol"], c["slot_ms"])) == "low", with_, against)
         delta = s - float(c.get("strength") or 0)
         out.append({**c, "strength": s,
@@ -140,8 +147,9 @@ def compare(market: Dict, setups: Dict[str, List[tuple]], *, core: Sequence[str]
     live = uc.all_floor(apply(cands, setups, vol, 1, 0.0, 0.0), universe, floor)
     base = {(c["symbol"], c["slot_ms"]) for c in live}
     rows = []
-    for label, d_days, with_, against in VARIANTS:
-        recs = uc.all_floor(apply(cands, setups, vol, d_days, with_, against), universe, floor)
+    for label, d_days, with_, against, only in VARIANTS:
+        recs = uc.all_floor(apply(cands, setups, vol, d_days, with_, against, only),
+                            universe, floor)
         keys = {(c["symbol"], c["slot_ms"]) for c in recs}
         b = rr.book(recs, market, floor=floor)
         rows.append({"label": label, "signals": len(recs), "added": len(keys - base),

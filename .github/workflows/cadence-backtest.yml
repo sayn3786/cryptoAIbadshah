@@ -112,6 +112,10 @@ name: Strategy backtests (private Telegram)
 #            docking the 4h signals for the next day or 3 days, on the live
 #            HL book (low-vol dock included); end_days_ago 0 and 135
 #            (backend/daily_setup_compare.py; ~20-30 min)
+#   setup-exits  hold longer when a daily setup agrees: HL trades within 3
+#            days of a setup their way aim at TP3 or ride a runner (entry stop
+#            or 3 / 7 days), with a control running the runner on every trade;
+#            end_days_ago 0 and 135 (backend/setup_exit_compare.py; ~20-30 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -130,7 +134,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -139,7 +143,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -234,6 +238,8 @@ jobs:
                           EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             daily-setups) MODULE=daily_setup_compare
                           EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            setup-exits) MODULE=setup_exit_compare
+                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and

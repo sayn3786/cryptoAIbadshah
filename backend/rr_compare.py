@@ -77,9 +77,13 @@ def risk_size(trade: Dict) -> float:
 def book(recs: Sequence[Dict], market: Dict, *, atr_add: float = 1.0,
          scale_tps: bool = False, min_rr: Optional[float] = None,
          size_fn: Callable[[Dict], float] = fixed_size,
-         floor: float = FLOOR) -> Dict:
+         floor: float = FLOOR,
+         exit_for: Optional[Callable[[Dict], Optional[Dict]]] = None) -> Dict:
     """The HL book: one position per coin, <= MAX_PER_SLOT orders a slot, and
-    total notional (with the slippage allowance) <= EXPOSURE_CAP_USD."""
+    total notional (with the slippage allowance) <= EXPOSURE_CAP_USD.
+    `exit_for(rec)` may return a different exit for one trade: {"tp_targets",
+    "tp1_frac", "max_hold_hours"} (any of them), applied after the stop is
+    widened; None keeps v54's."""
     open_pos: Dict[str, Dict] = {}       # symbol -> {"until", "usd"}
     per_slot: Dict[int, int] = {}
     trades: List[Dict] = []
@@ -101,8 +105,14 @@ def book(recs: Sequence[Dict], market: Dict, *, atr_add: float = 1.0,
                                atr_add=atr_add)
             if scale_tps:
                 r = scale_targets(r, r["sl_published"])
+        ex = dict(V54_EXIT)
+        alt = exit_for(r) if exit_for else None
+        if alt:
+            if alt.get("tp_targets"):
+                r = {**r, "tp_targets": alt["tp_targets"]}
+            ex.update({k: alt[k] for k in ("tp1_frac", "max_hold_hours") if k in alt})
         t = ee.simulate_hl(r, (market.get(r["symbol"]) or {}).get("1H") or [],
-                           costs=cm.LIMIT_TPS, min_rr_at_fill=min_rr, **V54_EXIT)
+                           costs=cm.LIMIT_TPS, min_rr_at_fill=min_rr, **ex)
         if not t["taken"]:
             counts["low_rr" if t.get("reason") == "LOW_RR_AT_FILL" else "stale"] += 1
             continue
