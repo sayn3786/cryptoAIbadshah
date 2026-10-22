@@ -210,4 +210,5 @@ def test_the_daily_job_stores_the_full_scan_only(app_mod, monkeypatch):
 def test_the_publish_path_passes_the_stored_reads():
     src = open(os.path.join(os.path.dirname(__file__), "..", "backend", "app.py"),
                encoding="utf-8").read()
-    assert "_hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())" in src
+    assert src.count("_hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads(),\n"
+                     "                                 _hl_daily_momentum())") == 3

@@ -681,7 +681,7 @@ def _monitor_candles(sym: str, tf: str):
     return closed
 
 
-def _fetch_alert_candles(sym: str, tf: str):
+def _fetch_alert_candles(sym: str, tf: str, limit=None):
     """(closed candles, skip_reason) for the Telegram alert scan.
 
     Like _fetch_closed_spot, but refuses data an alert must never be built on:
@@ -694,7 +694,7 @@ def _fetch_alert_candles(sym: str, tf: str):
     if not bs:
         return [], "no_pair"
     interval = TF_INTERVAL.get(tf, "1w")
-    limit = TF_LIMIT.get(tf, 120)
+    limit = limit or TF_LIMIT.get(tf, 120)
     spot, source = client.get_spot_klines_sourced(bs, interval, limit)
     if source == "demo":
         return [], "demo"
@@ -3265,7 +3265,9 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         import db as _db_batch
         if _db_batch.db_enabled():
             import publication_batch
-            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())
+            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads(),
+                                 _hl_daily_momentum())
+            _record_hl_boosts(_slot_start(now_sgt), _extra)
             for _r in _extra:
                 _r.setdefault("generated_at_utc", now)
             _xa = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
@@ -3304,8 +3306,10 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
             # Database-backed extras were frozen and committed with the channel
             # above. Never recompute or separately persist them after recovery.
             _extra = ([] if _db_batch.db_enabled() else
-                      _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads()))
+                      _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads(),
+                                 _hl_daily_momentum()))
             if _extra:
+                _record_hl_boosts(_slot_start(now_sgt), _extra)
                 for _r in _extra:
                     _r.setdefault("generated_at_utc", now)
                 _xa = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
@@ -3469,8 +3473,10 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
             "hl_extra_preview": [
                 f"{c['symbol']} {c.get('direction')} "
                 f"{c.get('display_strength') or c.get('strength')}"
-                + (f" (+{c['hl_boost']:g} bottom/top read)" if c.get("hl_boost") else "")
-                for c in _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())]}
+                + (f" (+{c['hl_boost']:g} {c.get('hl_boost_reason')})" if c.get("hl_boost")
+                   else "")
+                for c in _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads(),
+                                 _hl_daily_momentum())]}
            if dry_run else {}),
         # Publication gate. When false these recommendations were NOT recorded
         # and must be treated as analysis only, never as tradeable output.
@@ -3741,8 +3747,11 @@ def api_patterns_alert():
     # day, so a scheduler retry never double-posts; nothing is sent when empty.
     reads = _daily_market_reads(syms)
     if syms is None:
-        # The full scan: kept for the 4H publish's HL bottom-read boost (v55).
+        # The full scan: kept for the 4H publish's HL bottom-read boost (v55)
+        # and daily-momentum boost (v59).
         _store_daily_reads(reads)
+        if _daily_momentum_boost() > 0 and not dry:
+            _store_daily_momentum(_daily_momentum_scan())
     if dry:
         return jsonify({"ok": True, "dry": True, "reads": reads})
     if not reads:
@@ -4050,7 +4059,81 @@ def _hl_bottom_reads(now_ms=None) -> dict:
     return out
 
 
-def _hl_extra_candidates(candidates, published, bottoms=None):
+# v59 (HL only): +HL_DAILY_MOMENTUM_BOOST (default 5) to a LONG on a coin
+# whose last daily close (8 AM SGT) was a daily MOMENTUM setup — a wide day
+# (1.5x+ the 14-day range) closing in its top quarter, confirmed by the 1D
+# engine call 60+, a bullish FVG, volume or trendline (daily_setup) — for the
+# 24 hours after that close. The combination study found it called the next
+# 3 days (+3.5%, big moves ~2x as likely) in both halves of 3.5 years; on the
+# live HL book the +5 for the next day lifted Feb-Jun $9.06 -> $22.33 and
+# Jun-Oct $11.70 -> $15.60 (daily_setup_compare; drawdown $5.50 -> $4.25 and
+# $4.48 -> $6.24). Breakdown setups never boost SHORTs: that lost in both.
+# HL_DAILY_MOMENTUM_BOOST=0 turns it off.
+DEFAULT_DAILY_MOMENTUM_BOOST = 5.0
+DAILY_MOMENTUM_KV_KEY = "daily_momentum:v1"
+DAILY_MOMENTUM_WINDOW_MS = 24 * 3_600_000
+
+
+def _daily_momentum_boost() -> float:
+    raw = os.getenv("HL_DAILY_MOMENTUM_BOOST", "").strip().lower()
+    if raw in ("off", "false", "no"):
+        return 0.0
+    try:
+        v = float(raw) if raw else DEFAULT_DAILY_MOMENTUM_BOOST
+    except ValueError:
+        return DEFAULT_DAILY_MOMENTUM_BOOST
+    return v if 0 <= v <= 20 else DEFAULT_DAILY_MOMENTUM_BOOST
+
+
+def _daily_momentum_scan(symbols=None) -> dict:
+    """{SYMBOL: close ms} for the coins whose latest CLOSED daily candle is a
+    daily momentum setup (daily_setup.read_close). Demo / stale data or an
+    error leaves the coin out. Never raises."""
+    import daily_setup as _ds
+    symbols = symbols or list(SCAN_SYMBOLS)
+
+    def _one(sym):
+        try:
+            closed, why = _fetch_alert_candles(sym, "1D", limit=_ds.WINDOW + 1)
+            if why or len(closed) < _ds.WINDOW:
+                return None
+            if _ds.read_close(closed, sym) == 1:
+                return sym, int(closed[-1]["timestamp"]) + 86_400_000
+        except Exception:
+            return None
+        return None
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return dict(x for x in ex.map(_one, symbols) if x)
+
+
+def _store_daily_momentum(coins, now_ms=None) -> bool:
+    try:
+        import kv as _kv
+        payload = {"at": int(now_ms if now_ms is not None else time.time() * 1000),
+                   "coins": coins or {}}
+        return _kv.set_value(DAILY_MOMENTUM_KV_KEY, json.dumps(payload), ttl_seconds=3 * 86_400)
+    except Exception:
+        return False
+
+
+def _hl_daily_momentum(now_ms=None) -> set:
+    """The coins with a daily momentum setup whose close was in the last 24
+    hours, or an empty set (switch off, nothing stored, or unreadable)."""
+    if _daily_momentum_boost() <= 0:
+        return set()
+    try:
+        import kv as _kv
+        raw = _kv.get_value(DAILY_MOMENTUM_KV_KEY)
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        return set()
+    now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    return {str(sym).upper() for sym, close_ms in ((data or {}).get("coins") or {}).items()
+            if 0 <= now_ms - int(close_ms or 0) < DAILY_MOMENTUM_WINDOW_MS}
+
+
+def _hl_extra_candidates(candidates, published, bottoms=None, momentum=None):
     """The candidates auto-exec should trade beyond the published set, at most
     HL_EXTRA_MAX, strongest first. A candidate qualifies when its strength — plus
     the v55 bottom-read boost when `bottoms` ({SYMBOL: {directions}}) has an
@@ -4059,8 +4142,9 @@ def _hl_extra_candidates(candidates, published, bottoms=None):
     which becomes the stored confidence_score) and `hl_boost`. A published
     signal already at the floor is left to its own row; a published one that
     only the boost lifts is returned too (as an extra row, under its own
-    strategy_name). Empty unless auto-exec is enabled and HL_EXTRA_SIGNALS isn't
-    "off". Pure apart from reading those switches."""
+    strategy_name). `momentum` ({SYMBOLS}) adds the v59 daily-momentum boost
+    to a LONG on those coins the same way. Empty unless auto-exec is enabled
+    and HL_EXTRA_SIGNALS isn't "off". Pure apart from reading those switches."""
     import hl_autoexec as _ax
     if not _ax.is_auto_enabled():
         return []
@@ -4069,6 +4153,8 @@ def _hl_extra_candidates(candidates, published, bottoms=None):
     floor = _ax.auto_min_strength()
     boost = _bottom_read_boost()
     bottoms = bottoms or {}
+    m_boost = _daily_momentum_boost()
+    momentum = momentum or set()
 
     def _strength(c):
         return c.get("display_strength") or c.get("strength") or 0
@@ -4080,13 +4166,20 @@ def _hl_extra_candidates(candidates, published, bottoms=None):
         if sym in taken or not (c.get("entry") and c.get("sl") and c.get("tp_targets")):
             continue
         d = "bullish" if str(c.get("direction")).upper() == "LONG" else "bearish"
-        add = boost if boost and d in bottoms.get(sym, ()) else 0
+        why = []
+        add = 0
+        if boost and d in bottoms.get(sym, ()):
+            add += boost
+            why.append("1D bottom/top read with the trade")
+        if m_boost and d == "bullish" and sym in momentum:
+            add += m_boost
+            why.append("daily momentum close")
         s = _strength(c) + add
         if s < floor:
             continue
         if add:
             c = {**c, "display_strength": round(s, 1), "hl_boost": add,
-                 "hl_boost_reason": "1D bottom/top read with the trade"}
+                 "hl_boost_reason": " + ".join(why)}
         picks.append((s, c))
         taken.add(sym)
     picks.sort(key=lambda p: -p[0])
@@ -5377,6 +5470,34 @@ def _record_hl_signal_runs(signals, results, skipped):
         _kv_append_json(_hl_signal_run_key(sig), e)
 
 
+def _hl_boost_key(slot_start):
+    return f"hlboost:{_deploy_env()}:{slot_start.isoformat()}"
+
+
+def _record_hl_boosts(slot_start, extras):
+    """Keep which HL extras a boost lifted this slot ({SYMBOL: "+5 daily
+    momentum close"}), 14 days, for /api/hl/decisions. Never raises."""
+    try:
+        marks = {str(r.get("symbol")).upper(): f"+{r['hl_boost']:g} {r.get('hl_boost_reason')}"
+                 for r in extras or [] if r.get("hl_boost")}
+        if marks:
+            import kv as _kv
+            _kv.set_value(_hl_boost_key(slot_start), json.dumps(marks),
+                          ttl_seconds=14 * 86_400)
+    except Exception:
+        pass
+
+
+def _hl_boosts(slot_start) -> dict:
+    try:
+        import kv as _kv
+        raw = _kv.get_value(_hl_boost_key(slot_start))
+        data = json.loads(raw) if raw else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _record_hl_slot_run(out, now_sgt=None):
     out = out if isinstance(out, dict) else {}
     now_sgt = now_sgt or datetime.now(_SGT)
@@ -5509,12 +5630,14 @@ def _hl_decisions(days=10, min_strength=None):
                 runs=_kv_json_list(_hl_signal_run_key(sig)),
                 stale_alert=_oa.was_sent(f"stale:{sig.get('id')}:{sig.get('candle_ts')}"),
                 slot_runs=slot_runs, order=order)
+            boost = (_hl_boosts(_slot_start(gen_t.astimezone(_SGT))).get(
+                str(sig.get("symbol") or "").upper()) if gen_t else None)
             return {"published": gen_t.astimezone(_SGT).strftime("%b %d %-I%p SGT")
                     if gen_t else gen, "_t": gen_t.isoformat() if gen_t else str(gen),
                     "symbol": sig.get("symbol"), "direction": sig.get("direction"),
                     "strength": sig.get("confidence_score"),
                     "row": kinds.get(r.get("strategy_name"), r.get("strategy_name")),
-                    "hl": text, "code": code}
+                    "hl": text, "code": code, **({"boost": boost} if boost else {})}
 
         rows = [r for r in rows if (_ax._f(r.get("confidence_score")) or 0) >= floor]
         with ThreadPoolExecutor(max_workers=8) as pool:
