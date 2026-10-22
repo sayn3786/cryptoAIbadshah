@@ -71,3 +71,13 @@ def test_workflow_runs_it():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     assert "daily-setups) MODULE=daily_setup_compare" in wf
+
+
+def test_only_one_setup_family():
+    c = [{"symbol": "ETH", "slot_ms": 10 * D, "direction": "SHORT", "strength": 66.0},
+         {"symbol": "SOL", "slot_ms": 10 * D, "direction": "LONG", "strength": 66.0}]
+    setups = {"ETH": [(10 * D, -1)], "SOL": [(10 * D, 1)]}
+    got = {x["symbol"]: x["strength"] for x in ds.apply(c, setups, {}, 1, 5.0, 0.0, -1)}
+    assert got == {"ETH": 71.0, "SOL": 66.0}
+    got = {x["symbol"]: x["strength"] for x in ds.apply(c, setups, {}, 1, 5.0, 0.0, 1)}
+    assert got == {"ETH": 66.0, "SOL": 71.0}
