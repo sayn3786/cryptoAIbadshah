@@ -97,6 +97,11 @@ name: Strategy backtests (private Telegram)
 #            above-average volume, on the live HL book (low-vol dock
 #            included); end_days_ago 0 and 135
 #            (backend/breakout_volume_compare.py; ~20-30 min)
+#   vwap-whipsaw  "flat VWAP, price crossing = no trade": on a reading whose
+#            close crossed VWAP 3+ (or 4+) times in 10 candles, a new cross
+#            scores 0 or VWAP scores nothing, on the live HL book (low-vol dock
+#            included); end_days_ago 0 and 135
+#            (backend/vwap_whipsaw_compare.py; ~20-30 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -115,7 +120,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -124,7 +129,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -215,6 +220,8 @@ jobs:
                       EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             breakout-volume) MODULE=breakout_volume_compare
                              EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            vwap-whipsaw) MODULE=vwap_whipsaw_compare
+                          EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
