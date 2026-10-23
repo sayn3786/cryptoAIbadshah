@@ -22,6 +22,12 @@ signals table:
     is cancelled; a scalp still open after SCALP_MAX_HOLD_HOURS (12) is closed
     at market; the position manager moves the stop to entry at 1R.
 
+Sizing (size_plan): SCALP_RISK_USD ($1) is lost at the stop, so a tight stop
+means a bigger position; leverage = that position over SCALP_MARGIN_USD ($25),
+capped by market cap (mega 20x, large 10x, mid 7x, small 5x, micro 3x) and by
+Hyperliquid's max. The scalp book's total is capped at SCALP_MAX_EXPOSURE_USD
+($600), apart from the 4h book's cap.
+
 HL_SCALP_AUTO_EXECUTE=0 stops the orders (setups still go to the private
 chat); SCALP_ENABLED=0 stops everything. Refuses to trade unless the HL
 network is testnet, whatever HL_ALLOW_MAINNET says.
@@ -71,6 +77,61 @@ def max_hold_ms() -> int:
 
 def max_open() -> int:
     return int(_num_env("SCALP_MAX_OPEN", DEFAULT_MAX_OPEN))
+
+
+# ── sizing: a fixed $ risk, leverage capped by market-cap tier ──────────────
+# A scalp's stop is tight, so the same $ risk buys a much bigger position than
+# a 4h trade: size = risk / stop distance. The leverage that position needs
+# (size / margin budget) is capped by the coin's size — the bigger the coin,
+# the steadier its 15m candles — and by Hyperliquid's own maximum for it.
+LEV_TIERS = ((100e9, 20), (10e9, 10), (1e9, 7), (200e6, 5), (0, 3))
+MIN_STOP_PCT = 0.002      # a stop tighter than 0.2% is sized as 0.2% (noise)
+DEFAULT_RISK_USD = 1.0
+DEFAULT_MARGIN_USD = 25.0
+
+
+def lev_cap(market_cap: Optional[float]) -> int:
+    """Max leverage for a coin of this market cap (unknown: the mid tier)."""
+    if market_cap is None:
+        return 7
+    for floor, lev in LEV_TIERS:
+        if market_cap >= floor:
+            return lev
+    return 3
+
+
+DEFAULT_MAX_EXPOSURE_USD = 600.0
+
+
+def max_exposure_usd() -> float:
+    """The scalp book's total notional cap (pending + open), separate from the
+    4h book's HL_MAX_EXPOSURE_USD."""
+    return _num_env("SCALP_MAX_EXPOSURE_USD", DEFAULT_MAX_EXPOSURE_USD)
+
+
+def risk_usd() -> float:
+    return _num_env("SCALP_RISK_USD", DEFAULT_RISK_USD)
+
+
+def margin_usd() -> float:
+    return _num_env("SCALP_MARGIN_USD", DEFAULT_MARGIN_USD)
+
+
+def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
+              hl_max: Optional[float] = None, risk: Optional[float] = None,
+              margin: Optional[float] = None) -> Dict[str, float]:
+    """{"notional_usd", "leverage", "stop_pct", "cap"}: the position that loses
+    `risk` $ at the stop, no bigger than `margin` x the leverage cap. Pure."""
+    risk = risk_usd() if risk is None else risk
+    margin = margin_usd() if margin is None else margin
+    stop_pct = max(abs(float(entry) - float(stop)) / float(entry), MIN_STOP_PCT)
+    cap = lev_cap(market_cap)
+    if hl_max:
+        cap = max(1, min(cap, int(hl_max)))
+    notional = min(risk / stop_pct, margin * cap)
+    lev = max(1, min(cap, int(-(-notional // margin))))           # ceil, within the cap
+    return {"notional_usd": round(notional, 2), "leverage": lev,
+            "stop_pct": round(stop_pct * 100, 3), "cap": cap}
 
 
 CONFIRM_MODES = ("1h", "15m", "1h+15m", "none")
