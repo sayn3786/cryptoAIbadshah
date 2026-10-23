@@ -158,6 +158,61 @@ def min_strength() -> float:
 
 
 H1_POINTS = 5.0           # the 1H engine read: +5 with the trade, -5 against
+# Exits (exits()): the swing stop when it is 0.2-3% away, else 1.5 x ATR(14);
+# the next swing as the target when it is SCALP_TARGET_R (1.5) x the risk or
+# more away, else a fixed SCALP_TARGET_R target. R:R is NOT a filter unless
+# SCALP_MIN_RR is set (the owner's call: no dependency on it).
+STOP_MIN_PCT, STOP_MAX_PCT = 0.002, 0.03
+ATR_STOP = 1.5
+
+
+def target_r() -> float:
+    return _num_env("SCALP_TARGET_R", 1.5)
+
+
+def min_rr() -> float:
+    try:
+        return max(0.0, float(os.getenv("SCALP_MIN_RR", "") or 0))
+    except ValueError:
+        return 0.0
+
+
+def _atr(bars: Sequence[Dict[str, Any]], period: int = 14) -> Optional[float]:
+    if len(bars) < period + 1:
+        return None
+    trs = [max(float(b["high"]) - float(b["low"]), abs(float(b["high"]) - float(a["close"])),
+               abs(float(b["low"]) - float(a["close"])))
+           for a, b in zip(bars[-period - 1:-1], bars[-period:])]
+    return sum(trs) / period
+
+
+def exits(bars: Sequence[Dict[str, Any]], i: int, direction: str,
+          piv: Dict) -> Optional[Dict[str, Any]]:
+    """{"sl", "target", "rr", "how"} for a market entry at bar i's close: the
+    swing structure when it gives a sensible stop / a far enough target, else
+    an ATR stop / a fixed-R target. None only without a swing AND an ATR."""
+    close = float(bars[i]["close"])
+    long = direction == "LONG"
+    sgn = 1 if long else -1
+    st = sweep_fvg.structure_exit(bars, i, direction, piv, min_rr=0.0) or {}
+    how = []
+    sl = st.get("sl")
+    if sl is None or not (STOP_MIN_PCT <= abs(close - sl) / close <= STOP_MAX_PCT):
+        atr = _atr(bars[:i + 1])
+        if not atr:
+            return None
+        sl = close - sgn * max(ATR_STOP * atr, STOP_MIN_PCT * close)
+        how.append("ATR stop")
+    else:
+        how.append("swing stop")
+    risk = abs(close - sl)
+    tgt = st.get("target")
+    if tgt is None or abs(tgt - close) < target_r() * risk:
+        tgt = close + sgn * target_r() * risk
+        how.append(f"{target_r():g}R target")
+    else:
+        how.append("swing target")
+    return {"sl": sl, "target": tgt, "rr": round(abs(tgt - close) / risk, 2), "how": ", ".join(how)}
 
 
 def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now_ms: int,
@@ -207,14 +262,17 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
     if score < floor:
         return None, (f"{label}: {parts} = {score:g} < {floor:g}" if strength >= floor - 20
                       else None)
-    ex = sweep_fvg.structure_exit(bars, last, d, piv)
+    ex = exits(bars, last, d, piv)
     if ex is None:
-        return None, f"{label}: {parts} = {score:g}, no swing stop/target at R:R 1.5+"
+        return None, f"{label}: {parts} = {score:g}, no usable stop (no swing, no ATR)"
+    if ex["rr"] < min_rr():
+        return None, f"{label}: {parts} = {score:g}, R:R {ex['rr']:g} < {min_rr():g}"
     return {"kind": "engine", "symbol": symbol.upper(), "direction": d,
             "strength": round(score, 1), "engine_strength": round(strength, 1),
             "sweep_bonus": bonus, "h1_points": h1, "score_parts": parts,
             "entry": float(bars[last]["close"]), "limit": float(bars[last]["close"]),
-            "sl": ex["sl"], "target": ex["target"], "rr": ex["rr"], "slot_ms": close_ms}, None
+            "sl": ex["sl"], "target": ex["target"], "rr": ex["rr"], "exit": ex["how"],
+            "slot_ms": close_ms}, None
 
 
 def blend_signal(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *,
@@ -445,7 +503,8 @@ def message(setups: Sequence[Dict[str, Any]], *, auto: bool) -> str:
             extra = f"{s.get('score_parts') or s['engine_strength']} = {s['strength']:g}"
             lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
                          f"{s['direction']} · {extra} · market ~{px(s['entry'])} · SL "
-                         f"{px(s['sl'])} · TP {px(s['target'])} · R:R {s['rr']:g}")
+                         f"{px(s['sl'])} · TP {px(s['target'])} · R:R {s['rr']:g}"
+                         + (f" ({s['exit']})" if s.get("exit") else ""))
         else:
             lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
                          f"{s['direction']} · limit {px(s['limit'])} · SL {px(s['sl'])} · TP "

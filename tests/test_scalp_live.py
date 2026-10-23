@@ -469,9 +469,28 @@ def test_blend_1h_is_points_not_a_gate():
     assert calls == []                                        # can't reach 75: 1H not fetched
 
 
-def test_blend_reports_a_missing_structure():
-    flat = [b(i, 100, 100.2, 99.8, 100) for i in range(sl.WINDOW + 5)]
+def test_blend_without_structure_uses_atr_and_fixed_r(monkeypatch):
+    # lows only 0.05% under the close: the swing stop is too tight, so 1.5 x ATR
+    flat = [b(i, 100, 100.2, 99.95, 100) for i in range(sl.WINDOW + 5)]
     now = int(flat[-1]["timestamp"]) + M + 60_000
-    got, why = sl.blend(flat, "BTC", lambda w, tf, s: {"direction": "LONG", "strength": 90},
-                        now_ms=now)
-    assert got is None and "no swing stop/target" in why
+    read = lambda w, tf, s: {"direction": "LONG", "strength": 90}             # noqa: E731
+    got, why = sl.blend(flat, "BTC", read, now_ms=now)
+    assert why is None and got["exit"] == "ATR stop, 1.5R target" and got["rr"] == 1.5
+    assert abs(got["entry"] - got["sl"] - 1.5 * 0.25) < 1e-9               # 1.5 x ATR 0.25
+    monkeypatch.setenv("SCALP_MIN_RR", "2")                                 # opt-in filter
+    got, why = sl.blend(flat, "BTC", read, now_ms=now)
+    assert got is None and "R:R 1.5 < 2" in why
+    monkeypatch.setenv("SCALP_TARGET_R", "2")
+    got, _ = sl.blend(flat, "BTC", read, now_ms=now)
+    assert got["rr"] == 2.0
+
+
+def test_exits_prefer_the_swing_structure():
+    bars = padded()
+    ex = sl.exits(bars, len(bars) - 1, "LONG", sl.sweep_fvg.pivots(bars))
+    # the sweep's swing low is 3.4% under the close (over the 3% cap): ATR stop
+    assert ex["how"] == "ATR stop, swing target" and ex["target"] == 110 and ex["rr"] >= 1.5
+    near = bars[:-1] + [b(259, 101, 101.5, 100.4, 101)]                    # swing low 1.5% away
+    ex = sl.exits(near, len(near) - 1, "LONG", sl.sweep_fvg.pivots(near))
+    assert ex["how"].startswith("swing stop")
+    assert sl.min_rr() == 0.0 and sl.target_r() == 1.5
