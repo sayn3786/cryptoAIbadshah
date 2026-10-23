@@ -5756,8 +5756,12 @@ def api_hl_scalp():
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
                     "mode": _sl.mode(), "min_strength": _sl.min_strength(),
                     "setup": ("score = 15m engine + 10 for a sweep -> FVG the same way "
-                              "+/- 5 for the 1H read with / against; 75+ trades with a "
-                              "structure stop / target at R:R 1.5+" if _sl.mode() == "blend"
+                              "+/- 5 for the 1H read with / against; 75+ trades. Stop: the "
+                              "last swing (0.2-3% away) else 1.5 ATR; target: the next "
+                              f"swing if {_sl.target_r():g}R+ away else a "
+                              f"{_sl.target_r():g}R target"
+                              + (f"; R:R filter {_sl.min_rr():g}" if _sl.min_rr() else "")
+                              if _sl.mode() == "blend"
                               else "sweep -> FVG, gap top, R:R 1.5+"),
                     "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
                     "max_open": _sl.max_open(),
