@@ -5258,6 +5258,9 @@ def _hl_auto_execute_pass():
     store = _signal_store()
     rows = _hl_confirmed_published(store, _sp.strategy_version())
     signals = [_ax.to_signal(r) for r in rows]
+    busy = _scalp_busy_symbols()
+    if busy:                               # a scalp entry / position holds the coin
+        signals = [s_ for s_ in signals if str(s_.get("symbol") or "").upper() not in busy]
     if not signals:
         return {"ok": True, "ran": True, "attempted": 0, "executed": 0,
                 "reason": "NO_CONFIRMED_SIGNALS", "results": []}
@@ -5423,12 +5426,67 @@ def _scalp_private(text) -> None:
         app.logger.exception("scalp alert failed")
 
 
-def _scalp_hl(sigs, now_ms) -> dict:
-    """Time out scalps past the max hold, then open new ones (testnet only).
-    Never raises."""
+def _scalp_busy_symbols() -> set:
+    """Symbols the scalp book has a pending entry or an open scalp on: the 4h
+    auto-exec leaves them alone (HL holds one position per coin)."""
+    return {str(r.get("symbol") or "").upper() for r in _scalp_records().values()}
+
+
+def _scalp_place(setup, *, acct, table, recs, now_ms) -> dict:
+    """One resting limit entry with its stop + target attached. Never raises."""
     import scalp_live as _sl
     import hl_account as _ha
-    import hl_autoexec as _ax
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    sym = setup["symbol"]
+    coin = _hm.resolve_coin(sym, table)
+    if coin is None:
+        return {"symbol": sym, "ok": False, "reason": "SYMBOL_NOT_ON_HYPERLIQUID"}
+    sid, ts = _sl.signal_id(sym), setup["slot_ms"]
+    cloid = _hx.client_order_id(sid, "open", ts)
+    known = _ha.order_known(cloid)
+    if known is not False:
+        return {"symbol": sym, "ok": False,
+                "reason": "ALREADY_PLACED" if known else "ORDER_STATUS_UNAVAILABLE"}
+    cfg = _he.caps()
+    free = acct.get("account_value_usd")
+    spot = acct.get("spot_usdc_usd")
+    free = None if (free is None and spot is None) else max(free or 0.0, spot or 0.0)
+    plan = _hm.can_place(sym, setup["limit"], notional_usd=cfg["notional_usd"],
+                         leverage=cfg["leverage"], free_collateral_usd=free, table=table)
+    if not plan.get("ok"):
+        return {"symbol": sym, "ok": False, "reason": plan.get("reason")}
+    pending = sum(float(r.get("notional_usd") or 0) for r in recs.values()
+                  if r.get("state") == "pending")
+    if _he._current_exposure_usd(acct) + pending + plan["notional_usd"] \
+            > cfg["max_exposure_usd"] + 1e-9:
+        return {"symbol": sym, "ok": False, "reason": "MAX_EXPOSURE"}
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    px, sl, tp = (_hm.round_price(v, sz) for v in (setup["limit"], setup["sl"], setup["target"]))
+    try:
+        resp = _he.send_limit_open_with_tpsl(
+            coin, setup["direction"] == "LONG", plan["size"], px, sl, tp, cloid=cloid,
+            sl_cloid=_hx.client_order_id(sid, "sl", ts), tp_cloid=_hx.client_order_id(sid, "tp1", ts),
+            leverage=plan["leverage"])
+    except Exception as exc:
+        return {"symbol": sym, "ok": False, "reason": "SEND_FAILED", "error": type(exc).__name__}
+    st = _he.entry_status(resp)
+    if st["state"] == "error":
+        return {"symbol": sym, "ok": False, "reason": "SEND_REJECTED", "detail": st.get("error")}
+    recs[coin] = {"coin": coin, "symbol": sym, "direction": setup["direction"], "limit": px,
+                  "sl": sl, "target": tp, "oid": st.get("oid"), "placed_ms": now_ms,
+                  "notional_usd": plan["notional_usd"],
+                  "state": "open" if st["state"] == "filled" else "pending",
+                  **({"opened_ms": now_ms} if st["state"] == "filled" else {})}
+    return {"symbol": sym, "ok": True, "state": recs[coin]["state"]}
+
+
+def _scalp_hl(setups, now_ms) -> dict:
+    """Cancel stale entries, promote filled ones, time out old scalps, then
+    place new limit entries (testnet only). Never raises."""
+    import scalp_live as _sl
+    import hl_account as _ha
     import hl_exchange as _he
     import hl_execution as _hx
     import hl_meta as _hm
@@ -5442,104 +5500,118 @@ def _scalp_hl(sigs, now_ms) -> dict:
     try:
         with _hl_execute_lock:
             acct = _ha.account_state()
+            try:
+                acct["spot_usdc_usd"] = _ha.spot_usdc()
+            except Exception:
+                pass
             positions = acct.get("open_positions") or []
+            try:
+                orders = _ha._post_info({"type": "frontendOpenOrders",
+                                         "user": _ha.account_address()}) or []
+            except Exception:
+                orders = None
             recs = _scalp_records()
-            sw = _sl.sweep(recs, positions, now_ms=now_ms)
-            closed = []
-            for coin in sw["close"]:
+            mids = _ha.all_mids() if recs else {}
+            act = _sl.sweep(recs, positions, orders, mids, now_ms=now_ms)
+            notes = []
+            for coin in act["promote"]:
+                recs[coin].update(state="open", opened_ms=now_ms)
+                notes.append(f"filled {recs[coin]['symbol']} {recs[coin]['direction']}")
+            for coin in act["cancel"]:
                 rec = recs[coin]
-                cloid = _hx.client_order_id(_sl.signal_id(rec.get("symbol") or coin),
-                                            "timeout", rec.get("opened_ms"))
+                oids = [rec.get("oid")] + [o.get("oid") for o in orders or []
+                                           if str(o.get("coin")) == coin and o.get("reduceOnly")]
+                for oid in oids:
+                    try:
+                        _he.cancel_order(coin, oid)
+                    except Exception:
+                        pass
+                recs.pop(coin, None)
+                notes.append(f"cancelled {rec['symbol']} (not filled in 2h or through its stop)")
+            for coin in act["close"]:
+                rec = recs[coin]
+                cloid = _hx.client_order_id(_sl.signal_id(rec["symbol"]), "timeout",
+                                            rec.get("opened_ms"))
                 try:
                     ok, _detail = _he.order_accepted(_he.send_market_close(coin, cloid))
                 except Exception:
                     ok = False
                 if ok:
-                    closed.append(coin)
                     recs.pop(coin, None)
-            for coin in sw["drop"]:
+                    notes.append(f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h")
+            for coin in act["drop"]:
                 recs.pop(coin, None)
             table = _hm.asset_table()
             held = {str(p.get("coin") or "").upper() for p in positions}
-            todo = [_sl.to_hl(s) for s in sigs
-                    if (_hm.resolve_coin(s["symbol"], table) or "").upper() not in held]
-            todo = todo[:_sl.room(recs)]
-            opened = []
-            if todo:
+            results = []
+            for s in setups:
+                if _sl.room(recs) <= 0:
+                    break
+                coin = (_hm.resolve_coin(s["symbol"], table) or "").upper()
+                if coin in held or coin in {c.upper() for c in recs}:
+                    results.append({"symbol": s["symbol"], "ok": False, "reason": "POSITION_EXISTS"})
+                    continue
                 try:
-                    orders = _ha._post_info({"type": "frontendOpenOrders",
-                                             "user": _ha.account_address()}) or []
-                except Exception:
-                    orders = None
-                res = _ax.execute(todo, account_state=acct, table=table, open_orders=orders)
-                for sig, r in zip(todo, res.get("results") or []):
-                    if r.get("ok") and r.get("coin"):
-                        recs[r["coin"]] = {"coin": r["coin"], "symbol": sig["symbol"],
-                                           "direction": sig["direction"],
-                                           "entry": r.get("mark_px") or sig["entry"],
-                                           "opened_ms": now_ms}
-                        opened.append(f"{sig['symbol']} {sig['direction']} "
-                                      f"{sig['confidence_score']:g}")
-                out["results"] = [{"symbol": sig["symbol"], "ok": bool(r.get("ok")),
-                                   **{k: r[k] for k in ("reason", "drift_pct", "allowed_pct",
-                                                        "mark_px", "detail", "error")
-                                      if r.get(k) is not None and k != "ok"}}
-                                  for sig, r in zip(todo, res.get("results") or [])]
-                for x in out["results"]:
-                    if isinstance(x.get("detail"), (dict, list)):
-                        x["detail"] = str(x["detail"])[:200]
+                    r = _scalp_place(s, acct=acct, table=table, recs=recs, now_ms=now_ms)
+                except Exception as exc:
+                    r = {"symbol": s["symbol"], "ok": False, "reason": "ERROR",
+                         "error": type(exc).__name__}
+                results.append(r)
+                if r.get("ok"):
+                    notes.append(f"placed {s['symbol']} {s['direction']} limit {s['limit']:,.6g}")
             _scalp_save(recs)
-        out.update({"opened": opened, "timed_out": closed, "open": sorted(recs),
-                    "room": _sl.room(recs) + len(opened), "held": sorted(held)})
-        if opened or closed:
-            _scalp_private("⚡ scalp book (testnet): "
-                           + ("; ".join([f"opened {x}" for x in opened]
-                                        + [f"closed {c} after "
-                                           f"{_sl.max_hold_ms() // 3_600_000}h" for c in closed])))
+        out.update({"results": results, "notes": notes, "held": sorted(held),
+                    "open": {c: r.get("state") for c, r in recs.items()}})
+        if notes:
+            _scalp_private("🪤 scalp book (testnet): " + "; ".join(notes))
     except Exception as exc:
         out.update({"ok": False, "error": type(exc).__name__})
     return out
 
 
 def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
-    """One 15m scalp pass: read the scalp coins, alert new signals privately,
-    run the HL scalp book. Never raises."""
+    """One 15m pass of the sweep -> FVG scalp book: find setups completed on
+    the latest close with the 1H read agreeing, alert them privately, run the
+    HL book. Never raises."""
     import scalp_live as _sl
     if not _sl.enabled():
         return {"ok": True, "ran": False, "reason": "SCALP_DISABLED"}
     now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
-    fetch_fn = fetch_fn or (lambda sym: _sl.fetch_closed(SYMBOLS[sym], now_ms))
+    fetch_fn = fetch_fn or (lambda sym, iv: _sl.fetch_closed(SYMBOLS[sym], now_ms, interval=iv,
+                                                            count=245 if iv == "15m" else 241))
     read_fn = read_fn or _scalp_engine_read
 
     def _one(sym):
         try:
-            return _sl.read(fetch_fn(sym), sym, read_fn, now_ms=now_ms)
+            s = _sl.new_setup(fetch_fn(sym, "15m"), sym, now_ms=now_ms)
+            if s is None:
+                return None
+            return s if _sl.h1_agrees(s, fetch_fn(sym, "1h"), read_fn) else None
         except Exception:
             return None
 
     syms = [s for s in _sl.SYMBOLS if s in SYMBOLS]
     with ThreadPoolExecutor(max_workers=6) as ex:
-        sigs = [x for x in ex.map(_one, syms) if x]
-    sigs.sort(key=lambda x: -x["strength"])
+        found = [x for x in ex.map(_one, syms) if x]
+    found.sort(key=lambda x: -x["rr"])
     new = []
-    for x in sigs:
+    for x in found:
         try:
             import kv as _kv
-            if _kv.claim(f"scalp:sig:{_deploy_env()}:{x['symbol']}:{x['candle_ts']}",
+            if _kv.claim(f"scalp:sig:{_deploy_env()}:{x['symbol']}:{x['slot_ms']}",
                          ttl_seconds=2 * 86_400):
                 new.append(x)
         except Exception:
             pass
     if new:
         _scalp_private(_sl.message(new, auto=_sl.auto_enabled()))
-    hl = _scalp_hl(sigs, now_ms)
+    hl = _scalp_hl(new, now_ms)
+    label = [f"{x['symbol']} {x['direction']} R:R {x['rr']:g}" for x in found]
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "signals": [f"{x['symbol']} {x['direction']} {x['strength']:g}" for x in sigs],
-        **{k: hl.get(k) for k in ("reason", "opened", "timed_out", "results", "error",
-                                  "held") if hl.get(k)}}, cap=96)
-    return {"ok": True, "ran": True, "coins": len(syms),
-            "signals": [f"{x['symbol']} {x['direction']} {x['strength']:g}" for x in sigs],
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "setups": label,
+        **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held") if hl.get(k)}},
+        cap=96)
+    return {"ok": True, "ran": True, "coins": len(syms), "signals": label,
             "new": len(new), "scalp_hl": hl}
 
 
@@ -5560,7 +5632,7 @@ def api_hl_scalp():
         return guard
     import scalp_live as _sl
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
-                    "min_strength": _sl.min_strength(),
+                    "setup": "sweep -> FVG, gap top, R:R 1.5+, 1H agrees",
                     "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
                     "max_open": _sl.max_open(), "open": _scalp_records(),
                     "runs": _kv_json_list(f"scalp:runs:{_deploy_env()}")[-48:]})

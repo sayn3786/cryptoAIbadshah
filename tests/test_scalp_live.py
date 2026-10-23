@@ -1,6 +1,8 @@
 """
-The live 15m scalp book (HL testnet only): signal reads, the max-hold sweep,
-the scheduler job, and the gates that keep it off mainnet and off the 4h book.
+The live 15m scalp book (HL testnet only), sweep -> FVG: setups on the latest
+close with the 1H read agreeing, resting limit entries with the stop and target
+attached, the cancel / promote / time-out sweep, and the gates that keep it off
+mainnet and out of the 4h book.
 """
 import json
 import os
@@ -17,75 +19,88 @@ M = sl.M15_MS
 H = 3_600_000
 
 
-def bars(n, end_close):
-    return [{"timestamp": end_close - (n - i) * M, "open": 100, "high": 101, "low": 99,
-             "close": 100.5, "volume": 1} for i in range(n)]
+def b(i, o, h, lo, c):
+    return {"timestamp": i * M, "open": o, "high": h, "low": lo, "close": c, "volume": 1.0}
 
 
-def sig(d="LONG", s=80):
-    if d == "SHORT":
-        return {"direction": d, "strength": s, "entry": 101, "sl": 103, "tp_targets": [99, 97, 95]}
-    return {"direction": d, "strength": s, "entry": 100, "sl": 98, "tp_targets": [102, 104, 106]}
+def setup_bars():
+    """Swing high 110 at 5, swing low 100 at 12, sweep at 16, gap completed at 18."""
+    bars = [b(i, 102, 102.2, 101.8, 102) for i in range(19)]
+    bars[5] = b(5, 107, 110, 106, 108)
+    bars[12] = b(12, 102, 102.1, 100, 101)
+    bars[16] = b(16, 101, 101.5, 99.5, 101)
+    bars[17] = b(17, 101, 105, 101, 104.5)
+    bars[18] = b(18, 104.5, 106, 103, 105.5)
+    return bars
+
+
+NOW = 19 * M + 60_000           # one minute after candle 18 closed
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MIN_STRENGTH",
-              "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN"):
+    for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN"):
         monkeypatch.delenv(k, raising=False)
 
 
 def test_defaults_and_switches(monkeypatch):
     assert sl.enabled() and sl.auto_enabled()
-    assert sl.min_strength() == 75 and sl.max_hold_ms() == 12 * H and sl.max_open() == 2
+    assert sl.max_hold_ms() == 12 * H and sl.max_open() == 2 and sl.ENTRY_MS == 2 * H
     monkeypatch.setenv("HL_SCALP_AUTO_EXECUTE", "0")
     assert sl.enabled() and not sl.auto_enabled()
     monkeypatch.setenv("SCALP_ENABLED", "off")
     assert not sl.enabled() and not sl.auto_enabled()
 
 
-def test_read_needs_a_fresh_close_the_floor_and_a_ladder():
-    now = 1000 * M + 60_000
-    b = bars(sl.WINDOW, 1000 * M)
-    got = sl.read(b, "eth", lambda *a: sig(), now_ms=now)
-    assert got["symbol"] == "ETH" and got["candle_ts"] == 1000 * M and got["strength"] == 80
-    assert sl.read(b, "ETH", lambda *a: sig(), now_ms=now + M) is None        # stale
-    assert sl.read(b[:-1] if False else b[1:], "ETH", lambda *a: sig(), now_ms=now) is None
-    assert sl.read(b, "ETH", lambda *a: sig(s=70), now_ms=now) is None        # below 75
-    assert sl.read(b, "ETH", lambda *a: {**sig(), "tp_targets": []}, now_ms=now) is None
-    assert sl.read(b, "ETH", lambda *a: {"direction": "NEUTRAL"}, now_ms=now) is None
+def test_new_setup_only_on_the_latest_close():
+    s = sl.new_setup(setup_bars(), "eth", now_ms=NOW)
+    assert s == {"symbol": "ETH", "direction": "LONG", "limit": 103, "sl": s["sl"],
+                 "target": 110, "rr": s["rr"], "slot_ms": 19 * M}
+    assert s["sl"] < 99.5 and s["rr"] >= 1.5
+    assert sl.new_setup(setup_bars(), "ETH", now_ms=NOW + M) is None          # stale
+    more = setup_bars() + [b(19, 105, 105.5, 104.5, 105)]
+    assert sl.new_setup(more, "ETH", now_ms=20 * M + 60_000) is None          # gap was earlier
+    assert sl.new_setup([], "ETH", now_ms=NOW) is None
+
+
+def test_h1_agreement():
+    s = {"symbol": "ETH", "direction": "LONG"}
+    h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
+    assert sl.h1_agrees(s, h1, lambda w, tf, sym: {"direction": "LONG"})
+    assert not sl.h1_agrees(s, h1, lambda w, tf, sym: {"direction": "SHORT"})
+    assert not sl.h1_agrees(s, h1[:-1], lambda w, tf, sym: {"direction": "LONG"})
     seen = []
-    sl.read(b, "ETH", lambda w, tf, s: seen.append((len(w), tf)) or sig(), now_ms=now)
-    assert seen == [(sl.WINDOW, "15M")]
+    sl.h1_agrees(s, h1, lambda w, tf, sym: seen.append((len(w), tf)) or {})
+    assert seen == [(sl.H1_WINDOW, "1H")]
 
 
-def test_to_hl_keeps_its_own_stop():
-    s = sl.read(bars(sl.WINDOW, 10 * M + sl.WINDOW * M), "SOL", lambda *a: sig("SHORT"),
-                now_ms=10 * M + sl.WINDOW * M + 1)
-    h = sl.to_hl(s)
-    assert h["id"] == "scalp-SOL" and h["tp1"] == 99 and h["tp2"] == 97 and "atr" not in h
-    assert h["direction"] == "SHORT" and h["confidence_score"] == 80
-    assert h["entry"] == 100.5 and h["sl"] == 103          # stale check vs the 15m close
+def rec(state="pending", **kw):
+    r = {"coin": "ETH", "symbol": "ETH", "direction": "LONG", "limit": 100.0, "sl": 98.0,
+         "target": 104.0, "oid": 7, "placed_ms": 0, "state": state}
+    r.update(kw)
+    return r
 
 
-def test_close_already_past_tp1_or_the_stop_is_no_signal():
-    now = 1000 * M + 60_000
-    b = bars(sl.WINDOW, 1000 * M)                          # close 100.5
-    assert sl.read(b, "X", lambda *a: {**sig(), "tp_targets": [100.2, 104]}, now_ms=now) is None
-    assert sl.read(b, "X", lambda *a: {**sig(), "sl": 100.6}, now_ms=now) is None
-    assert sl.read(b, "X", lambda *a: sig(), now_ms=now)["close"] == 100.5
+def test_sweep_pending_entries():
+    orders = [{"oid": 7, "coin": "ETH"}]
+    pos = [{"coin": "ETH", "side": "long", "entry_px": 100.2}]
+    assert sl.sweep({"ETH": rec()}, pos, orders, {}, now_ms=H)["promote"] == ["ETH"]
+    assert sl.sweep({"ETH": rec()}, [], orders, {"ETH": "99"}, now_ms=H)["cancel"] == []
+    assert sl.sweep({"ETH": rec()}, [], orders, {"ETH": "99"}, now_ms=2 * H)["cancel"] == ["ETH"]
+    assert sl.sweep({"ETH": rec()}, [], orders, {"ETH": "97.9"}, now_ms=H)["cancel"] == ["ETH"]
+    assert sl.sweep({"ETH": rec()}, [], [], {}, now_ms=H)["drop"] == ["ETH"]       # gone
+    assert sl.sweep({"ETH": rec()}, [], None, {}, now_ms=5 * H) == \
+        {"promote": [], "cancel": [], "close": [], "drop": []}                    # unknown: wait
 
 
-def test_sweep_times_out_and_drops():
-    recs = {"ETH": {"coin": "ETH", "direction": "LONG", "entry": 100, "opened_ms": 0},
-            "SOL": {"coin": "SOL", "direction": "SHORT", "entry": 50, "opened_ms": 0},
-            "BTC": {"coin": "BTC", "direction": "LONG", "entry": 100, "opened_ms": 11 * H}}
-    pos = [{"coin": "ETH", "side": "long", "entry_px": 100.5},
-           {"coin": "SOL", "side": "long", "entry_px": 50},            # a 4h trade now
-           {"coin": "BTC", "side": "long", "entry_px": 101}]
-    assert sl.sweep(recs, pos, now_ms=12 * H) == {"close": ["ETH"], "drop": ["SOL"]}
-    assert sl.sweep(recs, [], now_ms=0) == {"close": [], "drop": ["ETH", "SOL", "BTC"]}
-    assert not sl.held([{"coin": "ETH", "side": "long", "entry_px": 110}], recs["ETH"])
+def test_sweep_open_scalps():
+    pos = [{"coin": "ETH", "side": "long", "entry_px": 100.5}]
+    r = rec(state="open", opened_ms=0)
+    assert sl.sweep({"ETH": r}, pos, [], {}, now_ms=12 * H)["close"] == ["ETH"]
+    assert sl.sweep({"ETH": r}, pos, [], {}, now_ms=11 * H)["close"] == []
+    assert sl.sweep({"ETH": r}, [{"coin": "ETH", "side": "short", "entry_px": 100}], [], {},
+                    now_ms=H)["drop"] == ["ETH"]                                  # a 4h trade now
+    assert sl.sweep({"ETH": r}, [], [], {}, now_ms=H)["drop"] == ["ETH"]
 
 
 def test_room(monkeypatch):
@@ -96,7 +111,7 @@ def test_room(monkeypatch):
 
 def test_fetch_falls_back_and_keeps_closed_only():
     now = 500 * M + 30_000
-    k = [[t * M, "1", "1", "1", "1", "1"] for t in range(500 - 250, 501)]   # incl. the forming one
+    k = [[t * M, "1", "1", "1", "1", "1"] for t in range(500 - 250, 501)]
 
     def get(url, params):
         if "binance" in url:
@@ -105,14 +120,35 @@ def test_fetch_falls_back_and_keeps_closed_only():
     got = sl.fetch_closed("ETHUSDT", now, get=get)
     assert got and all(c["timestamp"] + M <= now for c in got)
     got = sl.fetch_closed("ETHUSDT", now, get=lambda u, p: k)
-    assert got[-1]["timestamp"] == 499 * M and len(got) == 250
+    assert got[-1]["timestamp"] == 499 * M and len(got) == 245
 
 
 def test_message_is_honest():
-    s = {"symbol": "ETH", "direction": "LONG", "strength": 80.0, "entry": 100.0, "sl": 98.0,
-         "tp_targets": [102.0, 104.0]}
+    s = {"symbol": "ETH", "direction": "LONG", "limit": 100.0, "sl": 98.0, "target": 104.0,
+         "rr": 2.0}
     m = sl.message([s], auto=True)
-    assert "testnet" in m and "lost in both periods" in m and "ETH LONG 80" in m
+    assert "testnet" in m and "break-even" in m and "ETH LONG" in m and "limit 100" in m
+
+
+def test_entry_status_parsing():
+    import hl_exchange as he
+    ok = {"status": "ok", "response": {"data": {"statuses": [{"resting": {"oid": 5}}, "waitingForFill"]}}}
+    assert he.entry_status(ok) == {"state": "resting", "oid": 5}
+    filled = {"status": "ok", "response": {"data": {"statuses": [
+        {"filled": {"oid": 6, "avgPx": "101.5", "totalSz": "1"}}]}}}
+    assert he.entry_status(filled) == {"state": "filled", "oid": 6, "avg_px": 101.5}
+    assert he.entry_status({"status": "ok", "response": {"data": {"statuses": [
+        {"error": "Insufficient margin"}]}}})["state"] == "error"
+    assert he.entry_status("boom")["state"] == "error"
+
+
+def test_manager_keeps_exits_attached_to_a_resting_entry():
+    import hl_manage
+    orders = [{"coin": "ETH", "oid": 1, "reduceOnly": False, "isTrigger": False, "timestamp": 0},
+              {"coin": "ETH", "oid": 2, "reduceOnly": True, "isTrigger": True, "timestamp": 0},
+              {"coin": "SOL", "oid": 3, "reduceOnly": True, "isTrigger": True, "timestamp": 0}]
+    acts = hl_manage.plan([], orders, {}, {}, now_ms=10 ** 9)
+    assert acts == [{"coin": "SOL", "action": "cancel_orphans", "cancel_oids": [3]}]
 
 
 # ── the app side ────────────────────────────────────────────────────────────
@@ -133,16 +169,17 @@ def app_mod(monkeypatch):
     return app
 
 
-def test_run_alerts_each_candle_once(app_mod, monkeypatch):
-    monkeypatch.setattr(app_mod, "_scalp_hl", lambda sigs, now: {"ran": False, "reason": "X"})
-    now = 1000 * M + 60_000
-    b = bars(sl.WINDOW, 1000 * M)
-    read = lambda w, tf, s: sig() if s in ("ETH", "SOL") else {}        # noqa: E731
-    out = app_mod._scalp_run(now, fetch_fn=lambda s: b, read_fn=read)
-    assert out["signals"] == ["ETH LONG 80", "SOL LONG 80"] and out["new"] == 2
-    assert len(app_mod._sent) == 1 and "ETH LONG 80" in app_mod._sent[0]
-    again = app_mod._scalp_run(now, fetch_fn=lambda s: b, read_fn=read)
-    assert again["new"] == 0 and len(app_mod._sent) == 1
+def test_run_alerts_each_setup_once_and_needs_1h(app_mod, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
+    h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
+    fetch = lambda sym, iv: setup_bars() if iv == "15m" else h1                  # noqa: E731
+    read = lambda w, tf, s: {"direction": "LONG" if s == "ETH" else "SHORT"}      # noqa: E731
+    out = app_mod._scalp_run(NOW, fetch_fn=fetch, read_fn=read)
+    assert out["signals"] == ["ETH LONG R:R " + f"{calls[0][0]['rr']:g}"] and out["new"] == 1
+    assert len(app_mod._sent) == 1 and "ETH LONG" in app_mod._sent[0]
+    again = app_mod._scalp_run(NOW, fetch_fn=fetch, read_fn=read)
+    assert again["new"] == 0 and len(app_mod._sent) == 1 and calls[1] == []
 
 
 def test_disabled_does_nothing(app_mod, monkeypatch):
@@ -158,54 +195,88 @@ def test_hl_refuses_mainnet_and_respects_the_switch(app_mod, monkeypatch):
     assert app_mod._scalp_hl([], 0)["reason"] == "HL_SCALP_AUTO_EXECUTE_OFF"
 
 
-def test_hl_times_out_then_opens_within_room(app_mod, monkeypatch):
+@pytest.fixture
+def hl_fake(app_mod, monkeypatch):
     import hl_account
-    import hl_autoexec
     import hl_exchange
     import hl_execution
     import hl_meta
+    st = {"positions": [], "orders": [], "sent": [], "cancelled": [], "closed": [],
+          "known": False}
     monkeypatch.setattr(hl_account, "_env", lambda env=None: "testnet")
     monkeypatch.setattr(hl_execution, "arm_status", lambda: {"armed": True})
-    monkeypatch.setattr(hl_account, "account_state", lambda: {"open_positions": [
-        {"coin": "ETH", "side": "long", "entry_px": 100}]})
-    monkeypatch.setattr(hl_account, "_post_info", lambda *a, **k: [])
+    monkeypatch.setattr(hl_account, "account_state", lambda: {
+        "open_positions": st["positions"], "account_value_usd": 1000.0})
+    monkeypatch.setattr(hl_account, "spot_usdc", lambda: 0.0)
+    monkeypatch.setattr(hl_account, "_post_info", lambda *a, **k: st["orders"])
     monkeypatch.setattr(hl_account, "account_address", lambda: "0xabc")
-    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {})
-    monkeypatch.setattr(hl_meta, "resolve_coin", lambda sym, table: sym)
-    closes = []
-    monkeypatch.setattr(hl_exchange, "send_market_close", lambda coin, cloid, env=None:
-                        closes.append(coin) or {"status": "ok"})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"ETH": "100"})
+    monkeypatch.setattr(hl_account, "order_known", lambda cloid, env=None: st["known"])
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        s: {"sz_decimals": 2, "max_leverage": 10, "asset_id": i}
+        for i, s in enumerate(("ETH", "SOL", "XRP", "ADA"))})
+    monkeypatch.setattr(hl_exchange, "send_limit_open_with_tpsl",
+                        lambda coin, is_buy, size, px, sl_px, tp_px, **kw:
+                        st["sent"].append((coin, is_buy, px, sl_px, tp_px)) or
+                        {"status": "ok", "response": {"data": {"statuses": [
+                            {"resting": {"oid": 100 + len(st["sent"])}}]}}})
+    monkeypatch.setattr(hl_exchange, "cancel_order",
+                        lambda coin, oid, env=None: st["cancelled"].append((coin, oid)))
+    monkeypatch.setattr(hl_exchange, "send_market_close",
+                        lambda coin, cloid, env=None: st["closed"].append(coin) or {"status": "ok"})
     monkeypatch.setattr(hl_exchange, "order_accepted", lambda resp: (True, None))
-    calls = []
-
-    def execute(signals, **kw):
-        calls.append([s["symbol"] for s in signals])
-        return {"results": [{"ok": True, "coin": s["symbol"], "mark_px": 10.0} for s in signals]}
-    monkeypatch.setattr(hl_autoexec, "execute", execute)
-    app_mod._scalp_save({"ETH": {"coin": "ETH", "symbol": "ETH", "direction": "LONG",
-                                 "entry": 100, "opened_ms": 0}})
-    mk = lambda s: {"symbol": s, "direction": "LONG", "strength": 80.0, "entry": 10.0,   # noqa: E731
-                    "sl": 9.0, "tp_targets": [11.0, 12.0], "candle_ts": 1}
-    out = app_mod._scalp_hl([mk("SOL"), mk("XRP"), mk("ADA")], 12 * H)
-    assert closes == ["ETH"] and out["timed_out"] == ["ETH"]
-    assert calls == [["SOL", "XRP"]]                         # room for 2
-    assert sorted(app_mod._scalp_records()) == ["SOL", "XRP"]
-    assert any("opened SOL LONG 80" in t for t in app_mod._sent)
-    assert out["results"] == [{"symbol": "SOL", "ok": True, "mark_px": 10.0},
-                              {"symbol": "XRP", "ok": True, "mark_px": 10.0}]
-
-    def stale(signals, **kw):
-        return {"results": [{"ok": False, "reason": "STALE_ENTRY", "drift_pct": 0.5,
-                             "allowed_pct": 0.3, "coin": s["symbol"]} for s in signals]}
-    monkeypatch.setattr(hl_autoexec, "execute", stale)
-    app_mod._scalp_save({})
-    out = app_mod._scalp_hl([mk("BNB")], 13 * H)
-    assert out["results"] == [{"symbol": "BNB", "ok": False, "reason": "STALE_ENTRY",
-                               "drift_pct": 0.5, "allowed_pct": 0.3}]
-    assert out["opened"] == [] and out["held"] == ["ETH"]
+    return st
 
 
-def test_scalp_never_touches_the_4h_book_or_the_signals_table():
+def _setup(sym, d="LONG"):
+    return {"symbol": sym, "direction": d, "limit": 10.0, "sl": 9.5, "target": 11.0, "rr": 2.0,
+            "slot_ms": 1}
+
+
+def test_places_limit_entries_within_room(app_mod, hl_fake):
+    out = app_mod._scalp_hl([_setup("ETH"), _setup("SOL"), _setup("XRP")], H)
+    assert [x[0] for x in hl_fake["sent"]] == ["ETH", "SOL"]                 # room for 2
+    assert hl_fake["sent"][0] == ("ETH", True, 10.0, 9.5, 11.0)
+    recs = app_mod._scalp_records()
+    assert recs["ETH"]["state"] == "pending" and recs["ETH"]["oid"] == 101
+    assert app_mod._scalp_busy_symbols() == {"ETH", "SOL"}
+    assert any("placed ETH LONG limit 10" in t for t in app_mod._sent)
+    assert out["results"][0] == {"symbol": "ETH", "ok": True, "state": "pending"}
+
+
+def test_already_placed_and_held_coins_are_skipped(app_mod, hl_fake):
+    hl_fake["positions"] = [{"coin": "ETH", "side": "long", "entry_px": 50}]
+    hl_fake["known"] = True
+    out = app_mod._scalp_hl([_setup("ETH"), _setup("SOL")], H)
+    assert out["results"] == [{"symbol": "ETH", "ok": False, "reason": "POSITION_EXISTS"},
+                              {"symbol": "SOL", "ok": False, "reason": "ALREADY_PLACED"}]
+    assert hl_fake["sent"] == []
+
+
+def test_cancels_a_stale_entry_with_its_exits(app_mod, hl_fake):
+    app_mod._scalp_save({"ETH": rec(placed_ms=0)})
+    hl_fake["orders"] = [{"oid": 7, "coin": "ETH", "reduceOnly": False},
+                         {"oid": 8, "coin": "ETH", "reduceOnly": True}]
+    app_mod._scalp_hl([], 2 * H)
+    assert hl_fake["cancelled"] == [("ETH", 7), ("ETH", 8)]
+    assert app_mod._scalp_records() == {}
+
+
+def test_promotes_a_fill_then_times_it_out(app_mod, hl_fake):
+    app_mod._scalp_save({"ETH": rec(placed_ms=0)})
+    hl_fake["positions"] = [{"coin": "ETH", "side": "long", "entry_px": 100.1}]
+    app_mod._scalp_hl([], H)
+    assert app_mod._scalp_records()["ETH"]["state"] == "open"
+    app_mod._scalp_hl([], H + 12 * H)
+    assert hl_fake["closed"] == ["ETH"] and app_mod._scalp_records() == {}
+
+
+def test_4h_book_skips_scalp_coins():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "backend", "app.py")).read()
+    assert "busy = _scalp_busy_symbols()" in src
+
+
+def test_scalp_never_touches_the_signals_table():
     src = open(os.path.join(os.path.dirname(__file__), "..", "backend", "scalp_live.py")).read()
     assert "signal_store" not in src and "persist_recommendations" not in src
 
@@ -217,6 +288,7 @@ def test_route_and_scheduler(app_mod, monkeypatch):
     assert c.post("/api/cron/scalp").status_code == 401
     assert c.post("/api/cron/scalp", headers={"x-cron-secret": "s3cret-value-123"}).status_code == 200
     assert "/api/cron/scalp" in app_mod._SCHEDULER_PATHS
+    _ = json
 
 
 def test_worker_runs_it_every_15_minutes():
