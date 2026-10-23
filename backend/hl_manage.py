@@ -30,7 +30,8 @@ actually on the exchange:
     at market instead, which is what the stop at entry would have done.
 
 Orphans: a reduce-only order (stop, trigger TP or limit TP) on a coin with no
-open position is cancelled once it is ORPHAN_MIN_AGE_MS (2 min) old, so a
+open position and no resting entry order is cancelled once it is
+ORPHAN_MIN_AGE_MS (2 min) old, so a
 leftover take-profit can never close part of a LATER position on the same coin.
 The age floor covers the moments between an open and the state read; auto-exec
 also clears a coin's leftovers right before it opens that coin
@@ -183,7 +184,12 @@ def plan(positions: List[Dict[str, Any]], orders: List[Dict[str, Any]],
                         "cancel_oids": [o.get("oid") for o in others]})
 
     # Reduce-only orders whose position is gone (stopped out, or TP2 filled).
+    # A coin with a resting (non-reduce-only) ENTRY order is not orphaned: its
+    # reduce-only orders are the stop / take-profit attached to that entry
+    # (the scalp book's limit entries), waiting for it to fill.
     held = {str(p.get("coin")) for p in positions or [] if _num(p.get("size"))}
+    held |= {str(o.get("coin")) for o in orders or []
+             if isinstance(o, dict) and not o.get("reduceOnly") and not o.get("isTrigger")}
     orphans: Dict[str, List[Any]] = {}
     for o in orders or []:
         if not (isinstance(o, dict) and o.get("reduceOnly")):

@@ -43,6 +43,13 @@ DEFAULT_MAX_ENTRY_DEVIATION = 0.02
 DEFAULT_ENTRY_DRIFT_STOP_FRACTION = 0.5
 
 
+def _num(x: Any) -> Optional[float]:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
 def _flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -119,6 +126,53 @@ def send_market_open(coin: str, is_buy: bool, size: float, cloid_str: str,
         if not ok:
             raise RuntimeError(f"leverage update rejected: {detail}")
     return ex.market_open(coin, is_buy, size, cloid=Cloid.from_str(cloid_str))
+
+
+def send_limit_open_with_tpsl(coin: str, is_buy: bool, size: float, px: float,
+                              sl_px: float, tp_px: float, *, cloid: str, sl_cloid: str,
+                              tp_cloid: str, env: Optional[str] = None,
+                              leverage: Optional[float] = None) -> Any:
+    """A resting GTC limit OPEN with its stop and take-profit attached
+    (Hyperliquid's normalTpsl grouping): the two reduce-only children activate
+    only when the entry fills, so a fill is never without a stop, even between
+    scheduler runs. Leverage is set first, as for a market open."""
+    from hyperliquid.utils.signing import Cloid
+    ex = _exchange(env)
+    if leverage:
+        ok, detail = action_ok(ex.update_leverage(int(leverage), coin, True))
+        if not ok:
+            raise RuntimeError(f"leverage update rejected: {detail}")
+    exit_buy = not is_buy
+    orders = [
+        {"coin": coin, "is_buy": is_buy, "sz": float(size), "limit_px": float(px),
+         "order_type": {"limit": {"tif": "Gtc"}}, "reduce_only": False,
+         "cloid": Cloid.from_str(cloid)},
+        {"coin": coin, "is_buy": exit_buy, "sz": float(size), "limit_px": float(sl_px),
+         "order_type": {"trigger": {"triggerPx": float(sl_px), "isMarket": True, "tpsl": "sl"}},
+         "reduce_only": True, "cloid": Cloid.from_str(sl_cloid)},
+        {"coin": coin, "is_buy": exit_buy, "sz": float(size), "limit_px": float(tp_px),
+         "order_type": {"trigger": {"triggerPx": float(tp_px), "isMarket": False, "tpsl": "tp"}},
+         "reduce_only": True, "cloid": Cloid.from_str(tp_cloid)},
+    ]
+    return ex.bulk_orders(orders, grouping="normalTpsl")
+
+
+def entry_status(resp: Any) -> Dict[str, Any]:
+    """The entry leg of a bulk order response: {"state": "resting" | "filled" |
+    "error", "oid", "avg_px", "error"}. Pure."""
+    try:
+        if not isinstance(resp, dict) or resp.get("status") != "ok":
+            return {"state": "error", "error": str(resp)[:200]}
+        st = (((resp.get("response") or {}).get("data") or {}).get("statuses") or [None])[0]
+    except Exception:                                     # noqa: BLE001
+        return {"state": "error", "error": "unreadable response"}
+    if isinstance(st, dict) and "resting" in st:
+        return {"state": "resting", "oid": st["resting"].get("oid")}
+    if isinstance(st, dict) and "filled" in st:
+        f = st["filled"]
+        return {"state": "filled", "oid": f.get("oid"), "avg_px": _num(f.get("avgPx"))}
+    err = st.get("error") if isinstance(st, dict) else st
+    return {"state": "error", "error": str(err)[:200]}
 
 
 def send_market_close(coin: str, cloid_str: str, env: Optional[str] = None) -> Any:
