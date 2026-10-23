@@ -120,6 +120,10 @@ name: Strategy backtests (private Telegram)
 #            15m close, traded the HL way with HL fees; strength floor, 1H
 #            agreement and max hold as variants; end_days_ago 0 and 135
 #            (backend/scalp_compare.py; use days 60; ~20-30 min)
+#   entry-15m  15m entries for the live HL signals: a limit on a 0.25R / 0.5R
+#            pullback, at the 15m EMA 21, or after a 15m close its way, waiting
+#            1-2h, else skip or market; v54 exits; end_days_ago 0 and 135
+#            (backend/entry_15m_compare.py; ~20-30 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -138,7 +142,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -147,7 +151,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -246,6 +250,8 @@ jobs:
                          EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp) MODULE=scalp_compare
                    EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            entry-15m) MODULE=entry_15m_compare
+                       EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
