@@ -126,7 +126,8 @@ name: Strategy backtests (private Telegram)
 #            (backend/entry_15m_compare.py; ~20-30 min)
 #   sweep-fvg  the 3-step ICT scalp on 15m: liquidity sweep -> fair value gap
 #            -> limit entry in the gap, stop under the sweep, target the swing
-#            beyond; gap top / mid, R:R 1.5 / 2, 1H agreement; end_days_ago 0
+#            beyond; gap top / mid, R:R 1.5 / 2, the engine reads (1H, 15m,
+#            both or none) agreeing; end_days_ago 0
 #            and 135 (backend/sweep_fvg_compare.py; use days 60; ~5-15 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).

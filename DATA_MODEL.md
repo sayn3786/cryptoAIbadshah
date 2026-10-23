@@ -1,5 +1,19 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Scalp book history (migration `019`)
+
+`019_scalp_trades.sql` adds `scalp_trades`: one row per scalp the testnet 15m
+scalp book placed (`backend/scalp_live.py`, sweep → FVG), keyed
+`(environment, symbol, setup_close_time)`. It records the setup (limit, stop,
+target, R:R, size), then the outcome: `PENDING` → `OPEN` (filled) → `CLOSED`
+(`exit_reason` target / stop / breakeven / timeout / other, with `pnl_usd`
+after fees from Hyperliquid's own fills) or `CANCELLED` (not filled in 2h,
+price through the stop, or gone from HL). It is separate from `signals`, so no
+4h statistic ever includes a scalp. Additive and optional: before the
+migration the book still trades and only skips recording
+(`scalp_store` checks `to_regclass`). `GET /api/hl/scalp` shows the last 14
+days and their totals.
+
 ## Durable publication batches (migration `018`)
 
 Apply `018_publication_batches.sql` **before deploying this code**, then deploy

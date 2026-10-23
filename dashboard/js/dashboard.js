@@ -473,7 +473,7 @@ function renderAll(a) {
    so they're de-weighted in scoring (backend) AND flagged with a badge + dimmed
    here so the user reads them as reference context, not intraday triggers. */
 function applyHtfContext(tf) {
-  const lowTf = ['1H', '2H'].includes(tf);
+  const lowTf = ['15M', '1H', '2H'].includes(tf);
   const sections = ['onchainMetricsSection', 'gominingSection', 'etfFlowsSection',
                     'taoEcoSection', 'cryptoRegimeSection', 'macroSection'];
   sections.forEach(id => {
@@ -997,7 +997,7 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   S.candleSeries.setMarkers([]);   // wave markers — replaced later by renderElliottWave
 
   // Show hours on the time axis for intraday TFs; dates only for daily+
-  const intraday = ['1H', '2H', '4H', '8H', '12H'].includes(S.timeframe);
+  const intraday = ['15M', '1H', '2H', '4H', '8H', '12H'].includes(S.timeframe);
   S.mainChart.applyOptions({
     timeScale: { borderColor: '#1e2d44', timeVisible: intraday, secondsVisible: false },
   });
@@ -3758,6 +3758,7 @@ const TF_CLOSE_RULES = {
   // sidewaysCount: consecutive sideways candles before escalating
   // sidewaysDesc : human label for that count
   // checkTF      : next higher timeframe to consult when sideways
+  '15M': { candle: '15m candle',     hold: '1 – 12 hours',   check: 'every 15 min',     trail: '15m swing',     be1: 'move SL to entry at 1R — scalp; protect fast',       sidewaysCount: 4, sidewaysDesc: '4 consecutive sideways 15m candles (= 1 hour)',          checkTF: '1H'  },
   '1H':  { candle: '1H candle',      hold: '4 – 24 hours',   check: 'every 1 h',        trail: '1H swing',      be1: 'move SL to entry quickly — intraday trade',          sidewaysCount: 4, sidewaysDesc: '4 consecutive sideways 1H candles (= 4 hours)',          checkTF: '4H'  },
   '2H':  { candle: '2H candle',      hold: '8 – 48 hours',   check: 'every 2 h',        trail: '2H swing',      be1: 'move SL to entry — short-term trade; protect quickly',sidewaysCount: 3, sidewaysDesc: '3 consecutive sideways 2H candles (= 6 hours)',          checkTF: '4H'  },
   '4H':  { candle: '4H candle',      hold: '1 – 5 days',     check: 'every 4 h',        trail: '4H swing',      be1: 'move SL to entry — short TF; protect quickly',       sidewaysCount: 3, sidewaysDesc: '3 consecutive sideways 4H candles (= 1 12H candle)', checkTF: '12H' },

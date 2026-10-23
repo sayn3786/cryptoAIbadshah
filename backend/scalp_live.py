@@ -11,7 +11,8 @@ signals table:
 
   * every 15 minutes (the scheduler, /api/cron/scalp) each scalp coin's last
     closed 15m candles are read; a sweep -> FVG setup completed on the LATEST
-    close, with the coin's 1H engine read the same way, is a scalp — sent to
+    close, with the coin's engine read(s) the same way (SCALP_CONFIRM: the 1H
+    by default; "15m", "1h+15m" or "none"), is a scalp — sent to
     the PRIVATE chat once;
   * HL places a resting LIMIT entry at the gap's top with the stop (under the
     sweep's wick) and the target (the nearest swing beyond) ATTACHED, so they
@@ -70,6 +71,16 @@ def max_hold_ms() -> int:
 
 def max_open() -> int:
     return int(_num_env("SCALP_MAX_OPEN", DEFAULT_MAX_OPEN))
+
+
+CONFIRM_MODES = ("1h", "15m", "1h+15m", "none")
+
+
+def confirm_mode() -> str:
+    """Which engine reads must point the setup's way (SCALP_CONFIRM): the 1H
+    (default, the tested near-break-even variant), the 15m, both, or none."""
+    v = os.getenv("SCALP_CONFIRM", "").strip().lower()
+    return v if v in CONFIRM_MODES else "1h"
 
 
 # ── candles ─────────────────────────────────────────────────────────────────
@@ -143,15 +154,71 @@ def new_setup(bars: Sequence[Dict[str, Any]], symbol: str, *,
             "sl": s["sl"], "target": s["target"], "rr": s["rr"], "slot_ms": close_ms}
 
 
-def h1_agrees(setup: Dict[str, Any], h1: Sequence[Dict[str, Any]], read_fn: Callable) -> bool:
-    """The coin's 1H engine read at the last closed hour points the setup's way."""
-    if len(h1) < H1_WINDOW:
+def agrees(setup: Dict[str, Any], bars: Sequence[Dict[str, Any]], tf: str,
+           read_fn: Callable) -> bool:
+    """The coin's engine read (all its indicators) on the last H1_WINDOW closed
+    `tf` candles points the setup's way."""
+    if len(bars) < H1_WINDOW:
         return False
     try:
-        d = (read_fn(list(h1[-H1_WINDOW:]), "1H", setup["symbol"]) or {}).get("direction")
+        d = (read_fn(list(bars[-H1_WINDOW:]), tf, setup["symbol"]) or {}).get("direction")
     except Exception:                                     # noqa: BLE001
         return False
     return d == setup["direction"]
+
+
+def h1_agrees(setup: Dict[str, Any], h1: Sequence[Dict[str, Any]], read_fn: Callable) -> bool:
+    """The coin's 1H engine read at the last closed hour points the setup's way."""
+    return agrees(setup, h1, "1H", read_fn)
+
+
+def confirmed(setup: Dict[str, Any], m15: Sequence[Dict[str, Any]], fetch_h1: Callable,
+              read_fn: Callable, mode: Optional[str] = None) -> bool:
+    """The setup passes the confirmation mode (the 1H fetched only if needed)."""
+    mode = mode or confirm_mode()
+    if mode in ("15m", "1h+15m") and not agrees(setup, m15, "15M", read_fn):
+        return False
+    if mode in ("1h", "1h+15m") and not agrees(setup, fetch_h1(), "1H", read_fn):
+        return False
+    return True
+
+
+def settle(fills: Sequence[Dict[str, Any]], rec: Dict[str, Any], *,
+           timed_out: bool = False) -> Optional[Dict[str, Any]]:
+    """The scalp's result from the account's fills on its coin since it was
+    placed: entry and exit (volume-weighted), P&L after fees (Hyperliquid's
+    closedPnl minus every fee), and why it closed. None if it never filled. Pure."""
+    since = int(rec.get("placed_ms") or 0)
+    mine = [f for f in fills or [] if str(f.get("coin")) == rec["coin"]
+            and int(f.get("time") or 0) >= since]
+    opens = [f for f in mine if str(f.get("dir") or "").startswith("Open")]
+    closes = [f for f in mine if str(f.get("dir") or "").startswith("Close")]
+    if not opens:
+        return None
+
+    def vwap(fs):
+        sz = sum(float(f.get("sz") or 0) for f in fs)
+        return sum(float(f.get("px") or 0) * float(f.get("sz") or 0) for f in fs) / sz if sz else None
+    fill, exit_px = vwap(opens), vwap(closes)
+    fees = sum(float(f.get("fee") or 0) for f in mine)
+    pnl = sum(float(f.get("closedPnl") or 0) for f in closes) - fees
+    risk = abs((fill or 0) - float(rec["sl"])) or None
+    reason = "other"
+    if timed_out:
+        reason = "timeout"
+    elif exit_px is not None and risk:
+        if abs(exit_px - float(rec["target"])) <= 0.25 * risk:
+            reason = "target"
+        elif abs(exit_px - fill) <= 0.25 * risk:
+            reason = "breakeven"
+        elif abs(exit_px - float(rec["sl"])) <= 0.5 * risk or \
+                ((exit_px < rec["sl"]) if rec["direction"] == "LONG" else (exit_px > rec["sl"])):
+            reason = "stop"
+    return {"fill_price": round(fill, 8) if fill else None,
+            "filled_ms": min(int(f.get("time") or 0) for f in opens),
+            "exit_price": round(exit_px, 8) if exit_px else None,
+            "closed_ms": max((int(f.get("time") or 0) for f in closes), default=None),
+            "pnl_usd": round(pnl, 4), "fees_usd": round(fees, 4), "exit_reason": reason}
 
 
 # ── the book's state ────────────────────────────────────────────────────────
@@ -212,6 +279,10 @@ def room(records: Dict[str, Any]) -> int:
     return max(0, max_open() - len(records or {}))
 
 
+_CONFIRM_LABEL = {"1h": "1H agrees", "15m": "15m indicators agree",
+                  "1h+15m": "1H + 15m indicators agree", "none": "no indicator check"}
+
+
 def message(setups: Sequence[Dict[str, Any]], *, auto: bool) -> str:
     def px(v: float) -> str:
         return f"{v:,.6g}"
@@ -220,7 +291,7 @@ def message(setups: Sequence[Dict[str, Any]], *, auto: bool) -> str:
     for s in setups:
         lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} {s['direction']} "
                      f"· limit {px(s['limit'])} · SL {px(s['sl'])} · TP {px(s['target'])} · "
-                     f"R:R {s['rr']:g} · 1H agrees")
+                     f"R:R {s['rr']:g} · {_CONFIRM_LABEL[confirm_mode()]}")
     lines.append("Backtest: about break-even in both periods (not an edge). Testnet experiment; "
                  f"limit good for 2h, closed after {max_hold_ms() // H1_MS}h if still open.")
     return "\n".join(lines)
