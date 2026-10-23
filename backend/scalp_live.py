@@ -137,7 +137,8 @@ def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
 # ── which trigger ───────────────────────────────────────────────────────────
 # "blend" (default, the owner's call): the 15m ENGINE signal (all indicators)
 # triggers; a sweep -> FVG setup the same way in the last SWEEP_RECENT candles
-# only ADDS SWEEP_BONUS strength, never required. Exits come from structure
+# ADDS SWEEP_BONUS, and the coin's 1H engine read adds / takes H1_POINTS —
+# strength, never a requirement. Exits come from structure
 # (sweep_fvg.structure_exit). "sweep_fvg": the sweep -> FVG setup alone, with
 # a limit in the gap (the earlier mode).
 SCALP_MODES = ("blend", "sweep_fvg")
@@ -156,41 +157,71 @@ def min_strength() -> float:
     return _num_env("SCALP_MIN_STRENGTH", DEFAULT_MIN_STRENGTH)
 
 
-def blend_signal(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *,
-                 now_ms: int, floor: Optional[float] = None) -> Optional[Dict[str, Any]]:
-    """The 15m engine read on the LAST closed candle (closed within the last
-    15 minutes) + SWEEP_BONUS when a sweep -> FVG setup the same way completed
-    in the last SWEEP_RECENT candles; at `floor`+ with a structure stop and
-    target (R:R 1.5+), a scalp entered at market. None otherwise."""
+H1_POINTS = 5.0           # the 1H engine read: +5 with the trade, -5 against
+
+
+def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now_ms: int,
+          h1_fn: Optional[Callable] = None, floor: Optional[float] = None) -> tuple:
+    """(scalp or None, why not). The score: the 15m engine read on the LAST
+    closed candle (closed within the last 15 minutes), + SWEEP_BONUS when a
+    sweep -> FVG the same way completed in the last SWEEP_RECENT candles,
+    + H1_POINTS when the coin's 1H engine read agrees / - H1_POINTS when it
+    points the other way (`h1_fn` returns the 1H candles; fetched only when it
+    could change the outcome). Nothing is required but the score at `floor`+
+    and a structure stop and target at R:R 1.5+; the scalp enters at market.
+    "why" is None for a scalp, or a short reason for a directional read that
+    did not make it (neutral / stale / no read: ("", None) quietly)."""
     floor = min_strength() if floor is None else floor
     if len(bars) < WINDOW:
-        return None
+        return None, None
     last = len(bars) - 1
     close_ms = int(bars[last]["timestamp"]) + M15_MS
     if not (0 <= now_ms - close_ms < M15_MS):
-        return None
+        return None, None
     try:
         sig = read_fn(list(bars[-WINDOW:]), "15M", symbol) or {}
     except Exception:                                     # noqa: BLE001
-        return None
+        return None, None
     d = sig.get("direction")
     if d not in ("LONG", "SHORT"):
-        return None
+        return None, None
     strength = float(sig.get("strength") or 0)
     piv = sweep_fvg.pivots(bars)
     recent = [x for x in sweep_fvg.setups(bars, at=ENTRY_AT,
                                           start_ms=close_ms - SWEEP_RECENT * M15_MS, piv=piv)
               if x["direction"] == d and 0 <= last - x["ready"] < SWEEP_RECENT]
     bonus = SWEEP_BONUS if recent else 0.0
-    if strength + bonus < floor:
-        return None
+    h1 = 0.0
+    if h1_fn is not None and strength + bonus + H1_POINTS >= floor:
+        try:
+            h1_bars = h1_fn() or []
+            hd = (read_fn(list(h1_bars[-H1_WINDOW:]), "1H", symbol) or {}).get("direction") \
+                if len(h1_bars) >= H1_WINDOW else None
+        except Exception:                                 # noqa: BLE001
+            hd = None
+        h1 = H1_POINTS if hd == d else -H1_POINTS if hd in ("LONG", "SHORT") else 0.0
+    score = strength + bonus + h1
+    parts = f"15m {strength:g}" + (f" + sweep {bonus:g}" if bonus else "") + \
+        (f" {'+' if h1 > 0 else '-'} 1H {abs(h1):g}" if h1 else "")
+    label = f"{symbol.upper()} {d}"
+    if score < floor:
+        return None, (f"{label}: {parts} = {score:g} < {floor:g}" if strength >= floor - 20
+                      else None)
     ex = sweep_fvg.structure_exit(bars, last, d, piv)
     if ex is None:
-        return None
+        return None, f"{label}: {parts} = {score:g}, no swing stop/target at R:R 1.5+"
     return {"kind": "engine", "symbol": symbol.upper(), "direction": d,
-            "strength": round(strength + bonus, 1), "engine_strength": round(strength, 1),
-            "sweep_bonus": bonus, "entry": float(bars[last]["close"]), "limit": float(bars[last]["close"]),
-            "sl": ex["sl"], "target": ex["target"], "rr": ex["rr"], "slot_ms": close_ms}
+            "strength": round(score, 1), "engine_strength": round(strength, 1),
+            "sweep_bonus": bonus, "h1_points": h1, "score_parts": parts,
+            "entry": float(bars[last]["close"]), "limit": float(bars[last]["close"]),
+            "sl": ex["sl"], "target": ex["target"], "rr": ex["rr"], "slot_ms": close_ms}, None
+
+
+def blend_signal(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *,
+                 now_ms: int, floor: Optional[float] = None,
+                 h1_fn: Optional[Callable] = None) -> Optional[Dict[str, Any]]:
+    """The scalp from blend(), or None."""
+    return blend(bars, symbol, read_fn, now_ms=now_ms, h1_fn=h1_fn, floor=floor)[0]
 
 
 CONFIRM_MODES = ("1h", "15m", "1h+15m", "none")
@@ -411,12 +442,10 @@ def message(setups: Sequence[Dict[str, Any]], *, auto: bool) -> str:
     lines = [head + " (testnet" + (", auto-exec on)" if auto else ", alert only)")]
     for s in setups:
         if s.get("kind") == "engine":
-            extra = (f"engine {s['engine_strength']:g} + sweep/FVG {s['sweep_bonus']:g} = "
-                     f"{s['strength']:g}" if s.get("sweep_bonus") else f"engine {s['strength']:g}")
+            extra = f"{s.get('score_parts') or s['engine_strength']} = {s['strength']:g}"
             lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
                          f"{s['direction']} · {extra} · market ~{px(s['entry'])} · SL "
-                         f"{px(s['sl'])} · TP {px(s['target'])} · R:R {s['rr']:g} · "
-                         f"{_CONFIRM_LABEL[confirm_mode()]}")
+                         f"{px(s['sl'])} · TP {px(s['target'])} · R:R {s['rr']:g}")
         else:
             lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
                          f"{s['direction']} · limit {px(s['limit'])} · SL {px(s['sl'])} · TP "

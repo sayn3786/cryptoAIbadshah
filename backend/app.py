@@ -5687,14 +5687,13 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
         try:
             m15 = fetch_fn(sym, "15m")
             if _sl.mode() == "blend":
-                # The 15m engine triggers; sweep -> FVG only adds strength. Its
-                # own 15m read already IS the 15m check, so only the 1H applies.
-                s = _sl.blend_signal(m15, sym, read_fn, now_ms=now_ms)
-                if s is None:
-                    return None
-                need_1h = _sl.confirm_mode() in ("1h", "1h+15m")
-                return s if (not need_1h or _sl.h1_agrees(s, fetch_fn(sym, "1h"), read_fn)) \
-                    else None
+                # The 15m engine triggers; sweep -> FVG and the 1H read only add
+                # (or, the 1H against, take) strength — no requirement.
+                s, why = _sl.blend(m15, sym, read_fn, now_ms=now_ms,
+                                   h1_fn=lambda: fetch_fn(sym, "1h"))
+                if why:
+                    rejected.append(why)
+                return s
             s = _sl.new_setup(m15, sym, now_ms=now_ms)
             if s is None:
                 return None
@@ -5702,6 +5701,7 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
         except Exception:
             return None
 
+    rejected: list = []
     syms = [s for s in _sl.SYMBOLS if s in SYMBOLS]
     with ThreadPoolExecutor(max_workers=6) as ex:
         found = [x for x in ex.map(_one, syms) if x]
@@ -5718,12 +5718,16 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     if new:
         _scalp_private(_sl.message(new, auto=_sl.auto_enabled()))
     hl = _scalp_hl(new, now_ms)
-    label = [f"{x['symbol']} {x['direction']} R:R {x['rr']:g}" for x in found]
+    label = [f"{x['symbol']} {x['direction']} {x['strength']:g} R:R {x['rr']:g}"
+             if x.get("kind") == "engine" else f"{x['symbol']} {x['direction']} R:R {x['rr']:g}"
+             for x in found]
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "setups": label,
+        **({"rejected": sorted(rejected)} if rejected else {}),
         **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held") if hl.get(k)}},
         cap=96)
     return {"ok": True, "ran": True, "coins": len(syms), "signals": label,
+            "rejected": sorted(rejected),
             "new": len(new), "scalp_hl": hl}
 
 
@@ -5751,11 +5755,14 @@ def api_hl_scalp():
     import scalp_live as _sl
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
                     "mode": _sl.mode(), "min_strength": _sl.min_strength(),
-                    "setup": ("15m engine 75+ triggers; a sweep -> FVG the same way adds +10; "
-                              "structure stop / target, R:R 1.5+" if _sl.mode() == "blend"
+                    "setup": ("score = 15m engine + 10 for a sweep -> FVG the same way "
+                              "+/- 5 for the 1H read with / against; 75+ trades with a "
+                              "structure stop / target at R:R 1.5+" if _sl.mode() == "blend"
                               else "sweep -> FVG, gap top, R:R 1.5+"),
                     "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
-                    "max_open": _sl.max_open(), "confirm": _sl.confirm_mode(),
+                    "max_open": _sl.max_open(),
+                    "confirm": (_sl.confirm_mode() if _sl.mode() == "sweep_fvg"
+                                else "none: the 1H read is +/-5 points"),
                     "sizing": {"risk_usd": _sl.risk_usd(), "margin_usd": _sl.margin_usd(),
                                "max_exposure_usd": _sl.max_exposure_usd(),
                                "leverage_by_market_cap": "mega 20x, large 10x, mid 7x, "

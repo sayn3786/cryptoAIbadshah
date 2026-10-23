@@ -421,7 +421,7 @@ def test_blend_run_alerts_engine_scalps(app_mod, monkeypatch):
     read = lambda w, tf, s: {"direction": "LONG", "strength": 80} if s == "ETH" else {}  # noqa
     out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
     assert out["new"] == 1 and calls[0][0]["kind"] == "engine"
-    assert "engine 80 + sweep/FVG 10 = 90" in app_mod._sent[0]
+    assert "15m 80 + sweep 10 + 1H 5 = 95" in app_mod._sent[0]
 
 
 def test_engine_scalp_opens_at_market_risk_sized(app_mod, hl_fake, monkeypatch):
@@ -444,3 +444,34 @@ def test_engine_scalp_opens_at_market_risk_sized(app_mod, hl_fake, monkeypatch):
     assert recs["ETH"]["state"] == "open" and recs["ETH"]["kind"] == "engine"
     assert any("opened ETH LONG 80 at market ($247 at 10x" in t for t in app_mod._sent)
     assert out["results"][0]["ok"]
+
+
+
+def test_blend_1h_is_points_not_a_gate():
+    bars = padded()
+    h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
+
+    def read(s15, h1dir):
+        return lambda w, tf, sym: {"direction": h1dir if tf == "1H" else "LONG",
+                                   "strength": s15}
+    got, why = sl.blend(bars, "ETH", read(62, "LONG"), now_ms=NOW_B, h1_fn=lambda: h1)
+    assert got["strength"] == 77 and got["h1_points"] == 5 and why is None   # 62 + 10 + 5
+    got, _ = sl.blend(bars, "ETH", read(72, "SHORT"), now_ms=NOW_B, h1_fn=lambda: h1)
+    assert got["strength"] == 77 and got["h1_points"] == -5      # 72 + 10 - 5
+    got, why = sl.blend(bars, "ETH", read(68, "SHORT"), now_ms=NOW_B, h1_fn=lambda: h1)
+    assert got is None and why == "ETH LONG: 15m 68 + sweep 10 - 1H 5 = 73 < 75"
+    got, _ = sl.blend(bars, "ETH", read(75, "SHORT"), now_ms=NOW_B, h1_fn=lambda: h1)
+    assert got and got["strength"] == 80                      # 1H against still trades
+    got, why = sl.blend(bars, "ETH", read(55, "NEUTRAL"), now_ms=NOW_B, h1_fn=lambda: h1)
+    assert got is None and why == "ETH LONG: 15m 55 + sweep 10 = 65 < 75"
+    calls = []
+    sl.blend(bars, "ETH", read(40, "LONG"), now_ms=NOW_B, h1_fn=lambda: calls.append(1) or h1)
+    assert calls == []                                        # can't reach 75: 1H not fetched
+
+
+def test_blend_reports_a_missing_structure():
+    flat = [b(i, 100, 100.2, 99.8, 100) for i in range(sl.WINDOW + 5)]
+    now = int(flat[-1]["timestamp"]) + M + 60_000
+    got, why = sl.blend(flat, "BTC", lambda w, tf, s: {"direction": "LONG", "strength": 90},
+                        now_ms=now)
+    assert got is None and "no swing stop/target" in why
