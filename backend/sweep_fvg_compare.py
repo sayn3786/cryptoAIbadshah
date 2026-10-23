@@ -20,7 +20,8 @@ SHORTs mirror it (a sweep of a swing high, a bearish gap, target the swing
 low below). Traded the HL way on 15m candles: the limit fill pays the maker
 fee, all out at the target (stop to entry at 1R), max hold 12h, $25 a trade,
 one position per coin, <= 3 open. Variants: gap top / midpoint, MIN_RR 1.5 /
-2, and whether the coin's 1H engine read must agree.
+2, and which engine reads (all the indicators) must agree: none, the coin's
+1H read, its 15m read on the candle that completed the gap, or both.
 
 A variant WORKS with 30+ trades, a profit and PF >= 1.2; it replaces the
 engine in the testnet scalp book only if it works in both periods
@@ -49,9 +50,14 @@ USD = sc.USD
 MAX_OPEN = sc.MAX_OPEN
 LIMIT_FILL = {**cm.LIMIT_TPS, "entry": cm.MAKER_BPS}
 
-VARIANTS = tuple((f"entry gap {at} · R:R {rr_:g}+ · {'1H agrees' if confirm else '15m alone'}",
-                  at, rr_, confirm)
-                 for at in ("top", "mid") for rr_ in (1.5, 2.0) for confirm in (False, True))
+CONFIRM_LABEL = {"none": "no indicators", "1h": "1H agrees", "15m": "15m indicators agree",
+                 "1h+15m": "1H + 15m indicators agree"}
+# (label, entry in the gap, min R:R, which engine reads must agree)
+VARIANTS = tuple((f"entry gap {at} · R:R {rr_:g}+ · {CONFIRM_LABEL[mode]}", at, rr_, mode)
+                 for at in ("top", "mid") for rr_ in (1.5,)
+                 for mode in ("none", "1h", "15m", "1h+15m")) + tuple(
+    (f"entry gap top · R:R 2+ · {CONFIRM_LABEL[mode]}", "top", 2.0, mode)
+    for mode in ("1h", "1h+15m"))
 
 
 def fill(s: Dict, bars: Sequence[Dict]) -> Optional[int]:
@@ -107,6 +113,31 @@ def book(found: Sequence[Dict], m15: Dict[str, List[Dict]], *,
     return {"trades": trades, "missed": missed}
 
 
+def m15_agrees(s: Dict, bars: Sequence[Dict], read_fn: Callable, cache: Dict) -> bool:
+    """The engine (all its indicators) on the 240 closed 15m candles ending
+    with the one that completed the gap points the setup's way."""
+    k = s["ready"]
+    if k + 1 < sc.WINDOW:
+        return False
+    key = ("15M", s["symbol"], k)
+    if key not in cache:
+        try:
+            cache[key] = (read_fn(bars[k + 1 - sc.WINDOW:k + 1], "15M", s["symbol"]) or {}
+                          ).get("direction")
+        except Exception:                                 # noqa: BLE001
+            cache[key] = None
+    return cache[key] == s["direction"]
+
+
+def confirmed(s: Dict, mode: str, bars: Sequence[Dict], h1: Sequence[Dict],
+              h1_ts: Sequence[int], read_fn: Callable, cache: Dict) -> bool:
+    if mode in ("15m", "1h+15m") and not m15_agrees(s, bars, read_fn, cache):
+        return False
+    if mode in ("1h", "1h+15m") and not h1_agrees(s, h1, h1_ts, read_fn, cache):
+        return False
+    return True
+
+
 def h1_agrees(s: Dict, h1: Sequence[Dict], h1_ts: Sequence[int], read_fn: Callable,
               cache: Dict) -> bool:
     k = bisect.bisect_right(h1_ts, s["slot_ms"] - HOUR_MS) - 1
@@ -131,7 +162,7 @@ def compare(m15: Dict[str, List[Dict]], *, start_ms: int, end_ms: int,
     piv = {s: pivots(b) for s, b in m15.items()}
     base: Dict = {}
     rows = []
-    for label, at, min_rr, confirm in VARIANTS:
+    for label, at, min_rr, mode in VARIANTS:
         if (at, min_rr) not in base:
             base[(at, min_rr)] = [{**x, "symbol": sym} for sym, bars in m15.items()
                                   for x in setups(bars, at=at, min_rr=min_rr,
@@ -139,7 +170,7 @@ def compare(m15: Dict[str, List[Dict]], *, start_ms: int, end_ms: int,
         found = []
         for s in base[(at, min_rr)]:
             sym = s["symbol"]
-            if confirm and not h1_agrees(s, h1[sym], h1_ts[sym], read_fn, cache):
+            if not confirmed(s, mode, m15[sym], h1[sym], h1_ts[sym], read_fn, cache):
                 continue
             found.append(s)
         b = book(found, m15)

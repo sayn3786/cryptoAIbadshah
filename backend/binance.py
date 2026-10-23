@@ -549,7 +549,7 @@ class BinanceClient:
     # Gate.io intraday/daily candlesticks — real OHLC with deep history for alts
     # (e.g. TAO) that recently-listed CEX spot markets don't carry. Gate has no
     # 2h/12h bars, so those intervals fall through to the other sources.
-    _GATE_IV = {"1h": "1h", "4h": "4h", "8h": "8h", "1d": "1d",
+    _GATE_IV = {"15m": "15m", "1h": "1h", "4h": "4h", "8h": "8h", "1d": "1d",
                 "1w": "7d", "1W": "7d", "1M": "30d"}
 
     def _gate_candles(self, symbol: str, interval: str, limit: int = 100) -> Optional[List[Dict]]:
@@ -583,7 +583,7 @@ class BinanceClient:
     # Hong Kong 00:00 (UTC+8), which shifts every daily/weekly/monthly candle
     # 8h vs KuCoin/Binance/TradingView. The utc variants match the standard.
     _OKX_BAR_SPOT = {
-        "1h": "1H", "2h": "2H", "4h": "4H", "8h": "8H",
+        "15m": "15m", "1h": "1H", "2h": "2H", "4h": "4H", "8h": "8H",
         "12h": "12Hutc", "1d": "1Dutc", "1w": "1Wutc", "1W": "1Wutc", "1M": "1Mutc",
     }
 
@@ -633,7 +633,7 @@ class BinanceClient:
 
     # Bybit interval codes for kline endpoint
     _BYBIT_IV = {
-        "1h": "60",  "2h": "120", "4h": "240",  "8h": "480",
+        "15m": "15", "1h": "60",  "2h": "120", "4h": "240",  "8h": "480",
         "12h": "720", "1d": "D",  "1w": "W",    "1W": "W", "1M": "M",
     }
 
@@ -676,7 +676,7 @@ class BinanceClient:
             return None
         inst_id = spot_id + "-SWAP"   # BTC-USDT → BTC-USDT-SWAP
         _OKX_BAR = {
-            "1h": "1H", "2h": "2H", "4h": "4H",  "8h": "8H",
+            "15m": "15m", "1h": "1H", "2h": "2H", "4h": "4H",  "8h": "8H",
             "12h": "12Hutc", "1d": "1Dutc", "1w": "1Wutc", "1W": "1Wutc", "1M": "1Mutc",
         }
         bar = _OKX_BAR.get(interval, "1Wutc")
@@ -704,7 +704,7 @@ class BinanceClient:
 
     # MEXC — Binance-compatible v3 API; missing 2H/8H/12H intervals
     _MEXC_IV = {
-        "1h": "1h", "4h": "4h", "1d": "1d",
+        "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d",
         "1w": "1W", "1W": "1W", "1M": "1M",
     }
 
@@ -726,7 +726,7 @@ class BinanceClient:
 
     # HTX (Huobi) — 60min=1H, 4hour=4H, 1day, 1week; missing 2H/8H/12H
     _HTX_IV = {
-        "1h": "60min", "4h": "4hour", "1d": "1day",
+        "15m": "15min", "1h": "60min", "4h": "4hour", "1d": "1day",
         "1w": "1week", "1W": "1week", "1M": "1mon",
     }
 
@@ -761,7 +761,7 @@ class BinanceClient:
     # LBank — supports 2H/8H/12H which most exchanges miss
     # Response format: [timestamp_ms, open, close, high, low, volume]
     _LBANK_IV = {
-        "1h": "hour1", "2h": "hour2", "4h": "hour4", "8h": "hour8",
+        "15m": "minute15", "1h": "hour1", "2h": "hour2", "4h": "hour4", "8h": "hour8",
         "12h": "hour12", "1d": "day1", "1w": "week1", "1W": "week1",
     }
 
@@ -795,7 +795,7 @@ class BinanceClient:
             return None
 
     _KUCOIN_IV = {
-        "1h": "1hour", "2h": "2hour", "4h": "4hour", "8h": "8hour",
+        "15m": "15min", "1h": "1hour", "2h": "2hour", "4h": "4hour", "8h": "8hour",
         "12h": "12hour", "1d": "1day", "1w": "1week", "1W": "1week", "1M": "1day",
     }
 

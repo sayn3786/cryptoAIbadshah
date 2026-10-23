@@ -294,3 +294,66 @@ def test_route_and_scheduler(app_mod, monkeypatch):
 def test_worker_runs_it_every_15_minutes():
     s = worker_schedule()
     assert len(s["scalp"]) == 96 and all(m % 15 == 1 for _h, m in s["scalp"])
+
+
+def test_confirm_modes(monkeypatch):
+    assert sl.confirm_mode() == "1h"
+    s = {"symbol": "ETH", "direction": "LONG"}
+    m15 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
+    h1 = lambda: m15                                                       # noqa: E731
+    read = lambda w, tf, sym: {"direction": "LONG" if tf == "1H" else "SHORT"}  # noqa: E731
+    assert sl.confirmed(s, m15, h1, read)
+    for mode, want in (("15m", False), ("1h+15m", False), ("none", True), ("bogus", True)):
+        monkeypatch.setenv("SCALP_CONFIRM", mode)
+        assert sl.confirmed(s, m15, h1, read) is want
+    monkeypatch.setenv("SCALP_CONFIRM", "15m")
+    calls = []
+    sl.confirmed(s, m15, lambda: calls.append(1) or m15, read)
+    assert calls == []                                    # 1H not fetched when unused
+
+
+def _fill(t, d, px, sz, pnl=0.0, fee=0.01, coin="ETH"):
+    return {"coin": coin, "time": t, "dir": d, "px": str(px), "sz": str(sz),
+            "closedPnl": str(pnl), "fee": str(fee)}
+
+
+def test_settle_from_fills():
+    r = rec(state="open", placed_ms=100)                  # limit 100, sl 98, target 104
+    fills = [_fill(50, "Open Long", 99, 1), _fill(150, "Open Long", 100, 1),
+             _fill(300, "Close Long", 104, 1, pnl=4.0), _fill(310, "Open Long", 1, 1, coin="SOL")]
+    got = sl.settle(fills, r)
+    assert got == {"fill_price": 100.0, "filled_ms": 150, "exit_price": 104.0, "closed_ms": 300,
+                   "pnl_usd": 3.98, "fees_usd": 0.02, "exit_reason": "target"}
+    be = sl.settle([_fill(150, "Open Long", 100, 1), _fill(300, "Close Long", 100.1, 1, 0.1)], r)
+    assert be["exit_reason"] == "breakeven"
+    stop = sl.settle([_fill(150, "Open Long", 100, 1), _fill(300, "Close Long", 97.9, 1, -2.1)], r)
+    assert stop["exit_reason"] == "stop" and stop["pnl_usd"] == -2.12
+    assert sl.settle([_fill(150, "Open Long", 100, 1)], r, timed_out=True)["exit_reason"] == "timeout"
+    assert sl.settle([], r) is None
+
+
+def test_store_summary_and_quiet_without_db(monkeypatch):
+    import scalp_store
+    rows = [{"status": "CLOSED", "pnl_usd": 2.0, "exit_reason": "target", "filled_at": "x"},
+            {"status": "CLOSED", "pnl_usd": -1.0, "exit_reason": "stop", "filled_at": "x"},
+            {"status": "CANCELLED"}, {"status": "PENDING"}]
+    sm = scalp_store.summary(rows)
+    assert sm["placed"] == 4 and sm["closed"] == 2 and sm["win_rate_pct"] == 50.0
+    assert sm["pnl_usd"] == 1.0 and sm["pf"] == 2.0 and sm["cancelled"] == 1 and sm["open"] == 1
+    assert sm["by_reason"]["target"] == 1 and sm["by_reason"]["stop"] == 1
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert scalp_store.recent("test") == [] and scalp_store.placed("test", {}) is False
+
+
+def test_drop_records_the_close(app_mod, hl_fake, monkeypatch):
+    import hl_account
+    import scalp_store
+    seen = []
+    monkeypatch.setattr(scalp_store, "closed", lambda env, r, **kw: seen.append(kw["result"]))
+    app_mod._scalp_save({"ETH": rec(state="open", placed_ms=0, opened_ms=0, slot_ms=1)})
+    fills = [_fill(10, "Open Long", 100, 1), _fill(20, "Close Long", 104, 1, pnl=4.0)]
+    monkeypatch.setattr(hl_account, "_post_info", lambda body, **k:
+                        fills if body.get("type") == "userFills" else [])
+    app_mod._scalp_hl([], H)
+    assert seen and seen[0]["exit_reason"] == "target"
+    assert any("ETH closed at target" in t for t in app_mod._sent)

@@ -114,3 +114,20 @@ def test_workflow_runs_it():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     assert "sweep-fvg) MODULE=sweep_fvg_compare" in wf
+
+
+def test_confirmation_modes():
+    bars = long_setup()
+    s = {**[x for x in sf.setups(bars) if x["direction"] == "LONG"][0], "symbol": "ETH"}
+    long_read = lambda w, tf, sym: {"direction": "LONG"}               # noqa: E731
+    short_15m = lambda w, tf, sym: {"direction": "SHORT" if tf == "15M" else "LONG"}  # noqa: E731
+    big = [b(i, 100, 101, 99, 100) for i in range(sf.sc.WINDOW)] + bars
+    s2 = {**s, "ready": s["ready"] + sf.sc.WINDOW}
+    assert sf.confirmed(s2, "none", big, [], [], short_15m, {})
+    assert sf.confirmed(s2, "15m", big, [], [], long_read, {})
+    assert not sf.confirmed(s2, "15m", big, [], [], short_15m, {})
+    assert not sf.confirmed(s, "15m", bars, [], [], long_read, {})          # too little history
+    assert not sf.confirmed(s2, "1h+15m", big, [], [], long_read, {})       # no 1H history
+    labels = [v[0] for v in sf.VARIANTS]
+    assert "entry gap top · R:R 1.5+ · 1H + 15m indicators agree" in labels
+    assert "entry gap top · R:R 1.5+ · 15m indicators agree" in labels

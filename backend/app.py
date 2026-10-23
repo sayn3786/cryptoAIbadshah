@@ -243,7 +243,7 @@ _BTC_CORR = {
     "GOMINING": 0.5,  # Mining platform token — moderately correlated with BTC mining profitability
 }
 TF_INTERVAL = {
-    "1H": "1h", "2H": "2h",
+    "15M": "15m", "1H": "1h", "2H": "2h",
     "4H": "4h", "8H": "8h", "12H": "12h", "1D": "1d",
     "1W": "1w", "2W": "1w", "3W":  "1w",  "1M": "1M",
 }
@@ -254,7 +254,7 @@ TF_AGG = {"2W": 2, "3W": 3}
 # average (real months vary 28–31 days, so alignment checks use the median
 # observed gap, not this nominal value).
 TF_SECONDS = {
-    "1H": 3600, "2H": 7200, "4H": 14400, "8H": 28800, "12H": 43200,
+    "15M": 900, "1H": 3600, "2H": 7200, "4H": 14400, "8H": 28800, "12H": 43200,
     "1D": 86400, "1W": 604800, "2W": 1209600, "3W": 1814400, "1M": 2629800,
 }
 
@@ -262,7 +262,7 @@ TF_SECONDS = {
 # per timeframe (soft = degraded, hard = invalid). A 1M candle's last close
 # can legitimately sit far from the live price; a 1H one cannot.
 _TF_PRICE_GAP = {
-    "1H": (0.020, 0.060), "2H": (0.025, 0.075), "4H": (0.035, 0.10),
+    "15M": (0.012, 0.040), "1H": (0.020, 0.060), "2H": (0.025, 0.075), "4H": (0.035, 0.10),
     "8H": (0.045, 0.13),  "12H": (0.055, 0.16), "1D": (0.070, 0.20),
     "1W": (0.120, 0.30),  "2W": (0.140, 0.35),  "3W": (0.150, 0.38),
     "1M": (0.180, 0.45),
@@ -353,7 +353,7 @@ def _assess_data_quality(timeframe, spot_source, closed_spot, live_price, signal
 # for indicator seeding. 1W/1M keep less — 200 weeks/months of history rarely
 # exists for crypto, so EMA200 is expected to be unavailable there.
 TF_LIMIT = {
-    "1H": 240, "2H": 240,
+    "15M": 240, "1H": 240, "2H": 240,
     "4H": 240, "8H": 240, "12H": 240, "1D": 240,
     "1W": 150, "2W": 150, "3W":  150, "1M": 100,
 }
@@ -2321,7 +2321,8 @@ _analysis_cache_lock  = _threading.Lock()
 
 def _analysis_cache_key(symbol: str, tf: str) -> str:
     now  = datetime.now(timezone.utc)
-    half = (now.minute // 30) * 30
+    step = 15 if tf == "15M" else 30       # a 15m chart refreshes every candle
+    half = (now.minute // step) * step
     return f"av1_{symbol}_{tf}_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 def get_analysis(symbol: str, tf: str) -> dict:
@@ -5476,9 +5477,12 @@ def _scalp_place(setup, *, acct, table, recs, now_ms) -> dict:
         return {"symbol": sym, "ok": False, "reason": "SEND_REJECTED", "detail": st.get("error")}
     recs[coin] = {"coin": coin, "symbol": sym, "direction": setup["direction"], "limit": px,
                   "sl": sl, "target": tp, "oid": st.get("oid"), "placed_ms": now_ms,
-                  "notional_usd": plan["notional_usd"],
+                  "slot_ms": ts, "size": plan["size"], "notional_usd": plan["notional_usd"],
                   "state": "open" if st["state"] == "filled" else "pending",
-                  **({"opened_ms": now_ms} if st["state"] == "filled" else {})}
+                  **({"opened_ms": now_ms, "fill_price": st.get("avg_px")}
+                     if st["state"] == "filled" else {})}
+    import scalp_store as _ss
+    _ss.placed(_deploy_env(), recs[coin], rr=setup.get("rr"))
     return {"symbol": sym, "ok": True, "state": recs[coin]["state"]}
 
 
@@ -5513,9 +5517,21 @@ def _scalp_hl(setups, now_ms) -> dict:
             recs = _scalp_records()
             mids = _ha.all_mids() if recs else {}
             act = _sl.sweep(recs, positions, orders, mids, now_ms=now_ms)
+            import scalp_store as _ss
+            env = _deploy_env()
+            fills = None
+            if act["close"] or act["drop"]:
+                try:
+                    fills = _ha._post_info({"type": "userFills",
+                                            "user": _ha.account_address()}) or []
+                except Exception:
+                    fills = None
             notes = []
             for coin in act["promote"]:
+                px = next((p.get("entry_px") for p in positions
+                           if str(p.get("coin")) == coin), None)
                 recs[coin].update(state="open", opened_ms=now_ms)
+                _ss.filled(env, recs[coin], at_ms=now_ms, price=px)
                 notes.append(f"filled {recs[coin]['symbol']} {recs[coin]['direction']}")
             for coin in act["cancel"]:
                 rec = recs[coin]
@@ -5527,6 +5543,7 @@ def _scalp_hl(setups, now_ms) -> dict:
                     except Exception:
                         pass
                 recs.pop(coin, None)
+                _ss.cancelled(env, rec, reason="not filled in 2h or price through the stop")
                 notes.append(f"cancelled {rec['symbol']} (not filled in 2h or through its stop)")
             for coin in act["close"]:
                 rec = recs[coin]
@@ -5538,9 +5555,21 @@ def _scalp_hl(setups, now_ms) -> dict:
                     ok = False
                 if ok:
                     recs.pop(coin, None)
-                    notes.append(f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h")
+                    res = _sl.settle(fills, rec, timed_out=True) if fills is not None else None
+                    _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "timeout"})
+                    notes.append(f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h"
+                                 + (f" (${res['pnl_usd']:+.2f})" if res else ""))
             for coin in act["drop"]:
-                recs.pop(coin, None)
+                rec = recs.pop(coin, None) or {}
+                res = _sl.settle(fills, rec) if (fills is not None and rec) else None
+                if res and res.get("exit_price") is not None:
+                    _ss.closed(env, rec, at_ms=now_ms, result=res)
+                    notes.append(f"{rec['symbol']} closed at {res['exit_reason']} "
+                                 f"(${res['pnl_usd']:+.2f})")
+                elif rec.get("state") == "open":
+                    _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "other"})
+                elif rec.get("state") == "pending" and fills is not None:
+                    _ss.cancelled(env, rec, reason="gone from HL without a fill")
             table = _hm.asset_table()
             held = {str(p.get("coin") or "").upper() for p in positions}
             results = []
@@ -5583,10 +5612,11 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
 
     def _one(sym):
         try:
-            s = _sl.new_setup(fetch_fn(sym, "15m"), sym, now_ms=now_ms)
+            m15 = fetch_fn(sym, "15m")
+            s = _sl.new_setup(m15, sym, now_ms=now_ms)
             if s is None:
                 return None
-            return s if _sl.h1_agrees(s, fetch_fn(sym, "1h"), read_fn) else None
+            return s if _sl.confirmed(s, m15, lambda: fetch_fn(sym, "1h"), read_fn) else None
         except Exception:
             return None
 
@@ -5624,6 +5654,12 @@ def api_cron_scalp():
     return jsonify(_scalp_run())
 
 
+def _scalp_history() -> dict:
+    import scalp_store as _ss
+    rows = _ss.recent(_deploy_env(), days=14)
+    return {"summary_14d": _ss.summary(rows), "history": rows}
+
+
 @app.get("/api/hl/scalp")
 def api_hl_scalp():
     """The scalp book: the scalps it holds and its last runs. Admin only."""
@@ -5632,9 +5668,11 @@ def api_hl_scalp():
         return guard
     import scalp_live as _sl
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
-                    "setup": "sweep -> FVG, gap top, R:R 1.5+, 1H agrees",
+                    "setup": "sweep -> FVG, gap top, R:R 1.5+",
                     "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
-                    "max_open": _sl.max_open(), "open": _scalp_records(),
+                    "max_open": _sl.max_open(), "confirm": _sl.confirm_mode(),
+                    "open": _scalp_records(),
+                    **_scalp_history(),
                     "runs": _kv_json_list(f"scalp:runs:{_deploy_env()}")[-48:]})
 
 
