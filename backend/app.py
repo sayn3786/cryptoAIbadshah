@@ -5297,6 +5297,10 @@ def _hl_auto_execute_pass():
             acct["spot_usdc_usd"] = _ha.spot_usdc()
         except Exception:
             pass
+        scalp_coins = set(_scalp_records())
+        if scalp_coins:                    # the scalp book has its own exposure cap
+            acct["open_positions"] = [p for p in acct.get("open_positions") or []
+                                      if str(p.get("coin")) not in scalp_coins]
         try:                               # leftover exits of closed trades
             open_orders = _ha._post_info({"type": "frontendOpenOrders",
                                           "user": _ha.account_address()}) or []
@@ -5450,19 +5454,26 @@ def _scalp_place(setup, *, acct, table, recs, now_ms) -> dict:
     if known is not False:
         return {"symbol": sym, "ok": False,
                 "reason": "ALREADY_PLACED" if known else "ORDER_STATUS_UNAVAILABLE"}
-    cfg = _he.caps()
     free = acct.get("account_value_usd")
     spot = acct.get("spot_usdc_usd")
     free = None if (free is None and spot is None) else max(free or 0.0, spot or 0.0)
-    plan = _hm.can_place(sym, setup["limit"], notional_usd=cfg["notional_usd"],
-                         leverage=cfg["leverage"], free_collateral_usd=free, table=table)
+    # Risk sizing: $SCALP_RISK_USD lost at the stop, leverage capped by the
+    # coin's market-cap tier and Hyperliquid's own maximum.
+    try:
+        mcap = client.get_market_cap(SYMBOLS[sym])
+    except Exception:
+        mcap = None
+    size = _sl.size_plan(setup["limit"], setup["sl"], mcap,
+                         hl_max=(table.get(coin) or {}).get("max_leverage"))
+    plan = _hm.can_place(sym, setup["limit"], notional_usd=size["notional_usd"],
+                         leverage=size["leverage"], free_collateral_usd=free, table=table)
     if not plan.get("ok"):
         return {"symbol": sym, "ok": False, "reason": plan.get("reason")}
-    pending = sum(float(r.get("notional_usd") or 0) for r in recs.values()
-                  if r.get("state") == "pending")
-    if _he._current_exposure_usd(acct) + pending + plan["notional_usd"] \
-            > cfg["max_exposure_usd"] + 1e-9:
-        return {"symbol": sym, "ok": False, "reason": "MAX_EXPOSURE"}
+    # The scalp book's own exposure cap (the 4h book keeps HL_MAX_EXPOSURE_USD).
+    book = sum(float(r.get("notional_usd") or 0) for r in recs.values())
+    if book + plan["notional_usd"] > _sl.max_exposure_usd() + 1e-9:
+        return {"symbol": sym, "ok": False, "reason": "MAX_EXPOSURE",
+                "scalp_exposure_usd": round(book, 2)}
     sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
     px, sl, tp = (_hm.round_price(v, sz) for v in (setup["limit"], setup["sl"], setup["target"]))
     try:
@@ -5478,12 +5489,14 @@ def _scalp_place(setup, *, acct, table, recs, now_ms) -> dict:
     recs[coin] = {"coin": coin, "symbol": sym, "direction": setup["direction"], "limit": px,
                   "sl": sl, "target": tp, "oid": st.get("oid"), "placed_ms": now_ms,
                   "slot_ms": ts, "size": plan["size"], "notional_usd": plan["notional_usd"],
+                  "leverage": plan["leverage"],
                   "state": "open" if st["state"] == "filled" else "pending",
                   **({"opened_ms": now_ms, "fill_price": st.get("avg_px")}
                      if st["state"] == "filled" else {})}
     import scalp_store as _ss
     _ss.placed(_deploy_env(), recs[coin], rr=setup.get("rr"))
-    return {"symbol": sym, "ok": True, "state": recs[coin]["state"]}
+    return {"symbol": sym, "ok": True, "state": recs[coin]["state"],
+            "notional_usd": plan["notional_usd"], "leverage": plan["leverage"]}
 
 
 def _scalp_hl(setups, now_ms) -> dict:
@@ -5587,7 +5600,9 @@ def _scalp_hl(setups, now_ms) -> dict:
                          "error": type(exc).__name__}
                 results.append(r)
                 if r.get("ok"):
-                    notes.append(f"placed {s['symbol']} {s['direction']} limit {s['limit']:,.6g}")
+                    notes.append(f"placed {s['symbol']} {s['direction']} limit {s['limit']:,.6g} "
+                                 f"(${r['notional_usd']:,.0f} at {r['leverage']}x, "
+                                 f"${_sl.risk_usd():g} risk)")
             _scalp_save(recs)
         out.update({"results": results, "notes": notes, "held": sorted(held),
                     "open": {c: r.get("state") for c, r in recs.items()}})
@@ -5671,6 +5686,10 @@ def api_hl_scalp():
                     "setup": "sweep -> FVG, gap top, R:R 1.5+",
                     "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
                     "max_open": _sl.max_open(), "confirm": _sl.confirm_mode(),
+                    "sizing": {"risk_usd": _sl.risk_usd(), "margin_usd": _sl.margin_usd(),
+                               "max_exposure_usd": _sl.max_exposure_usd(),
+                               "leverage_by_market_cap": "mega 20x, large 10x, mid 7x, "
+                                                         "small 5x, micro 3x (HL max caps)"},
                     "open": _scalp_records(),
                     **_scalp_history(),
                     "runs": _kv_json_list(f"scalp:runs:{_deploy_env()}")[-48:]})

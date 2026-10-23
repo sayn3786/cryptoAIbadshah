@@ -215,6 +215,8 @@ def hl_fake(app_mod, monkeypatch):
     monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
         s: {"sz_decimals": 2, "max_leverage": 10, "asset_id": i}
         for i, s in enumerate(("ETH", "SOL", "XRP", "ADA"))})
+    import app as _app
+    monkeypatch.setattr(_app.client, "get_market_cap", lambda pair: 2e12)
     monkeypatch.setattr(hl_exchange, "send_limit_open_with_tpsl",
                         lambda coin, is_buy, size, px, sl_px, tp_px, **kw:
                         st["sent"].append((coin, is_buy, px, sl_px, tp_px)) or
@@ -241,7 +243,9 @@ def test_places_limit_entries_within_room(app_mod, hl_fake):
     assert recs["ETH"]["state"] == "pending" and recs["ETH"]["oid"] == 101
     assert app_mod._scalp_busy_symbols() == {"ETH", "SOL"}
     assert any("placed ETH LONG limit 10" in t for t in app_mod._sent)
-    assert out["results"][0] == {"symbol": "ETH", "ok": True, "state": "pending"}
+    # $1 risk / 5% stop = $20 notional: under the $25 margin, so 1x
+    assert out["results"][0] == {"symbol": "ETH", "ok": True, "state": "pending",
+                                 "notional_usd": 20.0, "leverage": 1.0}
 
 
 def test_already_placed_and_held_coins_are_skipped(app_mod, hl_fake):
@@ -357,3 +361,24 @@ def test_drop_records_the_close(app_mod, hl_fake, monkeypatch):
     app_mod._scalp_hl([], H)
     assert seen and seen[0]["exit_reason"] == "target"
     assert any("ETH closed at target" in t for t in app_mod._sent)
+
+
+def test_size_plan_risk_and_market_cap_leverage(monkeypatch):
+    p = sl.size_plan(100, 99.6, 2e12)                     # BTC-like: 0.4% stop
+    assert p == {"notional_usd": 250.0, "leverage": 10, "stop_pct": 0.4, "cap": 20}
+    assert sl.size_plan(100, 99, 2e10)["notional_usd"] == 100.0            # 1% stop
+    assert sl.size_plan(100, 99.9, 2e10) == {"notional_usd": 250.0, "leverage": 10,
+                                             "stop_pct": 0.2, "cap": 10}   # floor 0.2%, cap
+    assert sl.size_plan(1, 0.99, 5e8, hl_max=3)["leverage"] == 3
+    assert [sl.lev_cap(x) for x in (2e11, 5e10, 5e9, 5e8, 1e8, None)] == [20, 10, 7, 5, 3, 7]
+    monkeypatch.setenv("SCALP_RISK_USD", "2")
+    assert sl.size_plan(100, 99, 2e10)["notional_usd"] == 200.0
+    assert sl.max_exposure_usd() == 600.0
+
+
+def test_scalp_exposure_cap(app_mod, hl_fake, monkeypatch):
+    monkeypatch.setenv("SCALP_MAX_EXPOSURE_USD", "30")
+    app_mod._scalp_save({"SOL": rec(coin="SOL", symbol="SOL", notional_usd=20.0, oid=9)})
+    hl_fake["orders"] = [{"oid": 9, "coin": "SOL"}]
+    out = app_mod._scalp_hl([_setup("ETH")], H)
+    assert out["results"][0]["reason"] == "MAX_EXPOSURE"
