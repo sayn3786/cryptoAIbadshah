@@ -134,6 +134,65 @@ def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
             "stop_pct": round(stop_pct * 100, 3), "cap": cap}
 
 
+# ── which trigger ───────────────────────────────────────────────────────────
+# "blend" (default, the owner's call): the 15m ENGINE signal (all indicators)
+# triggers; a sweep -> FVG setup the same way in the last SWEEP_RECENT candles
+# only ADDS SWEEP_BONUS strength, never required. Exits come from structure
+# (sweep_fvg.structure_exit). "sweep_fvg": the sweep -> FVG setup alone, with
+# a limit in the gap (the earlier mode).
+SCALP_MODES = ("blend", "sweep_fvg")
+DEFAULT_MIN_STRENGTH = 75.0
+SWEEP_BONUS = 10.0
+SWEEP_RECENT = 4
+WINDOW = 240
+
+
+def mode() -> str:
+    v = os.getenv("SCALP_MODE", "").strip().lower()
+    return v if v in SCALP_MODES else "blend"
+
+
+def min_strength() -> float:
+    return _num_env("SCALP_MIN_STRENGTH", DEFAULT_MIN_STRENGTH)
+
+
+def blend_signal(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *,
+                 now_ms: int, floor: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The 15m engine read on the LAST closed candle (closed within the last
+    15 minutes) + SWEEP_BONUS when a sweep -> FVG setup the same way completed
+    in the last SWEEP_RECENT candles; at `floor`+ with a structure stop and
+    target (R:R 1.5+), a scalp entered at market. None otherwise."""
+    floor = min_strength() if floor is None else floor
+    if len(bars) < WINDOW:
+        return None
+    last = len(bars) - 1
+    close_ms = int(bars[last]["timestamp"]) + M15_MS
+    if not (0 <= now_ms - close_ms < M15_MS):
+        return None
+    try:
+        sig = read_fn(list(bars[-WINDOW:]), "15M", symbol) or {}
+    except Exception:                                     # noqa: BLE001
+        return None
+    d = sig.get("direction")
+    if d not in ("LONG", "SHORT"):
+        return None
+    strength = float(sig.get("strength") or 0)
+    piv = sweep_fvg.pivots(bars)
+    recent = [x for x in sweep_fvg.setups(bars, at=ENTRY_AT,
+                                          start_ms=close_ms - SWEEP_RECENT * M15_MS, piv=piv)
+              if x["direction"] == d and 0 <= last - x["ready"] < SWEEP_RECENT]
+    bonus = SWEEP_BONUS if recent else 0.0
+    if strength + bonus < floor:
+        return None
+    ex = sweep_fvg.structure_exit(bars, last, d, piv)
+    if ex is None:
+        return None
+    return {"kind": "engine", "symbol": symbol.upper(), "direction": d,
+            "strength": round(strength + bonus, 1), "engine_strength": round(strength, 1),
+            "sweep_bonus": bonus, "entry": float(bars[last]["close"]), "limit": float(bars[last]["close"]),
+            "sl": ex["sl"], "target": ex["target"], "rr": ex["rr"], "slot_ms": close_ms}
+
+
 CONFIRM_MODES = ("1h", "15m", "1h+15m", "none")
 
 
@@ -347,12 +406,21 @@ _CONFIRM_LABEL = {"1h": "1H agrees", "15m": "15m indicators agree",
 def message(setups: Sequence[Dict[str, Any]], *, auto: bool) -> str:
     def px(v: float) -> str:
         return f"{v:,.6g}"
-    lines = ["🪤 15m scalp: sweep → FVG (testnet" + (", auto-exec on)" if auto else
-                                                     ", alert only)")]
+    blend = any(s.get("kind") == "engine" for s in setups)
+    head = "⚡ 15m scalp: engine + structure" if blend else "🪤 15m scalp: sweep → FVG"
+    lines = [head + " (testnet" + (", auto-exec on)" if auto else ", alert only)")]
     for s in setups:
-        lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} {s['direction']} "
-                     f"· limit {px(s['limit'])} · SL {px(s['sl'])} · TP {px(s['target'])} · "
-                     f"R:R {s['rr']:g} · {_CONFIRM_LABEL[confirm_mode()]}")
-    lines.append("Backtest: about break-even in both periods (not an edge). Testnet experiment; "
-                 f"limit good for 2h, closed after {max_hold_ms() // H1_MS}h if still open.")
+        if s.get("kind") == "engine":
+            extra = (f"engine {s['engine_strength']:g} + sweep/FVG {s['sweep_bonus']:g} = "
+                     f"{s['strength']:g}" if s.get("sweep_bonus") else f"engine {s['strength']:g}")
+            lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
+                         f"{s['direction']} · {extra} · market ~{px(s['entry'])} · SL "
+                         f"{px(s['sl'])} · TP {px(s['target'])} · R:R {s['rr']:g} · "
+                         f"{_CONFIRM_LABEL[confirm_mode()]}")
+        else:
+            lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
+                         f"{s['direction']} · limit {px(s['limit'])} · SL {px(s['sl'])} · TP "
+                         f"{px(s['target'])} · R:R {s['rr']:g} · {_CONFIRM_LABEL[confirm_mode()]}")
+    lines.append("Testnet experiment, not a proven edge; $"
+                 f"{risk_usd():g} risk a scalp, closed after {max_hold_ms() // H1_MS}h if still open.")
     return "\n".join(lines)

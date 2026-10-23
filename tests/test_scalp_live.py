@@ -127,7 +127,7 @@ def test_message_is_honest():
     s = {"symbol": "ETH", "direction": "LONG", "limit": 100.0, "sl": 98.0, "target": 104.0,
          "rr": 2.0}
     m = sl.message([s], auto=True)
-    assert "testnet" in m and "break-even" in m and "ETH LONG" in m and "limit 100" in m
+    assert "testnet" in m and "not a proven edge" in m and "ETH LONG" in m and "limit 100" in m
 
 
 def test_entry_status_parsing():
@@ -170,6 +170,7 @@ def app_mod(monkeypatch):
 
 
 def test_run_alerts_each_setup_once_and_needs_1h(app_mod, monkeypatch):
+    monkeypatch.setenv("SCALP_MODE", "sweep_fvg")
     calls = []
     monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
     h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
@@ -382,3 +383,64 @@ def test_scalp_exposure_cap(app_mod, hl_fake, monkeypatch):
     hl_fake["orders"] = [{"oid": 9, "coin": "SOL"}]
     out = app_mod._scalp_hl([_setup("ETH")], H)
     assert out["results"][0]["reason"] == "MAX_EXPOSURE"
+
+
+
+def padded():
+    """240 flat candles, then the sweep -> FVG (gap completed at +18) and a
+    candle closing at 103 (the swing structure gives R:R ~2 from there)."""
+    flat = [b(i, 102, 102.2, 101.8, 102) for i in range(240)]
+    tail = setup_bars() + [b(19, 104, 104.5, 102.8, 103)]
+    return flat + [{**x, "timestamp": x["timestamp"] + 240 * M} for x in tail]
+
+
+NOW_B = (240 + 20) * M + 60_000
+
+
+def test_blend_engine_triggers_and_sweep_only_adds_strength(monkeypatch):
+    bars = padded()
+    read = lambda s_: (lambda w, tf, sym: {"direction": "LONG", "strength": s_})   # noqa: E731
+    got = sl.blend_signal(bars, "ETH", read(68), now_ms=NOW_B)       # 68 + 10 sweep bonus
+    assert got["kind"] == "engine" and got["strength"] == 78 and got["sweep_bonus"] == 10
+    assert got["entry"] == 103 and got["target"] == 110 and got["rr"] >= 1.5
+    assert sl.blend_signal(bars, "ETH", read(60), now_ms=NOW_B) is None          # 70 < 75
+    alone = sl.blend_signal(bars[:-6] + [{**bars[-1], "timestamp": bars[-7]["timestamp"] + M}],
+                            "ETH", read(80), now_ms=bars[-7]["timestamp"] + 2 * M + 60_000)
+    assert alone is None or alone["sweep_bonus"] == 0                             # no setup needed
+    assert sl.blend_signal(bars, "ETH", read(90), now_ms=NOW_B + M) is None      # stale
+    assert sl.mode() == "blend"
+    monkeypatch.setenv("SCALP_MODE", "sweep_fvg")
+    assert sl.mode() == "sweep_fvg"
+
+
+def test_blend_run_alerts_engine_scalps(app_mod, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
+    h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
+    fetch = lambda sym, iv: padded() if iv == "15m" else h1                          # noqa: E731
+    read = lambda w, tf, s: {"direction": "LONG", "strength": 80} if s == "ETH" else {}  # noqa
+    out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
+    assert out["new"] == 1 and calls[0][0]["kind"] == "engine"
+    assert "engine 80 + sweep/FVG 10 = 90" in app_mod._sent[0]
+
+
+def test_engine_scalp_opens_at_market_risk_sized(app_mod, hl_fake, monkeypatch):
+    import hl_autoexec
+    seen = {}
+
+    def execute(signals, **kw):
+        seen.update(sig=signals[0], cfg=kw["cfg"])
+        return {"results": [{"ok": True, "coin": "ETH", "mark_px": 103.1, "size": 2.4,
+                             "notional_usd": 247.4, "exits_ok": True}]}
+    monkeypatch.setattr(hl_autoexec, "execute", execute)
+    setup = {"kind": "engine", "symbol": "ETH", "direction": "LONG", "strength": 80.0,
+             "engine_strength": 80.0, "sweep_bonus": 0.0, "entry": 103.0, "limit": 103.0,
+             "sl": 102.6, "target": 104.0, "rr": 2.5, "slot_ms": 7}
+    out = app_mod._scalp_hl([setup], H)
+    assert seen["sig"]["tp1"] == 104.0 and seen["sig"]["sl"] == 102.6 and seen["sig"]["entry"] == 103
+    # $1 / 0.39% stop -> ~$256, capped at $25 x 10 = $250, rounded to the lot size
+    assert 240 < seen["cfg"]["notional_usd"] <= 250 and seen["cfg"]["leverage"] == 10
+    recs = app_mod._scalp_records()
+    assert recs["ETH"]["state"] == "open" and recs["ETH"]["kind"] == "engine"
+    assert any("opened ETH LONG 80 at market ($247 at 10x" in t for t in app_mod._sent)
+    assert out["results"][0]["ok"]

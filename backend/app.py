@@ -5437,7 +5437,73 @@ def _scalp_busy_symbols() -> set:
     return {str(r.get("symbol") or "").upper() for r in _scalp_records().values()}
 
 
-def _scalp_place(setup, *, acct, table, recs, now_ms) -> dict:
+def _scalp_size(sym, coin, setup, *, acct, table, recs):
+    """(risk-sized can_place plan, None) or (None, reject dict)."""
+    import scalp_live as _sl
+    import hl_meta as _hm
+    free = acct.get("account_value_usd")
+    spot = acct.get("spot_usdc_usd")
+    free = None if (free is None and spot is None) else max(free or 0.0, spot or 0.0)
+    try:
+        mcap = client.get_market_cap(SYMBOLS[sym])
+    except Exception:
+        mcap = None
+    size = _sl.size_plan(setup["limit"], setup["sl"], mcap,
+                         hl_max=(table.get(coin) or {}).get("max_leverage"))
+    plan = _hm.can_place(sym, setup["limit"], notional_usd=size["notional_usd"],
+                         leverage=size["leverage"], free_collateral_usd=free, table=table)
+    if not plan.get("ok"):
+        return None, {"symbol": sym, "ok": False, "reason": plan.get("reason")}
+    book = sum(float(r.get("notional_usd") or 0) for r in recs.values())
+    if book + plan["notional_usd"] > _sl.max_exposure_usd() + 1e-9:
+        return None, {"symbol": sym, "ok": False, "reason": "MAX_EXPOSURE",
+                      "scalp_exposure_usd": round(book, 2)}
+    return plan, None
+
+
+def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
+    """An engine-triggered scalp: a MARKET open through hl_autoexec.execute
+    (stale-entry guard against the 15m close, exact-once id, the structure stop
+    and target attached right after the fill), risk-sized. Never raises."""
+    import scalp_live as _sl
+    import hl_autoexec as _ax
+    import hl_exchange as _he
+    import hl_meta as _hm
+    sym = setup["symbol"]
+    coin = _hm.resolve_coin(sym, table)
+    if coin is None:
+        return {"symbol": sym, "ok": False, "reason": "SYMBOL_NOT_ON_HYPERLIQUID"}
+    plan, reject = _scalp_size(sym, coin, setup, acct=acct, table=table, recs=recs)
+    if reject:
+        return reject
+    sig = {"symbol": sym, "entry": setup["entry"], "direction": setup["direction"],
+           "id": _sl.signal_id(sym), "candle_ts": setup["slot_ms"], "sl": setup["sl"],
+           "tp1": setup["target"], "tp2": None, "confidence_score": setup["strength"]}
+    # Per-scalp size; the scalp book's exposure cap was checked above, so the
+    # 4h book's cap must not apply to it.
+    cfg = {**_he.caps(), "notional_usd": plan["notional_usd"], "leverage": plan["leverage"],
+           "max_exposure_usd": 1e12, "max_orders_per_run": 1_000}
+    out = _ax.execute([sig], account_state=acct, table=table, cfg=cfg, open_orders=orders)
+    r = (out.get("results") or [{}])[0]
+    if not r.get("ok"):
+        return {"symbol": sym, "ok": False, "reason": r.get("reason"),
+                **{k: r[k] for k in ("drift_pct", "allowed_pct") if r.get(k) is not None}}
+    px = r.get("mark_px") or setup["entry"]
+    recs[coin] = {"coin": coin, "symbol": sym, "direction": setup["direction"], "limit": px,
+                  "sl": setup["sl"], "target": setup["target"], "placed_ms": now_ms,
+                  "slot_ms": setup["slot_ms"], "size": r.get("size"),
+                  "notional_usd": r.get("notional_usd") or plan["notional_usd"],
+                  "leverage": plan["leverage"], "state": "open", "opened_ms": now_ms,
+                  "fill_price": px, "kind": "engine",
+                  **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
+    import scalp_store as _ss
+    _ss.placed(_deploy_env(), recs[coin], rr=setup.get("rr"))
+    return {"symbol": sym, "ok": True, "state": "open", "notional_usd": recs[coin]["notional_usd"],
+            "leverage": plan["leverage"],
+            **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
+
+
+def _scalp_place(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
     """One resting limit entry with its stop + target attached. Never raises."""
     import scalp_live as _sl
     import hl_account as _ha
@@ -5454,26 +5520,12 @@ def _scalp_place(setup, *, acct, table, recs, now_ms) -> dict:
     if known is not False:
         return {"symbol": sym, "ok": False,
                 "reason": "ALREADY_PLACED" if known else "ORDER_STATUS_UNAVAILABLE"}
-    free = acct.get("account_value_usd")
-    spot = acct.get("spot_usdc_usd")
-    free = None if (free is None and spot is None) else max(free or 0.0, spot or 0.0)
     # Risk sizing: $SCALP_RISK_USD lost at the stop, leverage capped by the
-    # coin's market-cap tier and Hyperliquid's own maximum.
-    try:
-        mcap = client.get_market_cap(SYMBOLS[sym])
-    except Exception:
-        mcap = None
-    size = _sl.size_plan(setup["limit"], setup["sl"], mcap,
-                         hl_max=(table.get(coin) or {}).get("max_leverage"))
-    plan = _hm.can_place(sym, setup["limit"], notional_usd=size["notional_usd"],
-                         leverage=size["leverage"], free_collateral_usd=free, table=table)
-    if not plan.get("ok"):
-        return {"symbol": sym, "ok": False, "reason": plan.get("reason")}
-    # The scalp book's own exposure cap (the 4h book keeps HL_MAX_EXPOSURE_USD).
-    book = sum(float(r.get("notional_usd") or 0) for r in recs.values())
-    if book + plan["notional_usd"] > _sl.max_exposure_usd() + 1e-9:
-        return {"symbol": sym, "ok": False, "reason": "MAX_EXPOSURE",
-                "scalp_exposure_usd": round(book, 2)}
+    # coin's market-cap tier and Hyperliquid's own maximum; the scalp book's
+    # own exposure cap (the 4h book keeps HL_MAX_EXPOSURE_USD).
+    plan, reject = _scalp_size(sym, coin, setup, acct=acct, table=table, recs=recs)
+    if reject:
+        return reject
     sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
     px, sl, tp = (_hm.round_price(v, sz) for v in (setup["limit"], setup["sl"], setup["target"]))
     try:
@@ -5594,14 +5646,20 @@ def _scalp_hl(setups, now_ms) -> dict:
                     results.append({"symbol": s["symbol"], "ok": False, "reason": "POSITION_EXISTS"})
                     continue
                 try:
-                    r = _scalp_place(s, acct=acct, table=table, recs=recs, now_ms=now_ms)
+                    place = _scalp_market if s.get("kind") == "engine" else _scalp_place
+                    r = place(s, acct=acct, table=table, recs=recs, now_ms=now_ms,
+                              orders=orders)
                 except Exception as exc:
                     r = {"symbol": s["symbol"], "ok": False, "reason": "ERROR",
                          "error": type(exc).__name__}
                 results.append(r)
-                if r.get("ok"):
+                if r.get("ok") and s.get("kind") == "engine":
+                    notes.append(f"opened {s['symbol']} {s['direction']} {s['strength']:g} at "
+                                 f"market (${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
+                                 f"${_sl.risk_usd():g} risk)")
+                elif r.get("ok"):
                     notes.append(f"placed {s['symbol']} {s['direction']} limit {s['limit']:,.6g} "
-                                 f"(${r['notional_usd']:,.0f} at {r['leverage']}x, "
+                                 f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
                                  f"${_sl.risk_usd():g} risk)")
             _scalp_save(recs)
         out.update({"results": results, "notes": notes, "held": sorted(held),
@@ -5628,6 +5686,15 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     def _one(sym):
         try:
             m15 = fetch_fn(sym, "15m")
+            if _sl.mode() == "blend":
+                # The 15m engine triggers; sweep -> FVG only adds strength. Its
+                # own 15m read already IS the 15m check, so only the 1H applies.
+                s = _sl.blend_signal(m15, sym, read_fn, now_ms=now_ms)
+                if s is None:
+                    return None
+                need_1h = _sl.confirm_mode() in ("1h", "1h+15m")
+                return s if (not need_1h or _sl.h1_agrees(s, fetch_fn(sym, "1h"), read_fn)) \
+                    else None
             s = _sl.new_setup(m15, sym, now_ms=now_ms)
             if s is None:
                 return None
@@ -5683,7 +5750,10 @@ def api_hl_scalp():
         return guard
     import scalp_live as _sl
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
-                    "setup": "sweep -> FVG, gap top, R:R 1.5+",
+                    "mode": _sl.mode(), "min_strength": _sl.min_strength(),
+                    "setup": ("15m engine 75+ triggers; a sweep -> FVG the same way adds +10; "
+                              "structure stop / target, R:R 1.5+" if _sl.mode() == "blend"
+                              else "sweep -> FVG, gap top, R:R 1.5+"),
                     "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
                     "max_open": _sl.max_open(), "confirm": _sl.confirm_mode(),
                     "sizing": {"risk_usd": _sl.risk_usd(), "margin_usd": _sl.margin_usd(),

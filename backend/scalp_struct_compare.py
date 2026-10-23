@@ -65,26 +65,7 @@ VARIANTS = (          # (label, kind, 1H must agree)
 )
 
 
-def structure_exit(bars: Sequence[Dict], i: int, direction: str, piv: Dict,
-                   min_rr: float = MIN_RR) -> Optional[Dict]:
-    """Stop beyond the latest confirmed swing on the other side, target the
-    nearest confirmed swing beyond, measured from bar i's close; None when
-    either is missing or R:R < min_rr. Swings confirmed by bar i only."""
-    close = float(bars[i]["close"])
-    long = direction == "LONG"
-    own = sf._known(piv["low"] if long else piv["high"], i + 1)
-    far = sf._known(piv["high"] if long else piv["low"], i + 1)
-    stops = [p[1] for p in own if (p[1] < close if long else p[1] > close)]
-    targets = [p[1] for p in far if (p[1] > close if long else p[1] < close)]
-    if not stops or not targets:
-        return None
-    sw = stops[-1]
-    stop = sw * (1 - sf.STOP_BUFFER) if long else sw * (1 + sf.STOP_BUFFER)
-    tgt = min(targets) if long else max(targets)
-    risk, reward = abs(close - stop), abs(tgt - close)
-    if risk <= 0 or reward / risk < min_rr:
-        return None
-    return {"sl": stop, "target": tgt, "rr": round(reward / risk, 2)}
+structure_exit = sf.structure_exit
 
 
 def _sizes(t: Dict, symbol: str) -> Dict:
