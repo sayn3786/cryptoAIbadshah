@@ -78,16 +78,20 @@ def book(recs: Sequence[Dict], market: Dict, *, atr_add: float = 1.0,
          scale_tps: bool = False, min_rr: Optional[float] = None,
          size_fn: Callable[[Dict], float] = fixed_size,
          floor: float = FLOOR,
-         exit_for: Optional[Callable[[Dict], Optional[Dict]]] = None) -> Dict:
+         exit_for: Optional[Callable[[Dict], Optional[Dict]]] = None,
+         entry_for: Optional[Callable[[Dict], Optional[tuple]]] = None) -> Dict:
     """The HL book: one position per coin, <= MAX_PER_SLOT orders a slot, and
     total notional (with the slippage allowance) <= EXPOSURE_CAP_USD.
     `exit_for(rec)` may return a different exit for one trade: {"tp_targets",
     "tp1_frac", "max_hold_hours"} (any of them), applied after the stop is
-    widened; None keeps v54's."""
+    widened; None keeps v54's. `entry_for(rec)` may replace the market entry:
+    it returns (candles from the fill, with the first one's open AT the fill
+    price, and the per-leg costs) or None when the order never filled (the
+    trade is skipped, counted "missed")."""
     open_pos: Dict[str, Dict] = {}       # symbol -> {"until", "usd"}
     per_slot: Dict[int, int] = {}
     trades: List[Dict] = []
-    counts = {"low_rr": 0, "stale": 0, "busy": 0, "capped": 0}
+    counts = {"low_rr": 0, "stale": 0, "busy": 0, "capped": 0, "missed": 0}
     for rec in sorted(recs, key=lambda r: (r["slot_ms"], r.get("rank", 0))):
         if (rec.get("strength") or 0) < floor:
             continue
@@ -111,8 +115,14 @@ def book(recs: Sequence[Dict], market: Dict, *, atr_add: float = 1.0,
             if alt.get("tp_targets"):
                 r = {**r, "tp_targets": alt["tp_targets"]}
             ex.update({k: alt[k] for k in ("tp1_frac", "max_hold_hours") if k in alt})
-        t = ee.simulate_hl(r, (market.get(r["symbol"]) or {}).get("1H") or [],
-                           costs=cm.LIMIT_TPS, min_rr_at_fill=min_rr, **ex)
+        candles, costs = (market.get(r["symbol"]) or {}).get("1H") or [], cm.LIMIT_TPS
+        if entry_for:
+            got = entry_for(r)
+            if got is None:
+                counts["missed"] += 1
+                continue
+            candles, costs = got
+        t = ee.simulate_hl(r, candles, costs=costs, min_rr_at_fill=min_rr, **ex)
         if not t["taken"]:
             counts["low_rr" if t.get("reason") == "LOW_RR_AT_FILL" else "stale"] += 1
             continue
