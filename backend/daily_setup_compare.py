@@ -38,6 +38,7 @@ from typing import Dict, List, Optional, Sequence
 
 import cadence_compare as cc
 import combo_study as cs
+import daily_setup
 import entry_exit_compare as ee
 import indicator_study as ist
 import portfolio_backtest as pbt
@@ -50,8 +51,8 @@ import universe_compare as uc
 HOUR_MS = cc.HOUR_MS
 DAY_MS = rs.DAY_MS
 FLOOR = 69.0
-BULL_CONFIRM = ("engine", "fvg", "volume", "trendlines")
-BEAR_CONFIRM = ("stoch_rsi", "liquidity_grab", "macd", "engulfing", "bollinger")
+BULL_CONFIRM = daily_setup.BULL_CONFIRM
+BEAR_CONFIRM = daily_setup.BEAR_CONFIRM
 
 VARIANTS = (          # (label, days the setup counts, with, against, only this setup)
     ("live (low-vol -5)", 1, 0.0, 0.0, None),
@@ -67,14 +68,7 @@ VARIANTS = (          # (label, days the setup counts, with, against, only this 
 )
 
 
-def setup(f: Dict[str, int]) -> int:
-    """+1 daily momentum, -1 daily breakdown, 0 neither (features from
-    combo_study for one daily close)."""
-    if f.get("c_range") == 1 and any(f.get(k) == 1 for k in BULL_CONFIRM):
-        return 1
-    if f.get("flags") == -1 and any(f.get(k) == -1 for k in BEAR_CONFIRM):
-        return -1
-    return 0
+setup = daily_setup.setup
 
 
 def coin_setups(daily: Sequence[Dict], score_fn, *, symbol: str, since_ms: int) -> List[tuple]:

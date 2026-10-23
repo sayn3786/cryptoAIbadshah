@@ -47,18 +47,21 @@ import math
 import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import daily_setup
 import read_study as rs
 
 DAY_MS = rs.DAY_MS
-WINDOW = 250              # closed daily candles fed to the engine (EMA 200)
-MIN_POINTS = 5.0
+WINDOW = daily_setup.WINDOW
+MIN_POINTS = daily_setup.MIN_POINTS
 HORIZONS = (1, 3, 7)
 MAIN_H = 3
 MIN_EACH = 30
 T_MIN = 2.5
 BIG_PCT = 0.90
-STRONG = 60.0
-SKIP_SECTIONS = ("combo_", "confluence", "group_caps")
+STRONG = daily_setup.STRONG
+SKIP_SECTIONS = daily_setup.SKIP_SECTIONS
+candle_features = daily_setup.candle_features
+engine_features = daily_setup.engine_features
 
 NAMES = {
     "rsi_level": "RSI level", "rsi_slope": "RSI slope", "roc": "ROC momentum",
@@ -80,53 +83,6 @@ def name(f: str) -> str:
 
 # ── features ────────────────────────────────────────────────────────────────
 
-def candle_features(bars: Sequence[Dict]) -> Dict[str, int]:
-    """{feature: +1 bull / -1 bear} from how the last daily candles closed."""
-    out: Dict[str, int] = {}
-    if len(bars) < 16:
-        return out
-    c = [float(b["close"]) for b in bars]
-    if c[-1] > c[-2] > c[-3] > c[-4]:
-        out["c_run"] = 1
-    elif c[-1] < c[-2] < c[-3] < c[-4]:
-        out["c_run"] = -1
-    last, prev = bars[-1], bars[-2]
-    if c[-1] > float(prev["high"]):
-        out["c_break"] = 1
-    elif c[-1] < float(prev["low"]):
-        out["c_break"] = -1
-    o, h, lo = float(last["open"]), float(last["high"]), float(last["low"])
-    body, rng = abs(c[-1] - o), h - lo
-    if rng > 0:
-        lower, upper = min(o, c[-1]) - lo, h - max(o, c[-1])
-        if lower >= 2 * max(body, rng * 0.05) and lower > upper:
-            out["c_wick"] = 1
-        elif upper >= 2 * max(body, rng * 0.05) and upper > lower:
-            out["c_wick"] = -1
-        trs = [max(float(b["high"]) - float(b["low"]), abs(float(b["high"]) - float(a["close"])),
-                   abs(float(b["low"]) - float(a["close"]))) for a, b in zip(bars[-15:-1], bars[-14:])]
-        atr = sum(trs[:-1]) / max(len(trs) - 1, 1)
-        pos = (c[-1] - lo) / rng
-        if atr > 0 and rng >= 1.5 * atr:
-            if pos >= 0.75:
-                out["c_range"] = 1
-            elif pos <= 0.25:
-                out["c_range"] = -1
-    return out
-
-
-def engine_features(sig: Dict) -> Dict[str, int]:
-    """{feature: direction} from one 1D signal's score breakdown."""
-    out: Dict[str, int] = {}
-    for k, v in (sig.get("score_breakdown") or {}).items():
-        if any(k.startswith(s) for s in SKIP_SECTIONS) or abs(v or 0) < MIN_POINTS:
-            continue
-        out[k] = 1 if v > 0 else -1
-    if (sig.get("strength") or 0) >= STRONG and sig.get("direction") in ("LONG", "SHORT"):
-        out["engine"] = 1 if sig["direction"] == "LONG" else -1
-    return out
-
-
 def coin_rows(daily: Sequence[Dict], score_fn, *, symbol: str) -> List[Dict]:
     """One row per daily close after the warm-up: features and forward moves.
     `score_fn(window, symbol)` returns the engine's 1D signal."""
@@ -144,10 +100,7 @@ def coin_rows(daily: Sequence[Dict], score_fn, *, symbol: str) -> List[Dict]:
     return rows
 
 
-def engine_score(win: Sequence[Dict], symbol: str) -> Dict:
-    import candle_analysis
-    import signals
-    return signals.generate_signal(candle_analysis.build_candle_analysis(win, "1D", symbol))
+engine_score = daily_setup.engine_score
 
 
 # ── counting ────────────────────────────────────────────────────────────────
