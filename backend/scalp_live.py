@@ -118,7 +118,9 @@ def read(closed: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *,
          now_ms: int, floor: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """The scalp signal on the LAST of these closed 15m candles, or None (not
     enough history, a candle that closed more than one 15m ago, below the
-    floor, neutral, or no ladder)."""
+    floor, neutral, no ladder, or a close already past the stop or TP1).
+    "close" is the price HL's market order is checked against; "entry" is the
+    engine's (pullback) entry level, kept for the message."""
     floor = min_strength() if floor is None else floor
     if len(closed) < WINDOW:
         return None
@@ -133,16 +135,23 @@ def read(closed: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *,
     tps = [t for t in (sig.get("tp_targets") or []) if t]
     if d not in ("LONG", "SHORT") or s < floor or not (sig.get("entry") and sig.get("sl") and tps):
         return None
+    close, sl, tp1 = float(closed[-1]["close"]), float(sig["sl"]), float(tps[0])
+    if not ((sl < close < tp1) if d == "LONG" else (tp1 < close < sl)):
+        return None
     return {"symbol": symbol.upper(), "direction": d, "strength": round(s, 1),
-            "entry": float(sig["entry"]), "sl": float(sig["sl"]),
+            "entry": float(sig["entry"]), "close": close, "sl": sl,
             "tp_targets": [float(t) for t in tps], "candle_ts": close_ms}
 
 
 def to_hl(s: Dict[str, Any]) -> Dict[str, Any]:
     """The shape hl_autoexec.execute takes (no "atr": the scalp keeps its own
-    stop, as tested)."""
+    stop, as tested). HL buys at MARKET, so the stale-entry check measures
+    the live price against the 15m close the signal was read on, not the
+    engine's pullback entry level (with scalp-tight stops that rejected
+    nearly every scalp)."""
     tps = s["tp_targets"]
-    return {"symbol": s["symbol"], "entry": s["entry"], "direction": s["direction"],
+    return {"symbol": s["symbol"], "entry": s.get("close") or s["entry"],
+            "direction": s["direction"],
             "id": signal_id(s["symbol"]), "candle_ts": s["candle_ts"], "sl": s["sl"],
             "tp1": tps[0], "tp2": tps[1] if len(tps) > 1 else None,
             "confidence_score": s["strength"]}

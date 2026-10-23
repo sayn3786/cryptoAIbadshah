@@ -18,11 +18,13 @@ H = 3_600_000
 
 
 def bars(n, end_close):
-    return [{"timestamp": end_close - (n - i) * M, "open": 1, "high": 1.01, "low": 0.99,
-             "close": 1, "volume": 1} for i in range(n)]
+    return [{"timestamp": end_close - (n - i) * M, "open": 100, "high": 101, "low": 99,
+             "close": 100.5, "volume": 1} for i in range(n)]
 
 
 def sig(d="LONG", s=80):
+    if d == "SHORT":
+        return {"direction": d, "strength": s, "entry": 101, "sl": 103, "tp_targets": [99, 97, 95]}
     return {"direction": d, "strength": s, "entry": 100, "sl": 98, "tp_targets": [102, 104, 106]}
 
 
@@ -61,8 +63,17 @@ def test_to_hl_keeps_its_own_stop():
     s = sl.read(bars(sl.WINDOW, 10 * M + sl.WINDOW * M), "SOL", lambda *a: sig("SHORT"),
                 now_ms=10 * M + sl.WINDOW * M + 1)
     h = sl.to_hl(s)
-    assert h["id"] == "scalp-SOL" and h["tp1"] == 102 and h["tp2"] == 104 and "atr" not in h
+    assert h["id"] == "scalp-SOL" and h["tp1"] == 99 and h["tp2"] == 97 and "atr" not in h
     assert h["direction"] == "SHORT" and h["confidence_score"] == 80
+    assert h["entry"] == 100.5 and h["sl"] == 103          # stale check vs the 15m close
+
+
+def test_close_already_past_tp1_or_the_stop_is_no_signal():
+    now = 1000 * M + 60_000
+    b = bars(sl.WINDOW, 1000 * M)                          # close 100.5
+    assert sl.read(b, "X", lambda *a: {**sig(), "tp_targets": [100.2, 104]}, now_ms=now) is None
+    assert sl.read(b, "X", lambda *a: {**sig(), "sl": 100.6}, now_ms=now) is None
+    assert sl.read(b, "X", lambda *a: sig(), now_ms=now)["close"] == 100.5
 
 
 def test_sweep_times_out_and_drops():
@@ -180,6 +191,18 @@ def test_hl_times_out_then_opens_within_room(app_mod, monkeypatch):
     assert calls == [["SOL", "XRP"]]                         # room for 2
     assert sorted(app_mod._scalp_records()) == ["SOL", "XRP"]
     assert any("opened SOL LONG 80" in t for t in app_mod._sent)
+    assert out["results"] == [{"symbol": "SOL", "ok": True, "mark_px": 10.0},
+                              {"symbol": "XRP", "ok": True, "mark_px": 10.0}]
+
+    def stale(signals, **kw):
+        return {"results": [{"ok": False, "reason": "STALE_ENTRY", "drift_pct": 0.5,
+                             "allowed_pct": 0.3, "coin": s["symbol"]} for s in signals]}
+    monkeypatch.setattr(hl_autoexec, "execute", stale)
+    app_mod._scalp_save({})
+    out = app_mod._scalp_hl([mk("BNB")], 13 * H)
+    assert out["results"] == [{"symbol": "BNB", "ok": False, "reason": "STALE_ENTRY",
+                               "drift_pct": 0.5, "allowed_pct": 0.3}]
+    assert out["opened"] == [] and out["held"] == ["ETH"]
 
 
 def test_scalp_never_touches_the_4h_book_or_the_signals_table():
