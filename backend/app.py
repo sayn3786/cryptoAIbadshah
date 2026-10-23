@@ -5481,10 +5481,16 @@ def _scalp_hl(sigs, now_ms) -> dict:
                         opened.append(f"{sig['symbol']} {sig['direction']} "
                                       f"{sig['confidence_score']:g}")
                 out["results"] = [{"symbol": sig["symbol"], "ok": bool(r.get("ok")),
-                                   "reason": r.get("reason")}
+                                   **{k: r[k] for k in ("reason", "drift_pct", "allowed_pct",
+                                                        "mark_px", "detail", "error")
+                                      if r.get(k) is not None and k != "ok"}}
                                   for sig, r in zip(todo, res.get("results") or [])]
+                for x in out["results"]:
+                    if isinstance(x.get("detail"), (dict, list)):
+                        x["detail"] = str(x["detail"])[:200]
             _scalp_save(recs)
-        out.update({"opened": opened, "timed_out": closed, "open": sorted(recs)})
+        out.update({"opened": opened, "timed_out": closed, "open": sorted(recs),
+                    "room": _sl.room(recs) + len(opened), "held": sorted(held)})
         if opened or closed:
             _scalp_private("⚡ scalp book (testnet): "
                            + ("; ".join([f"opened {x}" for x in opened]
@@ -5530,7 +5536,8 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "signals": [f"{x['symbol']} {x['direction']} {x['strength']:g}" for x in sigs],
-        **{k: hl.get(k) for k in ("reason", "opened", "timed_out") if hl.get(k)}}, cap=96)
+        **{k: hl.get(k) for k in ("reason", "opened", "timed_out", "results", "error",
+                                  "held") if hl.get(k)}}, cap=96)
     return {"ok": True, "ran": True, "coins": len(syms),
             "signals": [f"{x['symbol']} {x['direction']} {x['strength']:g}" for x in sigs],
             "new": len(new), "scalp_hl": hl}
