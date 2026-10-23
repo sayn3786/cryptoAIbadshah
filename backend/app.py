@@ -5385,6 +5385,180 @@ def _hl_weekly_lean_filter(signals, lean=None):
         return signals, [], None
 
 
+# ── 15m scalp book (HL testnet only; scalp_live) ─────────────────────────────
+
+def _scalp_key():
+    return f"scalp_open:{_deploy_env()}"
+
+
+def _scalp_records() -> dict:
+    """{HL coin: {"coin", "symbol", "direction", "entry", "opened_ms"}} of the
+    scalps this book opened and believes still open. Never raises."""
+    try:
+        import kv as _kv
+        data = json.loads(_kv.get_value(_scalp_key()) or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _scalp_save(records) -> None:
+    try:
+        import kv as _kv
+        _kv.set_value(_scalp_key(), json.dumps(records or {}), ttl_seconds=3 * 86_400)
+    except Exception:
+        pass
+
+
+def _scalp_engine_read(win, tf, symbol):
+    import candle_analysis
+    return generate_signal(candle_analysis.build_candle_analysis(list(win), tf, symbol))
+
+
+def _scalp_private(text) -> None:
+    try:                                   # the owner's PRIVATE chat only
+        import weekly_report
+        weekly_report.send_private(text)
+    except Exception:
+        app.logger.exception("scalp alert failed")
+
+
+def _scalp_hl(sigs, now_ms) -> dict:
+    """Time out scalps past the max hold, then open new ones (testnet only).
+    Never raises."""
+    import scalp_live as _sl
+    import hl_account as _ha
+    import hl_autoexec as _ax
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    if not _sl.auto_enabled():
+        return {"ran": False, "reason": "HL_SCALP_AUTO_EXECUTE_OFF"}
+    if _ha._env() != "testnet":
+        return {"ran": False, "reason": "TESTNET_ONLY"}
+    if not _hx.arm_status()["armed"]:
+        return {"ran": False, "reason": "DISARMED"}
+    out: dict = {"ran": True}
+    try:
+        with _hl_execute_lock:
+            acct = _ha.account_state()
+            positions = acct.get("open_positions") or []
+            recs = _scalp_records()
+            sw = _sl.sweep(recs, positions, now_ms=now_ms)
+            closed = []
+            for coin in sw["close"]:
+                rec = recs[coin]
+                cloid = _hx.client_order_id(_sl.signal_id(rec.get("symbol") or coin),
+                                            "timeout", rec.get("opened_ms"))
+                try:
+                    ok, _detail = _he.order_accepted(_he.send_market_close(coin, cloid))
+                except Exception:
+                    ok = False
+                if ok:
+                    closed.append(coin)
+                    recs.pop(coin, None)
+            for coin in sw["drop"]:
+                recs.pop(coin, None)
+            table = _hm.asset_table()
+            held = {str(p.get("coin") or "").upper() for p in positions}
+            todo = [_sl.to_hl(s) for s in sigs
+                    if (_hm.resolve_coin(s["symbol"], table) or "").upper() not in held]
+            todo = todo[:_sl.room(recs)]
+            opened = []
+            if todo:
+                try:
+                    orders = _ha._post_info({"type": "frontendOpenOrders",
+                                             "user": _ha.account_address()}) or []
+                except Exception:
+                    orders = None
+                res = _ax.execute(todo, account_state=acct, table=table, open_orders=orders)
+                for sig, r in zip(todo, res.get("results") or []):
+                    if r.get("ok") and r.get("coin"):
+                        recs[r["coin"]] = {"coin": r["coin"], "symbol": sig["symbol"],
+                                           "direction": sig["direction"],
+                                           "entry": r.get("mark_px") or sig["entry"],
+                                           "opened_ms": now_ms}
+                        opened.append(f"{sig['symbol']} {sig['direction']} "
+                                      f"{sig['confidence_score']:g}")
+                out["results"] = [{"symbol": sig["symbol"], "ok": bool(r.get("ok")),
+                                   "reason": r.get("reason")}
+                                  for sig, r in zip(todo, res.get("results") or [])]
+            _scalp_save(recs)
+        out.update({"opened": opened, "timed_out": closed, "open": sorted(recs)})
+        if opened or closed:
+            _scalp_private("⚡ scalp book (testnet): "
+                           + ("; ".join([f"opened {x}" for x in opened]
+                                        + [f"closed {c} after "
+                                           f"{_sl.max_hold_ms() // 3_600_000}h" for c in closed])))
+    except Exception as exc:
+        out.update({"ok": False, "error": type(exc).__name__})
+    return out
+
+
+def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
+    """One 15m scalp pass: read the scalp coins, alert new signals privately,
+    run the HL scalp book. Never raises."""
+    import scalp_live as _sl
+    if not _sl.enabled():
+        return {"ok": True, "ran": False, "reason": "SCALP_DISABLED"}
+    now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    fetch_fn = fetch_fn or (lambda sym: _sl.fetch_closed(SYMBOLS[sym], now_ms))
+    read_fn = read_fn or _scalp_engine_read
+
+    def _one(sym):
+        try:
+            return _sl.read(fetch_fn(sym), sym, read_fn, now_ms=now_ms)
+        except Exception:
+            return None
+
+    syms = [s for s in _sl.SYMBOLS if s in SYMBOLS]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        sigs = [x for x in ex.map(_one, syms) if x]
+    sigs.sort(key=lambda x: -x["strength"])
+    new = []
+    for x in sigs:
+        try:
+            import kv as _kv
+            if _kv.claim(f"scalp:sig:{_deploy_env()}:{x['symbol']}:{x['candle_ts']}",
+                         ttl_seconds=2 * 86_400):
+                new.append(x)
+        except Exception:
+            pass
+    if new:
+        _scalp_private(_sl.message(new, auto=_sl.auto_enabled()))
+    hl = _scalp_hl(sigs, now_ms)
+    _kv_append_json(f"scalp:runs:{_deploy_env()}", {
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "signals": [f"{x['symbol']} {x['direction']} {x['strength']:g}" for x in sigs],
+        **{k: hl.get(k) for k in ("reason", "opened", "timed_out") if hl.get(k)}}, cap=96)
+    return {"ok": True, "ran": True, "coins": len(syms),
+            "signals": [f"{x['symbol']} {x['direction']} {x['strength']:g}" for x in sigs],
+            "new": len(new), "scalp_hl": hl}
+
+
+@app.post("/api/cron/scalp")
+def api_cron_scalp():
+    """The 15m scalp book (scalp_live), every 15 minutes from the scheduler.
+    Internal: CRON_SECRET or the scheduler token."""
+    if not (_cron_authorized() or _scheduler_token_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    return jsonify(_scalp_run())
+
+
+@app.get("/api/hl/scalp")
+def api_hl_scalp():
+    """The scalp book: the scalps it holds and its last runs. Admin only."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    import scalp_live as _sl
+    return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
+                    "min_strength": _sl.min_strength(),
+                    "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
+                    "max_open": _sl.max_open(), "open": _scalp_records(),
+                    "runs": _kv_json_list(f"scalp:runs:{_deploy_env()}")[-48:]})
+
+
 def _hl_low_vol_filter(signals, floor):
     """(kept, skipped): v56 drops a signal whose strength clears the floor by
     less than the low-volatility dock while the coin's 1H ATR is under 0.8x
@@ -5428,7 +5602,7 @@ def _hl_slot_run_key(slot_start):
     return f"hlslot:{_deploy_env()}:{slot_start.isoformat()}"
 
 
-def _kv_append_json(key, entry):
+def _kv_append_json(key, entry, cap=None):
     """Append `entry` to the JSON list at `key` (newest last, capped). Never raises."""
     try:
         import kv as _kv
@@ -5437,7 +5611,7 @@ def _kv_append_json(key, entry):
             cur = cur if isinstance(cur, list) else []
         except (TypeError, ValueError):
             cur = []
-        cur = (cur + [entry])[-HL_RUN_LOG_MAX:]
+        cur = (cur + [entry])[-(cap or HL_RUN_LOG_MAX):]
         _kv.set_value(key, json.dumps(cur), ttl_seconds=HL_RUN_LOG_TTL)
     except Exception:                                    # noqa: BLE001
         pass
@@ -5966,7 +6140,8 @@ _SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/mon
                     "/api/cron/daily", "/api/patterns/alert",
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
-                    "/api/research/ml/collect", "/api/research/ml/label")
+                    "/api/research/ml/collect", "/api/research/ml/label",
+                    "/api/cron/scalp")
 
 
 def _scheduler_token_ok() -> bool:

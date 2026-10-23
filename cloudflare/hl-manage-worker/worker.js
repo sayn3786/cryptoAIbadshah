@@ -7,6 +7,7 @@
 //   every minute         position manager   POST /api/hl/manage   (stop → entry after TP1)
 //   hh:02, hh:12, hh:32  publish signals    POST /api/cron/publish  (+ HL auto-exec)
 //   hh:05, hh:35         outcome monitor    POST /api/signals/monitor
+//   hh:01/16/31/46       15m scalp book     POST /api/cron/scalp  (testnet HL scalps)
 //   00:07, 08:07, 12:07  Telegram daily     POST /api/cron/daily
 //   hh:07, hh:17, hh:37  persisted Telegram POST /api/cron/telegram (slot dedup)
 //   00:15                daily update       POST /api/patterns/alert  (1D/1W list → Telegram)
@@ -54,6 +55,9 @@ const JOBS = [
     due: ({ m }) => m === 2 || m === 12 || m === 32 },
   { name: "monitor", path: "/api/signals/monitor", ...S, retries: 0,
     due: ({ m }) => m === 5 || m === 35 },
+  // One minute after each 15m close: the scalp book (HL testnet only).
+  { name: "scalp", path: "/api/cron/scalp", ...S, retries: 0,
+    due: ({ m }) => m % 15 === 1 },
   { name: "daily", path: "/api/cron/daily", ...S, retries: 2,
     due: ({ h, m }) => (h === 0 || h === 8 || h === 12) && m === 7 },
   // All publication slots, including late publication retries. Same app-side
@@ -93,7 +97,9 @@ const SUMMARY_KEYS = ["ok", "ran", "reason", "positions", "actions", "computed",
   // HL-only extras (v55 boosted ones listed) — why a slot did or didn't trade.
   "strength_diag", "hl_extra",
   // how much the sections a price-only backtest can't see moved strength
-  "live_data_effect"];
+  "live_data_effect",
+  // scalp: the 15m signals read, how many were new, what the HL scalp book did
+  "signals", "new", "scalp_hl"];
 
 const RETRY_DELAY_MS = 20_000;       // a timed-out publish leaves the cache warmer
 
@@ -186,6 +192,7 @@ const ALERT_WHEN = {
   manage: ({ m }) => m % 30 === 0,        // every-minute job: at most twice an hour
   publish: ({ m }) => m === 32,           // the hour's last try: :02/:12 may still recover
   monitor: ({ m }) => m === 35,           // at most hourly
+  scalp: ({ m }) => m === 1,              // every-15-min job: at most hourly
   telegram: ({ m }) => m === 37,         // hourly, after earlier notification retries
 };
 
