@@ -45,7 +45,7 @@ def clean_env(monkeypatch):
 
 def test_defaults_and_switches(monkeypatch):
     assert sl.enabled() and sl.auto_enabled()
-    assert sl.max_hold_ms() == 12 * H and sl.max_open() == 2 and sl.ENTRY_MS == 2 * H
+    assert sl.max_hold_ms() == 12 * H and sl.max_open() == 12 and sl.ENTRY_MS == 2 * H
     monkeypatch.setenv("HL_SCALP_AUTO_EXECUTE", "0")
     assert sl.enabled() and not sl.auto_enabled()
     monkeypatch.setenv("SCALP_ENABLED", "off")
@@ -104,6 +104,8 @@ def test_sweep_open_scalps():
 
 
 def test_room(monkeypatch):
+    assert sl.room({}) == 12 and sl.room({"A": {}, "B": {}, "C": {}}) == 9
+    monkeypatch.setenv("SCALP_MAX_OPEN", "2")
     assert sl.room({}) == 2 and sl.room({"A": {}, "B": {}, "C": {}}) == 0
     monkeypatch.setenv("SCALP_MAX_OPEN", "4")
     assert sl.room({"A": {}}) == 3
@@ -236,7 +238,8 @@ def _setup(sym, d="LONG"):
             "slot_ms": 1}
 
 
-def test_places_limit_entries_within_room(app_mod, hl_fake):
+def test_places_limit_entries_within_room(app_mod, hl_fake, monkeypatch):
+    monkeypatch.setenv("SCALP_MAX_OPEN", "2")
     out = app_mod._scalp_hl([_setup("ETH"), _setup("SOL"), _setup("XRP")], H)
     assert [x[0] for x in hl_fake["sent"]] == ["ETH", "SOL"]                 # room for 2
     assert hl_fake["sent"][0] == ("ETH", True, 10.0, 9.5, 11.0)
@@ -374,7 +377,7 @@ def test_size_plan_risk_and_market_cap_leverage(monkeypatch):
     assert [sl.lev_cap(x) for x in (2e11, 5e10, 5e9, 5e8, 1e8, None)] == [20, 10, 7, 5, 3, 7]
     monkeypatch.setenv("SCALP_RISK_USD", "2")
     assert sl.size_plan(100, 99, 2e10)["notional_usd"] == 200.0
-    assert sl.max_exposure_usd() == 600.0
+    assert sl.max_exposure_usd() == 3000.0
 
 
 def test_scalp_exposure_cap(app_mod, hl_fake, monkeypatch):
