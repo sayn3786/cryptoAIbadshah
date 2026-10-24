@@ -5546,7 +5546,84 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
     return {**r, "flipped": True, "note": note}
 
 
-def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
+def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict]:
+    """Average into a running scalp at a better price: a market add sized for
+    $SCALP_RISK_USD to the stop, then the stop re-placed for the WHOLE
+    position (first, the old one cancelled after) and the take-profits re-laid
+    as a ladder for the whole size. None when the add can't be placed (the
+    caller then just updates the levels). Never raises."""
+    import scalp_live as _sl
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    sym, coin = rec["symbol"], rec["coin"]
+    plan, reject = _scalp_size(sym, coin, {"limit": mark, "sl": add["stop"]}, acct=acct,
+                               table=table, recs=recs)
+    if reject:
+        return None
+    long = st["side"] == "long"
+    sid, ts = _sl.signal_id(sym), setup["slot_ms"]
+    try:
+        ok, _d = _he.order_accepted(_he.send_market_open(
+            coin, long, plan["size"], _hx.client_order_id(sid, "add", ts),
+            leverage=plan["leverage"]))
+    except Exception:
+        ok = False
+    if not ok:
+        return None
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    total = round(st["size"] + plan["size"], sz)
+    old_avg = st["entry"]
+    avg = (old_avg * st["size"] + mark * plan["size"]) / total
+    exit_buy = not long
+    px = lambda v: _hm.round_price(v, sz)                             # noqa: E731
+    warn = ""
+    try:
+        sl_ok, _d = _he.order_accepted(_he.send_stop(
+            coin, exit_buy, total, px(add["stop"]), cloid=_hx.client_order_id(sid, "sl-add", ts)))
+    except Exception:
+        sl_ok = False
+    if sl_ok:
+        for o in st["stops"]:
+            try:
+                _he.cancel_order(coin, o.get("oid"))
+            except Exception:
+                pass
+    else:
+        warn = " ⚠️ the stop for the whole size was NOT placed (the old stop still covers the first part)"
+    ladder = (_sl.tp_ladder(st["cur_tps"], float(setup["target"]), total, sz, long=long,
+                            mark=mark)
+              or _sl.split(st["cur_tps"] or [float(setup["target"])], total, sz, mark))
+    placed = []
+    if ladder:
+        for o in st["tps"]:
+            try:
+                _he.cancel_order(coin, o.get("oid"))
+            except Exception:
+                pass
+        for k, (lvl, size) in enumerate(ladder, start=1):
+            try:
+                tp_ok, _d = _he.order_accepted(_he.send_take_profit(
+                    coin, exit_buy, size, px(lvl), cloid=_hx.client_order_id(sid, f"tp{k}-add", ts)))
+            except Exception:
+                tp_ok = False
+            if tp_ok:
+                placed.append(f"TP{k} {px(lvl):,.6g} ({round(size / total * 100):d}%)")
+        rec["target"] = px(ladder[-1][0])
+        rec["tps"] = [px(lvl) for lvl, _s in ladder]
+    rec.update(adds=int(rec.get("adds") or 0) + 1, limit=round(avg, 8), sl=px(add["stop"]),
+               size=total, notional_usd=round(float(rec.get("notional_usd") or 0)
+                                              + plan["notional_usd"], 2))
+    import scalp_store as _ss
+    _ss.levels(_deploy_env(), rec)
+    note = (f"added to {sym} {rec['direction']} at ~{mark:,.6g} (${plan['notional_usd']:,.0f} at "
+            f"{plan['leverage']:g}x, +${_sl.risk_usd():g} risk): avg entry {old_avg:,.6g} → "
+            f"{avg:,.6g}; SL {px(add['stop']):,.6g} for the whole size"
+            + (f"; TP ladder " + ", ".join(placed) if placed else "") + warn)
+    return {"symbol": sym, "ok": True, "added": plan["notional_usd"], "note": note}
+
+
+def _scalp_update(rec, setup, *, positions, orders, mids, table, acct=None, recs=None) -> dict:
     """A fresh signal the same way on a running scalp: move its target, and
     its stop only if tighter (scalp_live.plan_update). New orders first, then
     the old ones cancelled, so the position is never without a stop. Never
@@ -5560,6 +5637,13 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
         mark = float((mids or {}).get(coin))
     except (TypeError, ValueError):
         mark = None
+    if acct is not None and recs is not None:
+        st = _sl.exit_state(rec, positions, orders, mark)
+        add = _sl.plan_add(rec, setup, st, mark)
+        if add:
+            r = _scalp_add(rec, setup, st, add, mark=mark, table=table, acct=acct, recs=recs)
+            if r:
+                return r
     sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
     plan = _sl.plan_update(rec, setup, positions, orders, mark, sz_decimals=sz)
     if plan is None:
@@ -5766,7 +5850,7 @@ def _scalp_hl(setups, now_ms) -> dict:
                     continue
                 if rec is not None and rec.get("state") == "open":
                     r = _scalp_update(rec, s, positions=positions, orders=orders or [],
-                                      mids=mids, table=table)
+                                      mids=mids, table=table, acct=acct, recs=recs)
                     results.append(r)
                     if r.get("note"):
                         notes.append(r["note"])
