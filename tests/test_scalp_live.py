@@ -558,3 +558,50 @@ def test_running_scalp_gets_new_levels_on_hl(app_mod, hl_fake, monkeypatch):
     assert out["results"][0]["ok"] and "TP 142.201 → 142.076" in out["results"][0]["updated"]
     assert app_mod._scalp_records()["AAVE"]["target"] == 142.08
     assert any(t.startswith("🪤 scalp book (testnet): updated AAVE SHORT") for t in app_mod._sent)
+
+
+def test_opposite_signal_flips_the_scalp(app_mod, hl_fake, monkeypatch):
+    import hl_account
+    import hl_autoexec
+    import hl_meta
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"AAVE": "144.1"})
+    hl_fake["positions"] = AAVE_POS
+    hl_fake["orders"] = AAVE_ORDERS
+    seen = {}
+
+    def execute(signals, **kw):
+        seen.update(sig=signals[0], acct=kw["account_state"], orders=kw["open_orders"])
+        return {"results": [{"ok": True, "coin": "AAVE", "mark_px": 144.1, "size": 0.8,
+                             "notional_usd": 115.3, "exits_ok": True}]}
+    monkeypatch.setattr(hl_autoexec, "execute", execute)
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0)})
+    long_ = {"kind": "engine", "symbol": "AAVE", "direction": "LONG", "strength": 78.0,
+             "entry": 144.1, "limit": 144.1, "sl": 143.2, "target": 145.5, "rr": 1.55,
+             "slot_ms": 9}
+    out = app_mod._scalp_hl([long_], 2 * H)
+    assert hl_fake["closed"] == ["AAVE"]                                  # old SHORT closed
+    assert sorted(hl_fake["cancelled"]) == [("AAVE", 1), ("AAVE", 2)]     # its exits gone
+    assert seen["sig"]["direction"] == "LONG" and seen["acct"]["open_positions"] == []
+    assert seen["orders"] == []
+    assert app_mod._scalp_records()["AAVE"]["direction"] == "LONG"
+    assert out["results"][0]["flipped"]
+    assert any("closed AAVE SHORT on an opposite signal" in t and "opened AAVE LONG 78" in t
+               for t in app_mod._sent)
+
+
+def test_flip_stops_if_the_close_fails(app_mod, hl_fake, monkeypatch):
+    import hl_exchange
+    import hl_meta
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
+    monkeypatch.setattr(hl_exchange, "order_accepted", lambda resp: (False, "rejected"))
+    hl_fake["positions"] = AAVE_POS
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0)})
+    long_ = {"kind": "engine", "symbol": "AAVE", "direction": "LONG", "strength": 78.0,
+             "entry": 144.1, "limit": 144.1, "sl": 143.2, "target": 145.5, "rr": 1.55,
+             "slot_ms": 9}
+    out = app_mod._scalp_hl([long_], 2 * H)
+    assert out["results"][0]["reason"] == "FLIP_CLOSE_FAILED"
+    assert app_mod._scalp_records()["AAVE"]["direction"] == "SHORT"       # kept as it was
