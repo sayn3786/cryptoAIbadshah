@@ -629,3 +629,59 @@ def test_tp_ladder_grows_to_three_then_moves_the_furthest():
     # $10 minimum: a 0.15 position at 100 can't split three ways ($5 each)
     small = sl.tp_ladder([98.0, 97.0], 96.0, 0.15, 2, long=False, mark=100.0)
     assert small == [(96.0, 0.15)]                     # one TP for all: the furthest
+
+
+# ── averaging in at a better price ──────────────────────────────────────────
+
+def test_plan_add_rules(monkeypatch):
+    st = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.5)      # SHORT, avg 144.17
+    assert st["cur_sl"] == 145.483 and st["cur_tps"] == [142.201] and st["size"] == 0.75
+    new = {"direction": "SHORT", "sl": 145.483, "target": 142.076}
+    assert sl.plan_add(_aave(), new, st, 144.5) == {"stop": 145.483}   # 0.23% better
+    assert sl.plan_add(_aave(), {**new, "sl": 145.2}, st, 144.5) == {"stop": 145.2}  # tighter
+    assert sl.plan_add(_aave(), {**new, "sl": 146.0}, st, 144.5) == {"stop": 145.483}  # never wider
+    worse = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.2)
+    assert sl.plan_add(_aave(), new, worse, 144.2) is None           # only 0.02% better
+    assert sl.plan_add(_aave(adds=1), new, st, 144.5) is None        # one add already
+    assert sl.plan_add(_aave(), {**new, "direction": "LONG"}, st, 144.5) is None
+    monkeypatch.setenv("SCALP_MAX_ADDS", "0")
+    assert sl.plan_add(_aave(), new, st, 144.5) is None
+    monkeypatch.setenv("SCALP_MAX_ADDS", "2")
+    assert sl.plan_add(_aave(adds=1), new, st, 144.5) == {"stop": 145.483}
+
+
+def test_add_averages_in_and_relays_the_exits(app_mod, hl_fake, monkeypatch):
+    import hl_account
+    import hl_exchange
+    import hl_meta
+    calls = []
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"AAVE": "144.5"})
+    monkeypatch.setattr(app_mod.client, "get_market_cap", lambda pair: 4e9)
+    monkeypatch.setattr(hl_exchange, "send_market_open", lambda coin, buy, size, cloid, env=None,
+                        leverage=None: calls.append(("open", coin, buy, size)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_stop", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("sl", coin, buy, size, px)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_take_profit", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("tp", coin, buy, size, px)) or {"status": "ok"})
+    hl_fake["positions"] = AAVE_POS
+    hl_fake["orders"] = AAVE_ORDERS
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0, notional_usd=108.0)})
+    setup = {"kind": "engine", "symbol": "AAVE", "direction": "SHORT", "strength": 83.0,
+             "entry": 144.5, "limit": 144.5, "sl": 145.483, "target": 142.076, "rr": 1.5,
+             "slot_ms": 9}
+    out = app_mod._scalp_hl([setup], 2 * H)
+    opens = [c for c in calls if c[0] == "open"]
+    assert opens and opens[0][2] is False                               # SHORT add: sell
+    add = opens[0][3]
+    sls = [c for c in calls if c[0] == "sl"]
+    assert sls == [("sl", "AAVE", True, round(0.75 + add, 2), 145.48)]   # whole size
+    tps = [c for c in calls if c[0] == "tp"]
+    assert [c[4] for c in tps] == [142.2, 142.08] and \
+        round(sum(c[3] for c in tps), 2) == round(0.75 + add, 2)         # ladder, whole size
+    assert sorted(hl_fake["cancelled"]) == [("AAVE", 1), ("AAVE", 2)]
+    rec = app_mod._scalp_records()["AAVE"]
+    assert rec["adds"] == 1 and 144.17 < rec["limit"] < 144.5
+    assert out["results"][0]["ok"] and any("added to AAVE SHORT" in t and "avg entry 144.17 →"
+                                           in t for t in app_mod._sent)

@@ -519,6 +519,17 @@ def tp_ladder(existing: Sequence[float], new: float, size: float, sz_decimals: i
             return None
         levels = levels[:-1]
     levels = sorted(levels + [float(new)], key=lambda p: abs(p - mark))
+    return split(levels, size, sz_decimals, mark)
+
+
+def split(levels: Sequence[float], size: float, sz_decimals: int,
+          mark: float) -> Optional[List[tuple]]:
+    """Equal shares of `size` over the take-profit levels (nearest first; the
+    last takes the remainder), dropping the nearest when a share would fall
+    under MIN_TP_USD. Pure."""
+    levels = sorted((float(x) for x in levels if x), key=lambda p: abs(p - mark))
+    if not levels or size <= 0:
+        return None
     while len(levels) > 1 and _floor(size / len(levels), sz_decimals) * mark < MIN_TP_USD:
         levels = levels[1:]                                # drop the nearest: keep the reach
     share = _floor(size / len(levels), sz_decimals)
@@ -577,6 +588,76 @@ def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
             "kept_sl": kept_sl,
             "cancel_sl": [o.get("oid") for o in stops] if new_sl is not None else [],
             "cancel_tp": [o.get("oid") for o in tps] if ladder is not None else []}
+
+
+# ── averaging in: a same-way signal at a BETTER price adds to the scalp ──────
+ADD_BETTER = 0.001        # at least 0.1% better than the current average entry
+DEFAULT_MAX_ADDS = 1
+
+
+def max_adds() -> int:
+    raw = os.getenv("SCALP_MAX_ADDS", "").strip()
+    try:
+        return max(0, int(float(raw))) if raw else DEFAULT_MAX_ADDS
+    except ValueError:
+        return DEFAULT_MAX_ADDS
+
+
+def exit_state(rec: Dict[str, Any], positions: Sequence[Dict[str, Any]],
+               orders: Sequence[Dict[str, Any]], mark: Optional[float]) -> Optional[Dict[str, Any]]:
+    """The running scalp's position and exit orders: {"side", "size", "entry",
+    "stops", "tps", "cur_sl", "cur_tps"} or None (no matching position)."""
+    if mark is None:
+        return None
+    pos = next((p for p in positions or [] if str(p.get("coin")) == rec["coin"]), None)
+    side = "long" if rec["direction"] == "LONG" else "short"
+    if not pos or pos.get("side") != side:
+        return None
+    long = side == "long"
+    stops, tps = [], []
+    for o in orders or []:
+        if not (isinstance(o, dict) and str(o.get("coin")) == rec["coin"] and o.get("reduceOnly")):
+            continue
+        ot = str(o.get("orderType") or "").lower()
+        trig = _num(o.get("triggerPx"))
+        if o.get("isTrigger") and (ot.startswith("stop") or (not ot.startswith("take") and trig
+                                   and ((trig < mark) if long else (trig > mark)))):
+            stops.append(o)
+        else:
+            tps.append(o)
+    pxs = [_num(o.get("triggerPx")) for o in stops if _num(o.get("triggerPx"))]
+    cur_tps = [p for p in ((_num(o.get("limitPx")) if not o.get("isTrigger")
+                            else _num(o.get("triggerPx"))) for o in tps) if p]
+    return {"side": side, "size": abs(_num(pos.get("size")) or 0),
+            "entry": _num(pos.get("entry_px")), "stops": stops, "tps": tps,
+            "cur_sl": (max(pxs) if long else min(pxs)) if pxs else None,
+            "cur_tps": sorted(cur_tps, key=lambda p: abs(p - mark))}
+
+
+def plan_add(rec: Dict[str, Any], setup: Dict[str, Any], st: Optional[Dict[str, Any]],
+             mark: Optional[float]) -> Optional[Dict[str, Any]]:
+    """Average in? A same-way signal while price is ADD_BETTER better than the
+    running scalp's average entry (lower for a long), still on the right side
+    of the stop, and fewer than max_adds() adds so far. Returns {"stop"} (the
+    stop for the WHOLE position: the tighter of the current one and the new
+    signal's, never wider) or None. Pure."""
+    if st is None or mark is None or setup.get("direction") != rec.get("direction"):
+        return None
+    if int(rec.get("adds") or 0) >= max_adds() or not st.get("entry"):
+        return None
+    long = st["side"] == "long"
+    entry = st["entry"]
+    better = mark <= entry * (1 - ADD_BETTER) if long else mark >= entry * (1 + ADD_BETTER)
+    if not better:
+        return None
+    stop = st["cur_sl"]
+    new = float(setup["sl"])
+    if ((new < mark) if long else (new > mark)) and (stop is None or
+                                                    ((new > stop) if long else (new < stop))):
+        stop = new
+    if stop is None or not ((mark > stop) if long else (mark < stop)):
+        return None
+    return {"stop": stop}
 
 
 def room(records: Dict[str, Any]) -> int:
