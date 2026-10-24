@@ -1,5 +1,22 @@
 # Execution evidence rollout review — 2026-10-24 SGT
 
+## PR preparation update
+
+Current main `80e59db` was integrated before publication. Its scalp-trade
+migration owns 019, so our unpublished drafts were renumbered: execution ledger
+020, account evidence 021, manager journal 022, and order provenance 023.
+References below to the earlier 019–022 draft chain are historical checkpoint
+results, not production migration instructions. **Use 020 → 021 → 022 → 023**
+for this PR's new migrations after inspecting the actual deployed schema.
+
+The integrated branch passed **3,200 tests (124 skipped)** and **20 separate
+PostgreSQL integration tests**, including the full 001–023 chain. Main's 019
+also lacked version registration; this PR adds only its bookkeeping INSERT,
+just as for 017, without changing scalp strategy or stored trade values.
+Current-main orphan-order protection was preserved. Older archive/checkpoint
+reports predate this integration. PR publication is authorized; merging,
+production migrations and feature activation are not part of that approval.
+
 ## Decision
 
 Ready to package for a disabled-feature review PR, **not for automatic production
