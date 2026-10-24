@@ -699,6 +699,29 @@ SELECT environment, count(*), max(generated_at) FROM signals GROUP BY environmen
 | `database/migrations/` | `001`–`008`, plus review-only rollbacks. |
 | `database/migrate.py` | Explicit CLI runner. Never automatic. |
 
+Migration `020` adds the opt-in append-only execution evidence ledger:
+`execution_evidence_runs`, `execution_fill_evidence`, and `execution_order_links`.
+It must run before enabling collector writes. These observations are quarantined,
+not certified trade outcomes; funding and full position reconciliation remain
+required. See [execution evidence](docs/execution-evidence.md) for rollout gates.
+
+Migration `021` adds `execution_funding_evidence` and
+`execution_account_observations`. Current position snapshots carry venue and
+request/response timestamps; they are never backdated to a historical fill window.
+It requires `020` and is needed only for opt-in account-evidence writes.
+
+Migration `022` adds `manager_execution_observations`, an append-only intent and
+response journal for manager-created exits. It requires the trigger function
+from `020`. `MANAGER_EXECUTION_EVIDENCE_ENABLED=true` is a separate opt-in;
+journal failure never blocks a protective action and does not prove attribution.
+
+Migration `023` adds `manager_order_observations`, immutable independent order
+status evidence linked to a manager journal row by account/network-scoped foreign
+key. It requires `022`; the explicit persistence helper requires this table and
+does not auto-migrate or silently discard a failed write. The read-only loader
+requires a repeatable-read or serializable transaction. This infrastructure is
+not yet enabled in production and does not make trade labels ML-eligible.
+
 **Deploy order depends on the migration. `018` must run before this code.** Every
 migration is written so the running code probes for what it needs and degrades
 rather than failing. `002` is the exception that proves the rule — it replaces an

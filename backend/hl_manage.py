@@ -212,7 +212,8 @@ def run(*, env: Optional[str] = None,
         stop_fn: Optional[Callable] = None,
         cancel_fn: Optional[Callable] = None,
         close_fn: Optional[Callable] = None,
-        read_fn: Optional[Callable] = None) -> Dict[str, Any]:
+        read_fn: Optional[Callable] = None,
+        observer_fn: Optional[Callable] = None) -> Dict[str, Any]:
     """One manager pass. Never raises for an exchange rejection — each action's
     outcome is reported. I/O is injectable for tests."""
     import hl_exchange
@@ -244,6 +245,12 @@ def run(*, env: Optional[str] = None,
     positions, orders, mids, table, fills = read_fn()
     actions = plan(positions, orders, mids, table, fills)
 
+    from manager_execution_evidence import configured_observer, observed_call
+    observer = observer_fn or configured_observer(e)
+    observations = []
+    # Buffer in memory; database I/O happens only after ALL protective actions.
+    event_sink = observations.append if observer is not None else None
+
     results = []
     for a in actions:
         coin = a["coin"]
@@ -254,7 +261,9 @@ def run(*, env: Optional[str] = None,
                 # a duplicate by the exchange instead of stacking a second stop.
                 cloid = hl_execution.client_order_id(coin, "breakeven", a["stop_px"])
                 is_buy_exit = a["side"] != "long"
-                resp = stop_fn(coin, is_buy_exit, a["size"], a["stop_px"], cloid=cloid, env=env)
+                resp = observed_call(
+                    lambda: stop_fn(coin, is_buy_exit, a["size"], a["stop_px"], cloid=cloid, env=env),
+                    observer=event_sink,network=e,action=a,cloid=cloid,orders=orders)
                 ok, detail = hl_exchange.order_accepted(resp)
                 res["placed"] = ok
                 if not ok:
@@ -266,7 +275,8 @@ def run(*, env: Optional[str] = None,
                 res["cancelled"] = _cancel_all(cancel_fn, coin, a["cancel_oids"], env)
             elif a["action"] == "close_remainder":
                 cloid = hl_execution.client_order_id(coin, "breakeven_close", a["entry_px"])
-                resp = close_fn(coin, cloid, env)
+                resp = observed_call(lambda: close_fn(coin, cloid, env),
+                    observer=event_sink,network=e,action=a,cloid=cloid,orders=orders)
                 ok, detail = hl_exchange.order_accepted(resp)
                 res["closed"] = ok
                 if not ok:
@@ -274,8 +284,19 @@ def run(*, env: Optional[str] = None,
         except Exception as exc:                        # noqa: BLE001
             res["error"] = type(exc).__name__
         results.append(res)
-    return {"ok": True, "ran": True, "positions": len(positions),
-            "actions": len(actions), "results": results}
+    out = {"ok": True, "ran": True, "positions": len(positions),
+           "actions": len(actions), "results": results}
+    if observer is not None:
+        recorded = 0
+        for observation in observations:
+            try:
+                observer(observation)
+                recorded += 1
+            except Exception:
+                pass
+        out['execution_evidence'] = {'observed':len(observations), 'recorded':recorded,
+                                     'failed':len(observations)-recorded}
+    return out
 
 
 def _cancel_all(cancel_fn: Callable, coin: str, oids: List[Any],

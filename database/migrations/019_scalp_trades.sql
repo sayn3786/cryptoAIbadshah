@@ -39,4 +39,8 @@ CREATE TABLE IF NOT EXISTS scalp_trades (
 
 CREATE INDEX IF NOT EXISTS scalp_trades_env_placed ON scalp_trades (environment, placed_at DESC);
 
+INSERT INTO schema_migrations(version,description) VALUES
+ ('019','Persistent scalp trade history')
+ON CONFLICT(version) DO NOTHING;
+
 COMMIT;
