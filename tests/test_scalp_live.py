@@ -518,7 +518,8 @@ AAVE_ORDERS = [{"coin": "AAVE", "oid": 1, "reduceOnly": True, "isTrigger": True,
 def test_plan_update_moves_the_target_and_never_widens_the_stop():
     new = {"direction": "SHORT", "sl": 145.483, "target": 142.076}
     p = sl.plan_update(_aave(), new, AAVE_POS, AAVE_ORDERS, 144.1)
-    assert p["new_tp"] == 142.076 and p["cancel_tp"] == [2]
+    # one TP -> two: the old one closes 50%, the new one the rest
+    assert p["tp_ladder"] == [(142.201, 0.375), (142.076, 0.375)] and p["cancel_tp"] == [2]
     assert p["new_sl"] is None and p["cancel_sl"] == []                    # same stop: kept
     wider = sl.plan_update(_aave(), {**new, "sl": 146.0}, AAVE_POS, AAVE_ORDERS, 144.1)
     assert wider["new_sl"] is None and wider["kept_sl"] == 146.0
@@ -553,9 +554,11 @@ def test_running_scalp_gets_new_levels_on_hl(app_mod, hl_fake, monkeypatch):
              "entry": 144.12, "limit": 144.12, "sl": 145.0, "target": 142.076, "rr": 1.5,
              "slot_ms": 9}
     out = app_mod._scalp_hl([setup], 2 * H)
-    assert calls == [("sl", "AAVE", True, 0.75, 145.0), ("tp", "AAVE", True, 0.75, 142.08)]
+    assert calls == [("sl", "AAVE", True, 0.75, 145.0), ("tp", "AAVE", True, 0.37, 142.2),
+                     ("tp", "AAVE", True, 0.38, 142.08)]
     assert sorted(hl_fake["cancelled"]) == [("AAVE", 1), ("AAVE", 2)]
-    assert out["results"][0]["ok"] and "TP 142.201 → 142.076" in out["results"][0]["updated"]
+    assert out["results"][0]["ok"]
+    assert "TP ladder TP1 142.2 (49%), TP2 142.08 (51%)" in out["results"][0]["updated"]
     assert app_mod._scalp_records()["AAVE"]["target"] == 142.08
     assert any(t.startswith("🪤 scalp book (testnet): updated AAVE SHORT") for t in app_mod._sent)
 
@@ -605,3 +608,24 @@ def test_flip_stops_if_the_close_fails(app_mod, hl_fake, monkeypatch):
     out = app_mod._scalp_hl([long_], 2 * H)
     assert out["results"][0]["reason"] == "FLIP_CLOSE_FAILED"
     assert app_mod._scalp_records()["AAVE"]["direction"] == "SHORT"       # kept as it was
+
+
+
+def test_tp_ladder_grows_to_three_then_moves_the_furthest():
+    # SHORT at mark 100: targets below
+    two = sl.tp_ladder([98.0], 97.0, 3.0, 2, long=False, mark=100.0)
+    assert two == [(98.0, 1.5), (97.0, 1.5)]
+    three = sl.tp_ladder([98.0, 97.0], 96.0, 3.0, 2, long=False, mark=100.0)
+    assert three == [(98.0, 1.0), (97.0, 1.0), (96.0, 1.0)]
+    odd = sl.tp_ladder([98.0, 97.0], 96.0, 1.0, 2, long=False, mark=100.0)
+    assert odd == [(98.0, 0.33), (97.0, 0.33), (96.0, 0.34)]
+    moved = sl.tp_ladder([98.0, 97.0, 96.0], 95.0, 3.0, 2, long=False, mark=100.0)
+    assert [p for p, _ in moved] == [98.0, 97.0, 95.0]
+    assert sl.tp_ladder([98.0, 97.0, 96.0], 96.5, 3.0, 2, long=False, mark=100.0) is None
+    closer = sl.tp_ladder([97.0], 98.0, 2.0, 2, long=False, mark=100.0)
+    assert [p for p, _ in closer] == [98.0, 97.0]                       # by price, nearest first
+    assert sl.tp_ladder([97.0], 97.01, 2.0, 2, long=False, mark=100.0) is None   # same target
+    assert sl.tp_ladder([97.0], 101.0, 2.0, 2, long=False, mark=100.0) is None   # wrong side
+    # $10 minimum: a 0.15 position at 100 can't split three ways ($5 each)
+    small = sl.tp_ladder([98.0, 97.0], 96.0, 0.15, 2, long=False, mark=100.0)
+    assert small == [(96.0, 0.15)]                     # one TP for all: the furthest

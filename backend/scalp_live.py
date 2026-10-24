@@ -491,9 +491,47 @@ def _num(x: Any) -> Optional[float]:
         return None
 
 
+MAX_TPS = 3
+MIN_TP_USD = 10.0         # Hyperliquid's minimum order value
+
+
+def _floor(x: float, decimals: int) -> float:
+    from decimal import ROUND_DOWN, Decimal
+    return float(Decimal(str(x)).quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_DOWN))
+
+
+def tp_ladder(existing: Sequence[float], new: float, size: float, sz_decimals: int, *,
+              long: bool, mark: float) -> Optional[List[tuple]]:
+    """The take-profit ladder after a fresh target: [(price, size), ...]
+    nearest first. The new target is ADDED to the open TPs (1 -> 50/50,
+    2 -> 33/33/rest); at MAX_TPS the furthest moves out to it when it is
+    further. Equal shares of the current size, the last takes the remainder;
+    fewer levels when a share would fall under MIN_TP_USD. None = no change
+    (the same target, or a new one not beyond the mark). Pure."""
+    if not ((new > mark) if long else (new < mark)) or size <= 0:
+        return None
+    levels = sorted({float(x) for x in existing if x}, key=lambda p: abs(p - mark))
+    if any(abs(new - p) / p < 0.0005 for p in levels):
+        return None
+    if len(levels) >= MAX_TPS:
+        far = levels[-1]
+        if abs(new - mark) <= abs(far - mark):
+            return None
+        levels = levels[:-1]
+    levels = sorted(levels + [float(new)], key=lambda p: abs(p - mark))
+    while len(levels) > 1 and _floor(size / len(levels), sz_decimals) * mark < MIN_TP_USD:
+        levels = levels[1:]                                # drop the nearest: keep the reach
+    share = _floor(size / len(levels), sz_decimals)
+    if share <= 0:
+        return [(levels[-1], size)]
+    out = [(p, share) for p in levels[:-1]]
+    out.append((levels[-1], round(size - share * (len(levels) - 1), sz_decimals)))
+    return out
+
+
 def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
                 positions: Sequence[Dict[str, Any]], orders: Sequence[Dict[str, Any]],
-                mark: Optional[float]) -> Optional[Dict[str, Any]]:
+                mark: Optional[float], sz_decimals: int = 4) -> Optional[Dict[str, Any]]:
     """A fresh signal the same way on a RUNNING scalp: its new levels for the
     open position. The target always follows the new signal; the stop moves
     only when the new one is TIGHTER (closer to price) — never wider, because
@@ -529,21 +567,16 @@ def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
         new_sl = None                                      # already through the market
     elif cur_sl is not None and ((new_sl <= cur_sl) if long else (new_sl >= cur_sl)):
         kept_sl, new_sl = new_sl, None                     # wider (or equal): keep the stop
-    new_tp = float(setup["target"])
-    cur_tp = None
-    if tps:
-        o = tps[0]
-        cur_tp = _num(o.get("limitPx")) if not o.get("isTrigger") else _num(o.get("triggerPx"))
-    if not ((new_tp > mark) if long else (new_tp < mark)):
-        new_tp = None
-    elif cur_tp and abs(new_tp - cur_tp) / cur_tp < 0.0005:
-        new_tp = None                                      # the same target
-    if new_sl is None and new_tp is None:
+    cur_tps = [p for p in ((_num(o.get("limitPx")) if not o.get("isTrigger")
+                            else _num(o.get("triggerPx"))) for o in tps) if p]
+    ladder = tp_ladder(cur_tps, float(setup["target"]), size, sz_decimals, long=long, mark=mark)
+    if new_sl is None and ladder is None:
         return None
-    return {"side": side, "size": size, "new_sl": new_sl, "new_tp": new_tp,
-            "cur_sl": cur_sl, "cur_tp": cur_tp, "kept_sl": kept_sl,
+    return {"side": side, "size": size, "new_sl": new_sl, "tp_ladder": ladder,
+            "cur_sl": cur_sl, "cur_tps": sorted(cur_tps, key=lambda p: abs(p - mark)),
+            "kept_sl": kept_sl,
             "cancel_sl": [o.get("oid") for o in stops] if new_sl is not None else [],
-            "cancel_tp": [o.get("oid") for o in tps] if new_tp is not None else []}
+            "cancel_tp": [o.get("oid") for o in tps] if ladder is not None else []}
 
 
 def room(records: Dict[str, Any]) -> int:
