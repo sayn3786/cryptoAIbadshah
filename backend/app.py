@@ -5503,6 +5503,49 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
             **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
 
 
+def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
+    """An opposite engine signal on a running scalp: close it at market,
+    cancel its stop / target, record its result, then open the new direction
+    (HL holds one net position per coin, so both can't run). Never raises."""
+    import scalp_live as _sl
+    import hl_account as _ha
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import scalp_store as _ss
+    sym, coin = rec["symbol"], rec["coin"]
+    cloid = _hx.client_order_id(_sl.signal_id(sym), "flip", setup["slot_ms"])
+    try:
+        ok, _d = _he.order_accepted(_he.send_market_close(coin, cloid))
+    except Exception:
+        ok = False
+    if not ok:
+        return {"symbol": sym, "ok": False, "reason": "FLIP_CLOSE_FAILED"}
+    for o in [o for o in orders if str(o.get("coin")) == coin and o.get("reduceOnly")]:
+        try:
+            _he.cancel_order(coin, o.get("oid"))
+        except Exception:
+            pass
+    try:
+        fills = _ha._post_info({"type": "userFills", "user": _ha.account_address()}) or []
+    except Exception:
+        fills = []
+    res = _sl.settle(fills, rec) or {}
+    _ss.closed(_deploy_env(), rec, at_ms=now_ms, result={**res, "exit_reason": "other"})
+    recs.pop(coin, None)
+    closed = (f"closed {sym} {rec['direction']} on an opposite signal"
+              + (f" (${res['pnl_usd']:+.2f})" if res.get("pnl_usd") is not None else ""))
+    # The account snapshot still shows the old position and its exits.
+    acct["open_positions"] = [p for p in acct.get("open_positions") or []
+                              if str(p.get("coin")) != coin]
+    rest = [o for o in orders if str(o.get("coin")) != coin]
+    r = _scalp_market(setup, acct=acct, table=table, recs=recs, now_ms=now_ms, orders=rest)
+    if not r.get("ok"):
+        return {**r, "note": closed + f"; the {setup['direction']} did not open ({r.get('reason')})"}
+    note = (closed + f"; opened {sym} {setup['direction']} {setup['strength']:g} at market "
+            f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, ${_sl.risk_usd():g} risk)")
+    return {**r, "flipped": True, "note": note}
+
+
 def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
     """A fresh signal the same way on a running scalp: move its target, and
     its stop only if tighter (scalp_live.plan_update). New orders first, then
@@ -5704,6 +5747,14 @@ def _scalp_hl(setups, now_ms) -> dict:
             for s in setups:
                 coin = (_hm.resolve_coin(s["symbol"], table) or "").upper()
                 rec = next((r for c, r in recs.items() if c.upper() == coin), None)
+                if rec is not None and rec.get("state") == "open" and \
+                        s.get("kind") == "engine" and s["direction"] != rec["direction"]:
+                    r = _scalp_flip(rec, s, acct=acct, table=table, recs=recs,
+                                    orders=orders or [], now_ms=now_ms)
+                    results.append(r)
+                    if r.get("note"):
+                        notes.append(r["note"])
+                    continue
                 if rec is not None and rec.get("state") == "open":
                     r = _scalp_update(rec, s, positions=positions, orders=orders or [],
                                       mids=mids, table=table)
