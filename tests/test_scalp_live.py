@@ -497,3 +497,64 @@ def test_exits_prefer_the_swing_structure():
     ex = sl.exits(near, len(near) - 1, "LONG", sl.sweep_fvg.pivots(near))
     assert ex["how"].startswith("swing stop")
     assert sl.min_rr() == 0.0 and sl.target_r() == 1.5
+
+
+# ── a fresh signal on a running scalp moves its levels ──────────────────────
+
+def _aave(**kw):
+    r = {"coin": "AAVE", "symbol": "AAVE", "direction": "SHORT", "state": "open",
+         "limit": 144.17, "sl": 145.483, "target": 142.201, "slot_ms": 1}
+    r.update(kw)
+    return r
+
+
+AAVE_POS = [{"coin": "AAVE", "side": "short", "size": "0.75", "entry_px": 144.17}]
+AAVE_ORDERS = [{"coin": "AAVE", "oid": 1, "reduceOnly": True, "isTrigger": True,
+                "orderType": "Stop Market", "triggerPx": "145.483"},
+               {"coin": "AAVE", "oid": 2, "reduceOnly": True, "isTrigger": False,
+                "orderType": "Limit", "limitPx": "142.201"}]
+
+
+def test_plan_update_moves_the_target_and_never_widens_the_stop():
+    new = {"direction": "SHORT", "sl": 145.483, "target": 142.076}
+    p = sl.plan_update(_aave(), new, AAVE_POS, AAVE_ORDERS, 144.1)
+    assert p["new_tp"] == 142.076 and p["cancel_tp"] == [2]
+    assert p["new_sl"] is None and p["cancel_sl"] == []                    # same stop: kept
+    wider = sl.plan_update(_aave(), {**new, "sl": 146.0}, AAVE_POS, AAVE_ORDERS, 144.1)
+    assert wider["new_sl"] is None and wider["kept_sl"] == 146.0
+    tighter = sl.plan_update(_aave(), {**new, "sl": 145.0}, AAVE_POS, AAVE_ORDERS, 144.1)
+    assert tighter["new_sl"] == 145.0 and tighter["cancel_sl"] == [1]
+    assert sl.plan_update(_aave(), {**new, "direction": "LONG"}, AAVE_POS, AAVE_ORDERS,
+                          144.1) is None                                   # opposite: ignored
+    assert sl.plan_update(_aave(), {**new, "target": 142.2}, AAVE_POS, AAVE_ORDERS,
+                          144.1) is None                                   # same levels
+    assert sl.plan_update(_aave(state="pending"), new, AAVE_POS, AAVE_ORDERS, 144.1) is None
+    # a stop at entry (the 1R break-even) is never loosened back
+    be = [{**AAVE_ORDERS[0], "triggerPx": "144.17"}, AAVE_ORDERS[1]]
+    assert sl.plan_update(_aave(), {**new, "sl": 145.0}, AAVE_POS, be, 143.0)["new_sl"] is None
+
+
+def test_running_scalp_gets_new_levels_on_hl(app_mod, hl_fake, monkeypatch):
+    import hl_account
+    import hl_exchange
+    calls = []
+    monkeypatch.setattr(hl_exchange, "send_stop", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("sl", coin, buy, size, px)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_take_profit", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("tp", coin, buy, size, px)) or {"status": "ok"})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"AAVE": "144.1"})
+    hl_fake["positions"] = AAVE_POS
+    hl_fake["orders"] = AAVE_ORDERS
+    import hl_meta
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0)})
+    setup = {"kind": "engine", "symbol": "AAVE", "direction": "SHORT", "strength": 83.0,
+             "entry": 144.12, "limit": 144.12, "sl": 145.0, "target": 142.076, "rr": 1.5,
+             "slot_ms": 9}
+    out = app_mod._scalp_hl([setup], 2 * H)
+    assert calls == [("sl", "AAVE", True, 0.75, 145.0), ("tp", "AAVE", True, 0.75, 142.08)]
+    assert sorted(hl_fake["cancelled"]) == [("AAVE", 1), ("AAVE", 2)]
+    assert out["results"][0]["ok"] and "TP 142.201 → 142.076" in out["results"][0]["updated"]
+    assert app_mod._scalp_records()["AAVE"]["target"] == 142.08
+    assert any(t.startswith("🪤 scalp book (testnet): updated AAVE SHORT") for t in app_mod._sent)

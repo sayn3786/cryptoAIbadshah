@@ -5503,6 +5503,69 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
             **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
 
 
+def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
+    """A fresh signal the same way on a running scalp: move its target, and
+    its stop only if tighter (scalp_live.plan_update). New orders first, then
+    the old ones cancelled, so the position is never without a stop. Never
+    raises."""
+    import scalp_live as _sl
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    sym, coin = rec["symbol"], rec["coin"]
+    try:
+        mark = float((mids or {}).get(coin))
+    except (TypeError, ValueError):
+        mark = None
+    plan = _sl.plan_update(rec, setup, positions, orders, mark)
+    if plan is None:
+        return {"symbol": sym, "ok": False, "reason": "POSITION_EXISTS"}
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    exit_buy = plan["side"] != "long"
+    sid, ts = _sl.signal_id(sym), setup["slot_ms"]
+    done = []
+
+    def _px(v):
+        return _hm.round_price(v, sz)
+    try:
+        if plan["new_sl"] is not None:
+            ok, _d = _he.order_accepted(_he.send_stop(
+                coin, exit_buy, plan["size"], _px(plan["new_sl"]),
+                cloid=_hx.client_order_id(sid, "sl-upd", ts)))
+            if ok:
+                for oid in plan["cancel_sl"]:
+                    try:
+                        _he.cancel_order(coin, oid)
+                    except Exception:
+                        pass
+                done.append(f"SL {plan['cur_sl']:,.6g} → {plan['new_sl']:,.6g}"
+                            if plan["cur_sl"] else f"SL → {plan['new_sl']:,.6g}")
+                rec["sl"] = _px(plan["new_sl"])
+        if plan["new_tp"] is not None:
+            ok, _d = _he.order_accepted(_he.send_take_profit(
+                coin, exit_buy, plan["size"], _px(plan["new_tp"]),
+                cloid=_hx.client_order_id(sid, "tp-upd", ts)))
+            if ok:
+                for oid in plan["cancel_tp"]:
+                    try:
+                        _he.cancel_order(coin, oid)
+                    except Exception:
+                        pass
+                done.append(f"TP {plan['cur_tp']:,.6g} → {plan['new_tp']:,.6g}"
+                            if plan["cur_tp"] else f"TP → {plan['new_tp']:,.6g}")
+                rec["target"] = _px(plan["new_tp"])
+    except Exception as exc:
+        return {"symbol": sym, "ok": False, "reason": "UPDATE_FAILED", "error": type(exc).__name__}
+    if not done:
+        return {"symbol": sym, "ok": False, "reason": "UPDATE_REJECTED"}
+    import scalp_store as _ss
+    _ss.levels(_deploy_env(), rec)
+    kept = (" (stop kept: the new one would widen it)" if plan.get("kept_sl") is not None
+            and plan["new_sl"] is None else "")
+    note = f"updated {sym} {rec['direction']}: " + ", ".join(done) + kept
+    return {"symbol": sym, "ok": True, "updated": ", ".join(done), "note": note}
+
+
 def _scalp_place(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
     """One resting limit entry with its stop + target attached. Never raises."""
     import scalp_live as _sl
@@ -5639,9 +5702,17 @@ def _scalp_hl(setups, now_ms) -> dict:
             held = {str(p.get("coin") or "").upper() for p in positions}
             results = []
             for s in setups:
+                coin = (_hm.resolve_coin(s["symbol"], table) or "").upper()
+                rec = next((r for c, r in recs.items() if c.upper() == coin), None)
+                if rec is not None and rec.get("state") == "open":
+                    r = _scalp_update(rec, s, positions=positions, orders=orders or [],
+                                      mids=mids, table=table)
+                    results.append(r)
+                    if r.get("note"):
+                        notes.append(r["note"])
+                    continue
                 if _sl.room(recs) <= 0:
                     break
-                coin = (_hm.resolve_coin(s["symbol"], table) or "").upper()
                 if coin in held or coin in {c.upper() for c in recs}:
                     results.append({"symbol": s["symbol"], "ok": False, "reason": "POSITION_EXISTS"})
                     continue
