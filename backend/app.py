@@ -5839,6 +5839,9 @@ def _scalp_hl(setups, now_ms) -> dict:
             results = []
             for s in setups:
                 coin = (_hm.resolve_coin(s["symbol"], table) or "").upper()
+                if coin:                  # the levels onto HL's own prices
+                    s = _sl.on_hl_prices(s, _ha.candle_close(
+                        _hm.resolve_coin(s["symbol"], table), s["slot_ms"] - _sl.M15_MS))
                 rec = next((r for c, r in recs.items() if c.upper() == coin), None)
                 if rec is not None and rec.get("state") == "open" and \
                         s.get("kind") == "engine" and s["direction"] != rec["direction"]:
@@ -5871,7 +5874,9 @@ def _scalp_hl(setups, now_ms) -> dict:
                 if r.get("ok") and s.get("kind") == "engine":
                     notes.append(f"opened {s['symbol']} {s['direction']} {s['strength']:g} at "
                                  f"market (${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
-                                 f"${_sl.risk_usd():g} risk)")
+                                 f"${_sl.risk_usd():g} risk)"
+                                 + (f"; levels moved {s['basis_pct']:+.2f}% onto HL's price"
+                                    if abs(s.get("basis_pct") or 0) >= 0.05 else ""))
                 elif r.get("ok"):
                     notes.append(f"placed {s['symbol']} {s['direction']} limit {s['limit']:,.6g} "
                                  f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, "

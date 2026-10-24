@@ -426,6 +426,24 @@ def all_mids(*, env: Optional[str] = None, session: Optional[Any] = None) -> Dic
     return _post_info({"type": "allMids"}, env=env, session=session) or {}
 
 
+def candle_close(coin: str, open_ms: int, *, interval: str = "15m",
+                 env: Optional[str] = None, session: Optional[Any] = None) -> Optional[float]:
+    """The close of HL's own `interval` candle that opened at `open_ms`, or
+    None (not there yet, or the read failed)."""
+    step = {"15m": 900_000, "1h": 3_600_000}.get(interval, 900_000)
+    try:
+        rows = _post_info({"type": "candleSnapshot",
+                           "req": {"coin": coin, "interval": interval,
+                                   "startTime": int(open_ms), "endTime": int(open_ms) + step}},
+                          env=env, session=session) or []
+    except Exception:                                     # noqa: BLE001
+        return None
+    for r in rows if isinstance(rows, list) else []:
+        if int(r.get("t") or -1) == int(open_ms):
+            return _num(r.get("c"))
+    return None
+
+
 def mid_price(coin: str, *, env: Optional[str] = None,
               session: Optional[Any] = None) -> Optional[float]:
     """The live mid price for one coin — what a MARKET order will fill near, so

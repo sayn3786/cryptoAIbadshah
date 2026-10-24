@@ -360,6 +360,24 @@ def untradeable(symbol: str, close: Optional[float], table: Optional[Dict[str, A
     return None
 
 
+def on_hl_prices(setup: Dict[str, Any], hl_close: Optional[float]) -> Dict[str, Any]:
+    """The setup moved onto HL's own prices: the signal was read on exchange
+    candles, but HL (testnet especially) can sit a little apart. Entry, stop
+    and target keep their % distances around HL's close of the same 15m
+    candle, so the stale-entry guard measures only the move since the close,
+    not the gap. Unchanged without an HL close. Pure."""
+    ref = float(setup.get("close") or setup.get("entry") or 0)
+    if not hl_close or not ref:
+        return setup
+    k = float(hl_close) / ref
+    out = {**setup, "basis_pct": round((k - 1) * 100, 3), "close": float(hl_close)}
+    for key in ("entry", "limit", "sl", "target"):
+        if out.get(key) is None:
+            continue
+        out[key] = float(hl_close) if float(out[key]) == ref else float(out[key]) * k
+    return out
+
+
 def signal_id(symbol: str) -> str:
     return f"scalp-{symbol.upper()}"
 
@@ -380,7 +398,8 @@ def new_setup(bars: Sequence[Dict[str, Any]], symbol: str, *,
         return None
     s = max(found, key=lambda x: x["rr"])
     return {"symbol": symbol.upper(), "direction": s["direction"], "limit": s["limit"],
-            "sl": s["sl"], "target": s["target"], "rr": s["rr"], "slot_ms": close_ms}
+            "sl": s["sl"], "target": s["target"], "rr": s["rr"], "slot_ms": close_ms,
+            "close": float(bars[-1]["close"])}
 
 
 def agrees(setup: Dict[str, Any], bars: Sequence[Dict[str, Any]], tf: str,
