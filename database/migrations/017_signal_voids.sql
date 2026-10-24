@@ -24,4 +24,8 @@ DROP TRIGGER IF EXISTS signal_voids_immutable ON signal_voids;
 CREATE TRIGGER signal_voids_immutable BEFORE UPDATE OR DELETE ON signal_voids
     FOR EACH ROW EXECUTE FUNCTION reject_signal_void_mutation();
 
+INSERT INTO schema_migrations(version,description) VALUES
+ ('017','Append-only signal voids for invalid outcome evidence')
+ON CONFLICT(version) DO NOTHING;
+
 COMMIT;
