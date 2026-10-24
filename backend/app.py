@@ -5901,6 +5901,11 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     def _one(sym):
         try:
             m15 = fetch_fn(sym, "15m")
+            why_not = _sl.untradeable(sym, float(m15[-1]["close"]) if m15 else None,
+                                      hl_table, hl_mids, _hm.resolve_coin)
+            if why_not:
+                skipped[sym] = why_not
+                return None
             if _sl.mode() == "blend":
                 # The 15m engine triggers; sweep -> FVG and the 1H read only add
                 # (or, the 1H against, take) strength — no requirement.
@@ -5917,6 +5922,15 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
             return None
 
     rejected: list = []
+    skipped: dict = {}
+    import hl_meta as _hm
+    hl_table, hl_mids = None, None
+    if _sl.auto_enabled():
+        try:                               # which coins HL can actually trade now
+            import hl_account as _ha
+            hl_table, hl_mids = _hm.asset_table(), _ha.all_mids()
+        except Exception:
+            hl_table, hl_mids = None, None
     syms = [s for s in _sl.SYMBOLS if s in SYMBOLS]
     with ThreadPoolExecutor(max_workers=6) as ex:
         found = [x for x in ex.map(_one, syms) if x]
@@ -5939,10 +5953,11 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "setups": label,
         **({"rejected": sorted(rejected)} if rejected else {}),
+        **({"skipped": skipped} if skipped else {}),
         **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held") if hl.get(k)}},
         cap=96)
     return {"ok": True, "ran": True, "coins": len(syms), "signals": label,
-            "rejected": sorted(rejected),
+            "rejected": sorted(rejected), "skipped": skipped,
             "new": len(new), "scalp_hl": hl}
 
 
