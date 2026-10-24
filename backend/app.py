@@ -5560,10 +5560,10 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
         mark = float((mids or {}).get(coin))
     except (TypeError, ValueError):
         mark = None
-    plan = _sl.plan_update(rec, setup, positions, orders, mark)
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    plan = _sl.plan_update(rec, setup, positions, orders, mark, sz_decimals=sz)
     if plan is None:
         return {"symbol": sym, "ok": False, "reason": "POSITION_EXISTS"}
-    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
     exit_buy = plan["side"] != "long"
     sid, ts = _sl.signal_id(sym), setup["slot_ms"]
     done = []
@@ -5584,19 +5584,28 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
                 done.append(f"SL {plan['cur_sl']:,.6g} → {plan['new_sl']:,.6g}"
                             if plan["cur_sl"] else f"SL → {plan['new_sl']:,.6g}")
                 rec["sl"] = _px(plan["new_sl"])
-        if plan["new_tp"] is not None:
-            ok, _d = _he.order_accepted(_he.send_take_profit(
-                coin, exit_buy, plan["size"], _px(plan["new_tp"]),
-                cloid=_hx.client_order_id(sid, "tp-upd", ts)))
-            if ok:
-                for oid in plan["cancel_tp"]:
-                    try:
-                        _he.cancel_order(coin, oid)
-                    except Exception:
-                        pass
-                done.append(f"TP {plan['cur_tp']:,.6g} → {plan['new_tp']:,.6g}"
-                            if plan["cur_tp"] else f"TP → {plan['new_tp']:,.6g}")
-                rec["target"] = _px(plan["new_tp"])
+        if plan["tp_ladder"] is not None:
+            # The take-profits are re-laid as a ladder: the old ones cancelled
+            # first (the stop stays, so the position is never unprotected),
+            # then one reduce-only limit per level.
+            for oid in plan["cancel_tp"]:
+                try:
+                    _he.cancel_order(coin, oid)
+                except Exception:
+                    pass
+            placed = []
+            n = len(plan["tp_ladder"])
+            for k, (px, size) in enumerate(plan["tp_ladder"], start=1):
+                ok, _d = _he.order_accepted(_he.send_take_profit(
+                    coin, exit_buy, size, _px(px),
+                    cloid=_hx.client_order_id(sid, f"tp{k}-upd", ts)))
+                if ok:
+                    placed.append(f"TP{k} {_px(px):,.6g} ({round(size / plan['size'] * 100):d}%)")
+            if placed:
+                done.append("TP ladder " + ", ".join(placed)
+                            + ("" if len(placed) == n else f" ({n - len(placed)} rejected)"))
+                rec["target"] = _px(plan["tp_ladder"][-1][0])
+                rec["tps"] = [_px(px) for px, _sz in plan["tp_ladder"]]
     except Exception as exc:
         return {"symbol": sym, "ok": False, "reason": "UPDATE_FAILED", "error": type(exc).__name__}
     if not done:
