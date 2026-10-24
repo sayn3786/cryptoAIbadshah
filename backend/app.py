@@ -243,7 +243,7 @@ _BTC_CORR = {
     "GOMINING": 0.5,  # Mining platform token — moderately correlated with BTC mining profitability
 }
 TF_INTERVAL = {
-    "1H": "1h", "2H": "2h",
+    "15M": "15m", "1H": "1h", "2H": "2h",
     "4H": "4h", "8H": "8h", "12H": "12h", "1D": "1d",
     "1W": "1w", "2W": "1w", "3W":  "1w",  "1M": "1M",
 }
@@ -254,7 +254,7 @@ TF_AGG = {"2W": 2, "3W": 3}
 # average (real months vary 28–31 days, so alignment checks use the median
 # observed gap, not this nominal value).
 TF_SECONDS = {
-    "1H": 3600, "2H": 7200, "4H": 14400, "8H": 28800, "12H": 43200,
+    "15M": 900, "1H": 3600, "2H": 7200, "4H": 14400, "8H": 28800, "12H": 43200,
     "1D": 86400, "1W": 604800, "2W": 1209600, "3W": 1814400, "1M": 2629800,
 }
 
@@ -262,7 +262,7 @@ TF_SECONDS = {
 # per timeframe (soft = degraded, hard = invalid). A 1M candle's last close
 # can legitimately sit far from the live price; a 1H one cannot.
 _TF_PRICE_GAP = {
-    "1H": (0.020, 0.060), "2H": (0.025, 0.075), "4H": (0.035, 0.10),
+    "15M": (0.012, 0.040), "1H": (0.020, 0.060), "2H": (0.025, 0.075), "4H": (0.035, 0.10),
     "8H": (0.045, 0.13),  "12H": (0.055, 0.16), "1D": (0.070, 0.20),
     "1W": (0.120, 0.30),  "2W": (0.140, 0.35),  "3W": (0.150, 0.38),
     "1M": (0.180, 0.45),
@@ -353,7 +353,7 @@ def _assess_data_quality(timeframe, spot_source, closed_spot, live_price, signal
 # for indicator seeding. 1W/1M keep less — 200 weeks/months of history rarely
 # exists for crypto, so EMA200 is expected to be unavailable there.
 TF_LIMIT = {
-    "1H": 240, "2H": 240,
+    "15M": 240, "1H": 240, "2H": 240,
     "4H": 240, "8H": 240, "12H": 240, "1D": 240,
     "1W": 150, "2W": 150, "3W":  150, "1M": 100,
 }
@@ -681,7 +681,7 @@ def _monitor_candles(sym: str, tf: str):
     return closed
 
 
-def _fetch_alert_candles(sym: str, tf: str):
+def _fetch_alert_candles(sym: str, tf: str, limit=None):
     """(closed candles, skip_reason) for the Telegram alert scan.
 
     Like _fetch_closed_spot, but refuses data an alert must never be built on:
@@ -694,7 +694,7 @@ def _fetch_alert_candles(sym: str, tf: str):
     if not bs:
         return [], "no_pair"
     interval = TF_INTERVAL.get(tf, "1w")
-    limit = TF_LIMIT.get(tf, 120)
+    limit = limit or TF_LIMIT.get(tf, 120)
     spot, source = client.get_spot_klines_sourced(bs, interval, limit)
     if source == "demo":
         return [], "demo"
@@ -2321,7 +2321,8 @@ _analysis_cache_lock  = _threading.Lock()
 
 def _analysis_cache_key(symbol: str, tf: str) -> str:
     now  = datetime.now(timezone.utc)
-    half = (now.minute // 30) * 30
+    step = 15 if tf == "15M" else 30       # a 15m chart refreshes every candle
+    half = (now.minute // step) * step
     return f"av1_{symbol}_{tf}_{now.strftime('%Y%m%d%H')}{half:02d}"
 
 def get_analysis(symbol: str, tf: str) -> dict:
@@ -3265,7 +3266,9 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
         import db as _db_batch
         if _db_batch.db_enabled():
             import publication_batch
-            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())
+            _extra = _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads(),
+                                 _hl_daily_momentum())
+            _record_hl_boosts(_slot_start(now_sgt), _extra)
             for _r in _extra:
                 _r.setdefault("generated_at_utc", now)
             _xa = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
@@ -3304,8 +3307,10 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
             # Database-backed extras were frozen and committed with the channel
             # above. Never recompute or separately persist them after recovery.
             _extra = ([] if _db_batch.db_enabled() else
-                      _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads()))
+                      _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads(),
+                                 _hl_daily_momentum()))
             if _extra:
+                _record_hl_boosts(_slot_start(now_sgt), _extra)
                 for _r in _extra:
                     _r.setdefault("generated_at_utc", now)
                 _xa = {r["symbol"]: (raw.get(r["symbol"], {}).get("2H", {}) or {}).get("analysis")
@@ -3469,8 +3474,10 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
             "hl_extra_preview": [
                 f"{c['symbol']} {c.get('direction')} "
                 f"{c.get('display_strength') or c.get('strength')}"
-                + (f" (+{c['hl_boost']:g} bottom/top read)" if c.get("hl_boost") else "")
-                for c in _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads())]}
+                + (f" (+{c['hl_boost']:g} {c.get('hl_boost_reason')})" if c.get("hl_boost")
+                   else "")
+                for c in _hl_extra_candidates(candidates, intraday_recs, _hl_bottom_reads(),
+                                 _hl_daily_momentum())]}
            if dry_run else {}),
         # Publication gate. When false these recommendations were NOT recorded
         # and must be treated as analysis only, never as tradeable output.
@@ -3741,8 +3748,11 @@ def api_patterns_alert():
     # day, so a scheduler retry never double-posts; nothing is sent when empty.
     reads = _daily_market_reads(syms)
     if syms is None:
-        # The full scan: kept for the 4H publish's HL bottom-read boost (v55).
+        # The full scan: kept for the 4H publish's HL bottom-read boost (v55)
+        # and daily-momentum boost (v59).
         _store_daily_reads(reads)
+        if _daily_momentum_boost() > 0 and not dry:
+            _store_daily_momentum(_daily_momentum_scan())
     if dry:
         return jsonify({"ok": True, "dry": True, "reads": reads})
     if not reads:
@@ -4050,7 +4060,81 @@ def _hl_bottom_reads(now_ms=None) -> dict:
     return out
 
 
-def _hl_extra_candidates(candidates, published, bottoms=None):
+# v59 (HL only): +HL_DAILY_MOMENTUM_BOOST (default 5) to a LONG on a coin
+# whose last daily close (8 AM SGT) was a daily MOMENTUM setup — a wide day
+# (1.5x+ the 14-day range) closing in its top quarter, confirmed by the 1D
+# engine call 60+, a bullish FVG, volume or trendline (daily_setup) — for the
+# 24 hours after that close. The combination study found it called the next
+# 3 days (+3.5%, big moves ~2x as likely) in both halves of 3.5 years; on the
+# live HL book the +5 for the next day lifted Feb-Jun $9.06 -> $22.33 and
+# Jun-Oct $11.70 -> $15.60 (daily_setup_compare; drawdown $5.50 -> $4.25 and
+# $4.48 -> $6.24). Breakdown setups never boost SHORTs: that lost in both.
+# HL_DAILY_MOMENTUM_BOOST=0 turns it off.
+DEFAULT_DAILY_MOMENTUM_BOOST = 5.0
+DAILY_MOMENTUM_KV_KEY = "daily_momentum:v1"
+DAILY_MOMENTUM_WINDOW_MS = 24 * 3_600_000
+
+
+def _daily_momentum_boost() -> float:
+    raw = os.getenv("HL_DAILY_MOMENTUM_BOOST", "").strip().lower()
+    if raw in ("off", "false", "no"):
+        return 0.0
+    try:
+        v = float(raw) if raw else DEFAULT_DAILY_MOMENTUM_BOOST
+    except ValueError:
+        return DEFAULT_DAILY_MOMENTUM_BOOST
+    return v if 0 <= v <= 20 else DEFAULT_DAILY_MOMENTUM_BOOST
+
+
+def _daily_momentum_scan(symbols=None) -> dict:
+    """{SYMBOL: close ms} for the coins whose latest CLOSED daily candle is a
+    daily momentum setup (daily_setup.read_close). Demo / stale data or an
+    error leaves the coin out. Never raises."""
+    import daily_setup as _ds
+    symbols = symbols or list(SCAN_SYMBOLS)
+
+    def _one(sym):
+        try:
+            closed, why = _fetch_alert_candles(sym, "1D", limit=_ds.WINDOW + 1)
+            if why or len(closed) < _ds.WINDOW:
+                return None
+            if _ds.read_close(closed, sym) == 1:
+                return sym, int(closed[-1]["timestamp"]) + 86_400_000
+        except Exception:
+            return None
+        return None
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return dict(x for x in ex.map(_one, symbols) if x)
+
+
+def _store_daily_momentum(coins, now_ms=None) -> bool:
+    try:
+        import kv as _kv
+        payload = {"at": int(now_ms if now_ms is not None else time.time() * 1000),
+                   "coins": coins or {}}
+        return _kv.set_value(DAILY_MOMENTUM_KV_KEY, json.dumps(payload), ttl_seconds=3 * 86_400)
+    except Exception:
+        return False
+
+
+def _hl_daily_momentum(now_ms=None) -> set:
+    """The coins with a daily momentum setup whose close was in the last 24
+    hours, or an empty set (switch off, nothing stored, or unreadable)."""
+    if _daily_momentum_boost() <= 0:
+        return set()
+    try:
+        import kv as _kv
+        raw = _kv.get_value(DAILY_MOMENTUM_KV_KEY)
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        return set()
+    now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    return {str(sym).upper() for sym, close_ms in ((data or {}).get("coins") or {}).items()
+            if 0 <= now_ms - int(close_ms or 0) < DAILY_MOMENTUM_WINDOW_MS}
+
+
+def _hl_extra_candidates(candidates, published, bottoms=None, momentum=None):
     """The candidates auto-exec should trade beyond the published set, at most
     HL_EXTRA_MAX, strongest first. A candidate qualifies when its strength — plus
     the v55 bottom-read boost when `bottoms` ({SYMBOL: {directions}}) has an
@@ -4059,8 +4143,9 @@ def _hl_extra_candidates(candidates, published, bottoms=None):
     which becomes the stored confidence_score) and `hl_boost`. A published
     signal already at the floor is left to its own row; a published one that
     only the boost lifts is returned too (as an extra row, under its own
-    strategy_name). Empty unless auto-exec is enabled and HL_EXTRA_SIGNALS isn't
-    "off". Pure apart from reading those switches."""
+    strategy_name). `momentum` ({SYMBOLS}) adds the v59 daily-momentum boost
+    to a LONG on those coins the same way. Empty unless auto-exec is enabled
+    and HL_EXTRA_SIGNALS isn't "off". Pure apart from reading those switches."""
     import hl_autoexec as _ax
     if not _ax.is_auto_enabled():
         return []
@@ -4069,6 +4154,8 @@ def _hl_extra_candidates(candidates, published, bottoms=None):
     floor = _ax.auto_min_strength()
     boost = _bottom_read_boost()
     bottoms = bottoms or {}
+    m_boost = _daily_momentum_boost()
+    momentum = momentum or set()
 
     def _strength(c):
         return c.get("display_strength") or c.get("strength") or 0
@@ -4080,13 +4167,20 @@ def _hl_extra_candidates(candidates, published, bottoms=None):
         if sym in taken or not (c.get("entry") and c.get("sl") and c.get("tp_targets")):
             continue
         d = "bullish" if str(c.get("direction")).upper() == "LONG" else "bearish"
-        add = boost if boost and d in bottoms.get(sym, ()) else 0
+        why = []
+        add = 0
+        if boost and d in bottoms.get(sym, ()):
+            add += boost
+            why.append("1D bottom/top read with the trade")
+        if m_boost and d == "bullish" and sym in momentum:
+            add += m_boost
+            why.append("daily momentum close")
         s = _strength(c) + add
         if s < floor:
             continue
         if add:
             c = {**c, "display_strength": round(s, 1), "hl_boost": add,
-                 "hl_boost_reason": "1D bottom/top read with the trade"}
+                 "hl_boost_reason": " + ".join(why)}
         picks.append((s, c))
         taken.add(sym)
     picks.sort(key=lambda p: -p[0])
@@ -5165,6 +5259,9 @@ def _hl_auto_execute_pass():
     store = _signal_store()
     rows = _hl_confirmed_published(store, _sp.strategy_version())
     signals = [_ax.to_signal(r) for r in rows]
+    busy = _scalp_busy_symbols()
+    if busy:                               # a scalp entry / position holds the coin
+        signals = [s_ for s_ in signals if str(s_.get("symbol") or "").upper() not in busy]
     if not signals:
         return {"ok": True, "ran": True, "attempted": 0, "executed": 0,
                 "reason": "NO_CONFIRMED_SIGNALS", "results": []}
@@ -5200,6 +5297,10 @@ def _hl_auto_execute_pass():
             acct["spot_usdc_usd"] = _ha.spot_usdc()
         except Exception:
             pass
+        scalp_coins = set(_scalp_records())
+        if scalp_coins:                    # the scalp book has its own exposure cap
+            acct["open_positions"] = [p for p in acct.get("open_positions") or []
+                                      if str(p.get("coin")) not in scalp_coins]
         try:                               # leftover exits of closed trades
             open_orders = _ha._post_info({"type": "frontendOpenOrders",
                                           "user": _ha.account_address()}) or []
@@ -5292,6 +5393,511 @@ def _hl_weekly_lean_filter(signals, lean=None):
         return signals, [], None
 
 
+# ── 15m scalp book (HL testnet only; scalp_live) ─────────────────────────────
+
+def _scalp_key():
+    return f"scalp_open:{_deploy_env()}"
+
+
+def _scalp_records() -> dict:
+    """{HL coin: {"coin", "symbol", "direction", "entry", "opened_ms"}} of the
+    scalps this book opened and believes still open. Never raises."""
+    try:
+        import kv as _kv
+        data = json.loads(_kv.get_value(_scalp_key()) or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _scalp_save(records) -> None:
+    try:
+        import kv as _kv
+        _kv.set_value(_scalp_key(), json.dumps(records or {}), ttl_seconds=3 * 86_400)
+    except Exception:
+        pass
+
+
+def _scalp_engine_read(win, tf, symbol):
+    import candle_analysis
+    return generate_signal(candle_analysis.build_candle_analysis(list(win), tf, symbol))
+
+
+def _scalp_private(text) -> None:
+    try:                                   # the owner's PRIVATE chat only
+        import weekly_report
+        weekly_report.send_private(text)
+    except Exception:
+        app.logger.exception("scalp alert failed")
+
+
+def _scalp_busy_symbols() -> set:
+    """Symbols the scalp book has a pending entry or an open scalp on: the 4h
+    auto-exec leaves them alone (HL holds one position per coin)."""
+    return {str(r.get("symbol") or "").upper() for r in _scalp_records().values()}
+
+
+def _scalp_size(sym, coin, setup, *, acct, table, recs):
+    """(risk-sized can_place plan, None) or (None, reject dict)."""
+    import scalp_live as _sl
+    import hl_meta as _hm
+    free = acct.get("account_value_usd")
+    spot = acct.get("spot_usdc_usd")
+    free = None if (free is None and spot is None) else max(free or 0.0, spot or 0.0)
+    try:
+        mcap = client.get_market_cap(SYMBOLS[sym])
+    except Exception:
+        mcap = None
+    size = _sl.size_plan(setup["limit"], setup["sl"], mcap,
+                         hl_max=(table.get(coin) or {}).get("max_leverage"))
+    plan = _hm.can_place(sym, setup["limit"], notional_usd=size["notional_usd"],
+                         leverage=size["leverage"], free_collateral_usd=free, table=table)
+    if not plan.get("ok"):
+        return None, {"symbol": sym, "ok": False, "reason": plan.get("reason")}
+    book = sum(float(r.get("notional_usd") or 0) for r in recs.values())
+    if book + plan["notional_usd"] > _sl.max_exposure_usd() + 1e-9:
+        return None, {"symbol": sym, "ok": False, "reason": "MAX_EXPOSURE",
+                      "scalp_exposure_usd": round(book, 2)}
+    return plan, None
+
+
+def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
+    """An engine-triggered scalp: a MARKET open through hl_autoexec.execute
+    (stale-entry guard against the 15m close, exact-once id, the structure stop
+    and target attached right after the fill), risk-sized. Never raises."""
+    import scalp_live as _sl
+    import hl_autoexec as _ax
+    import hl_exchange as _he
+    import hl_meta as _hm
+    sym = setup["symbol"]
+    coin = _hm.resolve_coin(sym, table)
+    if coin is None:
+        return {"symbol": sym, "ok": False, "reason": "SYMBOL_NOT_ON_HYPERLIQUID"}
+    plan, reject = _scalp_size(sym, coin, setup, acct=acct, table=table, recs=recs)
+    if reject:
+        return reject
+    sig = {"symbol": sym, "entry": setup["entry"], "direction": setup["direction"],
+           "id": _sl.signal_id(sym), "candle_ts": setup["slot_ms"], "sl": setup["sl"],
+           "tp1": setup["target"], "tp2": None, "confidence_score": setup["strength"]}
+    # Per-scalp size; the scalp book's exposure cap was checked above, so the
+    # 4h book's cap must not apply to it.
+    cfg = {**_he.caps(), "notional_usd": plan["notional_usd"], "leverage": plan["leverage"],
+           "max_exposure_usd": 1e12, "max_orders_per_run": 1_000}
+    out = _ax.execute([sig], account_state=acct, table=table, cfg=cfg, open_orders=orders)
+    r = (out.get("results") or [{}])[0]
+    if not r.get("ok"):
+        return {"symbol": sym, "ok": False, "reason": r.get("reason"),
+                **{k: r[k] for k in ("drift_pct", "allowed_pct") if r.get(k) is not None}}
+    px = r.get("mark_px") or setup["entry"]
+    recs[coin] = {"coin": coin, "symbol": sym, "direction": setup["direction"], "limit": px,
+                  "sl": setup["sl"], "target": setup["target"], "placed_ms": now_ms,
+                  "slot_ms": setup["slot_ms"], "size": r.get("size"),
+                  "notional_usd": r.get("notional_usd") or plan["notional_usd"],
+                  "leverage": plan["leverage"], "state": "open", "opened_ms": now_ms,
+                  "fill_price": px, "kind": "engine",
+                  **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
+    import scalp_store as _ss
+    _ss.placed(_deploy_env(), recs[coin], rr=setup.get("rr"))
+    return {"symbol": sym, "ok": True, "state": "open", "notional_usd": recs[coin]["notional_usd"],
+            "leverage": plan["leverage"],
+            **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
+
+
+def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
+    """An opposite engine signal on a running scalp: close it at market,
+    cancel its stop / target, record its result, then open the new direction
+    (HL holds one net position per coin, so both can't run). Never raises."""
+    import scalp_live as _sl
+    import hl_account as _ha
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import scalp_store as _ss
+    sym, coin = rec["symbol"], rec["coin"]
+    cloid = _hx.client_order_id(_sl.signal_id(sym), "flip", setup["slot_ms"])
+    try:
+        ok, _d = _he.order_accepted(_he.send_market_close(coin, cloid))
+    except Exception:
+        ok = False
+    if not ok:
+        return {"symbol": sym, "ok": False, "reason": "FLIP_CLOSE_FAILED"}
+    for o in [o for o in orders if str(o.get("coin")) == coin and o.get("reduceOnly")]:
+        try:
+            _he.cancel_order(coin, o.get("oid"))
+        except Exception:
+            pass
+    try:
+        fills = _ha._post_info({"type": "userFills", "user": _ha.account_address()}) or []
+    except Exception:
+        fills = []
+    res = _sl.settle(fills, rec) or {}
+    _ss.closed(_deploy_env(), rec, at_ms=now_ms, result={**res, "exit_reason": "other"})
+    recs.pop(coin, None)
+    closed = (f"closed {sym} {rec['direction']} on an opposite signal"
+              + (f" (${res['pnl_usd']:+.2f})" if res.get("pnl_usd") is not None else ""))
+    # The account snapshot still shows the old position and its exits.
+    acct["open_positions"] = [p for p in acct.get("open_positions") or []
+                              if str(p.get("coin")) != coin]
+    rest = [o for o in orders if str(o.get("coin")) != coin]
+    r = _scalp_market(setup, acct=acct, table=table, recs=recs, now_ms=now_ms, orders=rest)
+    if not r.get("ok"):
+        return {**r, "note": closed + f"; the {setup['direction']} did not open ({r.get('reason')})"}
+    note = (closed + f"; opened {sym} {setup['direction']} {setup['strength']:g} at market "
+            f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, ${_sl.risk_usd():g} risk)")
+    return {**r, "flipped": True, "note": note}
+
+
+def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
+    """A fresh signal the same way on a running scalp: move its target, and
+    its stop only if tighter (scalp_live.plan_update). New orders first, then
+    the old ones cancelled, so the position is never without a stop. Never
+    raises."""
+    import scalp_live as _sl
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    sym, coin = rec["symbol"], rec["coin"]
+    try:
+        mark = float((mids or {}).get(coin))
+    except (TypeError, ValueError):
+        mark = None
+    plan = _sl.plan_update(rec, setup, positions, orders, mark)
+    if plan is None:
+        return {"symbol": sym, "ok": False, "reason": "POSITION_EXISTS"}
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    exit_buy = plan["side"] != "long"
+    sid, ts = _sl.signal_id(sym), setup["slot_ms"]
+    done = []
+
+    def _px(v):
+        return _hm.round_price(v, sz)
+    try:
+        if plan["new_sl"] is not None:
+            ok, _d = _he.order_accepted(_he.send_stop(
+                coin, exit_buy, plan["size"], _px(plan["new_sl"]),
+                cloid=_hx.client_order_id(sid, "sl-upd", ts)))
+            if ok:
+                for oid in plan["cancel_sl"]:
+                    try:
+                        _he.cancel_order(coin, oid)
+                    except Exception:
+                        pass
+                done.append(f"SL {plan['cur_sl']:,.6g} → {plan['new_sl']:,.6g}"
+                            if plan["cur_sl"] else f"SL → {plan['new_sl']:,.6g}")
+                rec["sl"] = _px(plan["new_sl"])
+        if plan["new_tp"] is not None:
+            ok, _d = _he.order_accepted(_he.send_take_profit(
+                coin, exit_buy, plan["size"], _px(plan["new_tp"]),
+                cloid=_hx.client_order_id(sid, "tp-upd", ts)))
+            if ok:
+                for oid in plan["cancel_tp"]:
+                    try:
+                        _he.cancel_order(coin, oid)
+                    except Exception:
+                        pass
+                done.append(f"TP {plan['cur_tp']:,.6g} → {plan['new_tp']:,.6g}"
+                            if plan["cur_tp"] else f"TP → {plan['new_tp']:,.6g}")
+                rec["target"] = _px(plan["new_tp"])
+    except Exception as exc:
+        return {"symbol": sym, "ok": False, "reason": "UPDATE_FAILED", "error": type(exc).__name__}
+    if not done:
+        return {"symbol": sym, "ok": False, "reason": "UPDATE_REJECTED"}
+    import scalp_store as _ss
+    _ss.levels(_deploy_env(), rec)
+    kept = (" (stop kept: the new one would widen it)" if plan.get("kept_sl") is not None
+            and plan["new_sl"] is None else "")
+    note = f"updated {sym} {rec['direction']}: " + ", ".join(done) + kept
+    return {"symbol": sym, "ok": True, "updated": ", ".join(done), "note": note}
+
+
+def _scalp_place(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
+    """One resting limit entry with its stop + target attached. Never raises."""
+    import scalp_live as _sl
+    import hl_account as _ha
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    sym = setup["symbol"]
+    coin = _hm.resolve_coin(sym, table)
+    if coin is None:
+        return {"symbol": sym, "ok": False, "reason": "SYMBOL_NOT_ON_HYPERLIQUID"}
+    sid, ts = _sl.signal_id(sym), setup["slot_ms"]
+    cloid = _hx.client_order_id(sid, "open", ts)
+    known = _ha.order_known(cloid)
+    if known is not False:
+        return {"symbol": sym, "ok": False,
+                "reason": "ALREADY_PLACED" if known else "ORDER_STATUS_UNAVAILABLE"}
+    # Risk sizing: $SCALP_RISK_USD lost at the stop, leverage capped by the
+    # coin's market-cap tier and Hyperliquid's own maximum; the scalp book's
+    # own exposure cap (the 4h book keeps HL_MAX_EXPOSURE_USD).
+    plan, reject = _scalp_size(sym, coin, setup, acct=acct, table=table, recs=recs)
+    if reject:
+        return reject
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    px, sl, tp = (_hm.round_price(v, sz) for v in (setup["limit"], setup["sl"], setup["target"]))
+    try:
+        resp = _he.send_limit_open_with_tpsl(
+            coin, setup["direction"] == "LONG", plan["size"], px, sl, tp, cloid=cloid,
+            sl_cloid=_hx.client_order_id(sid, "sl", ts), tp_cloid=_hx.client_order_id(sid, "tp1", ts),
+            leverage=plan["leverage"])
+    except Exception as exc:
+        return {"symbol": sym, "ok": False, "reason": "SEND_FAILED", "error": type(exc).__name__}
+    st = _he.entry_status(resp)
+    if st["state"] == "error":
+        return {"symbol": sym, "ok": False, "reason": "SEND_REJECTED", "detail": st.get("error")}
+    recs[coin] = {"coin": coin, "symbol": sym, "direction": setup["direction"], "limit": px,
+                  "sl": sl, "target": tp, "oid": st.get("oid"), "placed_ms": now_ms,
+                  "slot_ms": ts, "size": plan["size"], "notional_usd": plan["notional_usd"],
+                  "leverage": plan["leverage"],
+                  "state": "open" if st["state"] == "filled" else "pending",
+                  **({"opened_ms": now_ms, "fill_price": st.get("avg_px")}
+                     if st["state"] == "filled" else {})}
+    import scalp_store as _ss
+    _ss.placed(_deploy_env(), recs[coin], rr=setup.get("rr"))
+    return {"symbol": sym, "ok": True, "state": recs[coin]["state"],
+            "notional_usd": plan["notional_usd"], "leverage": plan["leverage"]}
+
+
+def _scalp_hl(setups, now_ms) -> dict:
+    """Cancel stale entries, promote filled ones, time out old scalps, then
+    place new limit entries (testnet only). Never raises."""
+    import scalp_live as _sl
+    import hl_account as _ha
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    if not _sl.auto_enabled():
+        return {"ran": False, "reason": "HL_SCALP_AUTO_EXECUTE_OFF"}
+    if _ha._env() != "testnet":
+        return {"ran": False, "reason": "TESTNET_ONLY"}
+    if not _hx.arm_status()["armed"]:
+        return {"ran": False, "reason": "DISARMED"}
+    out: dict = {"ran": True}
+    try:
+        with _hl_execute_lock:
+            acct = _ha.account_state()
+            try:
+                acct["spot_usdc_usd"] = _ha.spot_usdc()
+            except Exception:
+                pass
+            positions = acct.get("open_positions") or []
+            try:
+                orders = _ha._post_info({"type": "frontendOpenOrders",
+                                         "user": _ha.account_address()}) or []
+            except Exception:
+                orders = None
+            recs = _scalp_records()
+            mids = _ha.all_mids() if recs else {}
+            act = _sl.sweep(recs, positions, orders, mids, now_ms=now_ms)
+            import scalp_store as _ss
+            env = _deploy_env()
+            fills = None
+            if act["close"] or act["drop"]:
+                try:
+                    fills = _ha._post_info({"type": "userFills",
+                                            "user": _ha.account_address()}) or []
+                except Exception:
+                    fills = None
+            notes = []
+            for coin in act["promote"]:
+                px = next((p.get("entry_px") for p in positions
+                           if str(p.get("coin")) == coin), None)
+                recs[coin].update(state="open", opened_ms=now_ms)
+                _ss.filled(env, recs[coin], at_ms=now_ms, price=px)
+                notes.append(f"filled {recs[coin]['symbol']} {recs[coin]['direction']}")
+            for coin in act["cancel"]:
+                rec = recs[coin]
+                oids = [rec.get("oid")] + [o.get("oid") for o in orders or []
+                                           if str(o.get("coin")) == coin and o.get("reduceOnly")]
+                for oid in oids:
+                    try:
+                        _he.cancel_order(coin, oid)
+                    except Exception:
+                        pass
+                recs.pop(coin, None)
+                _ss.cancelled(env, rec, reason="not filled in 2h or price through the stop")
+                notes.append(f"cancelled {rec['symbol']} (not filled in 2h or through its stop)")
+            for coin in act["close"]:
+                rec = recs[coin]
+                cloid = _hx.client_order_id(_sl.signal_id(rec["symbol"]), "timeout",
+                                            rec.get("opened_ms"))
+                try:
+                    ok, _detail = _he.order_accepted(_he.send_market_close(coin, cloid))
+                except Exception:
+                    ok = False
+                if ok:
+                    recs.pop(coin, None)
+                    res = _sl.settle(fills, rec, timed_out=True) if fills is not None else None
+                    _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "timeout"})
+                    notes.append(f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h"
+                                 + (f" (${res['pnl_usd']:+.2f})" if res else ""))
+            for coin in act["drop"]:
+                rec = recs.pop(coin, None) or {}
+                res = _sl.settle(fills, rec) if (fills is not None and rec) else None
+                if res and res.get("exit_price") is not None:
+                    _ss.closed(env, rec, at_ms=now_ms, result=res)
+                    notes.append(f"{rec['symbol']} closed at {res['exit_reason']} "
+                                 f"(${res['pnl_usd']:+.2f})")
+                elif rec.get("state") == "open":
+                    _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "other"})
+                elif rec.get("state") == "pending" and fills is not None:
+                    _ss.cancelled(env, rec, reason="gone from HL without a fill")
+            table = _hm.asset_table()
+            held = {str(p.get("coin") or "").upper() for p in positions}
+            results = []
+            for s in setups:
+                coin = (_hm.resolve_coin(s["symbol"], table) or "").upper()
+                rec = next((r for c, r in recs.items() if c.upper() == coin), None)
+                if rec is not None and rec.get("state") == "open" and \
+                        s.get("kind") == "engine" and s["direction"] != rec["direction"]:
+                    r = _scalp_flip(rec, s, acct=acct, table=table, recs=recs,
+                                    orders=orders or [], now_ms=now_ms)
+                    results.append(r)
+                    if r.get("note"):
+                        notes.append(r["note"])
+                    continue
+                if rec is not None and rec.get("state") == "open":
+                    r = _scalp_update(rec, s, positions=positions, orders=orders or [],
+                                      mids=mids, table=table)
+                    results.append(r)
+                    if r.get("note"):
+                        notes.append(r["note"])
+                    continue
+                if _sl.room(recs) <= 0:
+                    break
+                if coin in held or coin in {c.upper() for c in recs}:
+                    results.append({"symbol": s["symbol"], "ok": False, "reason": "POSITION_EXISTS"})
+                    continue
+                try:
+                    place = _scalp_market if s.get("kind") == "engine" else _scalp_place
+                    r = place(s, acct=acct, table=table, recs=recs, now_ms=now_ms,
+                              orders=orders)
+                except Exception as exc:
+                    r = {"symbol": s["symbol"], "ok": False, "reason": "ERROR",
+                         "error": type(exc).__name__}
+                results.append(r)
+                if r.get("ok") and s.get("kind") == "engine":
+                    notes.append(f"opened {s['symbol']} {s['direction']} {s['strength']:g} at "
+                                 f"market (${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
+                                 f"${_sl.risk_usd():g} risk)")
+                elif r.get("ok"):
+                    notes.append(f"placed {s['symbol']} {s['direction']} limit {s['limit']:,.6g} "
+                                 f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
+                                 f"${_sl.risk_usd():g} risk)")
+            _scalp_save(recs)
+        out.update({"results": results, "notes": notes, "held": sorted(held),
+                    "open": {c: r.get("state") for c, r in recs.items()}})
+        if notes:
+            _scalp_private("🪤 scalp book (testnet): " + "; ".join(notes))
+    except Exception as exc:
+        out.update({"ok": False, "error": type(exc).__name__})
+    return out
+
+
+def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
+    """One 15m pass of the sweep -> FVG scalp book: find setups completed on
+    the latest close with the 1H read agreeing, alert them privately, run the
+    HL book. Never raises."""
+    import scalp_live as _sl
+    if not _sl.enabled():
+        return {"ok": True, "ran": False, "reason": "SCALP_DISABLED"}
+    now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    fetch_fn = fetch_fn or (lambda sym, iv: _sl.fetch_closed(SYMBOLS[sym], now_ms, interval=iv,
+                                                            count=245 if iv == "15m" else 241))
+    read_fn = read_fn or _scalp_engine_read
+
+    def _one(sym):
+        try:
+            m15 = fetch_fn(sym, "15m")
+            if _sl.mode() == "blend":
+                # The 15m engine triggers; sweep -> FVG and the 1H read only add
+                # (or, the 1H against, take) strength — no requirement.
+                s, why = _sl.blend(m15, sym, read_fn, now_ms=now_ms,
+                                   h1_fn=lambda: fetch_fn(sym, "1h"))
+                if why:
+                    rejected.append(why)
+                return s
+            s = _sl.new_setup(m15, sym, now_ms=now_ms)
+            if s is None:
+                return None
+            return s if _sl.confirmed(s, m15, lambda: fetch_fn(sym, "1h"), read_fn) else None
+        except Exception:
+            return None
+
+    rejected: list = []
+    syms = [s for s in _sl.SYMBOLS if s in SYMBOLS]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        found = [x for x in ex.map(_one, syms) if x]
+    found.sort(key=lambda x: -x["rr"])
+    new = []
+    for x in found:
+        try:
+            import kv as _kv
+            if _kv.claim(f"scalp:sig:{_deploy_env()}:{x['symbol']}:{x['slot_ms']}",
+                         ttl_seconds=2 * 86_400):
+                new.append(x)
+        except Exception:
+            pass
+    if new:
+        _scalp_private(_sl.message(new, auto=_sl.auto_enabled()))
+    hl = _scalp_hl(new, now_ms)
+    label = [f"{x['symbol']} {x['direction']} {x['strength']:g} R:R {x['rr']:g}"
+             if x.get("kind") == "engine" else f"{x['symbol']} {x['direction']} R:R {x['rr']:g}"
+             for x in found]
+    _kv_append_json(f"scalp:runs:{_deploy_env()}", {
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "setups": label,
+        **({"rejected": sorted(rejected)} if rejected else {}),
+        **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held") if hl.get(k)}},
+        cap=96)
+    return {"ok": True, "ran": True, "coins": len(syms), "signals": label,
+            "rejected": sorted(rejected),
+            "new": len(new), "scalp_hl": hl}
+
+
+@app.post("/api/cron/scalp")
+def api_cron_scalp():
+    """The 15m scalp book (scalp_live), every 15 minutes from the scheduler.
+    Internal: CRON_SECRET or the scheduler token."""
+    if not (_cron_authorized() or _scheduler_token_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    return jsonify(_scalp_run())
+
+
+def _scalp_history() -> dict:
+    import scalp_store as _ss
+    rows = _ss.recent(_deploy_env(), days=14)
+    return {"summary_14d": _ss.summary(rows), "history": rows}
+
+
+@app.get("/api/hl/scalp")
+def api_hl_scalp():
+    """The scalp book: the scalps it holds and its last runs. Admin only."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    import scalp_live as _sl
+    return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
+                    "mode": _sl.mode(), "min_strength": _sl.min_strength(),
+                    "setup": ("score = 15m engine + 10 for a sweep -> FVG the same way "
+                              "+/- 5 for the 1H read with / against; 75+ trades. Stop: the "
+                              "last swing (0.2-3% away) else 1.5 ATR; target: the next "
+                              f"swing if {_sl.target_r():g}R+ away else a "
+                              f"{_sl.target_r():g}R target"
+                              + (f"; R:R filter {_sl.min_rr():g}" if _sl.min_rr() else "")
+                              if _sl.mode() == "blend"
+                              else "sweep -> FVG, gap top, R:R 1.5+"),
+                    "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
+                    "max_open": _sl.max_open(),
+                    "confirm": (_sl.confirm_mode() if _sl.mode() == "sweep_fvg"
+                                else "none: the 1H read is +/-5 points"),
+                    "sizing": {"risk_usd": _sl.risk_usd(), "margin_usd": _sl.margin_usd(),
+                               "max_exposure_usd": _sl.max_exposure_usd(),
+                               "leverage_by_market_cap": "mega 20x, large 10x, mid 7x, "
+                                                         "small 5x, micro 3x (HL max caps)"},
+                    "open": _scalp_records(),
+                    **_scalp_history(),
+                    "runs": _kv_json_list(f"scalp:runs:{_deploy_env()}")[-48:]})
+
+
 def _hl_low_vol_filter(signals, floor):
     """(kept, skipped): v56 drops a signal whose strength clears the floor by
     less than the low-volatility dock while the coin's 1H ATR is under 0.8x
@@ -5335,7 +5941,7 @@ def _hl_slot_run_key(slot_start):
     return f"hlslot:{_deploy_env()}:{slot_start.isoformat()}"
 
 
-def _kv_append_json(key, entry):
+def _kv_append_json(key, entry, cap=None):
     """Append `entry` to the JSON list at `key` (newest last, capped). Never raises."""
     try:
         import kv as _kv
@@ -5344,7 +5950,7 @@ def _kv_append_json(key, entry):
             cur = cur if isinstance(cur, list) else []
         except (TypeError, ValueError):
             cur = []
-        cur = (cur + [entry])[-HL_RUN_LOG_MAX:]
+        cur = (cur + [entry])[-(cap or HL_RUN_LOG_MAX):]
         _kv.set_value(key, json.dumps(cur), ttl_seconds=HL_RUN_LOG_TTL)
     except Exception:                                    # noqa: BLE001
         pass
@@ -5375,6 +5981,34 @@ def _record_hl_signal_runs(signals, results, skipped):
         else:
             e.update({k: sig.get(k) for k in ("weekly_lean", "lean_bear", "lean_bull")})
         _kv_append_json(_hl_signal_run_key(sig), e)
+
+
+def _hl_boost_key(slot_start):
+    return f"hlboost:{_deploy_env()}:{slot_start.isoformat()}"
+
+
+def _record_hl_boosts(slot_start, extras):
+    """Keep which HL extras a boost lifted this slot ({SYMBOL: "+5 daily
+    momentum close"}), 14 days, for /api/hl/decisions. Never raises."""
+    try:
+        marks = {str(r.get("symbol")).upper(): f"+{r['hl_boost']:g} {r.get('hl_boost_reason')}"
+                 for r in extras or [] if r.get("hl_boost")}
+        if marks:
+            import kv as _kv
+            _kv.set_value(_hl_boost_key(slot_start), json.dumps(marks),
+                          ttl_seconds=14 * 86_400)
+    except Exception:
+        pass
+
+
+def _hl_boosts(slot_start) -> dict:
+    try:
+        import kv as _kv
+        raw = _kv.get_value(_hl_boost_key(slot_start))
+        data = json.loads(raw) if raw else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def _record_hl_slot_run(out, now_sgt=None):
@@ -5509,12 +6143,14 @@ def _hl_decisions(days=10, min_strength=None):
                 runs=_kv_json_list(_hl_signal_run_key(sig)),
                 stale_alert=_oa.was_sent(f"stale:{sig.get('id')}:{sig.get('candle_ts')}"),
                 slot_runs=slot_runs, order=order)
+            boost = (_hl_boosts(_slot_start(gen_t.astimezone(_SGT))).get(
+                str(sig.get("symbol") or "").upper()) if gen_t else None)
             return {"published": gen_t.astimezone(_SGT).strftime("%b %d %-I%p SGT")
                     if gen_t else gen, "_t": gen_t.isoformat() if gen_t else str(gen),
                     "symbol": sig.get("symbol"), "direction": sig.get("direction"),
                     "strength": sig.get("confidence_score"),
                     "row": kinds.get(r.get("strategy_name"), r.get("strategy_name")),
-                    "hl": text, "code": code}
+                    "hl": text, "code": code, **({"boost": boost} if boost else {})}
 
         rows = [r for r in rows if (_ax._f(r.get("confidence_score")) or 0) >= floor]
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -5843,7 +6479,8 @@ _SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/mon
                     "/api/cron/daily", "/api/patterns/alert",
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
-                    "/api/research/ml/collect", "/api/research/ml/label")
+                    "/api/research/ml/collect", "/api/research/ml/label",
+                    "/api/cron/scalp")
 
 
 def _scheduler_token_ok() -> bool:
