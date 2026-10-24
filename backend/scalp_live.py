@@ -43,11 +43,12 @@ M15_MS = sweep_fvg.M15
 H1_MS = 3_600_000
 H1_WINDOW = 240
 SYMBOLS = ("BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "AVAX", "LINK", "SUI",
-           "HYPE", "TRX", "AAVE")
+           "HYPE", "TRX", "AAVE", "TAO", "ONDO", "INJ", "FET", "XLM", "HBAR")
+MAX_BASIS = 0.01          # skip a coin whose HL price is >1% from the candles' price
 ENTRY_AT = "top"
 ENTRY_MS = sweep_fvg.ENTRY_BARS * M15_MS          # a limit is good for 2 hours
 DEFAULT_MAX_HOLD_HOURS = 12.0
-DEFAULT_MAX_OPEN = 12      # one per scalp coin: in effect no cap (owner's call)
+DEFAULT_MAX_OPEN = len(SYMBOLS)   # one per scalp coin: in effect no cap (owner's call)
 ENTRY_MATCH = 0.02        # a held position is "the scalp" within 2% of its entry
 
 
@@ -100,7 +101,7 @@ def lev_cap(market_cap: Optional[float]) -> int:
     return 3
 
 
-DEFAULT_MAX_EXPOSURE_USD = 3000.0   # room for all 12 at ~$250 each
+DEFAULT_MAX_EXPOSURE_USD = 4500.0   # room for all 18 at ~$250 each
 
 
 def max_exposure_usd() -> float:
@@ -339,6 +340,25 @@ def fetch_closed(pair: str, now_ms: int, *, interval: str = "15m", count: int = 
 
 
 # ── setups ──────────────────────────────────────────────────────────────────
+
+def untradeable(symbol: str, close: Optional[float], table: Optional[Dict[str, Any]],
+                mids: Optional[Dict[str, Any]], resolve: Callable) -> Optional[str]:
+    """Why HL can't trade this coin right now, or None. Not listed on this HL
+    network; or its HL price more than MAX_BASIS from the candles' latest
+    close (HL TESTNET's thin books drift — HYPE sat ~2.4% off — so the stop
+    and target would land on the wrong prices). Unknown table / mids: None."""
+    if not table:
+        return None
+    coin = resolve(symbol, table)
+    if coin is None:
+        return "not on HL"
+    mid = _num((mids or {}).get(coin))
+    if mid and close:
+        gap = abs(mid - close) / close
+        if gap > MAX_BASIS:
+            return f"HL price {gap * 100:.1f}% off"
+    return None
+
 
 def signal_id(symbol: str) -> str:
     return f"scalp-{symbol.upper()}"

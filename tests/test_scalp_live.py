@@ -45,7 +45,7 @@ def clean_env(monkeypatch):
 
 def test_defaults_and_switches(monkeypatch):
     assert sl.enabled() and sl.auto_enabled()
-    assert sl.max_hold_ms() == 12 * H and sl.max_open() == 12 and sl.ENTRY_MS == 2 * H
+    assert sl.max_hold_ms() == 12 * H and sl.max_open() == 18 and sl.ENTRY_MS == 2 * H
     monkeypatch.setenv("HL_SCALP_AUTO_EXECUTE", "0")
     assert sl.enabled() and not sl.auto_enabled()
     monkeypatch.setenv("SCALP_ENABLED", "off")
@@ -104,7 +104,7 @@ def test_sweep_open_scalps():
 
 
 def test_room(monkeypatch):
-    assert sl.room({}) == 12 and sl.room({"A": {}, "B": {}, "C": {}}) == 9
+    assert sl.room({}) == 18 and sl.room({"A": {}, "B": {}, "C": {}}) == 15
     monkeypatch.setenv("SCALP_MAX_OPEN", "2")
     assert sl.room({}) == 2 and sl.room({"A": {}, "B": {}, "C": {}}) == 0
     monkeypatch.setenv("SCALP_MAX_OPEN", "4")
@@ -167,6 +167,11 @@ def app_mod(monkeypatch):
                         and (mem.__setitem__(k, "1") or True))
     sent = []
     monkeypatch.setattr(app, "_scalp_private", lambda t: sent.append(t))
+    import hl_meta
+
+    def _no_hl(env=None):                 # tests never reach a real HL network
+        raise RuntimeError("no HL in tests")
+    monkeypatch.setattr(hl_meta, "asset_table", _no_hl)
     app._sent = sent
     return app
 
@@ -377,7 +382,7 @@ def test_size_plan_risk_and_market_cap_leverage(monkeypatch):
     assert [sl.lev_cap(x) for x in (2e11, 5e10, 5e9, 5e8, 1e8, None)] == [20, 10, 7, 5, 3, 7]
     monkeypatch.setenv("SCALP_RISK_USD", "2")
     assert sl.size_plan(100, 99, 2e10)["notional_usd"] == 200.0
-    assert sl.max_exposure_usd() == 3000.0
+    assert sl.max_exposure_usd() == 4500.0
 
 
 def test_scalp_exposure_cap(app_mod, hl_fake, monkeypatch):
@@ -685,3 +690,28 @@ def test_add_averages_in_and_relays_the_exits(app_mod, hl_fake, monkeypatch):
     assert rec["adds"] == 1 and 144.17 < rec["limit"] < 144.5
     assert out["results"][0]["ok"] and any("added to AAVE SHORT" in t and "avg entry 144.17 →"
                                            in t for t in app_mod._sent)
+
+
+
+def test_untradeable_coins_are_skipped():
+    table = {"ETH": {}, "HYPE": {}}
+    resolve = lambda sym, t: sym if sym in t else None                      # noqa: E731
+    assert sl.untradeable("XRP", 2.4, table, {}, resolve) == "not on HL"
+    assert sl.untradeable("HYPE", 76.85, table, {"HYPE": "78.78"}, resolve) == "HL price 2.5% off"
+    assert sl.untradeable("ETH", 2400, table, {"ETH": "2410"}, resolve) is None    # 0.4%
+    assert sl.untradeable("ETH", 2400, None, None, resolve) is None              # unknown: trade
+    assert len(sl.SYMBOLS) == 18 and "TAO" in sl.SYMBOLS
+
+
+def test_run_skips_and_logs_untradeable(app_mod, monkeypatch):
+    import hl_account
+    import hl_meta
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {"ETH": {}})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"ETH": "103"})
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: {"ran": False})
+    h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
+    fetch = lambda sym, iv: padded() if iv == "15m" else h1                          # noqa
+    read = lambda w, tf, s: {"direction": "LONG", "strength": 80}                    # noqa
+    out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
+    assert out["skipped"]["XRP"] == "not on HL" and "ETH" not in out["skipped"]
+    assert out["signals"] and all(x.startswith("ETH ") for x in out["signals"])
