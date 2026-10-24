@@ -55,7 +55,7 @@ def test_defaults_and_switches(monkeypatch):
 def test_new_setup_only_on_the_latest_close():
     s = sl.new_setup(setup_bars(), "eth", now_ms=NOW)
     assert s == {"symbol": "ETH", "direction": "LONG", "limit": 103, "sl": s["sl"],
-                 "target": 110, "rr": s["rr"], "slot_ms": 19 * M}
+                 "target": 110, "rr": s["rr"], "slot_ms": 19 * M, "close": 105.5}
     assert s["sl"] < 99.5 and s["rr"] >= 1.5
     assert sl.new_setup(setup_bars(), "ETH", now_ms=NOW + M) is None          # stale
     more = setup_bars() + [b(19, 105, 105.5, 104.5, 105)]
@@ -220,6 +220,7 @@ def hl_fake(app_mod, monkeypatch):
     monkeypatch.setattr(hl_account, "account_address", lambda: "0xabc")
     monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"ETH": "100"})
     monkeypatch.setattr(hl_account, "order_known", lambda cloid, env=None: st["known"])
+    monkeypatch.setattr(hl_account, "candle_close", lambda coin, open_ms, **kw: st.get("hl_close"))
     monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
         s: {"sz_decimals": 2, "max_leverage": 10, "asset_id": i}
         for i, s in enumerate(("ETH", "SOL", "XRP", "ADA"))})
@@ -715,3 +716,41 @@ def test_run_skips_and_logs_untradeable(app_mod, monkeypatch):
     out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
     assert out["skipped"]["XRP"] == "not on HL" and "ETH" not in out["skipped"]
     assert out["signals"] and all(x.startswith("ETH ") for x in out["signals"])
+
+
+
+def test_levels_move_onto_hl_prices():
+    s = {"symbol": "BTC", "direction": "SHORT", "entry": 80000.0, "limit": 80000.0,
+         "sl": 80250.0, "target": 79625.0}
+    got = sl.on_hl_prices(s, 80200.0)                                     # HL 0.25% above
+    assert got["basis_pct"] == 0.25 and got["entry"] == 80200.0
+    assert abs(got["sl"] - 80250 * 1.0025) < 1e-6 and abs(got["target"] - 79625 * 1.0025) < 1e-6
+    assert sl.on_hl_prices(s, None) is s                                   # no HL close
+
+
+def test_engine_scalp_uses_the_hl_close(app_mod, hl_fake, monkeypatch):
+    import hl_autoexec
+    seen = {}
+
+    def execute(signals, **kw):
+        seen.update(sig=signals[0])
+        return {"results": [{"ok": True, "coin": "ETH", "mark_px": 103.3, "size": 2.4,
+                             "notional_usd": 247.9, "exits_ok": True}]}
+    monkeypatch.setattr(hl_autoexec, "execute", execute)
+    hl_fake["hl_close"] = 103.25                                           # HL 0.24% above
+    setup = {"kind": "engine", "symbol": "ETH", "direction": "LONG", "strength": 80.0,
+             "engine_strength": 80.0, "sweep_bonus": 0.0, "entry": 103.0, "limit": 103.0,
+             "sl": 102.6, "target": 104.0, "rr": 2.5, "slot_ms": 7 * M}
+    app_mod._scalp_hl([setup], H)
+    k = 103.25 / 103.0
+    assert seen["sig"]["entry"] == 103.25                                  # the guard's reference
+    assert abs(seen["sig"]["sl"] - 102.6 * k) < 1e-9 and abs(seen["sig"]["tp1"] - 104.0 * k) < 1e-9
+    assert any("levels moved +0.24% onto HL's price" in t for t in app_mod._sent)
+
+
+
+def test_sweep_setup_shifts_from_its_close_not_its_limit():
+    s = {"symbol": "ETH", "direction": "LONG", "limit": 103.0, "sl": 99.4, "target": 110.0,
+         "close": 105.5}
+    got = sl.on_hl_prices(s, 105.5 * 1.01)
+    assert abs(got["limit"] - 103.0 * 1.01) < 1e-9 and got["close"] == 105.5 * 1.01
