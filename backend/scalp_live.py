@@ -26,7 +26,7 @@ Sizing (size_plan): SCALP_RISK_USD ($1) is lost at the stop, so a tight stop
 means a bigger position; leverage = that position over SCALP_MARGIN_USD ($25),
 capped by market cap (mega 20x, large 10x, mid 7x, small 5x, micro 3x) and by
 Hyperliquid's max. The scalp book's total is capped at SCALP_MAX_EXPOSURE_USD
-($600), apart from the 4h book's cap.
+($3,000), apart from the 4h book's cap.
 
 HL_SCALP_AUTO_EXECUTE=0 stops the orders (setups still go to the private
 chat); SCALP_ENABLED=0 stops everything. Refuses to trade unless the HL
@@ -47,7 +47,7 @@ SYMBOLS = ("BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "AVAX", "LINK", "SUI",
 ENTRY_AT = "top"
 ENTRY_MS = sweep_fvg.ENTRY_BARS * M15_MS          # a limit is good for 2 hours
 DEFAULT_MAX_HOLD_HOURS = 12.0
-DEFAULT_MAX_OPEN = 2
+DEFAULT_MAX_OPEN = 12      # one per scalp coin: in effect no cap (owner's call)
 ENTRY_MATCH = 0.02        # a held position is "the scalp" within 2% of its entry
 
 
@@ -100,7 +100,7 @@ def lev_cap(market_cap: Optional[float]) -> int:
     return 3
 
 
-DEFAULT_MAX_EXPOSURE_USD = 600.0
+DEFAULT_MAX_EXPOSURE_USD = 3000.0   # room for all 12 at ~$250 each
 
 
 def max_exposure_usd() -> float:
