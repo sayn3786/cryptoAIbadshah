@@ -79,6 +79,12 @@ def _update(env: str, rec: Dict[str, Any], sets: str, params: Dict[str, Any]) ->
     return bool(_run(work)) if rec.get("slot_ms") is not None else False
 
 
+def levels(env: str, rec: Dict[str, Any]) -> bool:
+    """A running scalp's stop / target moved by a fresh signal."""
+    return _update(env, rec, "stop_price = :sl, target_price = :tp",
+                   {"sl": rec.get("sl"), "tp": rec.get("target")})
+
+
 def filled(env: str, rec: Dict[str, Any], *, at_ms: int, price: Optional[float]) -> bool:
     return _update(env, rec, "status = 'OPEN', filled_at = :at, fill_price = :px",
                    {"at": _ts(at_ms), "px": price})

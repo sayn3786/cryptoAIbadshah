@@ -256,6 +256,13 @@ def send_stop(coin: str, is_buy_exit: bool, size: float, px: float, *,
     return _send_trigger(_exchange(env), coin, is_buy_exit, size, px, "sl", cloid)
 
 
+def send_take_profit(coin: str, is_buy_exit: bool, size: float, px: float, *,
+                     cloid: Optional[str] = None, env: Optional[str] = None) -> Any:
+    """A single reduce-only resting limit take-profit (the scalp book moving a
+    running scalp's target)."""
+    return _send_limit_tp(_exchange(env), coin, is_buy_exit, size, px, cloid)
+
+
 def cancel_order(coin: str, oid: int, env: Optional[str] = None) -> Any:
     """Cancel one resting order by exchange order id."""
     return _exchange(env).cancel(coin, int(oid))

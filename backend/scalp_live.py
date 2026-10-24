@@ -484,6 +484,68 @@ def sweep(records: Dict[str, Dict[str, Any]], positions: Sequence[Dict[str, Any]
     return out
 
 
+def _num(x: Any) -> Optional[float]:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
+                positions: Sequence[Dict[str, Any]], orders: Sequence[Dict[str, Any]],
+                mark: Optional[float]) -> Optional[Dict[str, Any]]:
+    """A fresh signal the same way on a RUNNING scalp: its new levels for the
+    open position. The target always follows the new signal; the stop moves
+    only when the new one is TIGHTER (closer to price) — never wider, because
+    the size was set for the original $ risk and the 1R break-even must not be
+    undone. Pure. None when nothing should change, else {"side", "size",
+    "new_sl", "new_tp" (each None if unchanged), "cancel_sl", "cancel_tp",
+    "kept_sl" (a wider new stop that was refused)}."""
+    if rec.get("state") != "open" or setup.get("direction") != rec.get("direction") or mark is None:
+        return None
+    pos = next((p for p in positions or [] if str(p.get("coin")) == rec["coin"]), None)
+    side = "long" if rec["direction"] == "LONG" else "short"
+    if not pos or pos.get("side") != side:
+        return None
+    size = abs(_num(pos.get("size")) or 0)
+    mine = [o for o in orders or [] if isinstance(o, dict) and str(o.get("coin")) == rec["coin"]
+            and o.get("reduceOnly")]
+    stops, tps = [], []
+    for o in mine:
+        ot = str(o.get("orderType") or "").lower()
+        trig = _num(o.get("triggerPx"))
+        if o.get("isTrigger") and (ot.startswith("stop") or (not ot.startswith("take") and trig
+                                   and ((trig < mark) if side == "long" else (trig > mark)))):
+            stops.append(o)
+        else:
+            tps.append(o)
+    long = side == "long"
+    cur_sl = None
+    if stops:
+        pxs = [_num(o.get("triggerPx")) for o in stops if _num(o.get("triggerPx"))]
+        cur_sl = (max(pxs) if long else min(pxs)) if pxs else None
+    new_sl, kept_sl = float(setup["sl"]), None
+    if not ((new_sl < mark) if long else (new_sl > mark)):
+        new_sl = None                                      # already through the market
+    elif cur_sl is not None and ((new_sl <= cur_sl) if long else (new_sl >= cur_sl)):
+        kept_sl, new_sl = new_sl, None                     # wider (or equal): keep the stop
+    new_tp = float(setup["target"])
+    cur_tp = None
+    if tps:
+        o = tps[0]
+        cur_tp = _num(o.get("limitPx")) if not o.get("isTrigger") else _num(o.get("triggerPx"))
+    if not ((new_tp > mark) if long else (new_tp < mark)):
+        new_tp = None
+    elif cur_tp and abs(new_tp - cur_tp) / cur_tp < 0.0005:
+        new_tp = None                                      # the same target
+    if new_sl is None and new_tp is None:
+        return None
+    return {"side": side, "size": size, "new_sl": new_sl, "new_tp": new_tp,
+            "cur_sl": cur_sl, "cur_tp": cur_tp, "kept_sl": kept_sl,
+            "cancel_sl": [o.get("oid") for o in stops] if new_sl is not None else [],
+            "cancel_tp": [o.get("oid") for o in tps] if new_tp is not None else []}
+
+
 def room(records: Dict[str, Any]) -> int:
     return max(0, max_open() - len(records or {}))
 
