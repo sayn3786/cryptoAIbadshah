@@ -82,3 +82,14 @@ def test_endpoint_auth_and_no_caller_scope(monkeypatch):
     assert r.headers['Cache-Control']=='no-store'
     monkeypatch.delenv('EXECUTION_PILOT_TOKEN')
     assert c.post(path,headers=headers).status_code==401
+
+
+def test_cloud_worker_contract():
+    import shutil
+    import subprocess
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node required for Worker contract tests')
+    subprocess.run([node, str(Path(__file__).resolve().parents[1]/
+                             'cloudflare/execution-pilot/worker.test.mjs')],
+                   check=True, capture_output=True, text=True, timeout=10)

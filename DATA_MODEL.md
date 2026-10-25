@@ -699,6 +699,15 @@ SELECT environment, count(*), max(generated_at) FROM signals GROUP BY environmen
 | `database/migrations/` | `001`–`008`, plus review-only rollbacks. |
 | `database/migrate.py` | Explicit CLI runner. Never automatic. |
 
+Migration `024` adds `execution_pilot_slots`, the operational admission ledger
+for the disabled-by-default, testnet-only cloud observation pilot. The primary
+key is `(pilot_id, slot)`; slots are bounded to 1–96 and run IDs are unique.
+`STARTED` claims commit before venue reads; evidence and `COMPLETE` commit
+together. `FAILED`, unresolved claims, and missing earlier slots block further
+collection. This table is mutable operational state, not an outcome label;
+the linked execution evidence remains append-only. Apply it explicitly before
+enabling the dedicated pilot flag. See `cloudflare/execution-pilot/README.md`.
+
 Migration `020` adds the opt-in append-only execution evidence ledger:
 `execution_evidence_runs`, `execution_fill_evidence`, and `execution_order_links`.
 It must run before enabling collector writes. These observations are quarantined,
