@@ -4678,6 +4678,30 @@ def api_ml_research_collect():
     return _ml_research_request("collect")
 
 
+@app.post("/api/research/execution-pilot/tick")
+def api_execution_pilot_tick():
+    def reply(body, status=200):
+        response = jsonify(body)
+        response.headers['Cache-Control'] = 'no-store'
+        return response, status
+    if not _execution_pilot_token_ok():
+        return reply({'ok': False, 'error_code': 'FORBIDDEN'}, 401)
+    if request.get_data():
+        return reply({'ok': False, 'error_code': 'BODY_NOT_ALLOWED'}, 400)
+    import execution_pilot_cloud
+    try:
+        result = execution_pilot_cloud.tick()
+        return reply(result)
+    except ValueError as exc:
+        allowed = {'PILOT_DISABLED', 'PRODUCTION_ONLY', 'INVALID_PILOT_ACCOUNT',
+                   'INVALID_PILOT_START', 'OUTSIDE_PILOT_WINDOW', 'PILOT_BUSY',
+                   'PILOT_REQUIRES_REVIEW'}
+        code = str(exc) if str(exc) in allowed else 'PILOT_FAILED'
+    except Exception:
+        code = 'PILOT_FAILED_OR_COMMIT_UNKNOWN'
+    return reply({'ok': False, 'error_code': code}, 503)
+
+
 @app.post("/api/research/ml/label")
 def api_ml_research_label():
     return _ml_research_request("label")
@@ -6493,6 +6517,12 @@ def _scheduler_token_ok() -> bool:
     return _token_ok("SCHEDULER_TOKEN", "x-scheduler-token")
 
 
+def _execution_pilot_token_ok():
+    return (request.method == 'POST'
+            and request.path == '/api/research/execution-pilot/tick'
+            and _token_ok('EXECUTION_PILOT_TOKEN', 'x-execution-pilot-token'))
+
+
 def _require_hl_admin():
     if not _hl_admin_ok():
         return jsonify({"error": "Unauthorized", "error_code": "FORBIDDEN"}), 401
@@ -6530,6 +6560,8 @@ def _enforce_dashboard_auth():
         return None
     # The narrow scheduler token opens only the scheduled-job paths (POST).
     if _scheduler_token_ok():
+        return None
+    if _execution_pilot_token_ok():
         return None
     u = _auth.current_user()
     if u is None:

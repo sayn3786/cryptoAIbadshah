@@ -1,0 +1,18 @@
+import {readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+const code=readFileSync(new URL('./worker.js',import.meta.url),'utf8');
+const {tick}=await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+const start=1800000000;
+const env={EXECUTION_PILOT_ENABLED:'true',EXECUTION_PILOT_START_UTC_SECONDS:String(start),EXECUTION_PILOT_TOKEN:'test'};
+let calls=0;
+const fetcher=async(url,init)=>{calls++;assert.equal(init.method,'POST');assert.equal(init.redirect,'error');assert.ok(url.endsWith('/execution-pilot/tick'));return {ok:true,status:200,json:async()=>({ok:true})};};
+assert.equal((await tick({},(start+960)*1000,fetcher)).skipped,'disabled');
+assert.equal((await tick(env,(start+87300)*1000,fetcher)).skipped,'outside_window');
+assert.equal((await tick(env,(start+86400+121)*1000,fetcher)).error_code,'MISSED_COLLECTION_WINDOW');
+assert.equal(calls,0);
+assert.equal((await tick(env,(start+960)*1000,fetcher)).ok,true);
+assert.equal(calls,1);
+calls=0;
+const failure=await tick(env,(start+960)*1000,async()=>{calls++;throw Error('secret');});
+assert.equal(failure.ok,false);assert.equal(calls,1);assert.ok(!JSON.stringify(failure).includes('secret'));
+console.log('pilot worker checks passed');
