@@ -43,11 +43,12 @@ M15_MS = sweep_fvg.M15
 H1_MS = 3_600_000
 H1_WINDOW = 240
 SYMBOLS = ("BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "AVAX", "LINK", "SUI",
-           "HYPE", "TRX", "AAVE")
+           "HYPE", "TRX", "AAVE", "TAO", "ONDO", "INJ", "FET", "XLM", "HBAR")
+MAX_BASIS = 0.01          # skip a coin whose HL price is >1% from the candles' price
 ENTRY_AT = "top"
 ENTRY_MS = sweep_fvg.ENTRY_BARS * M15_MS          # a limit is good for 2 hours
 DEFAULT_MAX_HOLD_HOURS = 12.0
-DEFAULT_MAX_OPEN = 12      # one per scalp coin: in effect no cap (owner's call)
+DEFAULT_MAX_OPEN = len(SYMBOLS)   # one per scalp coin: in effect no cap (owner's call)
 ENTRY_MATCH = 0.02        # a held position is "the scalp" within 2% of its entry
 
 
@@ -100,7 +101,7 @@ def lev_cap(market_cap: Optional[float]) -> int:
     return 3
 
 
-DEFAULT_MAX_EXPOSURE_USD = 3000.0   # room for all 12 at ~$250 each
+DEFAULT_MAX_EXPOSURE_USD = 4500.0   # room for all 18 at ~$250 each
 
 
 def max_exposure_usd() -> float:
@@ -340,6 +341,43 @@ def fetch_closed(pair: str, now_ms: int, *, interval: str = "15m", count: int = 
 
 # ── setups ──────────────────────────────────────────────────────────────────
 
+def untradeable(symbol: str, close: Optional[float], table: Optional[Dict[str, Any]],
+                mids: Optional[Dict[str, Any]], resolve: Callable) -> Optional[str]:
+    """Why HL can't trade this coin right now, or None. Not listed on this HL
+    network; or its HL price more than MAX_BASIS from the candles' latest
+    close (HL TESTNET's thin books drift — HYPE sat ~2.4% off — so the stop
+    and target would land on the wrong prices). Unknown table / mids: None."""
+    if not table:
+        return None
+    coin = resolve(symbol, table)
+    if coin is None:
+        return "not on HL"
+    mid = _num((mids or {}).get(coin))
+    if mid and close:
+        gap = abs(mid - close) / close
+        if gap > MAX_BASIS:
+            return f"HL price {gap * 100:.1f}% off"
+    return None
+
+
+def on_hl_prices(setup: Dict[str, Any], hl_close: Optional[float]) -> Dict[str, Any]:
+    """The setup moved onto HL's own prices: the signal was read on exchange
+    candles, but HL (testnet especially) can sit a little apart. Entry, stop
+    and target keep their % distances around HL's close of the same 15m
+    candle, so the stale-entry guard measures only the move since the close,
+    not the gap. Unchanged without an HL close. Pure."""
+    ref = float(setup.get("close") or setup.get("entry") or 0)
+    if not hl_close or not ref:
+        return setup
+    k = float(hl_close) / ref
+    out = {**setup, "basis_pct": round((k - 1) * 100, 3), "close": float(hl_close)}
+    for key in ("entry", "limit", "sl", "target"):
+        if out.get(key) is None:
+            continue
+        out[key] = float(hl_close) if float(out[key]) == ref else float(out[key]) * k
+    return out
+
+
 def signal_id(symbol: str) -> str:
     return f"scalp-{symbol.upper()}"
 
@@ -360,7 +398,8 @@ def new_setup(bars: Sequence[Dict[str, Any]], symbol: str, *,
         return None
     s = max(found, key=lambda x: x["rr"])
     return {"symbol": symbol.upper(), "direction": s["direction"], "limit": s["limit"],
-            "sl": s["sl"], "target": s["target"], "rr": s["rr"], "slot_ms": close_ms}
+            "sl": s["sl"], "target": s["target"], "rr": s["rr"], "slot_ms": close_ms,
+            "close": float(bars[-1]["close"])}
 
 
 def agrees(setup: Dict[str, Any], bars: Sequence[Dict[str, Any]], tf: str,
@@ -491,9 +530,58 @@ def _num(x: Any) -> Optional[float]:
         return None
 
 
+MAX_TPS = 3
+MIN_TP_USD = 10.0         # Hyperliquid's minimum order value
+
+
+def _floor(x: float, decimals: int) -> float:
+    from decimal import ROUND_DOWN, Decimal
+    return float(Decimal(str(x)).quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_DOWN))
+
+
+def tp_ladder(existing: Sequence[float], new: float, size: float, sz_decimals: int, *,
+              long: bool, mark: float) -> Optional[List[tuple]]:
+    """The take-profit ladder after a fresh target: [(price, size), ...]
+    nearest first. The new target is ADDED to the open TPs (1 -> 50/50,
+    2 -> 33/33/rest); at MAX_TPS the furthest moves out to it when it is
+    further. Equal shares of the current size, the last takes the remainder;
+    fewer levels when a share would fall under MIN_TP_USD. None = no change
+    (the same target, or a new one not beyond the mark). Pure."""
+    if not ((new > mark) if long else (new < mark)) or size <= 0:
+        return None
+    levels = sorted({float(x) for x in existing if x}, key=lambda p: abs(p - mark))
+    if any(abs(new - p) / p < 0.0005 for p in levels):
+        return None
+    if len(levels) >= MAX_TPS:
+        far = levels[-1]
+        if abs(new - mark) <= abs(far - mark):
+            return None
+        levels = levels[:-1]
+    levels = sorted(levels + [float(new)], key=lambda p: abs(p - mark))
+    return split(levels, size, sz_decimals, mark)
+
+
+def split(levels: Sequence[float], size: float, sz_decimals: int,
+          mark: float) -> Optional[List[tuple]]:
+    """Equal shares of `size` over the take-profit levels (nearest first; the
+    last takes the remainder), dropping the nearest when a share would fall
+    under MIN_TP_USD. Pure."""
+    levels = sorted((float(x) for x in levels if x), key=lambda p: abs(p - mark))
+    if not levels or size <= 0:
+        return None
+    while len(levels) > 1 and _floor(size / len(levels), sz_decimals) * mark < MIN_TP_USD:
+        levels = levels[1:]                                # drop the nearest: keep the reach
+    share = _floor(size / len(levels), sz_decimals)
+    if share <= 0:
+        return [(levels[-1], size)]
+    out = [(p, share) for p in levels[:-1]]
+    out.append((levels[-1], round(size - share * (len(levels) - 1), sz_decimals)))
+    return out
+
+
 def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
                 positions: Sequence[Dict[str, Any]], orders: Sequence[Dict[str, Any]],
-                mark: Optional[float]) -> Optional[Dict[str, Any]]:
+                mark: Optional[float], sz_decimals: int = 4) -> Optional[Dict[str, Any]]:
     """A fresh signal the same way on a RUNNING scalp: its new levels for the
     open position. The target always follows the new signal; the stop moves
     only when the new one is TIGHTER (closer to price) — never wider, because
@@ -529,21 +617,86 @@ def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
         new_sl = None                                      # already through the market
     elif cur_sl is not None and ((new_sl <= cur_sl) if long else (new_sl >= cur_sl)):
         kept_sl, new_sl = new_sl, None                     # wider (or equal): keep the stop
-    new_tp = float(setup["target"])
-    cur_tp = None
-    if tps:
-        o = tps[0]
-        cur_tp = _num(o.get("limitPx")) if not o.get("isTrigger") else _num(o.get("triggerPx"))
-    if not ((new_tp > mark) if long else (new_tp < mark)):
-        new_tp = None
-    elif cur_tp and abs(new_tp - cur_tp) / cur_tp < 0.0005:
-        new_tp = None                                      # the same target
-    if new_sl is None and new_tp is None:
+    cur_tps = [p for p in ((_num(o.get("limitPx")) if not o.get("isTrigger")
+                            else _num(o.get("triggerPx"))) for o in tps) if p]
+    ladder = tp_ladder(cur_tps, float(setup["target"]), size, sz_decimals, long=long, mark=mark)
+    if new_sl is None and ladder is None:
         return None
-    return {"side": side, "size": size, "new_sl": new_sl, "new_tp": new_tp,
-            "cur_sl": cur_sl, "cur_tp": cur_tp, "kept_sl": kept_sl,
+    return {"side": side, "size": size, "new_sl": new_sl, "tp_ladder": ladder,
+            "cur_sl": cur_sl, "cur_tps": sorted(cur_tps, key=lambda p: abs(p - mark)),
+            "kept_sl": kept_sl,
             "cancel_sl": [o.get("oid") for o in stops] if new_sl is not None else [],
-            "cancel_tp": [o.get("oid") for o in tps] if new_tp is not None else []}
+            "cancel_tp": [o.get("oid") for o in tps] if ladder is not None else []}
+
+
+# ── averaging in: a same-way signal at a BETTER price adds to the scalp ──────
+ADD_BETTER = 0.001        # at least 0.1% better than the current average entry
+DEFAULT_MAX_ADDS = 1
+
+
+def max_adds() -> int:
+    raw = os.getenv("SCALP_MAX_ADDS", "").strip()
+    try:
+        return max(0, int(float(raw))) if raw else DEFAULT_MAX_ADDS
+    except ValueError:
+        return DEFAULT_MAX_ADDS
+
+
+def exit_state(rec: Dict[str, Any], positions: Sequence[Dict[str, Any]],
+               orders: Sequence[Dict[str, Any]], mark: Optional[float]) -> Optional[Dict[str, Any]]:
+    """The running scalp's position and exit orders: {"side", "size", "entry",
+    "stops", "tps", "cur_sl", "cur_tps"} or None (no matching position)."""
+    if mark is None:
+        return None
+    pos = next((p for p in positions or [] if str(p.get("coin")) == rec["coin"]), None)
+    side = "long" if rec["direction"] == "LONG" else "short"
+    if not pos or pos.get("side") != side:
+        return None
+    long = side == "long"
+    stops, tps = [], []
+    for o in orders or []:
+        if not (isinstance(o, dict) and str(o.get("coin")) == rec["coin"] and o.get("reduceOnly")):
+            continue
+        ot = str(o.get("orderType") or "").lower()
+        trig = _num(o.get("triggerPx"))
+        if o.get("isTrigger") and (ot.startswith("stop") or (not ot.startswith("take") and trig
+                                   and ((trig < mark) if long else (trig > mark)))):
+            stops.append(o)
+        else:
+            tps.append(o)
+    pxs = [_num(o.get("triggerPx")) for o in stops if _num(o.get("triggerPx"))]
+    cur_tps = [p for p in ((_num(o.get("limitPx")) if not o.get("isTrigger")
+                            else _num(o.get("triggerPx"))) for o in tps) if p]
+    return {"side": side, "size": abs(_num(pos.get("size")) or 0),
+            "entry": _num(pos.get("entry_px")), "stops": stops, "tps": tps,
+            "cur_sl": (max(pxs) if long else min(pxs)) if pxs else None,
+            "cur_tps": sorted(cur_tps, key=lambda p: abs(p - mark))}
+
+
+def plan_add(rec: Dict[str, Any], setup: Dict[str, Any], st: Optional[Dict[str, Any]],
+             mark: Optional[float]) -> Optional[Dict[str, Any]]:
+    """Average in? A same-way signal while price is ADD_BETTER better than the
+    running scalp's average entry (lower for a long), still on the right side
+    of the stop, and fewer than max_adds() adds so far. Returns {"stop"} (the
+    stop for the WHOLE position: the tighter of the current one and the new
+    signal's, never wider) or None. Pure."""
+    if st is None or mark is None or setup.get("direction") != rec.get("direction"):
+        return None
+    if int(rec.get("adds") or 0) >= max_adds() or not st.get("entry"):
+        return None
+    long = st["side"] == "long"
+    entry = st["entry"]
+    better = mark <= entry * (1 - ADD_BETTER) if long else mark >= entry * (1 + ADD_BETTER)
+    if not better:
+        return None
+    stop = st["cur_sl"]
+    new = float(setup["sl"])
+    if ((new < mark) if long else (new > mark)) and (stop is None or
+                                                    ((new > stop) if long else (new < stop))):
+        stop = new
+    if stop is None or not ((mark > stop) if long else (mark < stop)):
+        return None
+    return {"stop": stop}
 
 
 def room(records: Dict[str, Any]) -> int:

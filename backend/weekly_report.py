@@ -88,8 +88,42 @@ def build_message(*, week_label: str, strategy_version: str,
     return "\n".join(lines).rstrip()
 
 
+def extra_chat_ids() -> List[str]:
+    """TELEGRAM_EXTRA_CHAT_IDS: more private chats (comma-separated) that get a
+    copy of every private message. The public channel (TELEGRAM_CHAT_ID) and
+    the main private chat are dropped, so nothing private reaches the channel."""
+    skip = {os.getenv("TELEGRAM_CHAT_ID", "").strip(), ""}
+    out: List[str] = []
+    for c in os.getenv("TELEGRAM_EXTRA_CHAT_IDS", "").split(","):
+        c = c.strip()
+        if c not in skip and c not in out:
+            out.append(c)
+    return out
+
+
+def mirror(text: str, *, token: str, primary: str, session: Any = None) -> int:
+    """Copy `text` to the extra private chats. Best-effort: a failing extra
+    chat never fails the main send. Returns how many went out."""
+    import requests
+    sent = 0
+    for chat in extra_chat_ids():
+        if chat == primary:
+            continue
+        try:
+            resp = (session or requests).post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat, "text": text, "disable_web_page_preview": True},
+                timeout=15)
+            resp.raise_for_status()
+            sent += 1
+        except Exception:                                 # noqa: BLE001
+            pass
+    return sent
+
+
 def send_private(text: str, *, session: Any = None) -> bool:
-    """Send to TELEGRAM_REPORT_CHAT_ID only. False (not sent) when unset."""
+    """Send to TELEGRAM_REPORT_CHAT_ID (and a copy to TELEGRAM_EXTRA_CHAT_IDS).
+    False (not sent) when unset."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_REPORT_CHAT_ID", "")
     if not token or not chat_id:
@@ -100,4 +134,5 @@ def send_private(text: str, *, session: Any = None) -> bool:
         json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
         timeout=15)
     resp.raise_for_status()
+    mirror(text, token=token, primary=chat_id, session=session)
     return True

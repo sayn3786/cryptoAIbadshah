@@ -72,6 +72,47 @@ def test_no_private_chat_means_nothing_is_sent(monkeypatch):
     assert wr.send_private("hello", session=s) is False and s.calls == []
 
 
+def test_extra_groups_get_a_copy_but_never_the_public_channel(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "@public_signals_channel")
+    monkeypatch.setenv("TELEGRAM_REPORT_CHAT_ID", "123456")
+    monkeypatch.setenv("TELEGRAM_EXTRA_CHAT_IDS",
+                       " -100777, @public_signals_channel,123456,,-100777 ")
+    s = _Sess()
+    assert wr.send_private("hello", session=s) is True
+    assert [c[1]["chat_id"] for c in s.calls] == ["123456", "-100777"]
+    assert all(c[1]["text"] == "hello" for c in s.calls)
+
+
+def test_a_failing_extra_group_never_fails_the_main_send(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot")
+    monkeypatch.setenv("TELEGRAM_REPORT_CHAT_ID", "123456")
+    monkeypatch.setenv("TELEGRAM_EXTRA_CHAT_IDS", "-100777,-100888")
+    sent = []
+
+    class S:
+        def post(self, url, json=None, timeout=None):
+            if json["chat_id"] == "-100777":
+                raise RuntimeError("bot was removed from the group")
+            sent.append(json["chat_id"])
+            class R:
+                def raise_for_status(self): pass
+            return R()
+    assert wr.send_private("hello", session=S()) is True
+    assert sent == ["123456", "-100888"]
+
+
+def test_ops_alerts_copy_to_the_extra_groups(monkeypatch):
+    import ops_alerts
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot")
+    monkeypatch.delenv("TELEGRAM_ALERT_CHAT_ID", raising=False)
+    monkeypatch.setenv("TELEGRAM_REPORT_CHAT_ID", "123456")
+    monkeypatch.setenv("TELEGRAM_EXTRA_CHAT_IDS", "-100777")
+    s = _Sess()
+    assert ops_alerts._post("opened", session=s) is True
+    assert [c[1]["chat_id"] for c in s.calls] == ["123456", "-100777"]
+
+
 # ── endpoint ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture

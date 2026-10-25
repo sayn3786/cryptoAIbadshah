@@ -45,7 +45,7 @@ def clean_env(monkeypatch):
 
 def test_defaults_and_switches(monkeypatch):
     assert sl.enabled() and sl.auto_enabled()
-    assert sl.max_hold_ms() == 12 * H and sl.max_open() == 12 and sl.ENTRY_MS == 2 * H
+    assert sl.max_hold_ms() == 12 * H and sl.max_open() == 18 and sl.ENTRY_MS == 2 * H
     monkeypatch.setenv("HL_SCALP_AUTO_EXECUTE", "0")
     assert sl.enabled() and not sl.auto_enabled()
     monkeypatch.setenv("SCALP_ENABLED", "off")
@@ -55,7 +55,7 @@ def test_defaults_and_switches(monkeypatch):
 def test_new_setup_only_on_the_latest_close():
     s = sl.new_setup(setup_bars(), "eth", now_ms=NOW)
     assert s == {"symbol": "ETH", "direction": "LONG", "limit": 103, "sl": s["sl"],
-                 "target": 110, "rr": s["rr"], "slot_ms": 19 * M}
+                 "target": 110, "rr": s["rr"], "slot_ms": 19 * M, "close": 105.5}
     assert s["sl"] < 99.5 and s["rr"] >= 1.5
     assert sl.new_setup(setup_bars(), "ETH", now_ms=NOW + M) is None          # stale
     more = setup_bars() + [b(19, 105, 105.5, 104.5, 105)]
@@ -104,7 +104,7 @@ def test_sweep_open_scalps():
 
 
 def test_room(monkeypatch):
-    assert sl.room({}) == 12 and sl.room({"A": {}, "B": {}, "C": {}}) == 9
+    assert sl.room({}) == 18 and sl.room({"A": {}, "B": {}, "C": {}}) == 15
     monkeypatch.setenv("SCALP_MAX_OPEN", "2")
     assert sl.room({}) == 2 and sl.room({"A": {}, "B": {}, "C": {}}) == 0
     monkeypatch.setenv("SCALP_MAX_OPEN", "4")
@@ -167,6 +167,11 @@ def app_mod(monkeypatch):
                         and (mem.__setitem__(k, "1") or True))
     sent = []
     monkeypatch.setattr(app, "_scalp_private", lambda t: sent.append(t))
+    import hl_meta
+
+    def _no_hl(env=None):                 # tests never reach a real HL network
+        raise RuntimeError("no HL in tests")
+    monkeypatch.setattr(hl_meta, "asset_table", _no_hl)
     app._sent = sent
     return app
 
@@ -215,6 +220,7 @@ def hl_fake(app_mod, monkeypatch):
     monkeypatch.setattr(hl_account, "account_address", lambda: "0xabc")
     monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"ETH": "100"})
     monkeypatch.setattr(hl_account, "order_known", lambda cloid, env=None: st["known"])
+    monkeypatch.setattr(hl_account, "candle_close", lambda coin, open_ms, **kw: st.get("hl_close"))
     monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
         s: {"sz_decimals": 2, "max_leverage": 10, "asset_id": i}
         for i, s in enumerate(("ETH", "SOL", "XRP", "ADA"))})
@@ -377,7 +383,7 @@ def test_size_plan_risk_and_market_cap_leverage(monkeypatch):
     assert [sl.lev_cap(x) for x in (2e11, 5e10, 5e9, 5e8, 1e8, None)] == [20, 10, 7, 5, 3, 7]
     monkeypatch.setenv("SCALP_RISK_USD", "2")
     assert sl.size_plan(100, 99, 2e10)["notional_usd"] == 200.0
-    assert sl.max_exposure_usd() == 3000.0
+    assert sl.max_exposure_usd() == 4500.0
 
 
 def test_scalp_exposure_cap(app_mod, hl_fake, monkeypatch):
@@ -518,7 +524,8 @@ AAVE_ORDERS = [{"coin": "AAVE", "oid": 1, "reduceOnly": True, "isTrigger": True,
 def test_plan_update_moves_the_target_and_never_widens_the_stop():
     new = {"direction": "SHORT", "sl": 145.483, "target": 142.076}
     p = sl.plan_update(_aave(), new, AAVE_POS, AAVE_ORDERS, 144.1)
-    assert p["new_tp"] == 142.076 and p["cancel_tp"] == [2]
+    # one TP -> two: the old one closes 50%, the new one the rest
+    assert p["tp_ladder"] == [(142.201, 0.375), (142.076, 0.375)] and p["cancel_tp"] == [2]
     assert p["new_sl"] is None and p["cancel_sl"] == []                    # same stop: kept
     wider = sl.plan_update(_aave(), {**new, "sl": 146.0}, AAVE_POS, AAVE_ORDERS, 144.1)
     assert wider["new_sl"] is None and wider["kept_sl"] == 146.0
@@ -553,9 +560,11 @@ def test_running_scalp_gets_new_levels_on_hl(app_mod, hl_fake, monkeypatch):
              "entry": 144.12, "limit": 144.12, "sl": 145.0, "target": 142.076, "rr": 1.5,
              "slot_ms": 9}
     out = app_mod._scalp_hl([setup], 2 * H)
-    assert calls == [("sl", "AAVE", True, 0.75, 145.0), ("tp", "AAVE", True, 0.75, 142.08)]
+    assert calls == [("sl", "AAVE", True, 0.75, 145.0), ("tp", "AAVE", True, 0.37, 142.2),
+                     ("tp", "AAVE", True, 0.38, 142.08)]
     assert sorted(hl_fake["cancelled"]) == [("AAVE", 1), ("AAVE", 2)]
-    assert out["results"][0]["ok"] and "TP 142.201 → 142.076" in out["results"][0]["updated"]
+    assert out["results"][0]["ok"]
+    assert "TP ladder TP1 142.2 (49%), TP2 142.08 (51%)" in out["results"][0]["updated"]
     assert app_mod._scalp_records()["AAVE"]["target"] == 142.08
     assert any(t.startswith("🪤 scalp book (testnet): updated AAVE SHORT") for t in app_mod._sent)
 
@@ -605,3 +614,143 @@ def test_flip_stops_if_the_close_fails(app_mod, hl_fake, monkeypatch):
     out = app_mod._scalp_hl([long_], 2 * H)
     assert out["results"][0]["reason"] == "FLIP_CLOSE_FAILED"
     assert app_mod._scalp_records()["AAVE"]["direction"] == "SHORT"       # kept as it was
+
+
+
+def test_tp_ladder_grows_to_three_then_moves_the_furthest():
+    # SHORT at mark 100: targets below
+    two = sl.tp_ladder([98.0], 97.0, 3.0, 2, long=False, mark=100.0)
+    assert two == [(98.0, 1.5), (97.0, 1.5)]
+    three = sl.tp_ladder([98.0, 97.0], 96.0, 3.0, 2, long=False, mark=100.0)
+    assert three == [(98.0, 1.0), (97.0, 1.0), (96.0, 1.0)]
+    odd = sl.tp_ladder([98.0, 97.0], 96.0, 1.0, 2, long=False, mark=100.0)
+    assert odd == [(98.0, 0.33), (97.0, 0.33), (96.0, 0.34)]
+    moved = sl.tp_ladder([98.0, 97.0, 96.0], 95.0, 3.0, 2, long=False, mark=100.0)
+    assert [p for p, _ in moved] == [98.0, 97.0, 95.0]
+    assert sl.tp_ladder([98.0, 97.0, 96.0], 96.5, 3.0, 2, long=False, mark=100.0) is None
+    closer = sl.tp_ladder([97.0], 98.0, 2.0, 2, long=False, mark=100.0)
+    assert [p for p, _ in closer] == [98.0, 97.0]                       # by price, nearest first
+    assert sl.tp_ladder([97.0], 97.01, 2.0, 2, long=False, mark=100.0) is None   # same target
+    assert sl.tp_ladder([97.0], 101.0, 2.0, 2, long=False, mark=100.0) is None   # wrong side
+    # $10 minimum: a 0.15 position at 100 can't split three ways ($5 each)
+    small = sl.tp_ladder([98.0, 97.0], 96.0, 0.15, 2, long=False, mark=100.0)
+    assert small == [(96.0, 0.15)]                     # one TP for all: the furthest
+
+
+# ── averaging in at a better price ──────────────────────────────────────────
+
+def test_plan_add_rules(monkeypatch):
+    st = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.5)      # SHORT, avg 144.17
+    assert st["cur_sl"] == 145.483 and st["cur_tps"] == [142.201] and st["size"] == 0.75
+    new = {"direction": "SHORT", "sl": 145.483, "target": 142.076}
+    assert sl.plan_add(_aave(), new, st, 144.5) == {"stop": 145.483}   # 0.23% better
+    assert sl.plan_add(_aave(), {**new, "sl": 145.2}, st, 144.5) == {"stop": 145.2}  # tighter
+    assert sl.plan_add(_aave(), {**new, "sl": 146.0}, st, 144.5) == {"stop": 145.483}  # never wider
+    worse = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.2)
+    assert sl.plan_add(_aave(), new, worse, 144.2) is None           # only 0.02% better
+    assert sl.plan_add(_aave(adds=1), new, st, 144.5) is None        # one add already
+    assert sl.plan_add(_aave(), {**new, "direction": "LONG"}, st, 144.5) is None
+    monkeypatch.setenv("SCALP_MAX_ADDS", "0")
+    assert sl.plan_add(_aave(), new, st, 144.5) is None
+    monkeypatch.setenv("SCALP_MAX_ADDS", "2")
+    assert sl.plan_add(_aave(adds=1), new, st, 144.5) == {"stop": 145.483}
+
+
+def test_add_averages_in_and_relays_the_exits(app_mod, hl_fake, monkeypatch):
+    import hl_account
+    import hl_exchange
+    import hl_meta
+    calls = []
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"AAVE": "144.5"})
+    monkeypatch.setattr(app_mod.client, "get_market_cap", lambda pair: 4e9)
+    monkeypatch.setattr(hl_exchange, "send_market_open", lambda coin, buy, size, cloid, env=None,
+                        leverage=None: calls.append(("open", coin, buy, size)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_stop", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("sl", coin, buy, size, px)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_take_profit", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("tp", coin, buy, size, px)) or {"status": "ok"})
+    hl_fake["positions"] = AAVE_POS
+    hl_fake["orders"] = AAVE_ORDERS
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0, notional_usd=108.0)})
+    setup = {"kind": "engine", "symbol": "AAVE", "direction": "SHORT", "strength": 83.0,
+             "entry": 144.5, "limit": 144.5, "sl": 145.483, "target": 142.076, "rr": 1.5,
+             "slot_ms": 9}
+    out = app_mod._scalp_hl([setup], 2 * H)
+    opens = [c for c in calls if c[0] == "open"]
+    assert opens and opens[0][2] is False                               # SHORT add: sell
+    add = opens[0][3]
+    sls = [c for c in calls if c[0] == "sl"]
+    assert sls == [("sl", "AAVE", True, round(0.75 + add, 2), 145.48)]   # whole size
+    tps = [c for c in calls if c[0] == "tp"]
+    assert [c[4] for c in tps] == [142.2, 142.08] and \
+        round(sum(c[3] for c in tps), 2) == round(0.75 + add, 2)         # ladder, whole size
+    assert sorted(hl_fake["cancelled"]) == [("AAVE", 1), ("AAVE", 2)]
+    rec = app_mod._scalp_records()["AAVE"]
+    assert rec["adds"] == 1 and 144.17 < rec["limit"] < 144.5
+    assert out["results"][0]["ok"] and any("added to AAVE SHORT" in t and "avg entry 144.17 →"
+                                           in t for t in app_mod._sent)
+
+
+
+def test_untradeable_coins_are_skipped():
+    table = {"ETH": {}, "HYPE": {}}
+    resolve = lambda sym, t: sym if sym in t else None                      # noqa: E731
+    assert sl.untradeable("XRP", 2.4, table, {}, resolve) == "not on HL"
+    assert sl.untradeable("HYPE", 76.85, table, {"HYPE": "78.78"}, resolve) == "HL price 2.5% off"
+    assert sl.untradeable("ETH", 2400, table, {"ETH": "2410"}, resolve) is None    # 0.4%
+    assert sl.untradeable("ETH", 2400, None, None, resolve) is None              # unknown: trade
+    assert len(sl.SYMBOLS) == 18 and "TAO" in sl.SYMBOLS
+
+
+def test_run_skips_and_logs_untradeable(app_mod, monkeypatch):
+    import hl_account
+    import hl_meta
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {"ETH": {}})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"ETH": "103"})
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: {"ran": False})
+    h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
+    fetch = lambda sym, iv: padded() if iv == "15m" else h1                          # noqa
+    read = lambda w, tf, s: {"direction": "LONG", "strength": 80}                    # noqa
+    out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
+    assert out["skipped"]["XRP"] == "not on HL" and "ETH" not in out["skipped"]
+    assert out["signals"] and all(x.startswith("ETH ") for x in out["signals"])
+
+
+
+def test_levels_move_onto_hl_prices():
+    s = {"symbol": "BTC", "direction": "SHORT", "entry": 80000.0, "limit": 80000.0,
+         "sl": 80250.0, "target": 79625.0}
+    got = sl.on_hl_prices(s, 80200.0)                                     # HL 0.25% above
+    assert got["basis_pct"] == 0.25 and got["entry"] == 80200.0
+    assert abs(got["sl"] - 80250 * 1.0025) < 1e-6 and abs(got["target"] - 79625 * 1.0025) < 1e-6
+    assert sl.on_hl_prices(s, None) is s                                   # no HL close
+
+
+def test_engine_scalp_uses_the_hl_close(app_mod, hl_fake, monkeypatch):
+    import hl_autoexec
+    seen = {}
+
+    def execute(signals, **kw):
+        seen.update(sig=signals[0])
+        return {"results": [{"ok": True, "coin": "ETH", "mark_px": 103.3, "size": 2.4,
+                             "notional_usd": 247.9, "exits_ok": True}]}
+    monkeypatch.setattr(hl_autoexec, "execute", execute)
+    hl_fake["hl_close"] = 103.25                                           # HL 0.24% above
+    setup = {"kind": "engine", "symbol": "ETH", "direction": "LONG", "strength": 80.0,
+             "engine_strength": 80.0, "sweep_bonus": 0.0, "entry": 103.0, "limit": 103.0,
+             "sl": 102.6, "target": 104.0, "rr": 2.5, "slot_ms": 7 * M}
+    app_mod._scalp_hl([setup], H)
+    k = 103.25 / 103.0
+    assert seen["sig"]["entry"] == 103.25                                  # the guard's reference
+    assert abs(seen["sig"]["sl"] - 102.6 * k) < 1e-9 and abs(seen["sig"]["tp1"] - 104.0 * k) < 1e-9
+    assert any("levels moved +0.24% onto HL's price" in t for t in app_mod._sent)
+
+
+
+def test_sweep_setup_shifts_from_its_close_not_its_limit():
+    s = {"symbol": "ETH", "direction": "LONG", "limit": 103.0, "sl": 99.4, "target": 110.0,
+         "close": 105.5}
+    got = sl.on_hl_prices(s, 105.5 * 1.01)
+    assert abs(got["limit"] - 103.0 * 1.01) < 1e-9 and got["close"] == 105.5 * 1.01

@@ -5570,7 +5570,84 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
     return {**r, "flipped": True, "note": note}
 
 
-def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
+def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict]:
+    """Average into a running scalp at a better price: a market add sized for
+    $SCALP_RISK_USD to the stop, then the stop re-placed for the WHOLE
+    position (first, the old one cancelled after) and the take-profits re-laid
+    as a ladder for the whole size. None when the add can't be placed (the
+    caller then just updates the levels). Never raises."""
+    import scalp_live as _sl
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    sym, coin = rec["symbol"], rec["coin"]
+    plan, reject = _scalp_size(sym, coin, {"limit": mark, "sl": add["stop"]}, acct=acct,
+                               table=table, recs=recs)
+    if reject:
+        return None
+    long = st["side"] == "long"
+    sid, ts = _sl.signal_id(sym), setup["slot_ms"]
+    try:
+        ok, _d = _he.order_accepted(_he.send_market_open(
+            coin, long, plan["size"], _hx.client_order_id(sid, "add", ts),
+            leverage=plan["leverage"]))
+    except Exception:
+        ok = False
+    if not ok:
+        return None
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    total = round(st["size"] + plan["size"], sz)
+    old_avg = st["entry"]
+    avg = (old_avg * st["size"] + mark * plan["size"]) / total
+    exit_buy = not long
+    px = lambda v: _hm.round_price(v, sz)                             # noqa: E731
+    warn = ""
+    try:
+        sl_ok, _d = _he.order_accepted(_he.send_stop(
+            coin, exit_buy, total, px(add["stop"]), cloid=_hx.client_order_id(sid, "sl-add", ts)))
+    except Exception:
+        sl_ok = False
+    if sl_ok:
+        for o in st["stops"]:
+            try:
+                _he.cancel_order(coin, o.get("oid"))
+            except Exception:
+                pass
+    else:
+        warn = " ⚠️ the stop for the whole size was NOT placed (the old stop still covers the first part)"
+    ladder = (_sl.tp_ladder(st["cur_tps"], float(setup["target"]), total, sz, long=long,
+                            mark=mark)
+              or _sl.split(st["cur_tps"] or [float(setup["target"])], total, sz, mark))
+    placed = []
+    if ladder:
+        for o in st["tps"]:
+            try:
+                _he.cancel_order(coin, o.get("oid"))
+            except Exception:
+                pass
+        for k, (lvl, size) in enumerate(ladder, start=1):
+            try:
+                tp_ok, _d = _he.order_accepted(_he.send_take_profit(
+                    coin, exit_buy, size, px(lvl), cloid=_hx.client_order_id(sid, f"tp{k}-add", ts)))
+            except Exception:
+                tp_ok = False
+            if tp_ok:
+                placed.append(f"TP{k} {px(lvl):,.6g} ({round(size / total * 100):d}%)")
+        rec["target"] = px(ladder[-1][0])
+        rec["tps"] = [px(lvl) for lvl, _s in ladder]
+    rec.update(adds=int(rec.get("adds") or 0) + 1, limit=round(avg, 8), sl=px(add["stop"]),
+               size=total, notional_usd=round(float(rec.get("notional_usd") or 0)
+                                              + plan["notional_usd"], 2))
+    import scalp_store as _ss
+    _ss.levels(_deploy_env(), rec)
+    note = (f"added to {sym} {rec['direction']} at ~{mark:,.6g} (${plan['notional_usd']:,.0f} at "
+            f"{plan['leverage']:g}x, +${_sl.risk_usd():g} risk): avg entry {old_avg:,.6g} → "
+            f"{avg:,.6g}; SL {px(add['stop']):,.6g} for the whole size"
+            + (f"; TP ladder " + ", ".join(placed) if placed else "") + warn)
+    return {"symbol": sym, "ok": True, "added": plan["notional_usd"], "note": note}
+
+
+def _scalp_update(rec, setup, *, positions, orders, mids, table, acct=None, recs=None) -> dict:
     """A fresh signal the same way on a running scalp: move its target, and
     its stop only if tighter (scalp_live.plan_update). New orders first, then
     the old ones cancelled, so the position is never without a stop. Never
@@ -5584,10 +5661,17 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
         mark = float((mids or {}).get(coin))
     except (TypeError, ValueError):
         mark = None
-    plan = _sl.plan_update(rec, setup, positions, orders, mark)
+    if acct is not None and recs is not None:
+        st = _sl.exit_state(rec, positions, orders, mark)
+        add = _sl.plan_add(rec, setup, st, mark)
+        if add:
+            r = _scalp_add(rec, setup, st, add, mark=mark, table=table, acct=acct, recs=recs)
+            if r:
+                return r
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    plan = _sl.plan_update(rec, setup, positions, orders, mark, sz_decimals=sz)
     if plan is None:
         return {"symbol": sym, "ok": False, "reason": "POSITION_EXISTS"}
-    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
     exit_buy = plan["side"] != "long"
     sid, ts = _sl.signal_id(sym), setup["slot_ms"]
     done = []
@@ -5608,19 +5692,28 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table) -> dict:
                 done.append(f"SL {plan['cur_sl']:,.6g} → {plan['new_sl']:,.6g}"
                             if plan["cur_sl"] else f"SL → {plan['new_sl']:,.6g}")
                 rec["sl"] = _px(plan["new_sl"])
-        if plan["new_tp"] is not None:
-            ok, _d = _he.order_accepted(_he.send_take_profit(
-                coin, exit_buy, plan["size"], _px(plan["new_tp"]),
-                cloid=_hx.client_order_id(sid, "tp-upd", ts)))
-            if ok:
-                for oid in plan["cancel_tp"]:
-                    try:
-                        _he.cancel_order(coin, oid)
-                    except Exception:
-                        pass
-                done.append(f"TP {plan['cur_tp']:,.6g} → {plan['new_tp']:,.6g}"
-                            if plan["cur_tp"] else f"TP → {plan['new_tp']:,.6g}")
-                rec["target"] = _px(plan["new_tp"])
+        if plan["tp_ladder"] is not None:
+            # The take-profits are re-laid as a ladder: the old ones cancelled
+            # first (the stop stays, so the position is never unprotected),
+            # then one reduce-only limit per level.
+            for oid in plan["cancel_tp"]:
+                try:
+                    _he.cancel_order(coin, oid)
+                except Exception:
+                    pass
+            placed = []
+            n = len(plan["tp_ladder"])
+            for k, (px, size) in enumerate(plan["tp_ladder"], start=1):
+                ok, _d = _he.order_accepted(_he.send_take_profit(
+                    coin, exit_buy, size, _px(px),
+                    cloid=_hx.client_order_id(sid, f"tp{k}-upd", ts)))
+                if ok:
+                    placed.append(f"TP{k} {_px(px):,.6g} ({round(size / plan['size'] * 100):d}%)")
+            if placed:
+                done.append("TP ladder " + ", ".join(placed)
+                            + ("" if len(placed) == n else f" ({n - len(placed)} rejected)"))
+                rec["target"] = _px(plan["tp_ladder"][-1][0])
+                rec["tps"] = [_px(px) for px, _sz in plan["tp_ladder"]]
     except Exception as exc:
         return {"symbol": sym, "ok": False, "reason": "UPDATE_FAILED", "error": type(exc).__name__}
     if not done:
@@ -5770,6 +5863,9 @@ def _scalp_hl(setups, now_ms) -> dict:
             results = []
             for s in setups:
                 coin = (_hm.resolve_coin(s["symbol"], table) or "").upper()
+                if coin:                  # the levels onto HL's own prices
+                    s = _sl.on_hl_prices(s, _ha.candle_close(
+                        _hm.resolve_coin(s["symbol"], table), s["slot_ms"] - _sl.M15_MS))
                 rec = next((r for c, r in recs.items() if c.upper() == coin), None)
                 if rec is not None and rec.get("state") == "open" and \
                         s.get("kind") == "engine" and s["direction"] != rec["direction"]:
@@ -5781,7 +5877,7 @@ def _scalp_hl(setups, now_ms) -> dict:
                     continue
                 if rec is not None and rec.get("state") == "open":
                     r = _scalp_update(rec, s, positions=positions, orders=orders or [],
-                                      mids=mids, table=table)
+                                      mids=mids, table=table, acct=acct, recs=recs)
                     results.append(r)
                     if r.get("note"):
                         notes.append(r["note"])
@@ -5802,7 +5898,9 @@ def _scalp_hl(setups, now_ms) -> dict:
                 if r.get("ok") and s.get("kind") == "engine":
                     notes.append(f"opened {s['symbol']} {s['direction']} {s['strength']:g} at "
                                  f"market (${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
-                                 f"${_sl.risk_usd():g} risk)")
+                                 f"${_sl.risk_usd():g} risk)"
+                                 + (f"; levels moved {s['basis_pct']:+.2f}% onto HL's price"
+                                    if abs(s.get("basis_pct") or 0) >= 0.05 else ""))
                 elif r.get("ok"):
                     notes.append(f"placed {s['symbol']} {s['direction']} limit {s['limit']:,.6g} "
                                  f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
@@ -5832,6 +5930,11 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     def _one(sym):
         try:
             m15 = fetch_fn(sym, "15m")
+            why_not = _sl.untradeable(sym, float(m15[-1]["close"]) if m15 else None,
+                                      hl_table, hl_mids, _hm.resolve_coin)
+            if why_not:
+                skipped[sym] = why_not
+                return None
             if _sl.mode() == "blend":
                 # The 15m engine triggers; sweep -> FVG and the 1H read only add
                 # (or, the 1H against, take) strength — no requirement.
@@ -5848,6 +5951,15 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
             return None
 
     rejected: list = []
+    skipped: dict = {}
+    import hl_meta as _hm
+    hl_table, hl_mids = None, None
+    if _sl.auto_enabled():
+        try:                               # which coins HL can actually trade now
+            import hl_account as _ha
+            hl_table, hl_mids = _hm.asset_table(), _ha.all_mids()
+        except Exception:
+            hl_table, hl_mids = None, None
     syms = [s for s in _sl.SYMBOLS if s in SYMBOLS]
     with ThreadPoolExecutor(max_workers=6) as ex:
         found = [x for x in ex.map(_one, syms) if x]
@@ -5870,10 +5982,11 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "setups": label,
         **({"rejected": sorted(rejected)} if rejected else {}),
+        **({"skipped": skipped} if skipped else {}),
         **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held") if hl.get(k)}},
         cap=96)
     return {"ok": True, "ran": True, "coins": len(syms), "signals": label,
-            "rejected": sorted(rejected),
+            "rejected": sorted(rejected), "skipped": skipped,
             "new": len(new), "scalp_hl": hl}
 
 
