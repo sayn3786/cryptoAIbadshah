@@ -202,6 +202,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_REPORT_CHAT_ID: ${{ secrets.TELEGRAM_REPORT_CHAT_ID }}
+          # optional: more private chats (comma-separated) that get a copy
+          TELEGRAM_EXTRA_CHAT_IDS: ${{ secrets.TELEGRAM_EXTRA_CHAT_IDS }}
           # The tools import app for its symbol list; keep its slot pre-warm
           # thread from waking up inside a long run.
           DISABLE_REC_SCHEDULER:   "1"

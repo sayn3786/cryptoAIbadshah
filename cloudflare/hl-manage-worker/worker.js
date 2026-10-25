@@ -37,6 +37,7 @@
 //   SCHEDULER_TOKEN  SECRET, opens only the scheduled paths above (POST)
 //   TELEGRAM_BOT_TOKEN      SECRET (optional), same bot as the app
 //   TELEGRAM_ALERT_CHAT_ID  SECRET (optional), your PRIVATE chat id, never a channel
+//   TELEGRAM_EXTRA_CHAT_IDS SECRET (optional), more private chat ids (comma-separated) for a copy
 // A job whose token is missing is skipped and logged; the others still run.
 
 // Retry on timeouts / platform errors by default. 4xx (auth, bad request) and
@@ -228,16 +229,31 @@ export function alertFor(r, when) {
 
 async function sendAlert(env, text) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_ALERT_CHAT_ID) return false;
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_ALERT_CHAT_ID, text,
-                             disable_web_page_preview: true }),
-    });
-    return res.ok;
-  } catch (_) {
-    return false;
+  const post = async chat => {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chat, text, disable_web_page_preview: true }),
+      });
+      return res.ok;
+    } catch (_) {
+      return false;
+    }
+  };
+  const ok = await post(env.TELEGRAM_ALERT_CHAT_ID);
+  // A copy to the extra private chats; never the main one twice.
+  for (const chat of extraChats(env)) await post(chat);
+  return ok;
+}
+
+/** TELEGRAM_EXTRA_CHAT_IDS: more private chats (comma-separated). Exported for tests. */
+export function extraChats(env) {
+  const seen = new Set([String(env.TELEGRAM_ALERT_CHAT_ID || "").trim(), ""]);
+  const out = [];
+  for (const c of String(env.TELEGRAM_EXTRA_CHAT_IDS || "").split(",").map(x => x.trim())) {
+    if (!seen.has(c)) { seen.add(c); out.push(c); }
   }
+  return out;
 }
 
 /** Run everything due at `when`; returns one summary per job. Exported for tests. */
