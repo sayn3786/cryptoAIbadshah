@@ -98,6 +98,15 @@ await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 4, 32) }, env,
 await wait;
 out.tgWithoutSecrets = tg.length - tg2;
 
+out.extra = w.extraChats({ TELEGRAM_ALERT_CHAT_ID: "777", TELEGRAM_EXTRA_CHAT_IDS: " -100888, 777,,-100888 , -100999" });
+const tg3 = tg.length;
+await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 4, 32) },
+  { ...env, TELEGRAM_BOT_TOKEN: "bot-token-x", TELEGRAM_ALERT_CHAT_ID: "777",
+    TELEGRAM_EXTRA_CHAT_IDS: "-100888" },
+  { waitUntil: p => { wait = p; } });
+await wait;
+out.tgExtra = tg.slice(tg3).map(t => t.body.chat_id);
+
 out.publicFetch = (await w.default.fetch()).status;
 process.stdout.write(JSON.stringify(out));
 """
@@ -196,3 +205,8 @@ def test_alerts_go_straight_to_the_private_chat(result):
     assert result["tg"] == [{"chat": "777", "text": result["tg"][0]["text"]}]
     assert "publish failed" in result["tg"][0]["text"]
     assert result["tgWithoutSecrets"] == 0             # no secrets → logged only
+
+
+def test_alerts_also_copy_to_the_extra_private_chats(result):
+    assert result["extra"] == ["-100888", "-100999"]   # no blanks, no repeats, not the main chat
+    assert result["tgExtra"] == ["777", "-100888"]

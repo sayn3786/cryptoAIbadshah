@@ -185,6 +185,8 @@ def _post(text: str, session: Any = None) -> bool:
         json={"chat_id": chat, "text": text, "disable_web_page_preview": True},
         timeout=10)
     resp.raise_for_status()
+    import weekly_report
+    weekly_report.mirror(text, token=token, primary=chat, session=session)
     return True
 
 

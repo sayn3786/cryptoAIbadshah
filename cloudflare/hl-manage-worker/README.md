@@ -42,6 +42,12 @@ own chat with the bot, never the public signals channel. Without it the job
 logs `REPORT_CHAT_NOT_CONFIGURED` and sends nothing. It is sent at most once per
 ISO week.
 
+**A second private group.** Set `TELEGRAM_EXTRA_CHAT_IDS` (comma-separated
+chat ids, e.g. `-1001234567890`) and every private message gets a copy there:
+in Vercel for scalp alerts, trade/position alerts and reports; as a GitHub
+secret for the backtest reports; as a Worker secret for scheduler alerts. The
+bot must be a member of the group. The public channel id is never copied to.
+
 **This Worker is the only scheduler.** The GitHub workflows for these jobs are
 manual-only (Actions tab → Run workflow), and `vercel.json` has no crons. Every
 job is safe to repeat (keyed per slot / candle / alert), so a manual run
