@@ -23,9 +23,7 @@ const w = await import(process.argv[1]);
 console.log = () => {};          // the scheduled handler logs; keep stdout for the JSON result
 const at = (h, m) => new Date(Date.UTC(2026, 8, 26, h, m));
 const out = {};
-out.telegramSchedule = Array.from({length:24}, (_, h) =>
-  [7,17,37].every(m => w.dueJobs(at(h,m)).includes("telegram")));
-out.due = Object.fromEntries([[0,2],[0,5],[0,7],[0,15],[4,2],[4,12],[4,32],[4,35],
+out.due = Object.fromEntries([[0,2],[0,3],[0,5],[0,7],[0,8],[0,15],[0,48],[4,2],[4,12],[4,32],[4,35],
   [8,7],[12,7],[16,15],[3,59],[13,33],[0,10],[0,20],[1,15],[1,30],[5,15],[2,10]].map(([h,m]) => [`${h}:${m}`, w.dueJobs(at(h,m))]));
 
 const calls = [];
@@ -44,18 +42,18 @@ const env = { APP_URL: "https://app.example/", HL_MANAGE_TOKEN: "manage-token-12
               SCHEDULER_TOKEN: "sched-token-1234567" };
 const noSleep = async () => {};
 
-out.at0002 = await w.runDue(at(0, 2), env, noSleep);
-out.calls0002 = calls.splice(0);
+out.at0003 = await w.runDue(at(0, 3), env, noSleep);
+out.calls0003 = calls.splice(0);
 
-script = [{ path: "/api/cron/publish", status: 504 }, { path: "/api/cron/publish", status: 504 }];
-out.retry = await w.runDue(at(4, 2), env, noSleep);
-out.retryCalls = calls.splice(0).filter(c => c.path === "/api/cron/publish").length;
+script = [{ path: "/api/cron/close", status: 504 }];
+out.retry = await w.runDue(at(0, 8), env, noSleep);
+out.retryCalls = calls.splice(0).filter(c => c.path === "/api/cron/close").length;
 
-script = [{ path: "/api/cron/publish", status: 401 }];
-out.noRetry401 = (await w.runDue(at(4, 2), env, noSleep)).find(r => r.job === "publish");
+script = [{ path: "/api/cron/close", status: 401 }];
+out.noRetry401 = (await w.runDue(at(0, 13), env, noSleep)).find(r => r.job === "close");
 calls.splice(0);
 
-out.missing = await w.runDue(at(0, 7), { APP_URL: env.APP_URL, HL_MANAGE_TOKEN: env.HL_MANAGE_TOKEN }, noSleep);
+out.missing = await w.runDue(at(0, 3), { APP_URL: env.APP_URL, HL_MANAGE_TOKEN: env.HL_MANAGE_TOKEN }, noSleep);
 out.missingCalls = calls.splice(0).map(c => c.path);
 
 // ML research: JSON body, and the old script's retry rule (503 is final).
@@ -68,16 +66,14 @@ calls.splice(0);
 
 // Problem alerts: rules, and a real send through the scheduled handler.
 out.alerts = {
-  pub401at32: w.alertFor({ job: "publish", status: 401, attempts: 1 }, at(4, 32)),
-  pub401at02: w.alertFor({ job: "publish", status: 401, attempts: 1 }, at(4, 2)),
+  close401at48: w.alertFor({ job: "close", status: 401, attempts: 1 }, at(0, 48)),
+  close401at03: w.alertFor({ job: "close", status: 401, attempts: 1 }, at(0, 3)),
   mgrAt30:    w.alertFor({ job: "manage", status: 0, attempts: 1 }, at(4, 30)),
   mgrAt31:    w.alertFor({ job: "manage", status: 0, attempts: 1 }, at(4, 31)),
   mlOff:      w.alertFor({ job: "ml-collect", status: 503, error_code: "FEATURE_DISABLED" }, at(4, 10)),
   ok:         w.alertFor({ job: "daily", status: 200 }, at(0, 7)),
   falseOk:    w.alertFor({ job: "telegram", status: 200, ok: false }, at(4, 37)),
-  tgEarly:    [7, 17].map(m => w.alertFor({ job: "telegram", status: 503 }, at(4, m))),
-  tgLast:     w.alertFor({ job: "telegram", status: 503 }, at(4, 37)),
-  daily504:   w.alertFor({ job: "daily", status: 504, attempts: 3 }, at(0, 7)),
+  close504:   w.alertFor({ job: "close", status: 504, attempts: 2 }, at(0, 48)),
 };
 const tg = [];
 globalThis.fetch = async (url, opts) => {
@@ -87,20 +83,20 @@ globalThis.fetch = async (url, opts) => {
   return { status: 401, json: async () => ({ error_code: "AUTH_REQUIRED" }) };
 };
 let wait;
-await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 4, 32) },
+await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 0, 48) },
   { ...env, TELEGRAM_BOT_TOKEN: "bot-token-x", TELEGRAM_ALERT_CHAT_ID: "777" },
   { waitUntil: p => { wait = p; } });
 await wait;
 out.tg = tg.map(t => ({ chat: t.body.chat_id, text: t.body.text }));
 const tg2 = tg.length;
-await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 4, 32) }, env,
+await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 0, 48) }, env,
   { waitUntil: p => { wait = p; } });
 await wait;
 out.tgWithoutSecrets = tg.length - tg2;
 
 out.extra = w.extraChats({ TELEGRAM_ALERT_CHAT_ID: "777", TELEGRAM_EXTRA_CHAT_IDS: " -100888, 777,,-100888 , -100999" });
 const tg3 = tg.length;
-await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 4, 32) },
+await w.default.scheduled({ scheduledTime: Date.UTC(2026, 8, 27, 0, 48) },
   { ...env, TELEGRAM_BOT_TOKEN: "bot-token-x", TELEGRAM_ALERT_CHAT_ID: "777",
     TELEGRAM_EXTRA_CHAT_IDS: "-100888" },
   { waitUntil: p => { wait = p; } });
@@ -125,16 +121,16 @@ def result(tmp_path_factory):
 
 def test_schedule(result):
     due = result["due"]
-    assert all(result["telegramSchedule"])
     assert result["alerts"]["falseOk"] is not None
-    assert due["0:2"] == ["manage", "publish"]            # right after the 4H close
+    assert due["0:2"] == ["manage"]                       # the 4H publish is retired
+    assert due["0:3"] == ["manage", "close"]              # right after the 00:00 UTC close
+    assert due["0:8"] == ["manage", "close"] and due["0:48"] == ["manage", "close"]
     assert due["0:5"] == ["manage", "monitor"]
-    assert due["0:7"] == ["manage", "daily", "telegram"]
+    assert due["0:7"] == ["manage"]
     assert due["0:15"] == ["manage", "patterns"]
-    assert due["4:12"] == ["manage", "publish"] and due["4:32"] == ["manage", "publish"]
+    assert due["4:12"] == ["manage"] and due["4:32"] == ["manage"]
     assert due["4:35"] == ["manage", "monitor"]
-    assert due["8:7"] == ["manage", "daily", "telegram"]
-    assert due["12:7"] == ["manage", "daily", "telegram"]
+    assert due["8:7"] == ["manage"] and due["12:7"] == ["manage"]
     assert due["16:15"] == ["manage"]                     # daily list runs at 00:15 only
     assert due["3:59"] == ["manage"] and due["13:33"] == ["manage"]
     assert due["0:10"] == ["manage", "ml-collect"] and due["2:10"] == ["manage", "ml-collect"]
@@ -144,15 +140,15 @@ def test_schedule(result):
 
 
 def test_each_job_posts_its_path_with_its_own_narrow_header(result):
-    by_path = {c["path"]: c for c in result["calls0002"]}
+    by_path = {c["path"]: c for c in result["calls0003"]}
     assert by_path["/api/hl/manage"]["headers"] == {"x-hl-manage-token": "manage-token-123456"}
-    assert by_path["/api/cron/publish"]["headers"] == {"x-scheduler-token": "sched-token-1234567"}
-    assert all(c["method"] == "POST" for c in result["calls0002"])
+    assert by_path["/api/cron/close"]["headers"] == {"x-scheduler-token": "sched-token-1234567"}
+    assert all(c["method"] == "POST" for c in result["calls0003"])
 
 
-def test_publish_retries_timeouts_then_succeeds(result):
-    pub = next(r for r in result["retry"] if r["job"] == "publish")
-    assert result["retryCalls"] == 3 and pub["status"] == 200 and pub["attempts"] == 3
+def test_close_retries_a_timeout_once(result):
+    close = next(r for r in result["retry"] if r["job"] == "close")
+    assert result["retryCalls"] == 2 and close["status"] == 200 and close["attempts"] == 2
 
 
 def test_auth_failures_are_not_retried(result):
@@ -161,13 +157,13 @@ def test_auth_failures_are_not_retried(result):
 
 def test_missing_scheduler_token_skips_only_its_jobs(result):
     by_job = {r["job"]: r for r in result["missing"]}
-    assert "SCHEDULER_TOKEN is not configured" in by_job["daily"]["error"]
+    assert "SCHEDULER_TOKEN is not configured" in by_job["close"]["error"]
     assert by_job["manage"]["status"] == 200
     assert result["missingCalls"] == ["/api/hl/manage"]
 
 
 def test_logs_are_an_allow_listed_summary(result):
-    text = json.dumps(result["at0002"])
+    text = json.dumps(result["at0003"])
     assert "token" not in text and "must-not-log" not in text and "app.example" not in text
 
 
@@ -183,27 +179,19 @@ def test_ml_jobs_send_their_body_and_do_not_retry_a_503(result):
     assert result["ml504"]["status"] == 200 and result["ml504"]["attempts"] == 2
 
 
-def test_publish_logs_the_hl_auto_exec_outcome(result):
-    pub = next(r for r in result["at0002"] if r["job"] == "publish")
-    assert pub["hl"] == {"ran": True, "attempted": 1, "executed": 1}
-    assert "0xsecret" not in json.dumps(result["at0002"])
-
-
 def test_problem_alert_rules(result):
     a = result["alerts"]
-    assert "publish failed at 04:32 UTC" in a["pub401at32"] and "token mismatch" in a["pub401at32"]
-    assert a["pub401at02"] is None                     # :12/:32 may still recover
+    assert "close failed at 00:48 UTC" in a["close401at48"] and "token mismatch" in a["close401at48"]
+    assert a["close401at03"] is None                   # later calls may still recover
     assert a["mgrAt30"] and a["mgrAt31"] is None       # every-minute job: at most twice an hour
     assert a["mlOff"] is None and a["ok"] is None
-    assert a["tgEarly"] == [None, None]
-    assert "telegram failed" in a["tgLast"]
-    assert "after 3 attempts" in a["daily504"] and "60 s timeout" in a["daily504"]
+    assert "after 2 attempts" in a["close504"] and "60 s timeout" in a["close504"]
 
 
 def test_alerts_go_straight_to_the_private_chat(result):
-    # At 04:32 both manage (m%30 != 0 → throttled) and publish run; only publish alerts.
+    # At 00:48 both manage (m%30 != 0 → throttled) and close run; only close alerts.
     assert result["tg"] == [{"chat": "777", "text": result["tg"][0]["text"]}]
-    assert "publish failed" in result["tg"][0]["text"]
+    assert "close failed" in result["tg"][0]["text"]
     assert result["tgWithoutSecrets"] == 0             # no secrets → logged only
 
 

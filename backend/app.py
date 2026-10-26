@@ -42,6 +42,7 @@ from holidays import get_upcoming_holidays
 from patterns import detect_bos_streak, detect_liquidity_pools, session_ranges, detect_equal_levels, detect_flags, pick_dominant_flags, summarize_flag_diagnostics, detect_reversals, detect_triangles_wedges, build_structure_panel, analyze_elliott_wave, find_pivots, detect_choch, detect_liquidity_grab, detect_acc_eql_fvg_setup, detect_trendline, detect_sr_zones
 from signals import generate_signal, _swing_levels
 import rec_policy
+import close_publish
 import portfolio_backtest
 import candle_analysis
 from journal import generate_journal
@@ -248,6 +249,8 @@ TF_INTERVAL = {
     "1W": "1w", "2W": "1w", "3W":  "1w",  "1M": "1M",
 }
 TF_AGG = {"2W": 2, "3W": 3}
+# Daily candles read to build the business-week series (~100 weeks).
+BUSINESS_WEEK_DAYS = 720
 
 # Nominal candle duration in SECONDS per timeframe — used to decide which
 # candle is still forming and to size staleness windows. 1M is the 30.44-day
@@ -256,6 +259,7 @@ TF_AGG = {"2W": 2, "3W": 3}
 TF_SECONDS = {
     "15M": 900, "1H": 3600, "2H": 7200, "4H": 14400, "8H": 28800, "12H": 43200,
     "1D": 86400, "1W": 604800, "2W": 1209600, "3W": 1814400, "1M": 2629800,
+    "BW": 5 * 86400,          # the business week: Monday 00:00 -> Saturday 00:00 UTC
 }
 
 # Max |live − signal| price gap before we flag the signal price as stale,
@@ -1452,13 +1456,28 @@ def _liquidation_bias(liq: dict, oi: dict) -> dict:
 # ── Core analysis ─────────────────────────────────────────────────────────────
 def build_analysis(symbol: str, timeframe: str) -> dict:
     bs       = SYMBOLS[symbol]
+    # The business week (Mon-Fri, closing Saturday 00:00 UTC) is built from
+    # daily candles and then analysed with the weekly parameters: it is a week
+    # of trading, minus the weekend. Everything downstream sees "1W"; only the
+    # candles, the closed/live split and the close time are its own.
+    business = timeframe == close_publish.BUSINESS
+    if business:
+        timeframe = "1W"
     interval = TF_INTERVAL.get(timeframe, "1w")
     limit    = TF_LIMIT.get(timeframe, 120)
 
-    spot    = client.get_spot_klines(bs, interval, limit)
-    spot_source = client.data_source
-    futures = client.get_futures_klines(bs, interval, limit)
-    futures_real = client.futures_real   # False → perp market unavailable for this token
+    if business:
+        spot    = close_publish.business_weeks(
+            client.get_spot_klines(bs, "1d", BUSINESS_WEEK_DAYS))
+        spot_source = client.data_source
+        futures = close_publish.business_weeks(
+            client.get_futures_klines(bs, "1d", BUSINESS_WEEK_DAYS))
+        futures_real = client.futures_real
+    else:
+        spot    = client.get_spot_klines(bs, interval, limit)
+        spot_source = client.data_source
+        futures = client.get_futures_klines(bs, interval, limit)
+        futures_real = client.futures_real   # False → perp market unavailable for this token
 
     if timeframe in TF_AGG:
         n       = TF_AGG[timeframe]
@@ -1470,7 +1489,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # still-forming candle repaints (its high/low/close change every tick), so
     # feeding it to indicators makes signals flicker and back-tests lie. We keep
     # the live candle aside purely for display and freshness checks.
-    _interval_s   = TF_SECONDS.get(timeframe, 3600)
+    _interval_s   = TF_SECONDS["BW"] if business else TF_SECONDS.get(timeframe, 3600)
     _spot_full    = spot
     spot, live_candle = _split_closed(spot, _interval_s)
     futures, _live_fut = _split_closed(futures, _interval_s)
@@ -1828,6 +1847,12 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         timeframe, spot_source, spot, live_price, signal_price)
     analysis["signal_candle_closed_at"] = _dq_extra["signal_candle_closed_at"]
     analysis["data_age_seconds"]        = _dq_extra["data_age_seconds"]
+    if business and spot:
+        # The business week closes five days after its Monday, not seven.
+        _bw_close = int(spot[-1]["timestamp"]) + TF_SECONDS["BW"] * 1000
+        analysis["signal_candle_closed_at"] = _bw_close
+        analysis["data_age_seconds"] = max(0, int(time.time()) - _bw_close // 1000)
+        analysis["timeframe"] = close_publish.BUSINESS
     analysis["data_quality"]            = _dq_level
     analysis["data_quality_reasons"]    = _dq_reasons
     # Tradeable only when data is clean enough to trust as an execution signal.
@@ -3626,7 +3651,10 @@ def _daily_rec_scheduler():
 # Start the scheduler in a daemon thread so it dies with the server.
 # DISABLE_REC_SCHEDULER=1 skips it for offline tools (the backtests import app
 # for its symbol list; a long run would otherwise wake it inside the job).
-if os.getenv("DISABLE_REC_SCHEDULER", "").strip().lower() not in ("1", "true", "yes"):
+# The 4H channel publication is retired (close trades replace it), so the
+# pre-warm, which records 4H sets, runs only when REC_PREWARM_4H asks for it.
+if os.getenv("DISABLE_REC_SCHEDULER", "").strip().lower() not in ("1", "true", "yes") \
+        and os.getenv("REC_PREWARM_4H", "").strip().lower() in ("1", "true", "yes"):
     _threading.Thread(target=_daily_rec_scheduler, daemon=True, name="rec-scheduler").start()
 
 
@@ -4595,6 +4623,190 @@ def api_cron_daily():
     telegram_ok = notification_status == 200
     response = jsonify({"ok": telegram_ok, "results": results})
     return response if telegram_ok else (response, 503)
+
+
+# ── Close trades: 1D daily, business week Saturday, crypto week Monday ──────
+# Replaces the 4H channel publication (see close_publish). Each call does at
+# most ONE timeframe's scan (the scans are ~30 full analyses each and must fit
+# the 60 s function limit), keeps the picked set in KV, and once every close
+# due today is in, sends one grouped post, exactly once per day.
+
+CLOSE_RUN_WINDOW_H = 3          # after this, a missed close is not published late
+CLOSE_MIN_CURRENT = 0.5         # share of coins whose newest candle must be the new close
+
+
+def _close_read(data: dict) -> dict:
+    sig = data.get("signal") or {}
+    return {"direction": sig.get("direction", "NEUTRAL"),
+            "strength": sig.get("strength", 0) or 0, "sig": sig,
+            "rsi": data.get("rsi"), "current_price": sig.get("current_price"),
+            "live_price": data.get("live_price"), "signal_price": data.get("signal_price"),
+            "data_quality": data.get("data_quality", "good"),
+            "tradeable": data.get("tradeable", True),
+            "closed_at": data.get("signal_candle_closed_at")}
+
+
+def _close_set_key(day: str, tf: str) -> str:
+    return f"close:set:{_deploy_env()}:{day}:{tf}"
+
+
+def _close_load(day: str, tf: str):
+    try:
+        raw = _kv_get(_close_set_key(day, tf))
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
+    """Scan every coin on `tf`'s just-closed candle, pick the top five and record
+    them. {"ready": False} while the exchanges still serve the previous candle."""
+    import signal_publish as _sp
+    build = build or build_analysis
+    higher = higher or get_analysis
+    expected = close_publish.expected_close_ms(tf, now)
+    syms = list(SCAN_SYMBOLS)
+    analyses: dict = {}
+
+    def _get(fn, sym, t):
+        try:
+            return sym, fn(sym, t)
+        except Exception:
+            return sym, None
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        for sym, data in ex.map(lambda x: _get(build, x, tf), syms):
+            if data:
+                analyses[sym] = data
+    reads = {sym: _close_read(a) for sym, a in analyses.items()}
+    current = {sym for sym, r in reads.items() if r.get("closed_at") == expected}
+    if len(current) < CLOSE_MIN_CURRENT * len(syms):
+        return {"ready": False, "current": len(current), "of": len(syms)}
+
+    htf = close_publish.HIGHER_TF[tf]
+    wanted = [sym for sym in current if reads[sym]["direction"] in ("LONG", "SHORT")]
+    hreads: dict = {}
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        for sym, data in ex.map(lambda x: _get(higher, x, htf), wanted):
+            if data:
+                hreads[sym] = _close_read(data)
+
+    btc = reads.get("BTC") or {}
+    try:
+        _oc_score = ((get_btc_mining_signals() or {}).get("onchain_score") or {}).get("score", 50)
+    except Exception:
+        _oc_score = 50
+    influence = rec_policy.btc_influence(btc.get("direction", "NEUTRAL"),
+                                         btc.get("strength", 0), onchain_score=_oc_score)
+    no_btc = rec_policy.btc_influence("NEUTRAL", 0)
+    detected = now.astimezone(_SGT).strftime("%b %d · %I:%M %p SGT")
+    passed, rejected = [], {}
+    for sym in syms:
+        if sym not in current:
+            rejected[sym] = "NOT_CURRENT" if sym in reads else "NO_DATA"
+            continue
+        corr = 0.0 if sym == "BTC" else _BTC_CORR.get(sym, 1.0)
+        s = close_publish.screen(sym, reads[sym], hreads.get(sym), tf=tf,
+                                 corr_factor=corr,
+                                 influence=no_btc if sym == "BTC" else influence)
+        if s["ok"]:
+            passed.append(close_publish.to_rec(s, reads[sym], btc_corr=corr,
+                                               detected_at=detected))
+        else:
+            rejected[sym] = f"{s['reason']}" + (f" {s['strength']:.0f}"
+                                                 if s.get("strength") is not None else "")
+    top = close_publish.select(passed)
+    recorded = []
+    for rec in top:
+        res = _sp.persist_recommendation(rec, analyses.get(rec["symbol"]),
+                                         strategy_name=close_publish.STRATEGY_NAME,
+                                         strategy_version=close_publish.STRATEGY_VERSION)
+        if res.actionable:
+            recorded.append({**rec, "signal_id": str(res["signal_id"]) if res.get("signal_id") else None})
+        else:
+            rejected[rec["symbol"]] = f"NOT_RECORDED {res.get('error_code')}"
+    return {"ready": True, "tf": tf, "recs": recorded, "rejected": rejected,
+            "candidates": len(passed)}
+
+
+def _close_send(sets: dict, now: datetime) -> bool:
+    """The grouped morning post: the public channel, plus a copy to the
+    private chats. True when the channel took it (or, with no channel set,
+    the private chat did)."""
+    import telegram as _tg
+    import weekly_report
+    text = close_publish.build_message(sets, day=close_publish.close_day(now))
+    token, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
+    sent = False
+    if token and chat:
+        sent = _tg._post_message(token, chat, text, markdown=False)
+    try:
+        private = weekly_report.send_private(text)
+    except Exception:
+        private = False
+    return sent or (not chat and private)
+
+
+def _close_run(now: datetime, *, compute=None, send=None) -> dict:
+    compute = compute or _close_compute
+    send = send or _close_send
+    day_start = close_publish.close_day(now)
+    if now - day_start > timedelta(hours=CLOSE_RUN_WINDOW_H):
+        return {"ok": True, "ran": False, "reason": "PAST_CLOSE_WINDOW"}
+    day = close_publish.close_key(now)
+    tfs = close_publish.due(now)
+    sets: dict = {}
+    computed = None
+    for tf in tfs:
+        got = _close_load(day, tf)
+        if got is None:
+            if computed is not None:
+                # One scan per call; the next call picks this one up.
+                return {"ok": True, "ran": True, "computed": computed, "next": tf,
+                        "due": tfs}
+            res = compute(tf, now)
+            if not res.get("ready"):
+                return {"ok": True, "ran": True, "reason": "DATA_NOT_CURRENT", "tf": tf,
+                        "current": res.get("current"), "of": res.get("of")}
+            got = {"recs": res["recs"], "rejected": res.get("rejected") or {}}
+            _kv_set(_close_set_key(day, tf), json.dumps(got, default=str),
+                    ttl_seconds=3 * 86_400)
+            computed = {"tf": tf, "picks": len(res["recs"]),
+                        "candidates": res.get("candidates")}
+        sets[tf] = got.get("recs") or []
+    result = _dispatch_once("tg:close", day, lambda: send(sets, now))
+
+    def _twitter():
+        return _post_twitter_signals(get_analysis("BTC", "1D"), get_analysis("ETH", "1D"))
+
+    tweet = _dispatch_once("tw:daily", day, _twitter) if result == "sent" else "skipped"
+    ok = result == "sent" or result.startswith("skipped")
+    return {"ok": ok, "ran": True, "due": tfs, "computed": computed,
+            "picks": {tf: [r["symbol"] + " " + r["direction"] for r in v] for tf, v in sets.items()},
+            "telegram": result, "twitter": tweet,
+            "reason": None if ok else "TELEGRAM_SEND_FAILED"}
+
+
+@app.post("/api/cron/close")
+def api_cron_close():
+    """The close trades: 1D every day at 00:00 UTC (8 AM SGT), plus the business
+    week on Saturday and the crypto week on Monday. Call it every few minutes
+    after the close: each call scans one due timeframe, and the call that finds
+    them all done sends the post (once per day)."""
+    if not (_scheduler_token_ok() or (os.getenv("CRON_SECRET") and _cron_authorized())):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    out = _close_run(datetime.now(timezone.utc))
+    return jsonify(out), 200 if out.get("ok") else 503
+
+
+@app.get("/api/closes")
+def api_closes():
+    """Today's close sets as recorded (what the post was built from)."""
+    now = datetime.now(timezone.utc)
+    day = close_publish.close_key(now)
+    return jsonify({"day": day, "due": close_publish.due(now),
+                    "sets": {tf: (_close_load(day, tf) or {}).get("recs")
+                             for tf in close_publish.due(now)}})
 
 
 @app.get("/api/cron/tao-snapshot")
@@ -6589,6 +6801,7 @@ def _hl_manage_token_ok() -> bool:
 # monitor, the daily Telegram/Twitter run, pattern alerts, the daily data
 # snapshots and the ML research collect/label jobs. POST only.
 _SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/monitor",
+                    "/api/cron/close",
                     "/api/cron/daily", "/api/patterns/alert",
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
@@ -7595,7 +7808,10 @@ def api_signals_monitor():
         # Closed candles only. A forming candle can un-touch a level before it
         # closes, and recording a hit from one would write an outcome the market
         # never confirmed.
-        return _monitor_candles(symbol, timeframe or "2H")
+        # Close trades (1D / business week / 1W) are walked on finer candles:
+        # one weekly bar would touch both a target and the stop.
+        tf = timeframe or "2H"
+        return _monitor_candles(symbol, close_publish.MONITOR_TF.get(tf, tf))
 
     try:
         summary = monitor.run_monitor(
@@ -7610,7 +7826,8 @@ def api_signals_monitor():
             # it got and the next tick resumes.
             budget_seconds=float(os.getenv("MONITOR_BUDGET_S",
                                            monitor.DEFAULT_BUDGET_SECONDS)),
-            limit=_int_arg("limit", 100, 1, 200))
+            limit=_int_arg("limit", 100, 1, 200),
+            windows=close_publish.WINDOWS)
     except Exception as exc:
         return _db_error_response(exc)
     print(f"[monitor] checked={summary['checked']} filled={summary['filled']} "

@@ -177,13 +177,13 @@ def test_the_telegram_workflow_retries():
     assert '"401"' in text and '"404"' in text, "config errors must not retry"
 
 
-def test_the_workflow_still_fires_after_the_boundary():
-    # The daily Telegram run is scheduled by the Cloudflare Worker.
+def test_the_close_post_fires_just_after_the_daily_close():
+    # The 4H Telegram run is retired; the close trades post after 00:00 UTC.
     from _worker_schedule import worker_schedule
-    runs = worker_schedule()["daily"]
-    assert runs, "the daily Telegram run must still be scheduled"
+    runs = worker_schedule()["close"]
+    assert runs, "the close trades must be scheduled"
     for hour, minute in runs:
-        assert hour % 4 == 0 and 0 < minute <= 15
+        assert hour == 0 and 0 < minute <= 50
 
 
 # ── kv.release ─────────────────────────────────────────────────────────────
