@@ -6232,10 +6232,21 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
             if _sl.mode() == "blend":
                 # The 15m engine triggers; sweep -> FVG and the 1H read only add
                 # (or, the 1H against, take) strength — no requirement.
-                s, why = _sl.blend(m15, sym, read_fn, now_ms=now_ms,
-                                   h1_fn=lambda: fetch_fn(sym, "1h"))
+                h1_cache: dict = {}
+
+                def _h1():
+                    if "bars" not in h1_cache:
+                        h1_cache["bars"] = fetch_fn(sym, "1h")
+                    return h1_cache["bars"]
+                s, why = _sl.blend(m15, sym, read_fn, now_ms=now_ms, h1_fn=_h1)
                 if why:
                     rejected.append(why)
+                if s is not None and _sl.min_adx() > 0:
+                    # Stand aside when the coin is not trending on 1H.
+                    block = _sl.adx_block(_h1(), s)
+                    if block:
+                        rejected.append(block)
+                        return None
                 return s
             s = _sl.new_setup(m15, sym, now_ms=now_ms)
             if s is None:
@@ -6308,6 +6319,7 @@ def api_hl_scalp():
     import scalp_live as _sl
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
                     "mode": _sl.mode(), "min_strength": _sl.min_strength(),
+                    "min_adx": _sl.min_adx(),
                     "setup": ("score = 15m engine + 10 for a sweep -> FVG the same way "
                               "+/- 5 for the 1H read with / against; 75+ trades. Stop: the "
                               "last swing (0.2-3% away) else 1.5 ATR; target: the next "

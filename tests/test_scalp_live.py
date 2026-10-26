@@ -41,7 +41,7 @@ NOW = 19 * M + 60_000           # one minute after candle 18 closed
 def clean_env(monkeypatch):
     for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN",
               "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER",
-              "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS"):
+              "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS", "SCALP_MIN_ADX"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -435,6 +435,40 @@ def test_blend_run_alerts_engine_scalps(app_mod, monkeypatch):
     out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
     assert out["new"] == 1 and calls[0][0]["kind"] == "engine"
     assert "15m 80 + sweep 10 + 1H 5 = 95" in app_mod._sent[0]
+
+
+def _h1_bars(trend: bool):
+    """1H candles: a steady climb (ADX high) or a back-and-forth range (ADX low)."""
+    out = []
+    for k in range(sl.H1_WINDOW):
+        c = 100 + 2 * k if trend else 100 + (1 if k % 2 else -1)
+        out.append({"timestamp": k * H, "open": c, "high": c + 0.5, "low": c - 0.5,
+                    "close": c, "volume": 1.0})
+    return out
+
+
+def test_adx_filter_rules(monkeypatch):
+    s = {"symbol": "SOL", "direction": "SHORT"}
+    assert sl.min_adx() == 25
+    assert sl.adx_block(_h1_bars(True), s) is None                     # trending: trade
+    why = sl.adx_block(_h1_bars(False), s)
+    assert why.startswith("SOL SHORT: 1H ADX") and "< 25 (no trend)" in why
+    assert sl.adx_block([], s) is None                                  # unknown never blocks
+    monkeypatch.setenv("SCALP_MIN_ADX", "0")
+    assert sl.adx_block(_h1_bars(False), s) is None                     # 0 = off
+
+
+def test_blend_run_stands_aside_when_the_coin_is_not_trending(app_mod, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
+    fetch = lambda sym, iv: padded() if iv == "15m" else _h1_bars(False)            # noqa: E731
+    read = lambda w, tf, s: {"direction": "LONG", "strength": 80} if s == "ETH" else {}  # noqa
+    out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
+    assert out["new"] == 0 and calls == [[]]
+    assert any(r.startswith("ETH LONG: 1H ADX") for r in out["rejected"])
+    trend = lambda sym, iv: padded() if iv == "15m" else _h1_bars(True)             # noqa: E731
+    monkeypatch.setattr(app_mod, "_kv_append_json", lambda *a, **k: None)
+    assert app_mod._scalp_run(NOW_B + 1, fetch_fn=trend, read_fn=read)["signals"]
 
 
 def test_engine_scalp_opens_at_market_risk_sized(app_mod, hl_fake, monkeypatch):
