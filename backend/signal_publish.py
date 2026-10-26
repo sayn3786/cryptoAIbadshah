@@ -117,7 +117,8 @@ def _candle_window(analysis: Dict[str, Any], timeframe: str):
 def persist_recommendation(rec: Dict[str, Any],
                            analysis: Optional[Dict[str, Any]] = None,
                            *, session=None,
-                           strategy_name: str = STRATEGY_NAME) -> PersistResult:
+                           strategy_name: str = STRATEGY_NAME,
+                           strategy_version: Optional[str] = None) -> PersistResult:
     """
     Persist ONE published recommendation.
 
@@ -175,7 +176,7 @@ def persist_recommendation(rec: Dict[str, Any],
             timeframe=timeframe,
             direction=direction,
             strategy_name=strategy_name,
-            strategy_version=STRATEGY_VERSION,
+            strategy_version=strategy_version or STRATEGY_VERSION,
             candle_open_time=open_t,
             candle_close_time=close_t,
             generated_at=generated_at,

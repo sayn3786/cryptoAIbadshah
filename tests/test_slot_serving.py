@@ -229,22 +229,10 @@ def test_the_publish_cron_exists_and_is_authorized():
         _os.environ.pop("CRON_SECRET", None)
 
 
-def test_the_publish_schedule_runs_often_enough_to_absorb_delay():
-    # It used to fire only at the six boundaries, which assumed GitHub cron
-    # arrives near its schedule. It does not — observed delays of one to THREE
-    # hours meant a run saw a non-boundary candle, published nothing and
-    # reported success. Two of the first four slots were lost that way.
-    #
-    # Running every hour (now from the Cloudflare Worker, with retries inside
-    # the hour) is what makes a delay or a timed-out attempt harmless: the slot
-    # publishes late rather than never.
+def test_the_4h_publish_is_retired_from_the_schedule():
+    # The close trades replaced the 4H publication; nothing calls publish now.
     from _worker_schedule import worker_schedule
-    runs = worker_schedule()["publish"]
-    assert {h for h, _ in runs} == set(range(24)), "must run every hour, not only on the boundaries"
-    for h in range(0, 24, 4):
-        first = min(m for hh, m in runs if hh == h)
-        assert 0 < first <= 15, f"the {h:02d}:00 slot must be tried just after the close"
-    assert len([m for hh, m in runs if hh == 0]) >= 2, "a timed-out attempt must be retried within the hour"
+    assert "publish" not in worker_schedule()
 
 
 def test_a_frequent_cron_is_only_affordable_because_it_checks_first():

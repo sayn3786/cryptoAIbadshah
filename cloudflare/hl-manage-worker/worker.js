@@ -5,11 +5,9 @@
 // at all. The app does all the work; this Worker is only the clock.
 //
 //   every minute         position manager   POST /api/hl/manage   (stop → entry after TP1)
-//   hh:02, hh:12, hh:32  publish signals    POST /api/cron/publish  (+ HL auto-exec)
+//   00:03 … 00:48        close trades       POST /api/cron/close  (1D; +BW Sat; +1W Mon)
 //   hh:05, hh:35         outcome monitor    POST /api/signals/monitor
 //   hh:01/16/31/46       15m scalp book     POST /api/cron/scalp  (testnet HL scalps)
-//   00:07, 08:07, 12:07  Telegram daily     POST /api/cron/daily
-//   hh:07, hh:17, hh:37  persisted Telegram POST /api/cron/telegram (slot dedup)
 //   00:15                daily update       POST /api/patterns/alert  (1D/1W list → Telegram)
 //   00:20                TAO snapshot       POST /api/cron/tao-snapshot
 //   01:30                data snapshots     POST /api/cron/etf-snapshot, /api/cron/market-snapshot
@@ -17,12 +15,11 @@
 //   every 2h at 01:15…   ML label           POST /api/research/ml/label    (01:15, 03:15, …)
 //   Sunday 06:17         weekly report      POST /api/cron/weekly-report  (→ PRIVATE Telegram chat)
 //
-// Publish runs three times an hour. The 4H slot publishes at :02 right after
-// the close, and the :12 / :32 runs retry when exchange data lagged or a cold
-// start timed out. Once a slot is published, extra runs return
-// SLOT_ALREADY_PUBLISHED in about a second. Every job is safe to repeat (keyed
-// per slot / candle / alert), so a manual GitHub run alongside never
-// double-sends or double-trades. This Worker is the only scheduler.
+// The close job runs eight times after 00:00 UTC. Each call scans one due
+// timeframe (1D; the business week on Saturday; the crypto week on Monday) and
+// the call that finds them all done sends one grouped post. Every job is safe
+// to repeat (keyed per day / candle / alert), so a manual run alongside never
+// double-sends. This Worker is the only scheduler. The 4H publication is retired.
 //
 // Problem alerts: when a job fails after its retries (app down or unreachable,
 // a 401 token mismatch, a 5xx, a timeout), the Worker messages the owner's
@@ -47,24 +44,23 @@ const DEFAULT_RETRY_ON = [0, 500, 502, 504];
 const ML_BODY = { symbols: ["BTC", "ETH"], source: "okx", write: true };
 
 const S = { secret: "SCHEDULER_TOKEN", header: "x-scheduler-token", timeoutMs: 75_000 };
+const CLOSE_MINUTES = [3, 8, 13, 18, 23, 28, 38, 48];
 
 const JOBS = [
   { name: "manage", path: "/api/hl/manage", secret: "HL_MANAGE_TOKEN",
     header: "x-hl-manage-token", timeoutMs: 50_000, retries: 0,
     due: () => true },
-  { name: "publish", path: "/api/cron/publish", ...S, retries: 2,
-    due: ({ m }) => m === 2 || m === 12 || m === 32 },
   { name: "monitor", path: "/api/signals/monitor", ...S, retries: 0,
     due: ({ m }) => m === 5 || m === 35 },
   // One minute after each 15m close: the scalp book (HL testnet only).
   { name: "scalp", path: "/api/cron/scalp", ...S, retries: 0,
     due: ({ m }) => m % 15 === 1 },
-  { name: "daily", path: "/api/cron/daily", ...S, retries: 2,
-    due: ({ h, m }) => (h === 0 || h === 8 || h === 12) && m === 7 },
-  // All publication slots, including late publication retries. Same app-side
-  // dedup key as the daily/manual sends; never computes or executes trades.
-  { name: "telegram", path: "/api/cron/telegram", ...S, retries: 2,
-    due: ({ m }) => m === 7 || m === 17 || m === 37 },
+  // The close trades, 00:00 UTC (8 AM SGT): 1D every day, + the business week
+  // on Saturday, + the crypto week on Monday. Each call scans one due
+  // timeframe; the call that finds them all done sends the post (once a day).
+  // The 4H publication (publish / telegram / daily) is retired.
+  { name: "close", path: "/api/cron/close", ...S, retries: 1,
+    due: ({ h, m }) => h === 0 && CLOSE_MINUTES.includes(m) },
   // Once a day after the 1D close: the 1D/1W Market Update list.
   { name: "patterns", path: "/api/patterns/alert", ...S, retries: 1,
     due: ({ h, m }) => h === 0 && m === 15 },
@@ -100,7 +96,9 @@ const SUMMARY_KEYS = ["ok", "ran", "reason", "positions", "actions", "computed",
   // how much the sections a price-only backtest can't see moved strength
   "live_data_effect",
   // scalp: the 15m signals read, how many were new, what the HL scalp book did
-  "signals", "new", "scalp_hl"];
+  "signals", "new", "scalp_hl",
+  // close: which close timeframes were due, scanned, picked and posted
+  "due", "next", "tf", "picks", "twitter"];
 
 const RETRY_DELAY_MS = 20_000;       // a timed-out publish leaves the cache warmer
 
@@ -191,10 +189,9 @@ const BENIGN_CODES = new Set(["FEATURE_DISABLED"]);   // ML research switched of
 // times a day and alert on every failure.
 const ALERT_WHEN = {
   manage: ({ m }) => m % 30 === 0,        // every-minute job: at most twice an hour
-  publish: ({ m }) => m === 32,           // the hour's last try: :02/:12 may still recover
+  close: ({ m }) => m === 48,             // the morning's last try: earlier calls may still recover
   monitor: ({ m }) => m === 35,           // at most hourly
   scalp: ({ m }) => m === 1,              // every-15-min job: at most hourly
-  telegram: ({ m }) => m === 37,         // hourly, after earlier notification retries
 };
 
 const HINTS = {

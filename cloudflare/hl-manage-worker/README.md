@@ -6,10 +6,8 @@ decides which jobs run:
 | When (UTC) | Job | Endpoint | Token |
 |---|---|---|---|
 | every minute | Position manager: stop → entry at 1R (v54), cancels leftover exit orders | `POST /api/hl/manage` | `HL_MANAGE_TOKEN` |
-| hh:02, hh:12, hh:32 | **Publish signals** (+ HL auto-exec entry) | `POST /api/cron/publish` | `SCHEDULER_TOKEN` |
+| 00:03, :08, :13, :18, :23, :28, :38, :48 UTC | **Close trades**: 1D top 5 daily; + business week (Mon-Fri) on Saturday; + crypto week (1W) on Monday; one grouped post | `POST /api/cron/close` | `SCHEDULER_TOKEN` |
 | hh:05, hh:35 | Outcome monitor (TP/SL hits, expiry) | `POST /api/signals/monitor` | `SCHEDULER_TOKEN` |
-| 00:07, 08:07, 12:07 | Telegram daily signals (+ Twitter) | `POST /api/cron/daily` | `SCHEDULER_TOKEN` |
-| Every hour :07, :17, :37 | Notify current persisted signal slot; deduplicated with daily/manual sends | `POST /api/cron/telegram` | `SCHEDULER_TOKEN` |
 | 00:15, 08:15, 16:15 | Pattern alerts → Telegram | `POST /api/patterns/alert` | `SCHEDULER_TOKEN` |
 | 00:20 | TAO snapshot | `POST /api/cron/tao-snapshot` | `SCHEDULER_TOKEN` |
 | 01:30 | ETF-flow and market snapshots | `POST /api/cron/etf-snapshot`, `/api/cron/market-snapshot` | `SCHEDULER_TOKEN` |
@@ -29,12 +27,16 @@ unsent: the publication ledger requires actual persisted signal IDs.
 
 Why: GitHub's schedules are best-effort. Publishing ran 1–3 hours late or not
 at all, which made signals late and HL entries stale. Vercel's free-plan cron
-only promises "within the hour". Cloudflare fires on time. Publish runs three
-times an hour: the 4H slot publishes at :02 right after the close, and :12 / :32
-retry if exchange data lagged or a cold start timed out. Once a slot is
-published, extra runs return `SLOT_ALREADY_PUBLISHED` in about a second.
-Timeouts and 5xx errors are retried (publish up to 3 attempts); auth errors are
-not. The ML jobs keep their old rule: 503 is never retried, because it may
+only promises "within the hour". Cloudflare fires on time.
+
+**Close trades** (replace the retired 4H publication). Every close is 00:00 UTC
+= 8 AM SGT. Each call scans ONE due timeframe (about 30 analyses, to fit the
+60 s limit) and keeps the picks; the call that finds every due close done sends
+one grouped post to the channel (`TELEGRAM_CHAT_ID`) plus a private copy, once
+a day. While the exchanges still serve the old candle a call answers
+`DATA_NOT_CURRENT` and the next one retries; after 03:00 UTC a missed close is
+not published late. Timeouts and 5xx are retried once; auth errors are not.
+The ML jobs keep their old rule: 503 is never retried, because it may
 already have recorded a failure.
 
 **Weekly report.** It goes only to `TELEGRAM_REPORT_CHAT_ID` in Vercel: your
@@ -80,7 +82,7 @@ channel):
 
 The Worker alerts directly rather than through the app, because a broken app
 can't report on itself. Throttled: the every-minute position manager alerts at
-most twice an hour, publish only on the hour's last try (:32), and the monitor
+most twice an hour, close only on the morning's last try (00:48), and the monitor
 at most hourly. Expected responses (ML switched off) never alert. Each app
 alert is sent once (deduped); a still-failing problem repeats every 4 hours at
 most.
@@ -151,11 +153,11 @@ curl -s -X POST -H "x-hl-manage-token: <HL_MANAGE_TOKEN>" \
   https://cryptomarket-sigma.vercel.app/api/hl/manage | python3 -m json.tool
 
 curl -s -X POST -H "x-scheduler-token: <SCHEDULER_TOKEN>" \
-  https://cryptomarket-sigma.vercel.app/api/cron/publish | python3 -m json.tool
+  https://cryptomarket-sigma.vercel.app/api/cron/close | python3 -m json.tool
 ```
-The first should show `"ok": true, "ran": true`. The second should show `"ok": true`,
-usually with `"skipped_reason": "SLOT_ALREADY_PUBLISHED"`. That's harmless;
-it publishes only if the current slot hasn't been published yet.
+The first should show `"ok": true, "ran": true`. The second should show `"ok": true`;
+outside 00:00-03:00 UTC with `"reason": "PAST_CLOSE_WINDOW"` (harmless), in the
+window it scans a due close or answers `"telegram": "skipped (already sent…)"`.
 
 The Worker logs one line per job (with a `"job"` field) under **Observability**.
 Persisted Workers Logs and invocation logs are enabled in `wrangler.toml` at
@@ -175,12 +177,10 @@ Platform quotas/retention still apply; this is not a permanent audit archive.
 | `"action":"close_remainder","closed":true` | Price was already back through entry; the remainder was closed. |
 | `"ran":false,"reason":"DISARMED"` | Live trading is off in Vercel (`LIVE_TRADING_ENABLED` / kill switch). Expected if you disarmed it. |
 | `"status":401` / `AUTH_REQUIRED` | The token differs between Cloudflare and Vercel, or Vercel wasn't redeployed after changing it. |
-| `"job":"publish","persisted":N` | The slot was published: N new signals (HL auto-exec ran on them). |
-| `"job":"publish","skipped_reason":"SLOT_ALREADY_PUBLISHED"` | Already published this slot; nothing new to publish. In the slot's first hour it still runs HL auto-exec (see `"hl"`), so a trade missed by a timed-out publish is caught up. |
-| `"hl":{"ran":true,"attempted":N,"executed":M}` | HL auto-exec ran on N Confirmed signals and opened M positions (the rest were already open, stale, etc.). |
-| `"hl":{"ran":false,"reason":"NOT_READY"}` | Auto-exec is off or disarmed in Vercel (`HL_AUTO_EXECUTE`, arm switch). |
-| `"hl":{"reason":"NO_CONFIRMED_SIGNALS"}` | No signal in this slot reached `HL_AUTO_MIN_STRENGTH`. |
-| `"job":"publish","status":504,"attempts":3` | Every attempt hit Vercel's 60 s limit; the next :12/:32 run retries. |
+| `"job":"close","computed":{"tf":"1D","picks":5},"next":"1W"` | Scanned the 1D close (5 picks); the next call scans the crypto week. |
+| `"job":"close","telegram":"sent","picks":{...}` | Every due close is in; the grouped post went out. |
+| `"job":"close","reason":"DATA_NOT_CURRENT"` | The exchanges still serve the previous candle; the next call retries. |
+| `"job":"close","status":504` | A scan hit Vercel's 60 s limit; the next call retries. |
 | `APP_URL or … is not configured` | That token's Secret is missing (see step 5). Only its jobs are skipped. |
 | Build fails in 0 seconds | Wrong root directory, or the Worker name ≠ `name` in `wrangler.toml`. |
 

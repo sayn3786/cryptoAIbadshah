@@ -468,7 +468,8 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
                 fill_window_hours: int = DEFAULT_FILL_WINDOW_HOURS,
                 breakeven_after_partial: bool = BREAKEVEN_AFTER_PARTIAL,
                 budget_seconds: float = DEFAULT_BUDGET_SECONDS,
-                limit: int = 100) -> Dict[str, Any]:
+                limit: int = 100,
+                windows: Optional[Dict[str, tuple]] = None) -> Dict[str, Any]:
     """
     Evaluate every working signal and record what the market did to it.
 
@@ -480,7 +481,11 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
     One signal's failure never stops the run: it is reported and the rest
     continue. A monitor that abandons the batch on the first bad row is worse
     than no monitor, because the remaining trades silently stay open.
+
+    ``windows`` maps a signal timeframe to its own (fill window h, max age h):
+    a weekly trade must not be expired on the 4H book's 72-hour clock.
     """
+    windows = windows or {}
     started = time.monotonic()
     # Where the time actually goes. Two rounds of tuning were guided by guesses
     # about which half was slow; this reports it instead.
@@ -571,10 +576,11 @@ def run_monitor(store, fetch_candles: Callable[[str, str], Sequence[Dict[str, An
                 continue                 # no market data this run
             detail = row
             _t = time.monotonic()
+            _fill_h, _age_h = windows.get(timeframe, (fill_window_hours, max_age_hours))
             actions = evaluate(detail, detail.get("targets") or [],
                                candle_cache[key], now=now,
-                               max_age_hours=max_age_hours,
-                               fill_window_hours=fill_window_hours,
+                               max_age_hours=_age_h,
+                               fill_window_hours=_fill_h,
                                breakeven_after_partial=breakeven_after_partial)
 
             # MFE/MAE is a measurement of a position, not a change to it, so it
