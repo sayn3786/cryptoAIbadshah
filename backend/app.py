@@ -7729,13 +7729,13 @@ def api_signals_tracker():
         return guard
     store = _signal_store()
     import signal_tracker as tracker
-    days = _int_arg("days", tracker.CLOSED_WINDOW_DAYS, 1, 31)
+    days = _int_arg("days", tracker.CLOSED_WINDOW_DAYS, 1, 365)
     env = request.args.get("environment")
     import signal_publish as _sp
     try:
         active = store.list_active_signals(limit=100, environment=env)
         closed = []
-        for page in range(1 if days <= 3 else 4):        # 100 a page; a month needs more
+        for page in range(1 if days <= 3 else 4 if days <= 31 else 20):   # 100 a page
             got = store.list_signals(statuses=list(tracker.TERMINAL_STATUSES),
                                      environment=env, limit=50 if days <= 3 else 100,
                                      offset=page * 100, with_total=False)["items"]

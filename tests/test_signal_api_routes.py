@@ -313,7 +313,7 @@ def test_tracker_asks_only_for_terminal_statuses_in_the_closed_list(client, fake
 
 def test_tracker_window_is_bounded(client, fake, monkeypatch):
     monkeypatch.setattr(appmod, "get_analysis", lambda *a, **k: {})
-    assert client.get("/api/signals/tracker?days=999").get_json()["window_days"] == 31  # the month view
+    assert client.get("/api/signals/tracker?days=999").get_json()["window_days"] == 365  # the custom range, up to a year
     assert client.get("/api/signals/tracker?days=junk").get_json()["window_days"] == 3
 
 

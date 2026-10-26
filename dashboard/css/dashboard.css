@@ -2442,3 +2442,19 @@ html { overflow-x: hidden; }
 .per-sum b { font-weight: 700; }
 #trackerBody .hlp-wrap { margin-bottom: 4px; }
 #hlClosedBox { margin-top: 16px; }
+.per-range { display: inline-flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted2); }
+.per-range label { display: inline-flex; align-items: center; gap: 6px; }
+.per-date { background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 8px; font: inherit; min-height: 32px; color-scheme: dark; }
+.per-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 2px 0 10px; }
+.per-stat { background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; min-width: 0; }
+.per-stat span { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted2); }
+.per-stat b { display: block; font-family: var(--mono); font-size: 16px; color: var(--text); margin-top: 3px; }
+.per-stat b.bull { color: var(--green, #10b981); } .per-stat b.bear { color: var(--red, #ef4444); }
+.per-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.per-dl { background: var(--card2); color: var(--gold); border: 1px solid var(--border); border-radius: 8px;
+  font-size: 12.5px; font-weight: 700; padding: 7px 12px; min-height: 34px; cursor: pointer; }
+.per-dl:disabled { opacity: .45; cursor: default; }
+.per-dl:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.per-note { font-size: 11.5px; color: var(--muted); }
+@media (max-width: 640px) { .per-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

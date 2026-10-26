@@ -203,10 +203,10 @@ def enrich_positions(state: Dict[str, Any], orders: Any,
 
 
 DEFAULT_CLOSED_DAYS = 3          # how long a closed trade stays in the list
-MAX_CLOSED_DAYS = 31             # the dashboard's "month" view
-_CLOSED_LOOKBACK_DAYS = 45       # pair against opens this far back
+MAX_CLOSED_DAYS = 365            # the dashboard's custom range, up to a year
+_CLOSED_LOOKBACK_DAYS = MAX_CLOSED_DAYS + 14   # pair against opens this far back
 _FILLS_PAGE = 2000               # userFillsByTime returns at most this many per call
-_FILLS_PAGES = 6
+_FILLS_PAGES = 10               # HL serves at most the 10,000 most recent fills
 
 
 def fills_paged(addr: str, start_ms: int, *, env: Optional[str] = None,
