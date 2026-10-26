@@ -47,7 +47,7 @@ SYMBOLS = ("BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "AVAX", "LINK", "SUI",
 MAX_BASIS = 0.01          # skip a coin whose HL price is >1% from the candles' price
 ENTRY_AT = "top"
 ENTRY_MS = sweep_fvg.ENTRY_BARS * M15_MS          # a limit is good for 2 hours
-DEFAULT_MAX_HOLD_HOURS = 12.0
+DEFAULT_MAX_HOLD_HOURS = 4.0     # a scalp that drifts for hours is not a scalp
 DEFAULT_MAX_OPEN = len(SYMBOLS)   # one per scalp coin: in effect no cap (owner's call)
 ENTRY_MATCH = 0.02        # a held position is "the scalp" within 2% of its entry
 
@@ -78,6 +78,30 @@ def max_hold_ms() -> int:
 
 def max_open() -> int:
     return int(_num_env("SCALP_MAX_OPEN", DEFAULT_MAX_OPEN))
+
+
+# An opposite signal FLIPS a running scalp only when it is strong and the coin
+# has not flipped recently; otherwise the scalp is just closed and the book
+# waits. In chop the 15m read swings long/short and every flip paid twice.
+DEFAULT_FLIP_MIN_STRENGTH = 85.0
+DEFAULT_FLIP_COOLDOWN_HOURS = 2.0
+
+
+def flip_min_strength() -> float:
+    return _num_env("SCALP_FLIP_MIN_STRENGTH", DEFAULT_FLIP_MIN_STRENGTH)
+
+
+def flip_cooldown_ms() -> int:
+    return int(_num_env("SCALP_FLIP_COOLDOWN_HOURS", DEFAULT_FLIP_COOLDOWN_HOURS) * H1_MS)
+
+
+def flip_block(setup: Dict[str, Any], *, flipped_recently: bool) -> Optional[str]:
+    """Why an opposite signal must NOT open the other way (None: flip). Pure."""
+    if float(setup.get("strength") or 0) < flip_min_strength():
+        return f"{float(setup.get('strength') or 0):g} is below {flip_min_strength():g} to flip"
+    if flipped_recently:
+        return f"flipped within the last {flip_cooldown_ms() / H1_MS:g}h"
+    return None
 
 
 # ── sizing: a fixed $ risk, leverage capped by market-cap tier ──────────────

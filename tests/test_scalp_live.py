@@ -40,13 +40,14 @@ NOW = 19 * M + 60_000           # one minute after candle 18 closed
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN",
-              "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER"):
+              "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER",
+              "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS"):
         monkeypatch.delenv(k, raising=False)
 
 
 def test_defaults_and_switches(monkeypatch):
     assert sl.enabled() and sl.auto_enabled()
-    assert sl.max_hold_ms() == 12 * H and sl.max_open() == 18 and sl.ENTRY_MS == 2 * H
+    assert sl.max_hold_ms() == 4 * H and sl.max_open() == 18 and sl.ENTRY_MS == 2 * H
     monkeypatch.setenv("HL_SCALP_AUTO_EXECUTE", "0")
     assert sl.enabled() and not sl.auto_enabled()
     monkeypatch.setenv("SCALP_ENABLED", "off")
@@ -97,8 +98,8 @@ def test_sweep_pending_entries():
 def test_sweep_open_scalps():
     pos = [{"coin": "ETH", "side": "long", "entry_px": 100.5}]
     r = rec(state="open", opened_ms=0)
-    assert sl.sweep({"ETH": r}, pos, [], {}, now_ms=12 * H)["close"] == ["ETH"]
-    assert sl.sweep({"ETH": r}, pos, [], {}, now_ms=11 * H)["close"] == []
+    assert sl.sweep({"ETH": r}, pos, [], {}, now_ms=4 * H)["close"] == ["ETH"]    # 4h max hold
+    assert sl.sweep({"ETH": r}, pos, [], {}, now_ms=3 * H)["close"] == []
     assert sl.sweep({"ETH": r}, [{"coin": "ETH", "side": "short", "entry_px": 100}], [], {},
                     now_ms=H)["drop"] == ["ETH"]                                  # a 4h trade now
     assert sl.sweep({"ETH": r}, [], [], {}, now_ms=H)["drop"] == ["ETH"]
@@ -164,6 +165,7 @@ def app_mod(monkeypatch):
     mem = {}
     monkeypatch.setattr(kv, "set_value", lambda k, v, ttl_seconds=0: mem.__setitem__(k, v) or True)
     monkeypatch.setattr(kv, "get_value", lambda k: mem.get(k))
+    monkeypatch.setattr(kv, "exists", lambda k: k in mem)
     monkeypatch.setattr(kv, "claim", lambda k, ttl_seconds=0: (k not in mem)
                         and (mem.__setitem__(k, "1") or True))
     sent = []
@@ -174,6 +176,7 @@ def app_mod(monkeypatch):
         raise RuntimeError("no HL in tests")
     monkeypatch.setattr(hl_meta, "asset_table", _no_hl)
     app._sent = sent
+    app._mem = mem
     return app
 
 
@@ -587,7 +590,7 @@ def test_opposite_signal_flips_the_scalp(app_mod, hl_fake, monkeypatch):
                              "notional_usd": 115.3, "exits_ok": True}]}
     monkeypatch.setattr(hl_autoexec, "execute", execute)
     app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0)})
-    long_ = {"kind": "engine", "symbol": "AAVE", "direction": "LONG", "strength": 78.0,
+    long_ = {"kind": "engine", "symbol": "AAVE", "direction": "LONG", "strength": 88.0,
              "entry": 144.1, "limit": 144.1, "sl": 143.2, "target": 145.5, "rr": 1.55,
              "slot_ms": 9}
     out = app_mod._scalp_hl([long_], 2 * H)
@@ -597,8 +600,56 @@ def test_opposite_signal_flips_the_scalp(app_mod, hl_fake, monkeypatch):
     assert seen["orders"] == []
     assert app_mod._scalp_records()["AAVE"]["direction"] == "LONG"
     assert out["results"][0]["flipped"]
-    assert any("closed AAVE SHORT on an opposite signal" in t and "opened AAVE LONG 78" in t
+    assert any("closed AAVE SHORT on an opposite signal" in t and "opened AAVE LONG 88" in t
                for t in app_mod._sent)
+    assert any(k.startswith("scalp:flipped:") and k.endswith(":AAVE") for k in app_mod._mem)
+
+
+def _flip_setup(app_mod, hl_fake, monkeypatch, opened):
+    import hl_account
+    import hl_autoexec
+    import hl_meta
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"AAVE": "144.1"})
+    monkeypatch.setattr(hl_autoexec, "execute", lambda signals, **kw: opened.append(signals) or {
+        "results": [{"ok": True, "coin": "AAVE", "mark_px": 144.1, "size": 0.8,
+                     "notional_usd": 115.3, "exits_ok": True}]})
+    hl_fake["positions"] = AAVE_POS
+    hl_fake["orders"] = AAVE_ORDERS
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0)})
+
+
+def _long(strength):
+    return {"kind": "engine", "symbol": "AAVE", "direction": "LONG", "strength": strength,
+            "entry": 144.1, "limit": 144.1, "sl": 143.2, "target": 145.5, "rr": 1.55,
+            "slot_ms": 9}
+
+
+def test_a_weak_opposite_signal_closes_and_waits(app_mod, hl_fake, monkeypatch):
+    opened = []
+    _flip_setup(app_mod, hl_fake, monkeypatch, opened)
+    out = app_mod._scalp_hl([_long(78.0)], 2 * H)
+    assert hl_fake["closed"] == ["AAVE"] and opened == []                # closed, no LONG
+    assert "AAVE" not in app_mod._scalp_records()
+    r = out["results"][0]
+    assert r["ok"] and r["flipped"] is False and "78 is below 85 to flip" in r["note"]
+
+
+def test_no_second_flip_within_the_cooldown(app_mod, hl_fake, monkeypatch):
+    opened = []
+    _flip_setup(app_mod, hl_fake, monkeypatch, opened)
+    app_mod._mem[f"scalp:flipped:{app_mod._deploy_env()}:AAVE"] = "1"   # flipped an hour ago
+    out = app_mod._scalp_hl([_long(92.0)], 2 * H)
+    assert hl_fake["closed"] == ["AAVE"] and opened == []
+    assert "flipped within the last 2h" in out["results"][0]["note"]
+
+
+def test_flip_rules():
+    assert sl.flip_block({"strength": 85}, flipped_recently=False) is None
+    assert sl.flip_block({"strength": 84.9}, flipped_recently=False)
+    assert sl.flip_block({"strength": 95}, flipped_recently=True)
+    assert sl.flip_cooldown_ms() == 2 * H
 
 
 def test_flip_stops_if_the_close_fails(app_mod, hl_fake, monkeypatch):
