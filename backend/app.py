@@ -5261,35 +5261,63 @@ def _alert_manager_pass(out):
         app.logger.exception("manager alerts failed")
 
 
+# How close an HL trade's open or close must be to the scalp book's record of
+# it (same coin and side) to be that scalp. The book acts on the 15-minute
+# run, and records a stop or target hit by HL at the next run.
+_SCALP_MATCH_MS = 20 * 60_000
+
+
+def _scalp_match(t, rows):
+    """The scalp_trades row that is this closed HL trade, or None. Matched on
+    coin and side, then on the nearer of the open times or the close times."""
+    coin = str(t.get("coin") or "").upper()
+    side = "LONG" if t.get("side") == "long" else "SHORT"
+    best = None
+    for r in rows:
+        if r["symbol"] != coin or r["direction"] != side:
+            continue
+        gaps = [abs(a - b) for a, b in ((t.get("closed_at"), r["closed_ms"]),
+                                        (t.get("opened_at"), r["opened_ms"]),
+                                        (t.get("opened_at"), r["placed_ms"])) if a and b]
+        gap = min(gaps) if gaps else None
+        if gap is not None and gap <= _SCALP_MATCH_MS and (best is None or gap < best[0]):
+            best = (gap, r)
+    return best[1] if best else None
+
+
 def _tag_hl_closed(trades, days) -> None:
     """Which book each closed HL trade came from: a 15m scalp (with its exit
-    reason) when the scalp book recorded a close on that coin within minutes,
-    else the 4H book / manual. In place; best-effort, never raises."""
+    reason) when the scalp book's record matches it, else the 4H book. With
+    the 4H auto-exec switched off the scalp book is the only thing trading,
+    so an unmatched trade is still a scalp (its exit reason just unknown).
+    In place; best-effort, never raises."""
+    def _ms(v):
+        try:
+            return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp() * 1000
+        except (TypeError, ValueError):
+            return None
     try:
         import scalp_store as _ss
-        rows = [r for r in _ss.recent(_deploy_env(), days=int(days) + 2, limit=1000)
-                if r.get("status") == "CLOSED" and r.get("closed_at")]
+        raw = _ss.recent(_deploy_env(), days=int(days) + 2, limit=2000)
     except Exception:
-        rows = []
-    closes = []
-    for r in rows:
-        try:
-            at = datetime.fromisoformat(str(r["closed_at"]).replace("Z", "+00:00"))
-            closes.append((str(r.get("symbol") or "").upper(), at.timestamp() * 1000, r))
-        except (TypeError, ValueError):
-            continue
+        raw = []
+    rows = [{"symbol": str(r.get("symbol") or "").upper(),
+             "direction": str(r.get("direction") or "").upper(),
+             "closed_ms": _ms(r.get("closed_at")), "opened_ms": _ms(r.get("filled_at")),
+             "placed_ms": _ms(r.get("placed_at")), "exit_reason": r.get("exit_reason")}
+            for r in raw if r.get("status") in ("CLOSED", "OPEN")]
+    try:
+        import hl_autoexec
+        four_h = hl_autoexec.is_auto_enabled()
+    except Exception:
+        four_h = True
     for t in trades:
-        coin = str(t.get("coin") or "").upper()
-        best = None
-        for sym, ms, r in closes:
-            gap = abs(ms - (t.get("closed_at") or 0))
-            if sym == coin and gap <= 15 * 60_000 and (best is None or gap < best[0]):
-                best = (gap, r)
-        if best:
+        m = _scalp_match(t, rows)
+        if m:
             t["book"] = "15m scalp"
-            t["exit_reason"] = best[1].get("exit_reason")
+            t["exit_reason"] = m.get("exit_reason")
         else:
-            t["book"] = "4H / other"
+            t["book"] = "4H" if four_h else "15m scalp"
 
 
 @app.get("/api/hl/positions")

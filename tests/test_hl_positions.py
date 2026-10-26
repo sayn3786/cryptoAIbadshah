@@ -235,3 +235,41 @@ def test_fills_failure_still_returns_positions(monkeypatch):
     monkeypatch.setenv("HYPERLIQUID_ACCOUNT_ADDRESS", "0xABC")
     d = hl.positions_detail(session=_Session(fail=("userFillsByTime",)))
     assert "fills" in d["partial"] and len(d["positions"]) == 2 and d["closed_trades"] == []
+
+
+# ── which book a closed HL trade came from ──────────────────────────────────
+
+def _iso(ms):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat()
+
+
+def test_closed_trades_are_labelled_by_book(monkeypatch):
+    pytest.importorskip("flask")
+    import app as appmod
+    import hl_autoexec
+    import scalp_store
+    T = 1_792_900_000_000
+    M = 60_000
+    rows = [  # the scalp book's records
+        {"symbol": "ADA", "direction": "SHORT", "status": "CLOSED", "exit_reason": "stop",
+         "placed_at": _iso(T), "filled_at": _iso(T), "closed_at": _iso(T + 90 * M)},
+        # recorded open but never closed in the store: still matched on its open
+        {"symbol": "ONDO", "direction": "LONG", "status": "OPEN", "exit_reason": None,
+         "placed_at": _iso(T), "filled_at": _iso(T + M), "closed_at": None},
+    ]
+    monkeypatch.setattr(scalp_store, "recent", lambda env, days=14, limit=200: rows)
+    trades = [
+        {"coin": "ADA", "side": "short", "opened_at": T + 30 * 1000, "closed_at": T + 95 * M},
+        {"coin": "ONDO", "side": "long", "opened_at": T + 2 * M, "closed_at": T + 700 * M},
+        {"coin": "ADA", "side": "long", "opened_at": T + 3000 * M, "closed_at": T + 3100 * M},
+    ]
+    monkeypatch.setattr(hl_autoexec, "is_auto_enabled", lambda: False)
+    appmod._tag_hl_closed(trades, 3)
+    assert [(t["book"], t.get("exit_reason")) for t in trades] == [
+        ("15m scalp", "stop"), ("15m scalp", None), ("15m scalp", None)]   # 4H off: all scalps
+    monkeypatch.setattr(hl_autoexec, "is_auto_enabled", lambda: True)
+    for t in trades:
+        t.pop("book"), t.pop("exit_reason", None)
+    appmod._tag_hl_closed(trades, 3)
+    assert [t["book"] for t in trades] == ["15m scalp", "15m scalp", "4H"]  # wrong side: 4H
