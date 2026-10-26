@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '256';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '257';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2495,81 +2495,6 @@ function _renderRewardHistory() {
     .catch(() => {});
 }
 
-/* ─── Paper Account — simulated auto-execution of the published signals ─────── */
-// Reporting only: this places no orders and moves no funds. It shows what
-// auto-trading the current strategy_version at a fixed notional WOULD have made
-// or lost, net of fees, with an equity-curve sparkline. Defaults to $10/trade —
-// Hyperliquid's live minimum — so the number on the card is one you could
-// actually trade; $1 is below that floor and only fillable in simulation.
-const PAPER_TRADE_SIZE = 10;
-
-async function loadPaperAccount() {
-  const sec  = document.getElementById('paperSection');
-  const body = document.getElementById('paperBody');
-  const meta = document.getElementById('paperMeta');
-  if (!sec || !body) return;
-  try {
-    const r = await fetch(`${API}/paper/account?trade_size_usd=${PAPER_TRADE_SIZE}`);
-    if (!r.ok) { sec.style.display = 'none'; return; }
-    const a = await r.json();
-    const s = a.summary || {};
-    if (!s.filled_trades) {                          // nothing closed yet on this version
-      sec.style.display = '';
-      if (meta) meta.textContent = a.strategy_version || '';
-      body.innerHTML = `<div style="opacity:.65;font-size:13px">No closed trades yet on
-        <b>${a.strategy_version || 'this version'}</b> — the paper account fills as signals resolve.</div>`;
-      return;
-    }
-    sec.style.display = '';
-    const usd = v => (v < 0 ? '−$' : '$') + Math.abs(Number(v)).toFixed(2);
-    const up  = (s.net_pnl_usd || 0) >= 0;
-    const col = up ? '#22c55e' : '#ef4444';
-    if (meta) meta.textContent = `${a.strategy_version || ''} · $${(a.config||{}).trade_size_usd}/trade · simulated`;
-
-    // Equity-curve sparkline (oldest → newest; the API already returns it forward).
-    const pts = (a.equity_curve || []).map(p => Number(p.balance_usd)).filter(v => !isNaN(v));
-    let spark = '';
-    if (pts.length >= 2) {
-      const lo = Math.min(...pts), hi = Math.max(...pts), span = (hi - lo) || 1;
-      const W = 240, H = 40, step = W / (pts.length - 1);
-      const path = pts.map((v, i) =>
-        `${i ? 'L' : 'M'}${(i*step).toFixed(1)},${(H - 3 - ((v-lo)/span)*(H-6)).toFixed(1)}`).join(' ');
-      spark = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="flex:none;max-width:100%">
-        <path d="${path}" fill="none" stroke="${col}" stroke-width="1.6"
-              stroke-linejoin="round" stroke-linecap="round"/></svg>`;
-    }
-
-    const lr = a.live_readiness || {};
-    const liveNote = lr.size_meets_live_minimum
-      ? `✅ ${usd((a.config||{}).trade_size_usd)}/trade meets Hyperliquid's live minimum`
-      : `⚠️ below Hyperliquid's $${lr.hyperliquid_min_order_usd} live minimum — simulation only`;
-
-    const cell = (label, val, strong) => `<div style="display:flex;flex-direction:column;gap:1px">
-        <span style="opacity:.55;font-size:11px">${label}</span>
-        <span style="font-size:${strong?'15px':'13px'};font-weight:${strong?'700':'600'}">${val}</span></div>`;
-
-    body.innerHTML = `
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px">
-        ${spark}
-        <div style="display:flex;flex-direction:column;gap:2px">
-          <span style="font-size:22px;font-weight:800;color:${col}">${usd(s.net_pnl_usd)}</span>
-          <span style="opacity:.6;font-size:11px">net P&L · ${s.filled_trades} trades · from $${(a.config||{}).start_balance_usd}</span>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:9px 14px;margin-bottom:9px">
-        ${cell('Win rate', (s.win_rate_pct ?? '—') + '%')}
-        ${cell('Return', (s.net_return_pct ?? 0).toFixed(2) + '%', true)}
-        ${cell('End balance', usd(s.end_balance_usd), true)}
-        ${cell('Max drawdown', usd(-Math.abs(s.max_drawdown_usd || 0)))}
-        ${cell('Fees paid', usd(s.fees_paid_usd) + (s.fees_as_pct_of_gross != null ? ` (${s.fees_as_pct_of_gross}% of gross)` : ''))}
-      </div>
-      <div style="font-size:11px;opacity:.7">${liveNote}</div>
-      <div style="font-size:11px;opacity:.5;margin-top:4px">Simulated — no orders, no funds. Funding not modelled; fills at the signal's tracked entry/exit.</div>`;
-  } catch (_) { sec.style.display = 'none'; }
-}
-
-// Hyperliquid read-only connection status (Phase 1 diagnostic). Public, safe
-// summary from /api/hl/status — hidden entirely until the account is configured.
 async function loadHlStatus() {
   const sec  = document.getElementById('hlStatusCard');
   const body = document.getElementById('hlStatusBody');
@@ -2625,53 +2550,167 @@ const _hlCls = v => v > 0 ? 'bull' : v < 0 ? 'bear' : '';
 
 /* ─── Closed-trade periods (shared by the HL and the published lists) ──────
    Today / Yesterday are calendar days in the viewer's own time zone; Week and
-   Month are the last 7 / 30 days. The lists are fetched once for a month and
-   filtered here, so switching tabs is instant and costs no request. */
-const _PERIODS = [['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'Week'], ['month', 'Month']];
+   Month are the last 7 / 30 days; Custom is a from-to date range (up to a year
+   back). On screen: the totals only. The trade-by-trade detail is a CSV
+   download (opens in Excel). */
+const _PERIODS = [['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'Week'],
+                  ['month', 'Month'], ['custom', 'Custom']];
+const _DAY = 86_400_000;
+const _MAX_DAYS = 365;
 const _periodState = (() => {
   try { return JSON.parse(localStorage.getItem('cm_close_period') || '{}') || {}; }
   catch (_) { return {}; }
 })();
 const _periodOf = scope => _periodState[scope] || 'yesterday';
+const _ymd = ms => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const _localDay = ymd => { const [y, m, d] = String(ymd).split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
 
-function _periodRange(key) {
-  const now = Date.now();
-  const d = new Date();
-  const sod = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  if (key === 'today') return [sod, Infinity];
-  if (key === 'yesterday') return [sod - 86_400_000, sod];
-  if (key === 'week') return [now - 7 * 86_400_000, Infinity];
-  return [now - 30 * 86_400_000, Infinity];
+function _customRange(scope) {
+  const today = _localDay(_ymd(Date.now()));
+  let from = _periodState[scope + '_from'] ? _localDay(_periodState[scope + '_from']) : today - 30 * _DAY;
+  let to = _periodState[scope + '_to'] ? _localDay(_periodState[scope + '_to']) : today;
+  if (Number.isNaN(from)) from = today - 30 * _DAY;
+  if (Number.isNaN(to)) to = today;
+  if (to < from) [from, to] = [to, from];
+  return [Math.max(from, today - _MAX_DAYS * _DAY), to + _DAY];
 }
 
-function _inPeriod(ms, key) {
+function _periodRange(key, scope) {
+  const now = Date.now();
+  const sod = _localDay(_ymd(now));
+  if (key === 'today') return [sod, Infinity];
+  if (key === 'yesterday') return [sod - _DAY, sod];
+  if (key === 'week') return [now - 7 * _DAY, Infinity];
+  if (key === 'custom') return _customRange(scope);
+  return [now - 30 * _DAY, Infinity];
+}
+
+function _inPeriod(ms, key, scope) {
   if (ms == null || Number.isNaN(ms)) return false;
-  const [a, b] = _periodRange(key);
+  const [a, b] = _periodRange(key, scope);
   return ms >= a && ms < b;
+}
+
+// How many days back a scope's data must reach for its chosen period.
+function _daysNeeded(scope) {
+  if (_periodOf(scope) !== 'custom') return 31;
+  const [from] = _customRange(scope);
+  return Math.min(_MAX_DAYS, Math.max(31, Math.ceil((Date.now() - from) / _DAY) + 1));
+}
+
+function _periodLabel(scope) {
+  const key = _periodOf(scope);
+  if (key !== 'custom') return Object.fromEntries(_PERIODS)[key];
+  const [a, b] = _customRange(scope);
+  return `${_ymd(a)} → ${_ymd(b - _DAY)}`;
 }
 
 function _periodTabs(scope) {
   const cur = _periodOf(scope);
-  return `<span class="per-tabs" role="tablist">${_PERIODS.map(([k, label]) =>
+  const tabs = `<span class="per-tabs" role="tablist">${_PERIODS.map(([k, label]) =>
     `<button type="button" class="per-tab${k === cur ? ' on' : ''}" role="tab"
        aria-selected="${k === cur}" data-scope="${scope}" data-period="${k}">${label}</button>`).join('')}</span>`;
+  if (cur !== 'custom') return tabs;
+  const [a, b] = _customRange(scope);
+  const min = _ymd(Date.now() - _MAX_DAYS * _DAY), max = _ymd(Date.now());
+  return tabs + `<span class="per-range">
+    <label>From <input type="date" class="per-date" data-scope="${scope}" data-edge="from"
+      value="${_ymd(a)}" min="${min}" max="${max}"></label>
+    <label>To <input type="date" class="per-date" data-scope="${scope}" data-edge="to"
+      value="${_ymd(b - _DAY)}" min="${min}" max="${max}"></label></span>`;
 }
 
-// Re-renderers per scope, from the data each list last fetched.
-const _periodRender = {};
+// Per scope: re-render from loaded data, reload for a longer range, and the
+// rows of the current period (what the download writes).
+const _periodRender = {}, _periodReload = {}, _periodLoaded = {}, _periodRows = {};
+
+function _periodChanged(scope) {
+  try { localStorage.setItem('cm_close_period', JSON.stringify(_periodState)); } catch (_) {}
+  if (_daysNeeded(scope) > (_periodLoaded[scope] || 31) && _periodReload[scope]) _periodReload[scope]();
+  else (_periodRender[scope] || (() => {}))();
+}
+
 document.addEventListener('click', e => {
   const btn = e.target.closest('.per-tab');
-  if (!btn) return;
-  e.stopPropagation();
-  _periodState[btn.dataset.scope] = btn.dataset.period;
-  try { localStorage.setItem('cm_close_period', JSON.stringify(_periodState)); } catch (_) {}
-  (_periodRender[btn.dataset.scope] || (() => {}))();
+  if (btn) {
+    e.stopPropagation();
+    _periodState[btn.dataset.scope] = btn.dataset.period;
+    _periodChanged(btn.dataset.scope);
+    return;
+  }
+  const dl = e.target.closest('.per-dl');
+  if (dl) { e.stopPropagation(); _periodDownload(dl.dataset.scope); }
+});
+document.addEventListener('change', e => {
+  const inp = e.target.closest('.per-date');
+  if (!inp || !inp.value) return;
+  _periodState[`${inp.dataset.scope}_${inp.dataset.edge}`] = inp.value;
+  _periodChanged(inp.dataset.scope);
 });
 
-function _periodSummary(n, wins, pnlHtml) {
-  if (!n) return '';
-  return `<span class="per-sum">${n} closed · <b class="bull">${wins}W</b> · <b class="bear">${n - wins}L</b>`
-    + ` · ${Math.round(wins / n * 100)}%${pnlHtml ? ' · ' + pnlHtml : ''}</span>`;
+function _periodStats(scope, { n, wins, losses, realized, avg, unit, note }) {
+  const fmt = v => unit === '$' ? _hlUsd(+v.toFixed(2)) : _hlPct(v) || '0.00%';
+  const decided = wins + losses;
+  const stat = (label, val, cls = '') => `<div class="per-stat"><span>${label}</span><b class="${cls}">${val}</b></div>`;
+  return `<div class="per-stats">
+      ${stat('Trades', n)}
+      ${stat('Wins', wins, 'bull')}
+      ${stat('Losses', losses, 'bear')}
+      ${stat('Win rate', decided ? Math.round(wins / decided * 100) + '%' : '—')}
+      ${stat(unit === '$' ? 'Realized' : 'Total return', n ? fmt(realized) : '—', _hlCls(realized))}
+      ${stat('Avg / trade', n ? fmt(avg) : '—', _hlCls(avg))}
+    </div>
+    <div class="per-foot"><button type="button" class="per-dl" data-scope="${scope}" ${n ? '' : 'disabled'}>
+      ⬇ Download CSV${n ? ` (${n} trade${n === 1 ? '' : 's'})` : ''}</button>
+      <span class="per-note">${_periodLabel(scope)}${note ? ' · ' + note : ''} · opens in Excel</span></div>`;
+}
+
+const _csvCell = v => {
+  if (v == null) return '';
+  const t = String(v);
+  return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+};
+const _isoLocal = ms => (ms ? new Date(ms).toLocaleString('sv-SE').replace(' ', ' ') : '');
+
+const _CSV = {
+  hl: {
+    name: 'hyperliquid-trades',
+    head: ['Coin', 'Side', 'Book', 'Exit reason', 'Opened', 'Closed', 'Held (min)', 'Entry', 'Exit',
+           'Exits', 'Size', 'Notional USD', 'Gross P&L USD', 'Fees USD', 'Net P&L USD', 'P&L %', 'Result'],
+    row: t => [t.coin, t.side, t.book, t.exit_reason, _isoLocal(t.opened_at), _isoLocal(t.closed_at),
+               t.opened_at && t.closed_at ? Math.round((t.closed_at - t.opened_at) / 60000) : '',
+               t.entry_px, t.exit_px, t.exits, t.size,
+               t.entry_px ? +(t.entry_px * t.size).toFixed(2) : '', t.gross_pnl_usd, t.fees_usd,
+               t.pnl_usd, t.pnl_pct, t.result],
+  },
+  pub: {
+    name: 'published-signals',
+    head: ['Symbol', 'Timeframe', 'Side', 'Status', 'Result', 'Strength', 'Published', 'Closed',
+           'Entry', 'Filled at', 'Stop', 'Original stop', 'Targets', 'Targets hit', 'Exit',
+           'Close reason', 'Return %', 'R multiple', 'Best %', 'Worst %'],
+    row: r => [r.symbol, r.timeframe, r.direction, r.status, _tkResult(r)[0], r.confidence,
+               _isoLocal(_tkMs(r.opened_at)), _isoLocal(_tkMs(r.closed_at)), r.entry,
+               r.entry_fill_price, r.stop_loss, r.original_stop,
+               (r.targets || []).map(t => t.price).join(' / '), (r.targets_hit || []).length,
+               r.close_price, r.close_reason, r.realized_return_pct ?? r.move_pct,
+               r.r_multiple, r.mfe_pct, r.mae_pct],
+  },
+};
+
+function _periodDownload(scope) {
+  const spec = _CSV[scope], rows = _periodRows[scope] || [];
+  if (!spec || !rows.length) return;
+  const lines = [spec.head, ...rows.map(spec.row)].map(r => r.map(_csvCell).join(','));
+  // The BOM makes Excel read it as UTF-8 (arrows, accents) instead of guessing.
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const [a, b] = _periodRange(_periodOf(scope), scope);
+  const to = Number.isFinite(b) ? b - 1 : Date.now();
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `${spec.name}_${_ymd(a)}_${_ymd(to)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 1000);
 }
 
 function _hlPositionRow(p) {
@@ -2716,27 +2755,6 @@ const _hlDur = (a, b) => {
 };
 const _HL_RESULT = { win: ['WIN', 'bull'], loss: ['LOSS', 'bear'], breakeven: ['BREAK-EVEN', 'muted'] };
 
-const _HL_EXIT = { target: 'Target', stop: 'Stop', breakeven: 'Break-even', timeout: '12h timeout',
-                   other: 'TP ladder / manual' };
-
-function _hlClosedRow(t) {
-  const [label, cls] = _HL_RESULT[t.result] || ['—', 'muted'];
-  const side = (t.side || '').toUpperCase();
-  const held = _hlDur(t.opened_at, t.closed_at);
-  return `<tr>
-    <td class="hlp-coin" data-label="Coin"><b>${t.coin}</b><span class="hlp-side ${t.side === 'long' ? 'bull' : 'bear'}">${side}</span></td>
-    <td data-label="Book"><b>${t.book || '—'}</b><small>${t.exit_reason ? _HL_EXIT[t.exit_reason] || t.exit_reason : ''}</small></td>
-    <td data-label="Opened"><b>${_hlWhen(t.opened_at)}</b></td>
-    <td data-label="Closed"><b>${_hlWhen(t.closed_at)}</b><small>${held ? 'held ' + held : ''}</small></td>
-    <td data-label="Entry"><b>${_hlPx(t.entry_px)}</b></td>
-    <td data-label="Exit"><b>${_hlPx(t.exit_px)}</b><small>${t.exits > 1 ? `avg of ${t.exits} exits` : '1 exit'}</small></td>
-    <td data-label="Size"><b>${Number(t.size).toLocaleString('en-US', { maximumFractionDigits: 6 })}</b><small>${t.entry_px ? _hlUsd(t.entry_px * t.size) : ''}</small></td>
-    <td data-label="P&amp;L"><b class="${_hlCls(t.pnl_usd)}">${_hlUsd(t.pnl_usd)}</b><small class="${_hlCls(t.pnl_pct)}">${_hlPct(t.pnl_pct) || ''}</small></td>
-    <td data-label="Fees"><b>${t.fees_usd ? _hlUsd(t.fees_usd) : '—'}</b><small>gross ${_hlUsd(t.gross_pnl_usd)}</small></td>
-    <td data-label="Result"><span class="hlp-result ${cls}">${label}</span></td>
-  </tr>`;
-}
-
 // Collapsed state per section ('open' / 'closed'); per-viewer convenience, so
 // it survives the 30s re-render and reloads. Storage may be unavailable.
 const _hlCollapsed = (() => {
@@ -2756,19 +2774,19 @@ function _hlSection(key, headInner, bodyHtml, extraCls = '') {
 
 function _hlClosedHtml(all) {
   const key = _periodOf('hl');
-  const closed = all.filter(t => _inPeriod(t.closed_at, key));
+  const closed = all.filter(t => _inPeriod(t.closed_at, key, 'hl'));
+  _periodRows.hl = closed;
   const realized = closed.reduce((a, t) => a + (t.pnl_usd || 0), 0);
   const wins = closed.filter(t => t.result === 'win').length;
-  const label = Object.fromEntries(_PERIODS)[key].toLowerCase();
+  const losses = closed.filter(t => t.result === 'loss').length;
+  const even = closed.length - wins - losses;
   return _hlSection('closed',
     `<span class="hlp-title">Closed <b>${closed.length}</b></span>
      ${closed.length ? `<span>Realized <b class="${_hlCls(realized)}">${_hlUsd(+realized.toFixed(2))}</b></span>` : ''}`,
-    `<div class="per-bar">${_periodTabs('hl')}${_periodSummary(closed.length, wins, '')}</div>` +
-    (closed.length ? `<div class="hlp-wrap"><table class="hlp-table">
-      <thead><tr><th>Coin</th><th>Book</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th>
-        <th>Size</th><th>P&amp;L</th><th>Fees</th><th>Result</th></tr></thead>
-      <tbody>${closed.map(_hlClosedRow).join('')}</tbody>
-    </table></div>` : `<div class="hlp-empty">No trades closed ${label === 'today' || label === 'yesterday' ? label : 'this ' + label}.</div>`),
+    `<div class="per-bar">${_periodTabs('hl')}</div>` +
+    _periodStats('hl', { n: closed.length, wins, losses, realized,
+      avg: closed.length ? realized / closed.length : 0, unit: '$',
+      note: even ? `${even} break-even` : '' }),
     'hlp-head-closed');
 }
 
@@ -2796,7 +2814,8 @@ async function loadHlPositions() {
   const box = document.getElementById('hlPositions');
   if (!box) return;
   try {
-    const r = await fetch(`${API}/hl/positions?days=31`);
+    const days = _daysNeeded('hl');
+    const r = await fetch(`${API}/hl/positions?days=${days}`);
     if (!r.ok) { box.style.display = 'none'; return; }
     const d = await r.json();
     const rows = d.positions || [];
@@ -2814,7 +2833,9 @@ async function loadHlPositions() {
         <tbody>${rows.map(_hlPositionRow).join('')}</tbody>
       </table></div>` : `<div class="hlp-empty">No open positions.</div>`);
 
+    _periodLoaded.hl = days;
     _periodRender.hl = () => _hlRenderClosed(box, closed);
+    _periodReload.hl = loadHlPositions;
     const closedHtml = `<div id="hlClosedBox">${_hlClosedHtml(closed)}</div>`;
 
     _hlBindToggle(box);
@@ -7078,11 +7099,11 @@ function _buildRecCard(r, i) {
    the bar" and "the set has not been published yet" are different facts, and
    showing the conviction-threshold copy for a database problem would be a lie. */
 function _recEmptyState(data) {
-  const next = data.valid_until_fmt || 'next 4H close';
+  const next = '8:00 AM SGT daily close';
   const states = {
-    NOT_PUBLISHED_YET: ['⏳', 'No Set Published For This Slot',
-      `Signals publish on the 4H close. The ${data.slot || 'current'} set has not been recorded yet — ` +
-      `either the bar has not been processed, or nothing cleared the quality gates.`],
+    NOT_PUBLISHED_YET: ['🗓', 'Trades Publish On The Daily Close',
+      'The 4H sets are retired. Trades now publish at 8 AM SGT: the 1D top 5 every day, plus the ' +
+      'business week on Saturday and the crypto week on Monday. See Published signals below.'],
     DB_NOT_CONFIGURED: ['🔌', 'Signal Store Not Configured',
       'Recommendations are served from the recorded set, and no database is configured for this deploy.'],
     DB_READ_FAILED: ['⚠️', 'Could Not Read This Slot',
@@ -7470,7 +7491,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadRecommendations();
   loadTracker();
   loadPatternHistory();
-  loadPaperAccount();
   loadHlStatus();
   // Positions table (admin only) — keep entry/mark/P&L/SL/TP current.
   setInterval(() => {
@@ -8650,55 +8670,40 @@ const _tkMs = iso => (iso ? Date.parse(iso) : null);
 const _TK_RESULT = { TP_HIT: ['WIN', 'bull'], SL_HIT: ['LOSS', 'bear'], EXPIRED: ['EXPIRED', 'muted'],
                      CANCELLED: ['NOT FILLED', 'muted'], CLOSED: ['CLOSED', 'muted'] };
 
-function _tkClosedRow(r) {
-  let [label, cls] = _TK_RESULT[r.status] || [r.status, 'muted'];
+function _tkResult(r) {
   const ret = r.realized_return_pct ?? r.move_pct;
-  if (r.status === 'SL_HIT' && ret != null && ret >= 0) [label, cls] = ['BREAK-EVEN', 'muted'];
-  if (r.status === 'CLOSED' && ret != null) [label, cls] = ret > 0 ? ['WIN', 'bull'] : ret < 0 ? ['LOSS', 'bear'] : ['BREAK-EVEN', 'muted'];
-  const side = (r.direction || '').toUpperCase();
-  const hits = (r.targets_hit || []).length;
-  const tps = (r.targets || []).map(t => `${t.hit ? '✓' : ''}${fmtPrice(t.price)}`).join(' / ');
-  const opened = _tkMs(r.opened_at), closedAt = _tkMs(r.closed_at);
-  return `<tr>
-    <td class="hlp-coin" data-label="Coin"><b>${r.symbol}</b><span class="hlp-side ${side === 'LONG' ? 'bull' : 'bear'}">${side} · ${r.timeframe || ''}</span></td>
-    <td data-label="Published"><b>${_hlWhen(opened)}</b><small>${r.confidence != null ? `strength ${Math.round(r.confidence)}` : ''}</small></td>
-    <td data-label="Closed"><b>${_hlWhen(closedAt)}</b><small>${_hlDur(opened, closedAt) ? 'after ' + _hlDur(opened, closedAt) : ''}</small></td>
-    <td data-label="Entry"><b>${fmtPrice(r.entry)}</b><small>${r.entry_fill_price != null ? 'filled ' + fmtPrice(r.entry_fill_price) : 'not filled'}</small></td>
-    <td data-label="Stop"><b>${fmtPrice(r.stop_loss)}</b><small>${r.stop_moved ? 'moved from ' + fmtPrice(r.original_stop) : ''}</small></td>
-    <td data-label="Targets"><b>${hits}/${(r.targets || []).length} hit</b><small>${tps}</small></td>
-    <td data-label="Exit"><b>${fmtPrice(r.close_price)}</b><small>${(r.close_reason || '').replace(/_/g, ' ').toLowerCase()}</small></td>
-    <td data-label="P/L"><b class="${_hlCls(ret)}">${ret == null ? '—' : _hlPct(ret)}</b><small>${r.r_multiple != null ? `${r.r_multiple >= 0 ? '+' : ''}${r.r_multiple.toFixed(2)}R` : ''}</small></td>
-    <td data-label="Best / worst"><b>${r.mfe_pct != null ? '+' + r.mfe_pct.toFixed(2) + '%' : '—'}</b><small>${r.mae_pct != null ? r.mae_pct.toFixed(2) + '%' : ''}</small></td>
-    <td data-label="Result"><span class="hlp-result ${cls}">${label}</span></td>
-  </tr>`;
+  if (['SL_HIT', 'CLOSED', 'TP_HIT'].includes(r.status) && ret != null)
+    return ret > 0 ? ['WIN', 'bull'] : ret < 0 ? ['LOSS', 'bear'] : ['BREAK-EVEN', 'muted'];
+  return _TK_RESULT[r.status] || [r.status, 'muted'];
 }
 
 function _tkRender(body, scoreEl) {
   const { live, closed, liveBatches } = _tkData;
   const key = _periodOf('pub');
-  const rows = closed.filter(r => _inPeriod(_tkMs(r.closed_at) ?? _tkMs(r.opened_at), key))
+  const rows = closed.filter(r => _inPeriod(_tkMs(r.closed_at) ?? _tkMs(r.opened_at), key, 'pub'))
     .sort((x, y) => (_tkMs(y.closed_at) || 0) - (_tkMs(x.closed_at) || 0));
+  _periodRows.pub = rows;
   const decided = rows.filter(r => ['TP_HIT', 'SL_HIT', 'CLOSED'].includes(r.status));
-  const wins = decided.filter(r => (r.realized_return_pct ?? r.move_pct ?? 0) > 0).length;
-  const label = Object.fromEntries(_PERIODS)[key];
-  scoreEl.innerHTML = `${live.length} live · ` + (decided.length
-    ? `<span class="tk-win">${wins}W</span> · <span class="tk-loss">${decided.length - wins}L</span> ${label.toLowerCase()}`
-    : `no results ${label.toLowerCase()}`);
+  const res = decided.map(_tkResult);
+  const wins = res.filter(x => x[0] === 'WIN').length;
+  const losses = res.filter(x => x[0] === 'LOSS').length;
   const sumRet = decided.reduce((a, r) => a + (r.realized_return_pct ?? r.move_pct ?? 0), 0);
+  const unfilled = rows.length - decided.length;
+  const label = _periodLabel('pub').toLowerCase();
+  scoreEl.innerHTML = `${live.length} live · ` + (decided.length
+    ? `<span class="tk-win">${wins}W</span> · <span class="tk-loss">${losses}L</span> ${label}`
+    : `no results ${label}`);
   body.innerHTML =
     (live.length
       ? `<div class="tracker-group-title">Live — ${live.length}</div>`
         + _tkBatches(liveBatches, live, 'live')
       : `<div class="tk-empty">No live signals. The next set publishes at the next close (8 AM SGT).</div>`)
-    + `<div class="tracker-group-title">Closed — ${rows.length}</div>
-       <div class="per-bar">${_periodTabs('pub')}${_periodSummary(decided.length, wins,
-         decided.length ? `<b class="${_hlCls(sumRet)}">${_hlPct(sumRet)}</b> summed` : '')}</div>`
-    + (rows.length
-      ? `<div class="hlp-wrap"><table class="hlp-table">
-          <thead><tr><th>Coin</th><th>Published</th><th>Closed</th><th>Entry</th><th>Stop</th>
-            <th>Targets</th><th>Exit</th><th>P/L</th><th>Best / worst</th><th>Result</th></tr></thead>
-          <tbody>${rows.map(_tkClosedRow).join('')}</tbody></table></div>`
-      : `<div class="hlp-empty">Nothing closed ${key === 'today' || key === 'yesterday' ? label.toLowerCase() : 'this ' + label.toLowerCase()}.</div>`);
+    + `<div class="tracker-group-title">Closed</div>
+       <div class="per-bar">${_periodTabs('pub')}</div>`
+    + _periodStats('pub', { n: decided.length, wins, losses, realized: sumRet,
+        avg: decided.length ? sumRet / decided.length : 0, unit: '%',
+        note: unfilled ? `${unfilled} expired / not filled (in the CSV)` : '' })
+        .replace(`data-scope="pub" ${decided.length ? '' : 'disabled'}`, `data-scope="pub" ${rows.length ? '' : 'disabled'}`);
 }
 
 async function loadTracker(force) {
@@ -8709,7 +8714,8 @@ async function loadTracker(force) {
   if (!section || !body) return;
 
   try {
-    const res = await fetch(`${API}/signals/tracker?days=31`, force ? {cache: 'no-store'} : undefined);
+    const days = _daysNeeded('pub');
+    const res = await fetch(`${API}/signals/tracker?days=${days}`, force ? {cache: 'no-store'} : undefined);
     if (res.status === 503) {
       // No database configured: the tracker has nothing to track. Stay hidden
       // rather than showing an empty table that looks like "no trades".
@@ -8723,7 +8729,9 @@ async function loadTracker(force) {
     _tkApplySection();     // collapsed unless this browser chose otherwise
 
     _tkData = { live, closed, liveBatches: data.live_batches };
+    _periodLoaded.pub = days;
     _periodRender.pub = () => _tkRender(body, scoreEl);
+    _periodReload.pub = () => loadTracker(true);
     metaEl.textContent = data.environment && data.environment !== 'production'
       ? `${data.environment} data` : '';
     _tkRender(body, scoreEl);

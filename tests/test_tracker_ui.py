@@ -156,7 +156,9 @@ def test_rows_are_rendered_grouped_into_batches():
     load = JS[JS.index("async function loadTracker"):]
     assert "live_batches" in load                # live signals stay grouped by batch
     render = JS[JS.index("function _tkRender"):JS.index("async function loadTracker")]
-    assert "_tkClosedRow" in render and "_periodTabs('pub')" in render   # closed: one list per period
+    # closed: totals for the chosen period on screen, the detail as a CSV download
+    assert "_periodStats('pub'" in render and "_periodTabs('pub')" in render
+    assert "_periodRows.pub = rows" in render
 
 
 def test_the_grouping_falls_back_to_a_flat_table():
