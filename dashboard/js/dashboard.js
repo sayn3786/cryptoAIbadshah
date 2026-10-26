@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '255';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '256';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2623,6 +2623,57 @@ const _hlUsd = v => v == null ? '—' : (v < 0 ? '−$' : '$') + Math.abs(v).toF
 const _hlPct = v => v == null ? '' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(2)}%`;
 const _hlCls = v => v > 0 ? 'bull' : v < 0 ? 'bear' : '';
 
+/* ─── Closed-trade periods (shared by the HL and the published lists) ──────
+   Today / Yesterday are calendar days in the viewer's own time zone; Week and
+   Month are the last 7 / 30 days. The lists are fetched once for a month and
+   filtered here, so switching tabs is instant and costs no request. */
+const _PERIODS = [['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'Week'], ['month', 'Month']];
+const _periodState = (() => {
+  try { return JSON.parse(localStorage.getItem('cm_close_period') || '{}') || {}; }
+  catch (_) { return {}; }
+})();
+const _periodOf = scope => _periodState[scope] || 'yesterday';
+
+function _periodRange(key) {
+  const now = Date.now();
+  const d = new Date();
+  const sod = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  if (key === 'today') return [sod, Infinity];
+  if (key === 'yesterday') return [sod - 86_400_000, sod];
+  if (key === 'week') return [now - 7 * 86_400_000, Infinity];
+  return [now - 30 * 86_400_000, Infinity];
+}
+
+function _inPeriod(ms, key) {
+  if (ms == null || Number.isNaN(ms)) return false;
+  const [a, b] = _periodRange(key);
+  return ms >= a && ms < b;
+}
+
+function _periodTabs(scope) {
+  const cur = _periodOf(scope);
+  return `<span class="per-tabs" role="tablist">${_PERIODS.map(([k, label]) =>
+    `<button type="button" class="per-tab${k === cur ? ' on' : ''}" role="tab"
+       aria-selected="${k === cur}" data-scope="${scope}" data-period="${k}">${label}</button>`).join('')}</span>`;
+}
+
+// Re-renderers per scope, from the data each list last fetched.
+const _periodRender = {};
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.per-tab');
+  if (!btn) return;
+  e.stopPropagation();
+  _periodState[btn.dataset.scope] = btn.dataset.period;
+  try { localStorage.setItem('cm_close_period', JSON.stringify(_periodState)); } catch (_) {}
+  (_periodRender[btn.dataset.scope] || (() => {}))();
+});
+
+function _periodSummary(n, wins, pnlHtml) {
+  if (!n) return '';
+  return `<span class="per-sum">${n} closed · <b class="bull">${wins}W</b> · <b class="bear">${n - wins}L</b>`
+    + ` · ${Math.round(wins / n * 100)}%${pnlHtml ? ' · ' + pnlHtml : ''}</span>`;
+}
+
 function _hlPositionRow(p) {
   const side = (p.side || '').toUpperCase();
   const lev  = p.leverage ? `${Number(p.leverage).toFixed(0)}×` : '';
@@ -2665,17 +2716,23 @@ const _hlDur = (a, b) => {
 };
 const _HL_RESULT = { win: ['WIN', 'bull'], loss: ['LOSS', 'bear'], breakeven: ['BREAK-EVEN', 'muted'] };
 
+const _HL_EXIT = { target: 'Target', stop: 'Stop', breakeven: 'Break-even', timeout: '12h timeout',
+                   other: 'TP ladder / manual' };
+
 function _hlClosedRow(t) {
   const [label, cls] = _HL_RESULT[t.result] || ['—', 'muted'];
   const side = (t.side || '').toUpperCase();
+  const held = _hlDur(t.opened_at, t.closed_at);
   return `<tr>
     <td class="hlp-coin" data-label="Coin"><b>${t.coin}</b><span class="hlp-side ${t.side === 'long' ? 'bull' : 'bear'}">${side}</span></td>
-    <td data-label="Opened"><b>${_hlWhen(t.opened_at)}</b><small>${_hlDur(t.opened_at, t.closed_at) ? 'held ' + _hlDur(t.opened_at, t.closed_at) : ''}</small></td>
-    <td data-label="Closed"><b>${_hlWhen(t.closed_at)}</b></td>
+    <td data-label="Book"><b>${t.book || '—'}</b><small>${t.exit_reason ? _HL_EXIT[t.exit_reason] || t.exit_reason : ''}</small></td>
+    <td data-label="Opened"><b>${_hlWhen(t.opened_at)}</b></td>
+    <td data-label="Closed"><b>${_hlWhen(t.closed_at)}</b><small>${held ? 'held ' + held : ''}</small></td>
     <td data-label="Entry"><b>${_hlPx(t.entry_px)}</b></td>
     <td data-label="Exit"><b>${_hlPx(t.exit_px)}</b><small>${t.exits > 1 ? `avg of ${t.exits} exits` : '1 exit'}</small></td>
-    <td data-label="Size"><b>${Number(t.size).toLocaleString('en-US', { maximumFractionDigits: 6 })}</b></td>
-    <td data-label="P&amp;L"><b class="${_hlCls(t.pnl_usd)}">${_hlUsd(t.pnl_usd)}</b><small class="${_hlCls(t.pnl_pct)}">${_hlPct(t.pnl_pct) || ''}${t.fees_usd ? ` · fees ${_hlUsd(t.fees_usd)}` : ''}</small></td>
+    <td data-label="Size"><b>${Number(t.size).toLocaleString('en-US', { maximumFractionDigits: 6 })}</b><small>${t.entry_px ? _hlUsd(t.entry_px * t.size) : ''}</small></td>
+    <td data-label="P&amp;L"><b class="${_hlCls(t.pnl_usd)}">${_hlUsd(t.pnl_usd)}</b><small class="${_hlCls(t.pnl_pct)}">${_hlPct(t.pnl_pct) || ''}</small></td>
+    <td data-label="Fees"><b>${t.fees_usd ? _hlUsd(t.fees_usd) : '—'}</b><small>gross ${_hlUsd(t.gross_pnl_usd)}</small></td>
     <td data-label="Result"><span class="hlp-result ${cls}">${label}</span></td>
   </tr>`;
 }
@@ -2697,6 +2754,29 @@ function _hlSection(key, headInner, bodyHtml, extraCls = '') {
   </div>`;
 }
 
+function _hlClosedHtml(all) {
+  const key = _periodOf('hl');
+  const closed = all.filter(t => _inPeriod(t.closed_at, key));
+  const realized = closed.reduce((a, t) => a + (t.pnl_usd || 0), 0);
+  const wins = closed.filter(t => t.result === 'win').length;
+  const label = Object.fromEntries(_PERIODS)[key].toLowerCase();
+  return _hlSection('closed',
+    `<span class="hlp-title">Closed <b>${closed.length}</b></span>
+     ${closed.length ? `<span>Realized <b class="${_hlCls(realized)}">${_hlUsd(+realized.toFixed(2))}</b></span>` : ''}`,
+    `<div class="per-bar">${_periodTabs('hl')}${_periodSummary(closed.length, wins, '')}</div>` +
+    (closed.length ? `<div class="hlp-wrap"><table class="hlp-table">
+      <thead><tr><th>Coin</th><th>Book</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th>
+        <th>Size</th><th>P&amp;L</th><th>Fees</th><th>Result</th></tr></thead>
+      <tbody>${closed.map(_hlClosedRow).join('')}</tbody>
+    </table></div>` : `<div class="hlp-empty">No trades closed ${label === 'today' || label === 'yesterday' ? label : 'this ' + label}.</div>`),
+    'hlp-head-closed');
+}
+
+function _hlRenderClosed(box, all) {
+  const el = box.querySelector('#hlClosedBox');
+  if (el) el.innerHTML = _hlClosedHtml(all);
+}
+
 function _hlBindToggle(box) {
   if (box.dataset.toggleBound) return;
   box.dataset.toggleBound = '1';
@@ -2716,7 +2796,7 @@ async function loadHlPositions() {
   const box = document.getElementById('hlPositions');
   if (!box) return;
   try {
-    const r = await fetch(`${API}/hl/positions`);
+    const r = await fetch(`${API}/hl/positions?days=31`);
     if (!r.ok) { box.style.display = 'none'; return; }
     const d = await r.json();
     const rows = d.positions || [];
@@ -2734,18 +2814,8 @@ async function loadHlPositions() {
         <tbody>${rows.map(_hlPositionRow).join('')}</tbody>
       </table></div>` : `<div class="hlp-empty">No open positions.</div>`);
 
-    const days = d.closed_days || 3;
-    const realized = closed.reduce((a, t) => a + (t.pnl_usd || 0), 0);
-    const wins = closed.filter(t => t.result === 'win').length;
-    const closedHtml = _hlSection('closed',
-      `<span class="hlp-title">Closed · last ${days} days <b>${closed.length}</b>${closed.length ? ` <span class="muted">(${wins} won)</span>` : ''}</span>
-       ${closed.length ? `<span>Realized <b class="${_hlCls(realized)}">${_hlUsd(+realized.toFixed(2))}</b></span>` : ''}`,
-      closed.length ? `<div class="hlp-wrap"><table class="hlp-table">
-        <thead><tr><th>Coin</th><th>Opened</th><th>Closed</th><th>Entry</th><th>Exit</th>
-          <th>Size</th><th>P&amp;L</th><th>Result</th></tr></thead>
-        <tbody>${closed.map(_hlClosedRow).join('')}</tbody>
-      </table></div>` : `<div class="hlp-empty">No trades closed in the last ${days} days.</div>`,
-      'hlp-head-closed');
+    _periodRender.hl = () => _hlRenderClosed(box, closed);
+    const closedHtml = `<div id="hlClosedBox">${_hlClosedHtml(closed)}</div>`;
 
     _hlBindToggle(box);
     box.innerHTML = openHtml + closedHtml +
@@ -8573,6 +8643,64 @@ async function loadPatternHistory() {
   } catch (_) { sec.style.display = 'none'; }
 }
 
+/* Published signals: the live ones as before (grouped by batch), then the
+   closed ones as one flat list for the chosen period, every column shown. */
+let _tkData = { live: [], closed: [], liveBatches: [] };
+const _tkMs = iso => (iso ? Date.parse(iso) : null);
+const _TK_RESULT = { TP_HIT: ['WIN', 'bull'], SL_HIT: ['LOSS', 'bear'], EXPIRED: ['EXPIRED', 'muted'],
+                     CANCELLED: ['NOT FILLED', 'muted'], CLOSED: ['CLOSED', 'muted'] };
+
+function _tkClosedRow(r) {
+  let [label, cls] = _TK_RESULT[r.status] || [r.status, 'muted'];
+  const ret = r.realized_return_pct ?? r.move_pct;
+  if (r.status === 'SL_HIT' && ret != null && ret >= 0) [label, cls] = ['BREAK-EVEN', 'muted'];
+  if (r.status === 'CLOSED' && ret != null) [label, cls] = ret > 0 ? ['WIN', 'bull'] : ret < 0 ? ['LOSS', 'bear'] : ['BREAK-EVEN', 'muted'];
+  const side = (r.direction || '').toUpperCase();
+  const hits = (r.targets_hit || []).length;
+  const tps = (r.targets || []).map(t => `${t.hit ? '✓' : ''}${fmtPrice(t.price)}`).join(' / ');
+  const opened = _tkMs(r.opened_at), closedAt = _tkMs(r.closed_at);
+  return `<tr>
+    <td class="hlp-coin" data-label="Coin"><b>${r.symbol}</b><span class="hlp-side ${side === 'LONG' ? 'bull' : 'bear'}">${side} · ${r.timeframe || ''}</span></td>
+    <td data-label="Published"><b>${_hlWhen(opened)}</b><small>${r.confidence != null ? `strength ${Math.round(r.confidence)}` : ''}</small></td>
+    <td data-label="Closed"><b>${_hlWhen(closedAt)}</b><small>${_hlDur(opened, closedAt) ? 'after ' + _hlDur(opened, closedAt) : ''}</small></td>
+    <td data-label="Entry"><b>${fmtPrice(r.entry)}</b><small>${r.entry_fill_price != null ? 'filled ' + fmtPrice(r.entry_fill_price) : 'not filled'}</small></td>
+    <td data-label="Stop"><b>${fmtPrice(r.stop_loss)}</b><small>${r.stop_moved ? 'moved from ' + fmtPrice(r.original_stop) : ''}</small></td>
+    <td data-label="Targets"><b>${hits}/${(r.targets || []).length} hit</b><small>${tps}</small></td>
+    <td data-label="Exit"><b>${fmtPrice(r.close_price)}</b><small>${(r.close_reason || '').replace(/_/g, ' ').toLowerCase()}</small></td>
+    <td data-label="P/L"><b class="${_hlCls(ret)}">${ret == null ? '—' : _hlPct(ret)}</b><small>${r.r_multiple != null ? `${r.r_multiple >= 0 ? '+' : ''}${r.r_multiple.toFixed(2)}R` : ''}</small></td>
+    <td data-label="Best / worst"><b>${r.mfe_pct != null ? '+' + r.mfe_pct.toFixed(2) + '%' : '—'}</b><small>${r.mae_pct != null ? r.mae_pct.toFixed(2) + '%' : ''}</small></td>
+    <td data-label="Result"><span class="hlp-result ${cls}">${label}</span></td>
+  </tr>`;
+}
+
+function _tkRender(body, scoreEl) {
+  const { live, closed, liveBatches } = _tkData;
+  const key = _periodOf('pub');
+  const rows = closed.filter(r => _inPeriod(_tkMs(r.closed_at) ?? _tkMs(r.opened_at), key))
+    .sort((x, y) => (_tkMs(y.closed_at) || 0) - (_tkMs(x.closed_at) || 0));
+  const decided = rows.filter(r => ['TP_HIT', 'SL_HIT', 'CLOSED'].includes(r.status));
+  const wins = decided.filter(r => (r.realized_return_pct ?? r.move_pct ?? 0) > 0).length;
+  const label = Object.fromEntries(_PERIODS)[key];
+  scoreEl.innerHTML = `${live.length} live · ` + (decided.length
+    ? `<span class="tk-win">${wins}W</span> · <span class="tk-loss">${decided.length - wins}L</span> ${label.toLowerCase()}`
+    : `no results ${label.toLowerCase()}`);
+  const sumRet = decided.reduce((a, r) => a + (r.realized_return_pct ?? r.move_pct ?? 0), 0);
+  body.innerHTML =
+    (live.length
+      ? `<div class="tracker-group-title">Live — ${live.length}</div>`
+        + _tkBatches(liveBatches, live, 'live')
+      : `<div class="tk-empty">No live signals. The next set publishes at the next close (8 AM SGT).</div>`)
+    + `<div class="tracker-group-title">Closed — ${rows.length}</div>
+       <div class="per-bar">${_periodTabs('pub')}${_periodSummary(decided.length, wins,
+         decided.length ? `<b class="${_hlCls(sumRet)}">${_hlPct(sumRet)}</b> summed` : '')}</div>`
+    + (rows.length
+      ? `<div class="hlp-wrap"><table class="hlp-table">
+          <thead><tr><th>Coin</th><th>Published</th><th>Closed</th><th>Entry</th><th>Stop</th>
+            <th>Targets</th><th>Exit</th><th>P/L</th><th>Best / worst</th><th>Result</th></tr></thead>
+          <tbody>${rows.map(_tkClosedRow).join('')}</tbody></table></div>`
+      : `<div class="hlp-empty">Nothing closed ${key === 'today' || key === 'yesterday' ? label.toLowerCase() : 'this ' + label.toLowerCase()}.</div>`);
+}
+
 async function loadTracker(force) {
   const section = document.getElementById('trackerSection');
   const body    = document.getElementById('trackerBody');
@@ -8581,7 +8709,7 @@ async function loadTracker(force) {
   if (!section || !body) return;
 
   try {
-    const res = await fetch(`${API}/signals/tracker`, force ? {cache: 'no-store'} : undefined);
+    const res = await fetch(`${API}/signals/tracker?days=31`, force ? {cache: 'no-store'} : undefined);
     if (res.status === 503) {
       // No database configured: the tracker has nothing to track. Stay hidden
       // rather than showing an empty table that looks like "no trades".
@@ -8594,24 +8722,11 @@ async function loadTracker(force) {
     section.classList.remove('hidden');
     _tkApplySection();     // collapsed unless this browser chose otherwise
 
-    const s = data.summary || {};
-    scoreEl.innerHTML = s.decided
-      ? `<span class="tk-win">${s.wins}W</span> · <span class="tk-loss">${s.losses}L</span>`
-        + ` · ${s.win_rate_pct}% over ${data.window_days}d`
-        + (s.expired ? ` · ${s.expired} expired` : '')
-      : `${live.length} live · no closed trades in ${data.window_days}d`;
+    _tkData = { live, closed, liveBatches: data.live_batches };
+    _periodRender.pub = () => _tkRender(body, scoreEl);
     metaEl.textContent = data.environment && data.environment !== 'production'
       ? `${data.environment} data` : '';
-
-    body.innerHTML =
-      (live.length
-        ? `<div class="tracker-group-title">Live — ${live.length}</div>`
-          + _tkBatches(data.live_batches, live, 'live')
-        : `<div class="tk-empty">No live signals. The next set publishes at the next slot.</div>`)
-      + (closed.length
-        ? `<div class="tracker-group-title">Closed — last ${data.window_days} days</div>`
-          + _tkBatches(data.closed_batches, closed, 'closed')
-        : '');
+    _tkRender(body, scoreEl);
   } catch (e) {
     console.warn('[tracker] load failed', e);
     // Leave whatever was last rendered in place — a failed poll must not blank

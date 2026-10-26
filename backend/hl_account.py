@@ -203,7 +203,33 @@ def enrich_positions(state: Dict[str, Any], orders: Any,
 
 
 DEFAULT_CLOSED_DAYS = 3          # how long a closed trade stays in the list
-_CLOSED_LOOKBACK_DAYS = 14       # pair against opens this far back
+MAX_CLOSED_DAYS = 31             # the dashboard's "month" view
+_CLOSED_LOOKBACK_DAYS = 45       # pair against opens this far back
+_FILLS_PAGE = 2000               # userFillsByTime returns at most this many per call
+_FILLS_PAGES = 6
+
+
+def fills_paged(addr: str, start_ms: int, *, env: Optional[str] = None,
+                session: Optional[Any] = None) -> List[Dict[str, Any]]:
+    """Every fill since `start_ms`, oldest first. userFillsByTime caps a reply
+    at 2000 fills from the START of the range, so a busy month would silently
+    lose its newest fills; page forward from the last one until a short page."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    start = int(start_ms)
+    for _ in range(_FILLS_PAGES):
+        page = _post_info({"type": "userFillsByTime", "user": addr, "startTime": start},
+                          env=env, session=session) or []
+        page = [f for f in page if isinstance(f, dict)]
+        for f in page:
+            key = (f.get("tid"), f.get("oid"), f.get("time"))
+            if key not in seen:
+                seen.add(key)
+                out.append(f)
+        if len(page) < _FILLS_PAGE:
+            break
+        start = int(max(_num(f.get("time")) or 0 for f in page))
+    return out
 
 
 def closed_trades_days() -> float:
@@ -211,7 +237,7 @@ def closed_trades_days() -> float:
         d = float(os.getenv("HL_CLOSED_TRADES_DAYS", "") or DEFAULT_CLOSED_DAYS)
     except ValueError:
         d = DEFAULT_CLOSED_DAYS
-    return min(max(d, 1.0), float(_CLOSED_LOOKBACK_DAYS))
+    return min(max(d, 1.0), float(MAX_CLOSED_DAYS))
 
 
 def closed_trades(fills: Any, now_ms: int, days: float = DEFAULT_CLOSED_DAYS) -> List[Dict[str, Any]]:
@@ -291,7 +317,8 @@ def closed_trades(fills: Any, now_ms: int, days: float = DEFAULT_CLOSED_DAYS) ->
 
 
 def positions_detail(address: Optional[str] = None, *, env: Optional[str] = None,
-                     session: Optional[Any] = None) -> Dict[str, Any]:
+                     session: Optional[Any] = None,
+                     days: Optional[float] = None) -> Dict[str, Any]:
     """Account snapshot + enriched positions (entry, mark, SL, TP, P&L, R:R).
     Three read-only info calls; open orders and mids are best-effort so a
     failure there still shows the positions, just without SL/TP or mark."""
@@ -315,12 +342,12 @@ def positions_detail(address: Optional[str] = None, *, env: Optional[str] = None
     # Closed trades are independent of whether anything is open now.
     import time as _time
     now_ms = int(_time.time() * 1000)
-    days = closed_trades_days()
+    days = closed_trades_days() if days is None else min(max(float(days), 1.0),
+                                                         float(MAX_CLOSED_DAYS))
     closed: List[Dict[str, Any]] = []
     try:
-        fills = _post_info({"type": "userFillsByTime", "user": addr,
-                            "startTime": now_ms - _CLOSED_LOOKBACK_DAYS * 86_400_000},
-                           env=env, session=session) or []
+        lookback = min(_CLOSED_LOOKBACK_DAYS, days + 14)
+        fills = fills_paged(addr, now_ms - int(lookback * 86_400_000), env=env, session=session)
         closed = closed_trades(fills, now_ms, days)
     except Exception:                                    # noqa: BLE001
         partial.append("fills")

@@ -2428,3 +2428,17 @@ html { overflow-x: hidden; }
 .hlp-sec + .hlp-sec { margin-top: 16px; }
 .hlp-sec + .hlp-sec .hlp-head-closed, .hlp-head-closed { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) { .hlp-chev { transition: none; } }
+
+/* Closed-trade period tabs (Today / Yesterday / Week / Month), shared by the
+   Hyperliquid and the published lists. */
+.per-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 2px 0 10px; }
+.per-tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.per-tab { background: none; border: 0; color: var(--muted2); font-size: 12px; font-weight: 600;
+  padding: 6px 11px; cursor: pointer; min-height: 32px; }
+.per-tab + .per-tab { border-left: 1px solid var(--border); }
+.per-tab.on { background: var(--card2); color: var(--gold); }
+.per-tab:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+.per-sum { font-size: 12px; color: var(--muted2); }
+.per-sum b { font-weight: 700; }
+#trackerBody .hlp-wrap { margin-bottom: 4px; }
+#hlClosedBox { margin-top: 16px; }
