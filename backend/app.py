@@ -5759,7 +5759,7 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
 
 
 def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict]:
-    """Average into a running scalp at a better price: a market add sized for
+    """Add to a running scalp (a same-way signal, any price): a market add sized for
     $SCALP_RISK_USD to the stop, then the stop re-placed for the WHOLE
     position (first, the old one cancelled after) and the take-profits re-laid
     as a ladder for the whole size. None when the add can't be placed (the

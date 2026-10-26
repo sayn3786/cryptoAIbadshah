@@ -39,7 +39,8 @@ NOW = 19 * M + 60_000           # one minute after candle 18 closed
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN"):
+    for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN",
+              "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -637,7 +638,7 @@ def test_tp_ladder_grows_to_three_then_moves_the_furthest():
     assert small == [(96.0, 0.15)]                     # one TP for all: the furthest
 
 
-# ── averaging in at a better price ──────────────────────────────────────────
+# ── adding to a running scalp ───────────────────────────────────────────────
 
 def test_plan_add_rules(monkeypatch):
     st = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.5)      # SHORT, avg 144.17
@@ -646,14 +647,18 @@ def test_plan_add_rules(monkeypatch):
     assert sl.plan_add(_aave(), new, st, 144.5) == {"stop": 145.483}   # 0.23% better
     assert sl.plan_add(_aave(), {**new, "sl": 145.2}, st, 144.5) == {"stop": 145.2}  # tighter
     assert sl.plan_add(_aave(), {**new, "sl": 146.0}, st, 144.5) == {"stop": 145.483}  # never wider
+    profit = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 143.0)    # SHORT in profit
+    assert sl.plan_add(_aave(), new, profit, 143.0) == {"stop": 145.483}  # adds at any price
+    assert sl.plan_add(_aave(adds=1), new, st, 144.5) == {"stop": 145.483}  # second add
+    assert sl.plan_add(_aave(adds=2), new, st, 144.5) is None        # two adds already
+    assert sl.plan_add(_aave(), new, st, 145.6) is None              # past the stop
+    assert sl.plan_add(_aave(), {**new, "direction": "LONG"}, st, 144.5) is None
+    monkeypatch.setenv("SCALP_ADD_ONLY_BETTER", "1")
     worse = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.2)
     assert sl.plan_add(_aave(), new, worse, 144.2) is None           # only 0.02% better
-    assert sl.plan_add(_aave(adds=1), new, st, 144.5) is None        # one add already
-    assert sl.plan_add(_aave(), {**new, "direction": "LONG"}, st, 144.5) is None
+    assert sl.plan_add(_aave(), new, st, 144.5) == {"stop": 145.483}
     monkeypatch.setenv("SCALP_MAX_ADDS", "0")
     assert sl.plan_add(_aave(), new, st, 144.5) is None
-    monkeypatch.setenv("SCALP_MAX_ADDS", "2")
-    assert sl.plan_add(_aave(adds=1), new, st, 144.5) == {"stop": 145.483}
 
 
 def test_add_averages_in_and_relays_the_exits(app_mod, hl_fake, monkeypatch):
