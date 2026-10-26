@@ -5261,6 +5261,37 @@ def _alert_manager_pass(out):
         app.logger.exception("manager alerts failed")
 
 
+def _tag_hl_closed(trades, days) -> None:
+    """Which book each closed HL trade came from: a 15m scalp (with its exit
+    reason) when the scalp book recorded a close on that coin within minutes,
+    else the 4H book / manual. In place; best-effort, never raises."""
+    try:
+        import scalp_store as _ss
+        rows = [r for r in _ss.recent(_deploy_env(), days=int(days) + 2, limit=1000)
+                if r.get("status") == "CLOSED" and r.get("closed_at")]
+    except Exception:
+        rows = []
+    closes = []
+    for r in rows:
+        try:
+            at = datetime.fromisoformat(str(r["closed_at"]).replace("Z", "+00:00"))
+            closes.append((str(r.get("symbol") or "").upper(), at.timestamp() * 1000, r))
+        except (TypeError, ValueError):
+            continue
+    for t in trades:
+        coin = str(t.get("coin") or "").upper()
+        best = None
+        for sym, ms, r in closes:
+            gap = abs(ms - (t.get("closed_at") or 0))
+            if sym == coin and gap <= 15 * 60_000 and (best is None or gap < best[0]):
+                best = (gap, r)
+        if best:
+            t["book"] = "15m scalp"
+            t["exit_reason"] = best[1].get("exit_reason")
+        else:
+            t["book"] = "4H / other"
+
+
 @app.get("/api/hl/positions")
 def api_hl_positions():
     """Open positions with live mark, stop-loss, take-profit, P&L and R:R for the
@@ -5273,8 +5304,13 @@ def api_hl_positions():
     if not _hl.configured():
         return jsonify({"ok": False, "configured": False,
                         "error_code": "HL_NOT_CONFIGURED"}), 503
+    days = None
+    if request.args.get("days"):
+        days = _int_arg("days", 3, 1, _hl.MAX_CLOSED_DAYS)
     try:
-        return jsonify({"ok": True, **_hl.positions_detail()})
+        out = _hl.positions_detail(days=days)
+        _tag_hl_closed(out.get("closed_trades") or [], days or out.get("closed_days") or 3)
+        return jsonify({"ok": True, **out})
     except Exception:
         app.logger.exception("hyperliquid positions read failed")
         return jsonify({"ok": False, "error_code": "HL_READ_FAILED",
@@ -7693,12 +7729,23 @@ def api_signals_tracker():
         return guard
     store = _signal_store()
     import signal_tracker as tracker
-    days = _int_arg("days", tracker.CLOSED_WINDOW_DAYS, 1, 30)
+    days = _int_arg("days", tracker.CLOSED_WINDOW_DAYS, 1, 31)
     env = request.args.get("environment")
+    import signal_publish as _sp
     try:
-        active = store.list_active_signals(limit=50, environment=env)
-        closed = store.list_signals(statuses=list(tracker.TERMINAL_STATUSES),
-                                    environment=env, limit=50)["items"]
+        active = store.list_active_signals(limit=100, environment=env)
+        closed = []
+        for page in range(1 if days <= 3 else 4):        # 100 a page; a month needs more
+            got = store.list_signals(statuses=list(tracker.TERMINAL_STATUSES),
+                                     environment=env, limit=50 if days <= 3 else 100,
+                                     offset=page * 100, with_total=False)["items"]
+            closed += got
+            if len(got) < 100:
+                break
+        # Published signals only: the HL-only extras were never posted, and
+        # what HL actually traded has its own section.
+        active = [r for r in active if r.get("strategy_name") != _sp.HL_EXTRA_STRATEGY_NAME]
+        closed = [r for r in closed if r.get("strategy_name") != _sp.HL_EXTRA_STRATEGY_NAME]
         store.attach_targets(active)
         store.attach_targets(closed)
     except store.SignalValidationError as exc:

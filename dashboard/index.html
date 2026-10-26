@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/dashboard/css/dashboard.css?v=142" />
+  <link rel="stylesheet" href="/dashboard/css/dashboard.css?v=143" />
 </head>
 <body>
 
@@ -140,7 +140,7 @@
        tabindex="0" aria-expanded="true" aria-controls="trackerBody"
        title="Click to show or hide the tracker">
     <span class="tk-caret tk-section-caret" aria-hidden="true">▾</span>
-    <span class="rec-title">📋 Signal Tracker</span>
+    <span class="rec-title">📋 Published signals</span>
     <span id="trackerScore" class="tracker-score"></span>
     <span id="trackerMeta" class="rec-generated"></span>
     <button class="btn-tg" id="trackerRefresh" onclick="event.stopPropagation(); loadTracker(true)" title="Refresh tracker">
@@ -162,7 +162,7 @@
 <!-- ── HYPERLIQUID CONNECTION (read-only status) ──────────────────────────── -->
 <section id="hlStatusCard" class="rec-section" style="display:none">
   <div class="rec-header" style="cursor:default">
-    <span class="rec-title">🔌 Hyperliquid Connection</span>
+    <span class="rec-title">🔌 Hyperliquid · traded</span>
     <span id="hlStatusMeta" class="rec-generated"></span>
   </div>
   <div id="hlStatusBody" style="padding:10px 14px 14px"></div>
@@ -1085,7 +1085,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=255";
+  var DJS = "/dashboard/js/dashboard.js?v=256";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;

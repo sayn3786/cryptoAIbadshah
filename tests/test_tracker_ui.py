@@ -154,7 +154,9 @@ def test_rows_are_rendered_grouped_into_batches():
     block = JS[JS.index("function _tkBatches"):JS.index("async function loadTracker")]
     assert "b.title" in block and "b.rows" in block
     load = JS[JS.index("async function loadTracker"):]
-    assert "live_batches" in load and "closed_batches" in load
+    assert "live_batches" in load                # live signals stay grouped by batch
+    render = JS[JS.index("function _tkRender"):JS.index("async function loadTracker")]
+    assert "_tkClosedRow" in render and "_periodTabs('pub')" in render   # closed: one list per period
 
 
 def test_the_grouping_falls_back_to_a_flat_table():
