@@ -5754,7 +5754,10 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
 def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
     """An opposite engine signal on a running scalp: close it at market,
     cancel its stop / target, record its result, then open the new direction
-    (HL holds one net position per coin, so both can't run). Never raises."""
+    (HL holds one net position per coin, so both can't run) only when the
+    signal is SCALP_FLIP_MIN_STRENGTH+ and the coin has not flipped within
+    SCALP_FLIP_COOLDOWN_HOURS; otherwise it is closed and the book waits.
+    Never raises."""
     import scalp_live as _sl
     import hl_account as _ha
     import hl_exchange as _he
@@ -5785,10 +5788,25 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
     # The account snapshot still shows the old position and its exits.
     acct["open_positions"] = [p for p in acct.get("open_positions") or []
                               if str(p.get("coin")) != coin]
+    import kv as _kv
+    flip_key = f"scalp:flipped:{_deploy_env()}:{coin}"
+    try:
+        recent = bool(_kv.exists(flip_key))
+    except Exception:
+        recent = False
+    why = _sl.flip_block(setup, flipped_recently=recent)
+    if why:
+        # Close and wait: in chop the opposite read is usually noise.
+        return {"symbol": sym, "ok": True, "closed": True, "flipped": False,
+                "note": closed + f"; not opening {setup['direction']} ({why})"}
     rest = [o for o in orders if str(o.get("coin")) != coin]
     r = _scalp_market(setup, acct=acct, table=table, recs=recs, now_ms=now_ms, orders=rest)
     if not r.get("ok"):
         return {**r, "note": closed + f"; the {setup['direction']} did not open ({r.get('reason')})"}
+    try:
+        _kv.claim(flip_key, ttl_seconds=max(60, _sl.flip_cooldown_ms() // 1000))
+    except Exception:
+        pass
     note = (closed + f"; opened {sym} {setup['direction']} {setup['strength']:g} at market "
             f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, ${_sl.risk_usd():g} risk)")
     return {**r, "flipped": True, "note": note}
