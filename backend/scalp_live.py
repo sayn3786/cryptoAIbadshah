@@ -629,9 +629,16 @@ def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
             "cancel_tp": [o.get("oid") for o in tps] if ladder is not None else []}
 
 
-# ── averaging in: a same-way signal at a BETTER price adds to the scalp ──────
+# ── adding: every same-way signal adds a $1-risk slice to the scalp ─────────
+# At any price (better or in profit), up to max_adds() adds. SCALP_ADD_ONLY_BETTER
+# brings back the old rule: only when price is ADD_BETTER better than the
+# average entry.
 ADD_BETTER = 0.001        # at least 0.1% better than the current average entry
-DEFAULT_MAX_ADDS = 1
+DEFAULT_MAX_ADDS = 2
+
+
+def add_only_better() -> bool:
+    return os.getenv("SCALP_ADD_ONLY_BETTER", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def max_adds() -> int:
@@ -675,11 +682,11 @@ def exit_state(rec: Dict[str, Any], positions: Sequence[Dict[str, Any]],
 
 def plan_add(rec: Dict[str, Any], setup: Dict[str, Any], st: Optional[Dict[str, Any]],
              mark: Optional[float]) -> Optional[Dict[str, Any]]:
-    """Average in? A same-way signal while price is ADD_BETTER better than the
-    running scalp's average entry (lower for a long), still on the right side
-    of the stop, and fewer than max_adds() adds so far. Returns {"stop"} (the
-    stop for the WHOLE position: the tighter of the current one and the new
-    signal's, never wider) or None. Pure."""
+    """Add to it? A same-way signal while price is still on the right side of
+    the stop and fewer than max_adds() adds so far, at any price (with
+    SCALP_ADD_ONLY_BETTER: only ADD_BETTER better than the average entry).
+    Returns {"stop"} (the stop for the WHOLE position: the tighter of the
+    current one and the new signal's, never wider) or None. Pure."""
     if st is None or mark is None or setup.get("direction") != rec.get("direction"):
         return None
     if int(rec.get("adds") or 0) >= max_adds() or not st.get("entry"):
@@ -687,7 +694,7 @@ def plan_add(rec: Dict[str, Any], setup: Dict[str, Any], st: Optional[Dict[str, 
     long = st["side"] == "long"
     entry = st["entry"]
     better = mark <= entry * (1 - ADD_BETTER) if long else mark >= entry * (1 + ADD_BETTER)
-    if not better:
+    if add_only_better() and not better:
         return None
     stop = st["cur_sl"]
     new = float(setup["sl"])
