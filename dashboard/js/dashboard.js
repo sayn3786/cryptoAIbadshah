@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '257';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '258';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -129,6 +129,10 @@ function initCharts() {
   // stretch the price axis (candles drive the scale).
   S.ema50Series  = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#f472b6', lineWidth: 1 });
   S.ema200Series = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#facc15', lineWidth: 2 });
+  // SMA 100 (orange) / SMA 200 (magenta), dashed so they read apart from the
+  // EMAs: the simple averages traders watch as 15m support / resistance.
+  S.sma100Series = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#fb923c', lineWidth: 1, lineStyle: 2 });
+  S.sma200Series = S.mainChart.addLineSeries({ ..._overlayOpts, color: '#e879f9', lineWidth: 2, lineStyle: 2 });
 
   // Trading-session range boxes (intraday) behind the candles.
   S.sessionShade = new SessionShade(S.mainChart, S.candleSeries);
@@ -1194,6 +1198,10 @@ function renderMainChart(candles, fvgs, supertrend, ichimoku, btcMining, symbol,
   S.ema200Series.setData(_emaData(emaLines?.ema200));
   S.ema50Series.applyOptions({ visible: _layerVisible('ema50') });
   S.ema200Series.applyOptions({ visible: _layerVisible('ema200') });
+  S.sma100Series.setData(_emaData(emaLines?.sma100));
+  S.sma200Series.setData(_emaData(emaLines?.sma200));
+  S.sma100Series.applyOptions({ visible: _layerVisible('sma100') });
+  S.sma200Series.applyOptions({ visible: _layerVisible('sma200') });
 
   // ── Supply / demand zones — draw each band as top/mid/bottom price lines ──
   // (mirrors the FVG style; lightweight-charts v4 has no native filled boxes).
@@ -1439,6 +1447,17 @@ function renderEMACard(ema) {
     const cls = up ? 'bull' : 'bear';
     return `<div class="ema-row"><span class="ema-label">EMA${r.p}</span><span class="${cls}">${up ? '▲' : '▼'} ${fmt(r.v)}</span></div>`;
   }).join('');
+
+  // SMA 100 / 200: where price sits against the simple averages, and whether
+  // it is right on one (within 0.3%: "testing" the level).
+  for (const p of [100, 200]) {
+    const v = ema[`sma${p}`], d = ema[`sma${p}_dist_pct`];
+    if (v == null || d == null) continue;
+    const cls = d >= 0 ? 'bull' : 'bear';
+    const test = Math.abs(d) <= 0.3 ? ' · testing' : '';
+    rowsHtml += `<div class="ema-row"><span class="ema-label">SMA${p}</span><span class="${cls}">`
+      + `${d >= 0 ? '▲' : '▼'} ${fmt(v)} <small>(${d >= 0 ? '+' : ''}${d.toFixed(2)}%${test})</small></span></div>`;
+  }
 
   // When price last crossed the 50 EMA — the flip that turns the headline.
   const fh = flipHistoryRows(ema, { bull: trend.includes('bull'), rowClass: 'ema-row',
