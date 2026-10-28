@@ -357,7 +357,7 @@ def _assess_data_quality(timeframe, spot_source, closed_spot, live_price, signal
 # for indicator seeding. 1W/1M keep less — 200 weeks/months of history rarely
 # exists for crypto, so EMA200 is expected to be unavailable there.
 TF_LIMIT = {
-    "15M": 240, "1H": 240, "2H": 240,
+    "15M": 320, "1H": 240, "2H": 240,   # 15M: enough for the SMA 200 across the chart
     "4H": 240, "8H": 240, "12H": 240, "1D": 240,
     "1W": 150, "2W": 150, "3W":  150, "1M": 100,
 }

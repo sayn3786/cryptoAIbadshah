@@ -202,6 +202,32 @@ def ema_series(values: Sequence[float], period: int) -> List:
     return out
 
 
+def sma_series(values: Sequence[float], period: int) -> List:
+    """Simple moving average at each index (None before `period` values)."""
+    n = len(values)
+    out: List = [None] * n
+    if n < period:
+        return out
+    total = sum(values[:period])
+    out[period - 1] = total / period
+    for i in range(period, n):
+        total += values[i] - values[i - period]
+        out[i] = total / period
+    return out
+
+
+def _sma_now(closes: Sequence[float]) -> Dict:
+    """The latest SMA 100 / 200 and how far the close sits from each (%)."""
+    out: Dict = {}
+    last = closes[-1] if closes else None
+    for p in (100, 200):
+        if last and len(closes) >= p:
+            v = sum(closes[-p:]) / p
+            out[f"sma{p}"] = round(v, 8)
+            out[f"sma{p}_dist_pct"] = round((last - v) / v * 100, 3) if v else None
+    return out
+
+
 def vol_regime(candles: Sequence[Dict]):
     """
     Percentile of the current normalised ATR(14) against this token's own
@@ -346,6 +372,13 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
                    for i in range(len(candles))
                    if _ema200_s[i] is not None and candles[i]["timestamp"] >= _cut_ts],
     }
+    # SMA 100 / 200: the simple averages many traders watch as dynamic support /
+    # resistance (on 15m especially). Display and context only: no score reads them.
+    for _p in (100, 200):
+        _s = sma_series(closes, _p)
+        ema_lines[f"sma{_p}"] = [{"timestamp": candles[i]["timestamp"], "value": round(_s[i], 8)}
+                                 for i in range(len(candles))
+                                 if _s[i] is not None and candles[i]["timestamp"] >= _cut_ts]
 
     supertrend = calculate_supertrend(candles)
     ichimoku = calculate_ichimoku(candles)
@@ -407,7 +440,8 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
         # they return the flip in BARS, and the close time is attached here where
         # the candles are in scope. _with_flip_ts leaves other keys untouched.
         "macd": _with_flip_ts(calculate_macd(closes), candles),
-        "ema_trend": _with_flip_ts(calculate_ema_trend(closes), candles),
+        "ema_trend": {**_with_flip_ts(calculate_ema_trend(closes), candles),
+                      **_sma_now(closes)},
         "ema_lines": ema_lines,
         "supertrend": supertrend,
         "ichimoku": ichimoku,

@@ -15,7 +15,7 @@ def test_backend_timeframe_tables():
     pytest.importorskip("flask")
     import app
     assert app.TF_INTERVAL["15M"] == "15m" and app.TF_SECONDS["15M"] == 900
-    assert app.TF_LIMIT["15M"] == 240 and "15M" in app._TF_PRICE_GAP
+    assert app.TF_LIMIT["15M"] == 320 and "15M" in app._TF_PRICE_GAP   # SMA 200 across the chart
 
 
 def test_every_exchange_maps_15m():
