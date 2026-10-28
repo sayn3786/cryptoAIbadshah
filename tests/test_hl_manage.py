@@ -151,6 +151,49 @@ def test_position_without_a_stop_is_left_alone():
     assert hm.plan([_pos(20)], [_tp(20, 0.72)], {"FET": "0.67"}, TABLE) == []
 
 
+def test_unprotected_position_gets_a_protective_stop_after_the_grace():
+    now = 10_000_000
+    pos = [_pos(20)]
+    assert hm.unprotected(pos, [_tp(20, 0.72)], {"FET": "0.67"}) == ["FET"]
+    assert hm.unprotected(pos, [_stop(20, 0.55)], {"FET": "0.67"}) == []
+    young = hm.plan(pos, [], {"FET": "0.67"}, TABLE, now_ms=now,
+                    unprotected_since={"FET": now - 60_000})
+    assert young == []                                    # its exits may still be on the way
+    [a] = hm.plan(pos, [], {"FET": "0.67"}, TABLE, now_ms=now,
+                  unprotected_since={"FET": now - 3 * 60_000})
+    assert a["action"] == "protect" and a["side"] == "long" and a["size"] == 20
+    assert a["stop_px"] == round(0.67 * 0.99, 4) and a["unprotected_s"] == 180
+
+
+def test_unprotected_short_is_stopped_above_the_mark():
+    now = 10_000_000
+    pos = [_pos(1.14, entry=129.8, side="short", coin="ETH")]
+    [a] = hm.plan(pos, [], {"ETH": "134.645"}, TABLE, now_ms=now,
+                  unprotected_since={"ETH": now - 5 * 60_000})
+    assert a["action"] == "protect" and 135.9 < a["stop_px"] < 136.1   # 1% above the mark
+
+
+def test_run_protects_a_position_seen_without_a_stop_for_two_minutes(monkeypatch):
+    _arm(monkeypatch)
+    import kv
+    mem = {}
+    monkeypatch.setattr(kv, "get_value", lambda k: mem.get(k))
+    monkeypatch.setattr(kv, "set_value", lambda k, v, ttl_seconds=0: mem.__setitem__(k, v) or True)
+    clock = [1_000.0]
+    monkeypatch.setattr(hm.time, "time", lambda: clock[0])
+    placed = []
+    run = lambda: hm.run(read_fn=_reader([_pos(20)], [], {"FET": "0.67"}),          # noqa: E731
+                         stop_fn=lambda *a, **k: placed.append(a[3]) or OK,
+                         cancel_fn=lambda *a: None)
+    assert run()["actions"] == 0 and placed == []           # first seen now
+    clock[0] += 60
+    assert run()["actions"] == 0                            # 1 min: still in the grace
+    clock[0] += 61
+    out = run()
+    assert placed == [round(0.67 * 0.99, 4)] and out["results"][0]["action"] == "protect"
+    assert out["results"][0]["placed"] is True
+
+
 # ── the manager's run (I/O injected) ─────────────────────────────────────────
 
 def _arm(monkeypatch, env="testnet"):
