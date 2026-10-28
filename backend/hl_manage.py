@@ -99,11 +99,45 @@ def partially_closed(coin: str, fills: Optional[List[Dict[str, Any]]]) -> bool:
     return bool(opens and closes and max(closes) > max(opens))
 
 
+# Safety net: a position with NO stop (a partial close, a failed re-placement,
+# anything) gets a protective stop this far beyond the mark once it has been
+# seen unprotected for PROTECT_GRACE_MS, so a fresh entry whose exits are still
+# being placed is never touched.
+DEFAULT_PROTECT_STOP_PCT = 1.0
+PROTECT_GRACE_MS = 120_000
+
+
+def protect_stop_pct() -> float:
+    try:
+        v = float(os.getenv("HL_PROTECT_STOP_PCT", "") or DEFAULT_PROTECT_STOP_PCT)
+    except ValueError:
+        v = DEFAULT_PROTECT_STOP_PCT
+    return v if v > 0 else DEFAULT_PROTECT_STOP_PCT
+
+
+def unprotected(positions: List[Dict[str, Any]], orders: List[Dict[str, Any]],
+                mids: Dict[str, Any]) -> List[str]:
+    """Coins with an open position and no stop-loss order. Pure."""
+    out = []
+    for p in positions or []:
+        coin, side = p.get("coin"), p.get("side")
+        if not coin or not _num(p.get("size")) or side not in ("long", "short"):
+            continue
+        mark = _num((mids or {}).get(coin))
+        if not any(isinstance(o, dict) and o.get("isTrigger") and o.get("reduceOnly")
+                   and str(o.get("coin")) == str(coin)
+                   and hl_account._classify_trigger(o, side, mark) == "sl"
+                   for o in orders or []):
+            out.append(str(coin))
+    return out
+
+
 def plan(positions: List[Dict[str, Any]], orders: List[Dict[str, Any]],
          mids: Dict[str, Any], table: Dict[str, Any],
          fills: Optional[List[Dict[str, Any]]] = None, *,
          trigger: Union[float, str, None] = None,
-         now_ms: Optional[int] = None) -> List[Dict[str, Any]]:
+         now_ms: Optional[int] = None,
+         unprotected_since: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
     """What to do for each open position. Pure.
 
     `positions` are hl_account.parse_state rows; `orders` Hyperliquid's
@@ -115,6 +149,9 @@ def plan(positions: List[Dict[str, Any]], orders: List[Dict[str, Any]],
       cancel_stale    a stop at entry already exists — just cancel the old ones
       close_remainder ("tp1" mode) price is back through entry — close at market
       cancel_orphans  reduce-only orders on a coin with no position
+      protect         a position with no stop, unprotected for PROTECT_GRACE_MS+
+                      (per `unprotected_since`, {coin: first seen ms}): a stop
+                      protect_stop_pct() beyond the mark for the whole size
     Positions that need nothing are omitted.
     """
     trigger = breakeven_trigger() if trigger is None else trigger
@@ -135,7 +172,16 @@ def plan(positions: List[Dict[str, Any]], orders: List[Dict[str, Any]],
         stops = [o for o in stops_by_coin.get(str(coin), [])
                  if hl_account._classify_trigger(o, side, mark) == "sl"]
         if not stops:
-            continue                                   # nothing to move (UI flags it)
+            first = (unprotected_since or {}).get(str(coin))
+            if first is not None and mark and now_ms - first >= PROTECT_GRACE_MS:
+                sz_dec = int((table.get(coin) or {}).get("sz_decimals") or 0)
+                pct = protect_stop_pct() / 100
+                px = mark * (1 - pct) if side == "long" else mark * (1 + pct)
+                actions.append({"coin": coin, "action": "protect", "side": side,
+                                "size": size, "stop_px": hl_meta.round_price(px, sz_dec),
+                                "entry_px": entry, "mark_px": mark,
+                                "unprotected_s": int((now_ms - first) / 1000)})
+            continue
         sz_dec = int((table.get(coin) or {}).get("sz_decimals") or 0)
         be_px = hl_meta.round_price(entry, sz_dec)
         at_entry = [o for o in stops if _same_px(_num(o.get("triggerPx")), be_px)]
@@ -243,7 +289,10 @@ def run(*, env: Optional[str] = None,
             return (state.get("open_positions") or [], orders, mids,
                     hl_meta.asset_table(env=env), fills)
     positions, orders, mids, table, fills = read_fn()
-    actions = plan(positions, orders, mids, table, fills)
+    now_ms = int(time.time() * 1000)
+    since = _track_unprotected(e, unprotected(positions, orders, mids), now_ms)
+    actions = plan(positions, orders, mids, table, fills, now_ms=now_ms,
+                   unprotected_since=since)
 
     from manager_execution_evidence import configured_observer, observed_call
     observer = observer_fn or configured_observer(e)
@@ -271,6 +320,16 @@ def run(*, env: Optional[str] = None,
                     results.append(res)                # keep the old stop; retry next run
                     continue
                 res["cancelled"] = _cancel_all(cancel_fn, coin, a["cancel_oids"], env)
+            elif a["action"] == "protect":
+                cloid = hl_execution.client_order_id(coin, "protect", a["stop_px"])
+                is_buy_exit = a["side"] != "long"
+                resp = observed_call(
+                    lambda: stop_fn(coin, is_buy_exit, a["size"], a["stop_px"], cloid=cloid, env=env),
+                    observer=event_sink,network=e,action=a,cloid=cloid,orders=orders)
+                ok, detail = hl_exchange.order_accepted(resp)
+                res["placed"] = ok
+                if not ok:
+                    res["error"] = detail
             elif a["action"] in ("cancel_stale", "cancel_orphans"):
                 res["cancelled"] = _cancel_all(cancel_fn, coin, a["cancel_oids"], env)
             elif a["action"] == "close_remainder":
@@ -296,6 +355,26 @@ def run(*, env: Optional[str] = None,
                 pass
         out['execution_evidence'] = {'observed':len(observations), 'recorded':recorded,
                                      'failed':len(observations)-recorded}
+    return out
+
+
+def _track_unprotected(env: str, coins: List[str], now_ms: int) -> Dict[str, int]:
+    """{coin: when it was first seen without a stop}, kept in KV across the
+    every-minute runs; coins protected again drop out. Never raises: without a
+    KV nothing is ever old enough, so no protective stop is placed."""
+    import json
+    key = f"hl:unprotected:{env}"
+    try:
+        import kv
+        seen = json.loads(kv.get_value(key) or "{}")
+        seen = seen if isinstance(seen, dict) else {}
+    except Exception:                                   # noqa: BLE001
+        return {}
+    out = {c: int(seen.get(c) or now_ms) for c in coins}
+    try:
+        kv.set_value(key, json.dumps(out), ttl_seconds=86_400)
+    except Exception:                                   # noqa: BLE001
+        return {}
     return out
 
 

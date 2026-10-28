@@ -260,6 +260,18 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def fmt_protected(r: Dict[str, Any]) -> str:
+    return (f"🛡 {r.get('coin')} {str(r.get('side') or '').upper()} had NO stop-loss for "
+            f"{r.get('unprotected_s', 0) // 60} min: placed a protective stop at "
+            f"{r.get('stop_px')} ({protect_pct_label()} beyond the mark {r.get('mark_px')}). "
+            "Check why its stop was missing.")
+
+
+def protect_pct_label() -> str:
+    import hl_manage
+    return f"{hl_manage.protect_stop_pct():g}%"
+
+
 def notify_manager(results: List[Dict[str, Any]], *, now_ms: Optional[int] = None) -> List[str]:
     """After a position-manager pass: stop moved / remainder closed / failures.
     Without durable dedupe, a still-failing action alerts at most every 30 min
@@ -274,6 +286,8 @@ def notify_manager(results: List[Dict[str, Any]], *, now_ms: Optional[int] = Non
             sent.append(send(fmt_manager_problem(r), f"mgr-fail:{coin}:{act}", ttl=PROBLEM_TTL))
         elif act == "move_stop" and r.get("placed"):
             sent.append(send(fmt_stop_moved(r), f"be:{coin}:{r.get('stop_px')}"))
+        elif act == "protect" and r.get("placed"):
+            sent.append(send(fmt_protected(r), f"protect:{coin}:{r.get('stop_px')}"))
         elif act == "close_remainder" and r.get("closed"):
             sent.append(send(fmt_remainder_closed(r), f"berem:{coin}:{r.get('entry_px')}"))
     return sent

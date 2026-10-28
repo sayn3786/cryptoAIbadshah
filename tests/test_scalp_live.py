@@ -217,8 +217,12 @@ def hl_fake(app_mod, monkeypatch):
           "known": False}
     monkeypatch.setattr(hl_account, "_env", lambda env=None: "testnet")
     monkeypatch.setattr(hl_execution, "arm_status", lambda: {"armed": True})
+    # A market close takes the coin off the book, unless the test makes it fill
+    # only part ("partial_close").
     monkeypatch.setattr(hl_account, "account_state", lambda: {
-        "open_positions": st["positions"], "account_value_usd": 1000.0})
+        "open_positions": [p for p in st["positions"]
+                           if st.get("partial_close") or p.get("coin") not in st["closed"]],
+        "account_value_usd": 1000.0})
     monkeypatch.setattr(hl_account, "spot_usdc", lambda: 0.0)
     monkeypatch.setattr(hl_account, "_post_info", lambda *a, **k: st["orders"])
     monkeypatch.setattr(hl_account, "account_address", lambda: "0xabc")
@@ -668,6 +672,17 @@ def test_a_weak_opposite_signal_closes_and_waits(app_mod, hl_fake, monkeypatch):
     assert "AAVE" not in app_mod._scalp_records()
     r = out["results"][0]
     assert r["ok"] and r["flipped"] is False and "78 is below 85 to flip" in r["note"]
+
+
+def test_a_partial_close_keeps_the_stop_and_the_record(app_mod, hl_fake, monkeypatch):
+    opened = []
+    _flip_setup(app_mod, hl_fake, monkeypatch, opened)
+    hl_fake["partial_close"] = True                       # thin book: part still open
+    out = app_mod._scalp_hl([_long(92.0)], 2 * H)
+    r = out["results"][0]
+    assert r["reason"] == "FLIP_CLOSE_PARTIAL" and "stop and target were kept" in r["note"]
+    assert hl_fake["cancelled"] == [] and opened == []    # exits stay, no new trade
+    assert app_mod._scalp_records()["AAVE"]["direction"] == "SHORT"
 
 
 def test_no_second_flip_within_the_cooldown(app_mod, hl_fake, monkeypatch):

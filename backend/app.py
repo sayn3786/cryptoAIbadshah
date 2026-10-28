@@ -5803,6 +5803,19 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
             **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
 
 
+def _scalp_left_open(coin: str) -> Optional[float]:
+    """The size HL still holds on `coin` right now (0 when flat), or None when
+    the account can't be read."""
+    try:
+        import hl_account as _ha
+        for p in _ha.account_state().get("open_positions") or []:
+            if str(p.get("coin") or "").upper() == coin.upper():
+                return abs(float(p.get("size") or 0))
+        return 0.0
+    except Exception:
+        return None
+
+
 def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
     """An opposite engine signal on a running scalp: close it at market,
     cancel its stop / target, record its result, then open the new direction
@@ -5823,6 +5836,15 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
         ok = False
     if not ok:
         return {"symbol": sym, "ok": False, "reason": "FLIP_CLOSE_FAILED"}
+    # A market close on a thin book can fill only PART of the position. Its stop
+    # and target are cancelled only once HL shows the coin flat; otherwise they
+    # stay (reduce-only, they cover what is left) and the scalp stays recorded.
+    left = _scalp_left_open(coin)
+    if left != 0:
+        what = "could not confirm the close" if left is None else f"{left:g} still open"
+        return {"symbol": sym, "ok": False, "reason": "FLIP_CLOSE_PARTIAL",
+                "note": f"{sym}: the close on an opposite signal filled only part "
+                        f"({what}); its stop and target were kept"}
     for o in [o for o in orders if str(o.get("coin")) == coin and o.get("reduceOnly")]:
         try:
             _he.cancel_order(coin, o.get("oid"))
