@@ -453,6 +453,8 @@ def _h1_bars(trend: bool):
 
 def test_adx_filter_rules(monkeypatch):
     s = {"symbol": "SOL", "direction": "SHORT"}
+    assert sl.min_adx() == 0 and sl.adx_block(_h1_bars(False), s) is None   # off by default
+    monkeypatch.setenv("SCALP_MIN_ADX", "25")
     assert sl.min_adx() == 25
     assert sl.adx_block(_h1_bars(True), s) is None                     # trending: trade
     why = sl.adx_block(_h1_bars(False), s)
@@ -463,6 +465,7 @@ def test_adx_filter_rules(monkeypatch):
 
 
 def test_blend_run_stands_aside_when_the_coin_is_not_trending(app_mod, monkeypatch):
+    monkeypatch.setenv("SCALP_MIN_ADX", "25")
     calls = []
     monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
     fetch = lambda sym, iv: padded() if iv == "15m" else _h1_bars(False)            # noqa: E731

@@ -80,12 +80,12 @@ def max_open() -> int:
     return int(_num_env("SCALP_MAX_OPEN", DEFAULT_MAX_OPEN))
 
 
-# No new scalp on a coin whose own 1H trend is weak: the 1H ADX (14) at the
-# last closed hour must be at least SCALP_MIN_ADX (0 = off). The scalp-chop
-# backtest: ADX >= 25 cut the loss 60-86% in both periods (-$42 vs -$296,
-# -$156 vs -$394), the only filter that helped in both. An unknown ADX never
-# blocks.
-DEFAULT_MIN_ADX = 25.0
+# Optional: no new scalp on a coin whose own 1H trend is weak (1H ADX (14) at
+# the last closed hour below SCALP_MIN_ADX). OFF by default (owner's call,
+# Oct 30): the scalp-chop backtest had ADX >= 25 cut the loss in both periods,
+# but the book still lost with it. SCALP_MIN_ADX=25 turns it back on. An
+# unknown ADX never blocks.
+DEFAULT_MIN_ADX = 0.0
 
 
 def min_adx() -> float:
