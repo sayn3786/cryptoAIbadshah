@@ -80,32 +80,6 @@ def max_open() -> int:
     return int(_num_env("SCALP_MAX_OPEN", DEFAULT_MAX_OPEN))
 
 
-# Optional: no new scalp on a coin whose own 1H trend is weak (1H ADX (14) at
-# the last closed hour below SCALP_MIN_ADX). OFF by default (owner's call,
-# Oct 30): the scalp-chop backtest had ADX >= 25 cut the loss in both periods,
-# but the book still lost with it. SCALP_MIN_ADX=25 turns it back on. An
-# unknown ADX never blocks.
-DEFAULT_MIN_ADX = 0.0
-
-
-def min_adx() -> float:
-    if _off("SCALP_MIN_ADX"):                 # 0 / off: no ADX filter
-        return 0.0
-    return _num_env("SCALP_MIN_ADX", DEFAULT_MIN_ADX)
-
-
-def adx_block(h1_bars: Sequence[Dict[str, Any]], setup: Dict[str, Any]) -> Optional[str]:
-    """Why the coin's weak 1H trend keeps this scalp out (None: it may trade). Pure."""
-    floor = min_adx()
-    if floor <= 0:
-        return None
-    import trend_regime
-    v = trend_regime.last_adx(list(h1_bars or []))
-    if v is None or v >= floor:
-        return None
-    return f"{setup['symbol']} {setup['direction']}: 1H ADX {v:.0f} < {floor:g} (no trend)"
-
-
 # An opposite signal FLIPS a running scalp only when it is strong and the coin
 # has not flipped recently; otherwise the scalp is just closed and the book
 # waits. In chop the 15m read swings long/short and every flip paid twice.
