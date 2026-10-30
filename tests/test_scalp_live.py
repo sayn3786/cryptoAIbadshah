@@ -853,8 +853,10 @@ def test_sweep_setup_shifts_from_its_close_not_its_limit():
 
 def test_fixed_levels_are_a_share_of_margin():
     assert sl.fixed_margin_usd() == 50
-    assert [sl.fixed_leverage(x) for x in (2e12, 5e10, 5e9, 5e8, 1e8, None)] == [20, 15, 10, 7, 5, 10]
-    assert sl.fixed_leverage(2e12, hl_max=10) == 10                       # HL's cap wins
+    assert [sl.fixed_leverage(x) for x in (2e12, 5e9, 1e8, None)] == [11, 11, 11, 11]   # every coin
+    assert sl.fixed_leverage(2e12, hl_max=3) == 3                         # HL's cap wins
+    assert sl.fixed_leverage(2e12, hl_max=50) == 11
+    assert "HL's max" in sl.fix_levels({"entry": 100.0, "direction": "LONG"}, 3)["exit"]
     lv = sl.roe_levels(100.0, "LONG", 10)                                  # 10x: 1% = 10%
     assert [round(lv[k], 6) for k in ("sl", "tp1", "tp2")] == [99.0, 102.5, 103.8]
     sv = sl.roe_levels(100.0, "SHORT", 20)
