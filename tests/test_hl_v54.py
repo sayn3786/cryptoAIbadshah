@@ -29,8 +29,10 @@ NOW = 10_000_000_000
 
 @pytest.fixture(autouse=True)
 def _defaults(monkeypatch):
-    for k in ("HL_BREAKEVEN_TRIGGER", "HL_STOP_ATR_ADD", "HL_TP_ORDER"):
+    for k in ("HL_STOP_ATR_ADD", "HL_TP_ORDER"):
         monkeypatch.delenv(k, raising=False)
+    # These cover the v54 1R rule, still selectable; the default is now "tp1".
+    monkeypatch.setenv("HL_BREAKEVEN_TRIGGER", "1R")
 
 
 def _pos(size, entry=0.60, side="long", coin="FET"):
@@ -108,8 +110,10 @@ def test_opened_alert_shows_the_atr_buffer():
 # ── break-even at 1R ─────────────────────────────────────────────────────────
 
 def test_breakeven_trigger_env(monkeypatch):
-    assert hm.breakeven_trigger() == 1.0
-    for raw, want in (("tp1", "tp1"), ("1.5R", 1.5), ("0.8", 0.8), ("junk", 1.0), ("0", 1.0)):
+    monkeypatch.delenv("HL_BREAKEVEN_TRIGGER")
+    assert hm.breakeven_trigger() == "tp1"                    # default: once TP1 filled
+    for raw, want in (("tp1", "tp1"), ("1R", 1.0), ("1.5R", 1.5), ("0.8", 0.8),
+                      ("junk", "tp1"), ("0", "tp1")):
         monkeypatch.setenv("HL_BREAKEVEN_TRIGGER", raw)
         assert hm.breakeven_trigger() == want
 

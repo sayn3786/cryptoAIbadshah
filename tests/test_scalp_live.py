@@ -391,7 +391,7 @@ def test_size_plan_risk_and_market_cap_leverage(monkeypatch):
     assert [sl.lev_cap(x) for x in (2e11, 5e10, 5e9, 5e8, 1e8, None)] == [20, 10, 7, 5, 3, 7]
     monkeypatch.setenv("SCALP_RISK_USD", "2")
     assert sl.size_plan(100, 99, 2e10)["notional_usd"] == 200.0
-    assert sl.max_exposure_usd() == 4500.0
+    assert sl.max_exposure_usd() == 100_000.0         # margin is the real limit now
 
 
 def test_scalp_exposure_cap(app_mod, hl_fake, monkeypatch):
@@ -847,3 +847,80 @@ def test_sweep_setup_shifts_from_its_close_not_its_limit():
          "close": 105.5}
     got = sl.on_hl_prices(s, 105.5 * 1.01)
     assert abs(got["limit"] - 103.0 * 1.01) < 1e-9 and got["close"] == 105.5 * 1.01
+
+
+# ── fixed margin, exits as % of margin (owner, Oct 30) ──────────────────────
+
+def test_fixed_levels_are_a_share_of_margin():
+    assert sl.fixed_margin_usd() == 50
+    assert [sl.fixed_leverage(x) for x in (2e12, 5e10, 5e9, 5e8, 1e8, None)] == [20, 15, 10, 7, 5, 10]
+    assert sl.fixed_leverage(2e12, hl_max=10) == 10                       # HL's cap wins
+    lv = sl.roe_levels(100.0, "LONG", 10)                                  # 10x: 1% = 10%
+    assert [round(lv[k], 6) for k in ("sl", "tp1", "tp2")] == [99.0, 102.5, 103.8]
+    sv = sl.roe_levels(100.0, "SHORT", 20)
+    assert [round(sv[k], 6) for k in ("sl", "tp1", "tp2")] == [100.5, 98.75, 98.1]
+    s = sl.fix_levels({"entry": 100.0, "direction": "LONG", "sl": 97, "target": 109}, 10)
+    assert (round(s["sl"], 6), round(s["tp1"], 6), round(s["target"], 6)) == (99.0, 102.5, 103.8)
+    assert s["leverage"] == 10 and s["rr"] == 2.5 and "fixed at 10x" in s["exit"]
+    text = sl.message([{**s, "kind": "engine", "symbol": "ETH", "strength": 80,
+                        "score_parts": "15m 80", "engine_strength": 80}], auto=True)
+    assert "TP1 102.5 · TP2 103.8" in text and "$50 margin a scalp" in text
+
+
+def test_fixed_scalp_opens_50_margin_with_tp1_and_tp2(app_mod, hl_fake, monkeypatch):
+    import hl_autoexec
+    seen = {}
+
+    def execute(signals, **kw):
+        seen.update(sig=signals[0], cfg=kw["cfg"])
+        return {"results": [{"ok": True, "coin": "ETH", "mark_px": 100.0, "size": 5.0,
+                             "notional_usd": 500.0, "exits_ok": True}]}
+    monkeypatch.setattr(hl_autoexec, "execute", execute)
+    setup = sl.fix_levels({"kind": "engine", "symbol": "ETH", "direction": "LONG",
+                           "strength": 80.0, "entry": 100.0, "limit": 100.0, "sl": 97.0,
+                           "target": 109.0, "rr": 3.0, "slot_ms": 9}, 10)
+    out = app_mod._scalp_hl([setup], 2 * H)
+    assert out["results"][0]["ok"]
+    assert seen["cfg"]["notional_usd"] == 500.0 and seen["cfg"]["leverage"] == 10   # $50 x 10
+    assert round(seen["sig"]["sl"], 6) == 99.0 and round(seen["sig"]["tp1"], 6) == 102.5
+    assert round(seen["sig"]["tp2"], 6) == 103.8
+    rec = app_mod._scalp_records()["ETH"]
+    assert [round(x, 6) for x in rec["tps"]] == [102.5, 103.8]
+
+
+def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch):
+    import hl_account
+    import hl_exchange
+    import hl_meta
+    calls = []
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"AAVE": "144.5"})
+    monkeypatch.setattr(hl_exchange, "send_market_open", lambda coin, buy, size, cloid, env=None,
+                        leverage=None: calls.append(("open", size, leverage)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_stop", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("sl", size, px)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_take_profit", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("tp", size, px)) or {"status": "ok"})
+    hl_fake["positions"] = AAVE_POS
+    hl_fake["orders"] = AAVE_ORDERS
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0, leverage=10, size=0.75,
+                                       notional_usd=108.0)})
+    setup = sl.fix_levels({"kind": "engine", "symbol": "AAVE", "direction": "SHORT",
+                           "strength": 83.0, "entry": 144.5, "limit": 144.5, "sl": 146.0,
+                           "target": 140.0, "rr": 1.5, "slot_ms": 9}, 10)
+    out = app_mod._scalp_hl([setup], 2 * H)
+    opens = [c for c in calls if c[0] == "open"]
+    assert opens and opens[0][2] == 10                                    # another $50 at 10x
+    rec = app_mod._scalp_records()["AAVE"]
+    avg = rec["limit"]
+    assert rec["adds"] == 1 and 144.17 < avg < 144.5
+    assert abs(rec["sl"] - avg * 1.01) < 0.02                             # -10% of margin at 10x
+    tp1, tp2 = rec["tps"]                                                  # +25% / +38%
+    assert abs(tp1 - avg * 0.975) < 0.02 and abs(tp2 - avg * 0.962) < 0.02
+    assert "re-fixed SL" in out["results"][0]["note"]
+    # max adds reached: the levels stay fixed
+    app_mod._scalp_save({"AAVE": {**rec, "adds": 2}})
+    calls.clear()
+    out = app_mod._scalp_hl([{**setup, "slot_ms": 10}], 3 * H)
+    assert out["results"][0]["reason"] == "FIXED_LEVELS_KEPT" and calls == []
