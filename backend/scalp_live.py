@@ -125,7 +125,7 @@ def lev_cap(market_cap: Optional[float]) -> int:
     return 3
 
 
-DEFAULT_MAX_EXPOSURE_USD = 4500.0   # room for all 18 at ~$250 each
+DEFAULT_MAX_EXPOSURE_USD = 100_000.0   # $50 margin at up to 20x, adds: margin is the real limit
 
 
 def max_exposure_usd() -> float:
@@ -157,6 +157,59 @@ def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
     lev = max(1, min(cap, int(-(-notional // margin))))           # ceil, within the cap
     return {"notional_usd": round(notional, 2), "leverage": lev,
             "stop_pct": round(stop_pct * 100, 3), "cap": cap}
+
+
+# ── fixed margin, levels as % of margin (the owner's rules, Oct 30) ─────────
+# Every scalp: SCALP_FIXED_MARGIN_USD ($50) of margin at the coin's leverage
+# (raised market-cap tiers, capped by Hyperliquid's max), with fixed exits as a
+# share of that margin (ROE): stop -10%, TP1 +25% (half the position), TP2
+# +38% (the rest). At 10x, -10% of margin is a 1% price move. A later signal
+# the same way adds another $50 and re-fixes all three from the new average
+# entry; nothing else moves them. SCALP_FIXED_MARGIN_USD=0 = the old risk
+# sizing with structure exits.
+FIXED_LEV_TIERS = ((100e9, 20), (10e9, 15), (1e9, 10), (200e6, 7), (0, 5))
+DEFAULT_FIXED_MARGIN_USD = 50.0
+SL_ROE_PCT = 10.0
+TP1_ROE_PCT = 25.0
+TP2_ROE_PCT = 38.0
+
+
+def fixed_margin_usd() -> float:
+    """$ margin a scalp opens with (0 / off: the old risk sizing)."""
+    if _off("SCALP_FIXED_MARGIN_USD"):
+        return 0.0
+    return _num_env("SCALP_FIXED_MARGIN_USD", DEFAULT_FIXED_MARGIN_USD)
+
+
+def fixed_leverage(market_cap: Optional[float], hl_max: Optional[float] = None) -> int:
+    """The coin's leverage: the raised market-cap tier (unknown: 10x), capped
+    by Hyperliquid's maximum for it."""
+    lev = 10
+    if market_cap is not None:
+        lev = next(v for floor, v in FIXED_LEV_TIERS if market_cap >= floor)
+    if hl_max:
+        lev = max(1, min(lev, int(hl_max)))
+    return lev
+
+
+def roe_levels(entry: float, direction: str, leverage: float) -> Dict[str, float]:
+    """{"sl", "tp1", "tp2"}: -SL_ROE / +TP1_ROE / +TP2_ROE % of margin at
+    `leverage`, i.e. those % divided by the leverage away from `entry`. Pure."""
+    sgn = 1 if direction == "LONG" else -1
+    e, lev = float(entry), float(leverage)
+    return {"sl": e * (1 - sgn * SL_ROE_PCT / 100 / lev),
+            "tp1": e * (1 + sgn * TP1_ROE_PCT / 100 / lev),
+            "tp2": e * (1 + sgn * TP2_ROE_PCT / 100 / lev)}
+
+
+def fix_levels(setup: Dict[str, Any], leverage: int) -> Dict[str, Any]:
+    """The setup with the fixed exits from its entry: sl, tp1, target (= TP2),
+    leverage, R:R to TP1. Pure."""
+    lv = roe_levels(setup["entry"], setup["direction"], leverage)
+    return {**setup, "sl": lv["sl"], "tp1": lv["tp1"], "target": lv["tp2"],
+            "leverage": leverage, "rr": round(TP1_ROE_PCT / SL_ROE_PCT, 2),
+            "exit": (f"fixed at {leverage}x: SL -{SL_ROE_PCT:g}% / TP1 +{TP1_ROE_PCT:g}% / "
+                     f"TP2 +{TP2_ROE_PCT:g}% of ${fixed_margin_usd():g} margin")}
 
 
 # ── which trigger ───────────────────────────────────────────────────────────
@@ -395,7 +448,7 @@ def on_hl_prices(setup: Dict[str, Any], hl_close: Optional[float]) -> Dict[str, 
         return setup
     k = float(hl_close) / ref
     out = {**setup, "basis_pct": round((k - 1) * 100, 3), "close": float(hl_close)}
-    for key in ("entry", "limit", "sl", "target"):
+    for key in ("entry", "limit", "sl", "target", "tp1"):
         if out.get(key) is None:
             continue
         out[key] = float(hl_close) if float(out[key]) == ref else float(out[key]) * k
@@ -747,14 +800,18 @@ def message(setups: Sequence[Dict[str, Any]], *, auto: bool) -> str:
     for s in setups:
         if s.get("kind") == "engine":
             extra = f"{s.get('score_parts') or s['engine_strength']} = {s['strength']:g}"
+            tp = (f"TP1 {px(s['tp1'])} · TP2 {px(s['target'])}" if s.get("tp1")
+                  else f"TP {px(s['target'])} · R:R {s['rr']:g}")
             lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
                          f"{s['direction']} · {extra} · market ~{px(s['entry'])} · SL "
-                         f"{px(s['sl'])} · TP {px(s['target'])} · R:R {s['rr']:g}"
+                         f"{px(s['sl'])} · {tp}"
                          + (f" ({s['exit']})" if s.get("exit") else ""))
         else:
             lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
                          f"{s['direction']} · limit {px(s['limit'])} · SL {px(s['sl'])} · TP "
                          f"{px(s['target'])} · R:R {s['rr']:g} · {_CONFIRM_LABEL[confirm_mode()]}")
-    lines.append("Testnet experiment, not a proven edge; $"
-                 f"{risk_usd():g} risk a scalp, closed after {max_hold_ms() // H1_MS}h if still open.")
+    size = (f"${fixed_margin_usd():g} margin a scalp" if fixed_margin_usd() > 0
+            else f"${risk_usd():g} risk a scalp")
+    lines.append(f"Testnet experiment, not a proven edge; {size}, closed after "
+                 f"{max_hold_ms() // H1_MS}h if still open.")
     return "\n".join(lines)

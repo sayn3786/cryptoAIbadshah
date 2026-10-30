@@ -5737,19 +5737,39 @@ def _scalp_busy_symbols() -> set:
     return {str(r.get("symbol") or "").upper() for r in _scalp_records().values()}
 
 
+def _scalp_leverage(sym, table=None) -> int:
+    """The coin's fixed-margin leverage: its market-cap tier, capped by HL."""
+    import scalp_live as _sl
+    import hl_meta as _hm
+    try:
+        mcap = client.get_market_cap(SYMBOLS[sym])
+    except Exception:
+        mcap = None
+    hl_max = None
+    if table:
+        coin = _hm.resolve_coin(sym, table)
+        hl_max = (table.get(coin) or {}).get("max_leverage") if coin else None
+    return _sl.fixed_leverage(mcap, hl_max)
+
+
 def _scalp_size(sym, coin, setup, *, acct, table, recs):
-    """(risk-sized can_place plan, None) or (None, reject dict)."""
+    """(sized can_place plan, None) or (None, reject dict): a fixed margin at
+    the setup's leverage, or (fixed margin off) risk-sized."""
     import scalp_live as _sl
     import hl_meta as _hm
     free = acct.get("account_value_usd")
     spot = acct.get("spot_usdc_usd")
     free = None if (free is None and spot is None) else max(free or 0.0, spot or 0.0)
-    try:
-        mcap = client.get_market_cap(SYMBOLS[sym])
-    except Exception:
-        mcap = None
-    size = _sl.size_plan(setup["limit"], setup["sl"], mcap,
-                         hl_max=(table.get(coin) or {}).get("max_leverage"))
+    if setup.get("leverage") and _sl.fixed_margin_usd() > 0:
+        lev = int(setup["leverage"])
+        size = {"notional_usd": round(_sl.fixed_margin_usd() * lev, 2), "leverage": lev}
+    else:
+        try:
+            mcap = client.get_market_cap(SYMBOLS[sym])
+        except Exception:
+            mcap = None
+        size = _sl.size_plan(setup["limit"], setup["sl"], mcap,
+                             hl_max=(table.get(coin) or {}).get("max_leverage"))
     plan = _hm.can_place(sym, setup["limit"], notional_usd=size["notional_usd"],
                          leverage=size["leverage"], free_collateral_usd=free, table=table)
     if not plan.get("ok"):
@@ -5776,9 +5796,11 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
     plan, reject = _scalp_size(sym, coin, setup, acct=acct, table=table, recs=recs)
     if reject:
         return reject
+    tp1 = setup.get("tp1")                     # fixed exits: TP1 (half) + TP2
     sig = {"symbol": sym, "entry": setup["entry"], "direction": setup["direction"],
            "id": _sl.signal_id(sym), "candle_ts": setup["slot_ms"], "sl": setup["sl"],
-           "tp1": setup["target"], "tp2": None, "confidence_score": setup["strength"]}
+           "tp1": tp1 or setup["target"], "tp2": setup["target"] if tp1 else None,
+           "confidence_score": setup["strength"]}
     # Per-scalp size; the scalp book's exposure cap was checked above, so the
     # 4h book's cap must not apply to it.
     cfg = {**_he.caps(), "notional_usd": plan["notional_usd"], "leverage": plan["leverage"],
@@ -5795,6 +5817,7 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
                   "notional_usd": r.get("notional_usd") or plan["notional_usd"],
                   "leverage": plan["leverage"], "state": "open", "opened_ms": now_ms,
                   "fill_price": px, "kind": "engine",
+                  **({"tps": [tp1, setup["target"]]} if tp1 else {}),
                   **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
     import scalp_store as _ss
     _ss.placed(_deploy_env(), recs[coin], rr=setup.get("rr"))
@@ -5884,6 +5907,89 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
     note = (closed + f"; opened {sym} {setup['direction']} {setup['strength']:g} at market "
             f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, ${_sl.risk_usd():g} risk)")
     return {**r, "flipped": True, "note": note}
+
+
+def _scalp_add_fixed(rec, setup, st, *, mark, table, acct, recs) -> Optional[dict]:
+    """Fixed-margin add: another $margin at market at the scalp's leverage,
+    then the stop (for the WHOLE size, placed first, the old one cancelled
+    after), TP1 (half) and TP2 re-fixed from the new average entry. None when
+    it can't add (max adds reached, TP1 already taken, the order rejected).
+    Never raises."""
+    import scalp_live as _sl
+    import hl_autoexec as _ax
+    import hl_exchange as _he
+    import hl_execution as _hx
+    import hl_meta as _hm
+    sym, coin = rec["symbol"], rec["coin"]
+    if mark is None or int(rec.get("adds") or 0) >= _sl.max_adds() or not st.get("entry"):
+        return None
+    if rec.get("size") and st["size"] < float(rec["size"]) * 0.98:
+        return None                                # TP1 already took part: leave it be
+    lev = int(rec.get("leverage") or setup.get("leverage") or 10)
+    long = st["side"] == "long"
+    better = mark <= st["entry"] * (1 - _sl.ADD_BETTER) if long else \
+        mark >= st["entry"] * (1 + _sl.ADD_BETTER)
+    if _sl.add_only_better() and not better:
+        return None
+    plan, reject = _scalp_size(sym, coin, {"limit": mark, "sl": rec.get("sl"), "leverage": lev},
+                               acct=acct, table=table, recs=recs)
+    if reject:
+        return None
+    sid, ts = _sl.signal_id(sym), setup["slot_ms"]
+    try:
+        ok, _d = _he.order_accepted(_he.send_market_open(
+            coin, long, plan["size"], _hx.client_order_id(sid, "add", ts), leverage=lev))
+    except Exception:
+        ok = False
+    if not ok:
+        return None
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    total = round(st["size"] + plan["size"], sz)
+    old_avg = st["entry"]
+    avg = (old_avg * st["size"] + mark * plan["size"]) / total
+    lv = _sl.roe_levels(avg, rec["direction"], lev)
+    px = lambda v: _hm.round_price(v, sz)                             # noqa: E731
+    exit_buy = not long
+    warn = ""
+    try:
+        sl_ok, _d = _he.order_accepted(_he.send_stop(
+            coin, exit_buy, total, px(lv["sl"]), cloid=_hx.client_order_id(sid, "sl-add", ts)))
+    except Exception:
+        sl_ok = False
+    if sl_ok:
+        for o in st["stops"]:
+            try:
+                _he.cancel_order(coin, o.get("oid"))
+            except Exception:
+                pass
+    else:
+        warn = " ⚠️ the new stop was NOT placed (the old stop still covers the first part)"
+    for o in st["tps"]:
+        try:
+            _he.cancel_order(coin, o.get("oid"))
+        except Exception:
+            pass
+    split = _ax.plan_tp_split(total, sz, px(lv["tp1"]), px(lv["tp2"]))
+    legs = ([(px(lv["tp1"]), split[0]), (px(lv["tp2"]), split[1])] if split
+            else [(px(lv["tp1"]), total)])
+    placed = []
+    for k, (lvl, size) in enumerate(legs, start=1):
+        try:
+            tp_ok, _d = _he.order_accepted(_he.send_take_profit(
+                coin, exit_buy, size, lvl, cloid=_hx.client_order_id(sid, f"tp{k}-add", ts)))
+        except Exception:
+            tp_ok = False
+        if tp_ok:
+            placed.append(f"TP{k} {lvl:,.6g}")
+    rec.update(adds=int(rec.get("adds") or 0) + 1, limit=round(avg, 8), sl=px(lv["sl"]),
+               target=legs[-1][0], tps=[lvl for lvl, _s in legs], size=total,
+               notional_usd=round(float(rec.get("notional_usd") or 0) + plan["notional_usd"], 2))
+    import scalp_store as _ss
+    _ss.levels(_deploy_env(), rec)
+    note = (f"added ${_sl.fixed_margin_usd():g} margin to {sym} {rec['direction']} at ~{mark:,.6g} "
+            f"({lev}x): avg entry {old_avg:,.6g} → {avg:,.6g}; re-fixed SL {px(lv['sl']):,.6g}"
+            + (", " + ", ".join(placed) if placed else "") + warn)
+    return {"symbol": sym, "ok": True, "added": plan["notional_usd"], "note": note}
 
 
 def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict]:
@@ -5977,6 +6083,14 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table, acct=None, recs
         mark = float((mids or {}).get(coin))
     except (TypeError, ValueError):
         mark = None
+    if setup.get("tp1") and _sl.fixed_margin_usd() > 0:
+        # Fixed exits: a same-way signal only adds $margin and re-fixes them.
+        st = _sl.exit_state(rec, positions, orders, mark)
+        if acct is not None and recs is not None and st is not None:
+            r = _scalp_add_fixed(rec, setup, st, mark=mark, table=table, acct=acct, recs=recs)
+            if r:
+                return r
+        return {"symbol": sym, "ok": False, "reason": "FIXED_LEVELS_KEPT"}
     if acct is not None and recs is not None:
         st = _sl.exit_state(rec, positions, orders, mark)
         add = _sl.plan_add(rec, setup, st, mark)
@@ -6258,6 +6372,10 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
                                    h1_fn=lambda: fetch_fn(sym, "1h"))
                 if why:
                     rejected.append(why)
+                if s is not None and _sl.fixed_margin_usd() > 0:
+                    # The owner's fixed exits: % of a fixed margin at the
+                    # coin's leverage, replacing the structure stop / target.
+                    s = _sl.fix_levels(s, _scalp_leverage(sym, hl_table))
                 return s
             s = _sl.new_setup(m15, sym, now_ms=now_ms)
             if s is None:

@@ -65,19 +65,22 @@ def _same_px(a: Optional[float], b: Optional[float]) -> bool:
     return a is not None and b is not None and abs(a - b) <= abs(b) * 1e-6
 
 
-DEFAULT_BREAKEVEN_TRIGGER = 1.0          # v54: move at 1R
+# The owner's fixed-exit scalps (Oct 30): the stop moves to entry once TP1 has
+# filled (it was 1R, v54, which with a 10% stop / 25% TP1 would move it well
+# before TP1). HL_BREAKEVEN_TRIGGER=1R brings v54 back.
+DEFAULT_BREAKEVEN_TRIGGER: Union[float, str] = "tp1"
 ORPHAN_MIN_AGE_MS = 2 * 60 * 1000
 
 
 def breakeven_trigger() -> Union[float, str]:
-    """"tp1" (v53) or a positive R multiple (v54 default 1.0), from
+    """"tp1" (default: once TP1 has filled) or a positive R multiple, from
     HL_BREAKEVEN_TRIGGER ("1R", "1.5r", "0.8", "tp1"). Anything unreadable falls
     back to the default."""
     raw = os.getenv("HL_BREAKEVEN_TRIGGER", "").strip().lower()
-    if raw == "tp1":
-        return "tp1"
+    if raw == "tp1" or not raw:
+        return "tp1" if raw == "tp1" else DEFAULT_BREAKEVEN_TRIGGER
     try:
-        r = float(raw.rstrip("r")) if raw else DEFAULT_BREAKEVEN_TRIGGER
+        r = float(raw.rstrip("r"))
     except ValueError:
         return DEFAULT_BREAKEVEN_TRIGGER
     return r if r > 0 else DEFAULT_BREAKEVEN_TRIGGER
