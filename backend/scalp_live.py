@@ -160,14 +160,15 @@ def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
 
 
 # ── fixed margin, levels as % of margin (the owner's rules, Oct 30) ─────────
-# Every scalp: SCALP_FIXED_MARGIN_USD ($50) of margin at the coin's leverage
-# (raised market-cap tiers, capped by Hyperliquid's max), with fixed exits as a
-# share of that margin (ROE): stop -10%, TP1 +25% (half the position), TP2
-# +38% (the rest). At 10x, -10% of margin is a 1% price move. A later signal
-# the same way adds another $50 and re-fixes all three from the new average
-# entry; nothing else moves them. SCALP_FIXED_MARGIN_USD=0 = the old risk
-# sizing with structure exits.
-FIXED_LEV_TIERS = ((100e9, 20), (10e9, 15), (1e9, 10), (200e6, 7), (0, 5))
+# Every scalp: SCALP_FIXED_MARGIN_USD ($50) of margin at SCALP_LEVERAGE (11x,
+# every coin; the owner's call, Oct 30 - the market-cap tiers gave 2-3x on
+# small coins), capped only where Hyperliquid's own max for the coin is lower
+# (it rejects more). Fixed exits as a share of that margin (ROE): stop -10%,
+# TP1 +25% (half the position), TP2 +38% (the rest); at 11x the stop is a
+# ~0.91% move. A later signal the same way adds another $50 and re-fixes all
+# three from the new average entry; nothing else moves them.
+# SCALP_FIXED_MARGIN_USD=0 = the old risk sizing with structure exits.
+DEFAULT_SCALP_LEVERAGE = 11
 DEFAULT_FIXED_MARGIN_USD = 50.0
 SL_ROE_PCT = 10.0
 TP1_ROE_PCT = 25.0
@@ -181,12 +182,14 @@ def fixed_margin_usd() -> float:
     return _num_env("SCALP_FIXED_MARGIN_USD", DEFAULT_FIXED_MARGIN_USD)
 
 
-def fixed_leverage(market_cap: Optional[float], hl_max: Optional[float] = None) -> int:
-    """The coin's leverage: the raised market-cap tier (unknown: 10x), capped
-    by Hyperliquid's maximum for it."""
-    lev = 10
-    if market_cap is not None:
-        lev = next(v for floor, v in FIXED_LEV_TIERS if market_cap >= floor)
+def scalp_leverage() -> int:
+    return int(_num_env("SCALP_LEVERAGE", DEFAULT_SCALP_LEVERAGE))
+
+
+def fixed_leverage(market_cap: Optional[float] = None, hl_max: Optional[float] = None) -> int:
+    """SCALP_LEVERAGE (11x) for every coin, capped by Hyperliquid's maximum for
+    it. `market_cap` is no longer used (kept for callers)."""
+    lev = scalp_leverage()
     if hl_max:
         lev = max(1, min(lev, int(hl_max)))
     return lev
@@ -208,7 +211,9 @@ def fix_levels(setup: Dict[str, Any], leverage: int) -> Dict[str, Any]:
     lv = roe_levels(setup["entry"], setup["direction"], leverage)
     return {**setup, "sl": lv["sl"], "tp1": lv["tp1"], "target": lv["tp2"],
             "leverage": leverage, "rr": round(TP1_ROE_PCT / SL_ROE_PCT, 2),
-            "exit": (f"fixed at {leverage}x: SL -{SL_ROE_PCT:g}% / TP1 +{TP1_ROE_PCT:g}% / "
+            "exit": (f"fixed at {leverage}x"
+                     + (f" (HL's max for the coin)" if leverage < scalp_leverage() else "")
+                     + f": SL -{SL_ROE_PCT:g}% / TP1 +{TP1_ROE_PCT:g}% / "
                      f"TP2 +{TP2_ROE_PCT:g}% of ${fixed_margin_usd():g} margin")}
 
 
