@@ -5796,11 +5796,9 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
     plan, reject = _scalp_size(sym, coin, setup, acct=acct, table=table, recs=recs)
     if reject:
         return reject
-    tp1 = setup.get("tp1")                     # fixed exits: TP1 (half) + TP2
     sig = {"symbol": sym, "entry": setup["entry"], "direction": setup["direction"],
            "id": _sl.signal_id(sym), "candle_ts": setup["slot_ms"], "sl": setup["sl"],
-           "tp1": tp1 or setup["target"], "tp2": setup["target"] if tp1 else None,
-           "confidence_score": setup["strength"]}
+           "tp1": setup["target"], "tp2": None, "confidence_score": setup["strength"]}
     # Per-scalp size; the scalp book's exposure cap was checked above, so the
     # 4h book's cap must not apply to it.
     cfg = {**_he.caps(), "notional_usd": plan["notional_usd"], "leverage": plan["leverage"],
@@ -5817,7 +5815,7 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
                   "notional_usd": r.get("notional_usd") or plan["notional_usd"],
                   "leverage": plan["leverage"], "state": "open", "opened_ms": now_ms,
                   "fill_price": px, "kind": "engine",
-                  **({"tps": [tp1, setup["target"]]} if tp1 else {}),
+                  **({"tps": [setup["target"]]} if setup.get("fixed") else {}),
                   **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
     import scalp_store as _ss
     _ss.placed(_deploy_env(), recs[coin], rr=setup.get("rr"))
@@ -6083,7 +6081,7 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table, acct=None, recs
         mark = float((mids or {}).get(coin))
     except (TypeError, ValueError):
         mark = None
-    if setup.get("tp1") and _sl.fixed_margin_usd() > 0:
+    if setup.get("fixed") and _sl.fixed_margin_usd() > 0:
         # Fixed exits: a same-way signal only adds $margin and re-fixes them.
         st = _sl.exit_state(rec, positions, orders, mark)
         if acct is not None and recs is not None and st is not None:

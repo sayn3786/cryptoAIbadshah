@@ -858,18 +858,19 @@ def test_fixed_levels_are_a_share_of_margin():
     assert sl.fixed_leverage(2e12, hl_max=50) == 11
     assert "HL's max" in sl.fix_levels({"entry": 100.0, "direction": "LONG"}, 3)["exit"]
     lv = sl.roe_levels(100.0, "LONG", 10)                                  # 10x: 1% = 10%
-    assert [round(lv[k], 6) for k in ("sl", "tp1", "tp2")] == [99.0, 102.5, 103.8]
+    assert [round(lv[k], 6) for k in ("sl", "tp1", "tp2")] == [99.0, 101.5, 102.5]
     sv = sl.roe_levels(100.0, "SHORT", 20)
-    assert [round(sv[k], 6) for k in ("sl", "tp1", "tp2")] == [100.5, 98.75, 98.1]
+    assert [round(sv[k], 6) for k in ("sl", "tp1", "tp2")] == [100.5, 99.25, 98.75]
     s = sl.fix_levels({"entry": 100.0, "direction": "LONG", "sl": 97, "target": 109}, 10)
-    assert (round(s["sl"], 6), round(s["tp1"], 6), round(s["target"], 6)) == (99.0, 102.5, 103.8)
-    assert s["leverage"] == 10 and s["rr"] == 2.5 and "fixed at 10x" in s["exit"]
+    assert (round(s["sl"], 6), round(s["target"], 6)) == (99.0, 101.5)     # one target, +15%
+    assert s["fixed"] and s["leverage"] == 10 and s["rr"] == 1.5
+    assert "SL -10% / TP +15%" in s["exit"]
     text = sl.message([{**s, "kind": "engine", "symbol": "ETH", "strength": 80,
                         "score_parts": "15m 80", "engine_strength": 80}], auto=True)
-    assert "TP1 102.5 · TP2 103.8" in text and "$50 margin a scalp" in text
+    assert "TP 101.5" in text and "$50 margin a scalp" in text
 
 
-def test_fixed_scalp_opens_50_margin_with_tp1_and_tp2(app_mod, hl_fake, monkeypatch):
+def test_fixed_scalp_opens_50_margin_with_one_target(app_mod, hl_fake, monkeypatch):
     import hl_autoexec
     seen = {}
 
@@ -884,10 +885,9 @@ def test_fixed_scalp_opens_50_margin_with_tp1_and_tp2(app_mod, hl_fake, monkeypa
     out = app_mod._scalp_hl([setup], 2 * H)
     assert out["results"][0]["ok"]
     assert seen["cfg"]["notional_usd"] == 500.0 and seen["cfg"]["leverage"] == 10   # $50 x 10
-    assert round(seen["sig"]["sl"], 6) == 99.0 and round(seen["sig"]["tp1"], 6) == 102.5
-    assert round(seen["sig"]["tp2"], 6) == 103.8
-    rec = app_mod._scalp_records()["ETH"]
-    assert [round(x, 6) for x in rec["tps"]] == [102.5, 103.8]
+    assert round(seen["sig"]["sl"], 6) == 99.0 and round(seen["sig"]["tp1"], 6) == 101.5
+    assert seen["sig"]["tp2"] is None                                    # one target, all of it
+    assert [round(x, 6) for x in app_mod._scalp_records()["ETH"]["tps"]] == [101.5]
 
 
 def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch):
@@ -918,8 +918,8 @@ def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch
     avg = rec["limit"]
     assert rec["adds"] == 1 and 144.17 < avg < 144.5
     assert abs(rec["sl"] - avg * 1.01) < 0.02                             # -10% of margin at 10x
-    tp1, tp2 = rec["tps"]                                                  # +25% / +38%
-    assert abs(tp1 - avg * 0.975) < 0.02 and abs(tp2 - avg * 0.962) < 0.02
+    tp1, tp2 = rec["tps"]                                   # on an add: +15% (half) / +25%
+    assert abs(tp1 - avg * 0.985) < 0.02 and abs(tp2 - avg * 0.975) < 0.02
     assert "re-fixed SL" in out["results"][0]["note"]
     # max adds reached: the levels stay fixed
     app_mod._scalp_save({"AAVE": {**rec, "adds": 2}})

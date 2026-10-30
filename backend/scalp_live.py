@@ -163,16 +163,18 @@ def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
 # Every scalp: SCALP_FIXED_MARGIN_USD ($50) of margin at SCALP_LEVERAGE (11x,
 # every coin; the owner's call, Oct 30 - the market-cap tiers gave 2-3x on
 # small coins), capped only where Hyperliquid's own max for the coin is lower
-# (it rejects more). Fixed exits as a share of that margin (ROE): stop -10%,
-# TP1 +25% (half the position), TP2 +38% (the rest); at 11x the stop is a
-# ~0.91% move. A later signal the same way adds another $50 and re-fixes all
-# three from the new average entry; nothing else moves them.
+# (it rejects more). Fixed exits as a share of that margin (ROE): stop -10%
+# and ONE target at +15% for the whole position; at 11x the stop is a ~0.91%
+# move, the target ~1.36%. A later signal the same way adds another $50 and
+# re-fixes the exits from the new average entry as a ladder: TP1 +15% (half),
+# TP2 +25% (the rest). Once TP1 fills the manager moves the stop to entry.
+# Nothing else moves them.
 # SCALP_FIXED_MARGIN_USD=0 = the old risk sizing with structure exits.
 DEFAULT_SCALP_LEVERAGE = 11
 DEFAULT_FIXED_MARGIN_USD = 50.0
 SL_ROE_PCT = 10.0
-TP1_ROE_PCT = 25.0
-TP2_ROE_PCT = 38.0
+TP1_ROE_PCT = 15.0          # the single target; on an add, TP1 (half)
+TP2_ROE_PCT = 25.0          # on an add only: TP2 (the rest)
 
 
 def fixed_margin_usd() -> float:
@@ -206,15 +208,15 @@ def roe_levels(entry: float, direction: str, leverage: float) -> Dict[str, float
 
 
 def fix_levels(setup: Dict[str, Any], leverage: int) -> Dict[str, Any]:
-    """The setup with the fixed exits from its entry: sl, tp1, target (= TP2),
-    leverage, R:R to TP1. Pure."""
+    """The setup with the fixed exits from its entry: sl, ONE target (+TP1_ROE
+    of margin, the whole position), leverage, R:R; marked "fixed". Pure."""
     lv = roe_levels(setup["entry"], setup["direction"], leverage)
-    return {**setup, "sl": lv["sl"], "tp1": lv["tp1"], "target": lv["tp2"],
+    return {**setup, "fixed": True, "sl": lv["sl"], "tp1": lv["tp1"], "target": lv["tp1"],
             "leverage": leverage, "rr": round(TP1_ROE_PCT / SL_ROE_PCT, 2),
             "exit": (f"fixed at {leverage}x"
                      + (f" (HL's max for the coin)" if leverage < scalp_leverage() else "")
-                     + f": SL -{SL_ROE_PCT:g}% / TP1 +{TP1_ROE_PCT:g}% / "
-                     f"TP2 +{TP2_ROE_PCT:g}% of ${fixed_margin_usd():g} margin")}
+                     + f": SL -{SL_ROE_PCT:g}% / TP +{TP1_ROE_PCT:g}% of "
+                     f"${fixed_margin_usd():g} margin")}
 
 
 # ── which trigger ───────────────────────────────────────────────────────────
@@ -805,8 +807,7 @@ def message(setups: Sequence[Dict[str, Any]], *, auto: bool) -> str:
     for s in setups:
         if s.get("kind") == "engine":
             extra = f"{s.get('score_parts') or s['engine_strength']} = {s['strength']:g}"
-            tp = (f"TP1 {px(s['tp1'])} · TP2 {px(s['target'])}" if s.get("tp1")
-                  else f"TP {px(s['target'])} · R:R {s['rr']:g}")
+            tp = f"TP {px(s['target'])} · R:R {s['rr']:g}"
             lines.append(f"{'🟢' if s['direction'] == 'LONG' else '🔴'} {s['symbol']} "
                          f"{s['direction']} · {extra} · market ~{px(s['entry'])} · SL "
                          f"{px(s['sl'])} · {tp}"
