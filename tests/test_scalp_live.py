@@ -41,7 +41,7 @@ NOW = 19 * M + 60_000           # one minute after candle 18 closed
 def clean_env(monkeypatch):
     for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN",
               "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER",
-              "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS", "SCALP_MIN_ADX"):
+              "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -451,31 +451,16 @@ def _h1_bars(trend: bool):
     return out
 
 
-def test_adx_filter_rules(monkeypatch):
-    s = {"symbol": "SOL", "direction": "SHORT"}
-    assert sl.min_adx() == 0 and sl.adx_block(_h1_bars(False), s) is None   # off by default
-    monkeypatch.setenv("SCALP_MIN_ADX", "25")
-    assert sl.min_adx() == 25
-    assert sl.adx_block(_h1_bars(True), s) is None                     # trending: trade
-    why = sl.adx_block(_h1_bars(False), s)
-    assert why.startswith("SOL SHORT: 1H ADX") and "< 25 (no trend)" in why
-    assert sl.adx_block([], s) is None                                  # unknown never blocks
-    monkeypatch.setenv("SCALP_MIN_ADX", "0")
-    assert sl.adx_block(_h1_bars(False), s) is None                     # 0 = off
-
-
-def test_blend_run_stands_aside_when_the_coin_is_not_trending(app_mod, monkeypatch):
-    monkeypatch.setenv("SCALP_MIN_ADX", "25")
+def test_no_adx_filter_in_the_live_book(app_mod, monkeypatch):
+    # Removed (owner's call, Oct 30): a ranging coin's signal still trades.
+    assert not hasattr(sl, "adx_block") and not hasattr(sl, "min_adx")
+    monkeypatch.setenv("SCALP_MIN_ADX", "25")                       # no longer read
     calls = []
     monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
     fetch = lambda sym, iv: padded() if iv == "15m" else _h1_bars(False)            # noqa: E731
     read = lambda w, tf, s: {"direction": "LONG", "strength": 80} if s == "ETH" else {}  # noqa
     out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
-    assert out["new"] == 0 and calls == [[]]
-    assert any(r.startswith("ETH LONG: 1H ADX") for r in out["rejected"])
-    trend = lambda sym, iv: padded() if iv == "15m" else _h1_bars(True)             # noqa: E731
-    monkeypatch.setattr(app_mod, "_kv_append_json", lambda *a, **k: None)
-    assert app_mod._scalp_run(NOW_B + 1, fetch_fn=trend, read_fn=read)["signals"]
+    assert out["new"] == 1 and not any("ADX" in r for r in out["rejected"])
 
 
 def test_engine_scalp_opens_at_market_risk_sized(app_mod, hl_fake, monkeypatch):
