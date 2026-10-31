@@ -43,9 +43,7 @@ def clean_env(monkeypatch):
               "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER",
               "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS", "SCALP_REVERSAL_POINTS"):
         monkeypatch.delenv(k, raising=False)
-    # The engine-only tests below predate the reversal requirement; the
-    # reversal tests switch it back on.
-    monkeypatch.setenv("SCALP_REQUIRE_REVERSAL", "off")
+    monkeypatch.delenv("SCALP_REQUIRE_REVERSAL", raising=False)   # off by default
 
 
 def test_defaults_and_switches(monkeypatch):
@@ -951,15 +949,15 @@ def test_reversal_reads_fade_as_they_play_out():
     assert sl.reversal_reads(old, bars) == {"LONG": {}, "SHORT": {}}   # all played out
 
 
-def test_blend_adds_reversal_points_and_requires_one(monkeypatch):
-    monkeypatch.setenv("SCALP_REQUIRE_REVERSAL", "on")
+def test_blend_adds_reversal_points_and_can_require_one(monkeypatch):
     bars = padded()
     rev = {"LONG": {"bottom": 1.0}, "SHORT": {}}
     read = lambda s_, r: (lambda w, tf, sym: {"direction": "LONG", "strength": s_,  # noqa: E731
                                               "_reversal": r})
     got = sl.blend_signal(bars, "ETH", read(55, rev), now_ms=NOW_B)   # 55 + sweep 10 + bottom 15
     assert got and got["strength"] == 80 and "bottom 15" in got["score_parts"]
+    assert not sl.require_reversal()
+    assert sl.blend_signal(bars, "ETH", read(90, {}), now_ms=NOW_B)   # all indicators alone: trades
+    monkeypatch.setenv("SCALP_REQUIRE_REVERSAL", "on")                  # optional gate
     s, why = sl.blend(bars, "ETH", read(90, {"LONG": {}, "SHORT": {"top": 1.0}}), now_ms=NOW_B)
-    assert s is None and "no fresh bottom / top" in why        # strong, but no fresh read its way
-    monkeypatch.setenv("SCALP_REQUIRE_REVERSAL", "off")
-    assert sl.blend_signal(bars, "ETH", read(90, {}), now_ms=NOW_B)
+    assert s is None and "no fresh bottom / top" in why

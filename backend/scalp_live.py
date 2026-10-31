@@ -306,10 +306,11 @@ def exits(bars: Sequence[Dict[str, Any]], i: int, direction: str,
 # up to SCALP_REVERSAL_POINTS (15) to a scalp the same way, at full weight
 # right at the turn and fading as it plays out: markers and divergences over
 # REVERSAL_DECAY_BARS closed candles, the Fib while price stays in the zone,
-# S/R with the distance from the level. With SCALP_REQUIRE_REVERSAL (on) a
-# scalp needs at least one of them still live: the scalp-reversal backtest had
-# "1+ fresh read required" lose 95% less than the live rules (-$141 vs -$2,881
-# over 60 days), points alone did not help.
+# S/R with the distance from the level. They ADD to the engine score (every
+# other indicator still counts); nothing requires them (the owner's call).
+# SCALP_REQUIRE_REVERSAL=on would need one still live for a new scalp: the
+# scalp-reversal backtest had that lose 95% less than the live rules over
+# Sep-Oct (-$141 vs -$2,881); points alone did not help.
 DEFAULT_REVERSAL_POINTS = 15.0
 REVERSAL_DECAY_BARS = 6
 REVERSAL_LEVEL_PCT = 0.4
@@ -323,7 +324,8 @@ def reversal_points_each() -> float:
 
 
 def require_reversal() -> bool:
-    return not _off("SCALP_REQUIRE_REVERSAL")
+    """Off by default: the reads add points, they are not a gate."""
+    return os.getenv("SCALP_REQUIRE_REVERSAL", "").strip().lower() in ("1", "on", "true", "yes")
 
 
 def reversal_reads(a: Dict[str, Any], bars: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
