@@ -41,8 +41,11 @@ NOW = 19 * M + 60_000           # one minute after candle 18 closed
 def clean_env(monkeypatch):
     for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN",
               "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER",
-              "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS"):
+              "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS", "SCALP_REVERSAL_POINTS"):
         monkeypatch.delenv(k, raising=False)
+    # The engine-only tests below predate the reversal requirement; the
+    # reversal tests switch it back on.
+    monkeypatch.setenv("SCALP_REQUIRE_REVERSAL", "off")
 
 
 def test_defaults_and_switches(monkeypatch):
@@ -926,3 +929,37 @@ def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch
     calls.clear()
     out = app_mod._scalp_hl([{**setup, "slot_ms": 10}], 3 * H)
     assert out["results"][0]["reason"] == "FIXED_LEVELS_KEPT" and calls == []
+
+
+# ── fresh reversal reads: big points at the turn, fading (owner, Oct 31) ────
+
+def test_reversal_reads_fade_as_they_play_out():
+    bars = [b(i, 100, 101, 99, 100) for i in range(20)]
+    last = bars[-1]["timestamp"]
+    a = {"rsi_markers": [{"kind": "oversold_bottom", "bars_ago": 0, "status": "active"},
+                         {"kind": "overbought_top", "bars_ago": 3, "status": "active"}],
+         "rsi_divergence": {"type": "bullish", "points": {"curr": {"timestamp": last - 6 * M}}},
+         "fib": {"in_entry_zone": True, "bias": "long", "status": "entry_zone"},
+         "sr_zones": {"support": {"dist_pct": -0.2}, "resistance": {"dist_pct": 2.0}}}
+    r = sl.reversal_reads(a, bars)
+    assert r["LONG"] == {"bottom": 1.0, "divergence": 0.5, "fib": 1.0, "support": 0.75}
+    assert r["SHORT"] == {"top": 0.5}                       # 3 of 6 candles: half
+    assert sl.reversal_points(r["LONG"]) == 48.8            # (1 + .5 + 1 + .75) x 15
+    old = {"rsi_markers": [{"kind": "oversold_bottom", "bars_ago": 6, "status": "active"}],
+           "rsi_divergence": {"type": "bullish", "forming": True, "played_out": True},
+           "fib": {"in_entry_zone": True, "bias": "long", "status": "void"}}
+    assert sl.reversal_reads(old, bars) == {"LONG": {}, "SHORT": {}}   # all played out
+
+
+def test_blend_adds_reversal_points_and_requires_one(monkeypatch):
+    monkeypatch.setenv("SCALP_REQUIRE_REVERSAL", "on")
+    bars = padded()
+    rev = {"LONG": {"bottom": 1.0}, "SHORT": {}}
+    read = lambda s_, r: (lambda w, tf, sym: {"direction": "LONG", "strength": s_,  # noqa: E731
+                                              "_reversal": r})
+    got = sl.blend_signal(bars, "ETH", read(55, rev), now_ms=NOW_B)   # 55 + sweep 10 + bottom 15
+    assert got and got["strength"] == 80 and "bottom 15" in got["score_parts"]
+    s, why = sl.blend(bars, "ETH", read(90, {"LONG": {}, "SHORT": {"top": 1.0}}), now_ms=NOW_B)
+    assert s is None and "no fresh bottom / top" in why        # strong, but no fresh read its way
+    monkeypatch.setenv("SCALP_REQUIRE_REVERSAL", "off")
+    assert sl.blend_signal(bars, "ETH", read(90, {}), now_ms=NOW_B)
