@@ -227,7 +227,7 @@ def fix_levels(setup: Dict[str, Any], leverage: int) -> Dict[str, Any]:
 # (sweep_fvg.structure_exit). "sweep_fvg": the sweep -> FVG setup alone, with
 # a limit in the gap (the earlier mode).
 SCALP_MODES = ("blend", "sweep_fvg")
-DEFAULT_MIN_STRENGTH = 75.0
+DEFAULT_MIN_STRENGTH = 85.0   # owner, Oct 31: with the reversal points scores run past 100
 SWEEP_BONUS = 10.0
 SWEEP_RECENT = 4
 WINDOW = 240
