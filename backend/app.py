@@ -5758,7 +5758,13 @@ def _scalp_save(records) -> None:
 
 def _scalp_engine_read(win, tf, symbol):
     import candle_analysis
-    return generate_signal(candle_analysis.build_candle_analysis(list(win), tf, symbol))
+    import scalp_live as _sl
+    a = candle_analysis.build_candle_analysis(list(win), tf, symbol)
+    sig = generate_signal(a)
+    if tf == "15M":
+        # The fresh reversal reads the scalp score adds (scalp_live.blend).
+        sig = {**sig, "_reversal": _sl.reversal_reads(a, list(win))}
+    return sig
 
 
 def _scalp_private(text) -> None:

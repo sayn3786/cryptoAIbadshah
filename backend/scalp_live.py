@@ -300,6 +300,85 @@ def exits(bars: Sequence[Dict[str, Any]], i: int, direction: str,
     return {"sl": sl, "target": tgt, "rr": round(abs(tgt - close) / risk, 2), "how": ", ".join(how)}
 
 
+# ── fresh reversal reads (the owner's call, Oct 31) ─────────────────────────
+# An oversold bottom / overbought top (RSI swing marker), an RSI divergence,
+# price in the Fib 0.618-0.786 zone and price at support / resistance each add
+# up to SCALP_REVERSAL_POINTS (15) to a scalp the same way, at full weight
+# right at the turn and fading as it plays out: markers and divergences over
+# REVERSAL_DECAY_BARS closed candles, the Fib while price stays in the zone,
+# S/R with the distance from the level. They ADD to the engine score (every
+# other indicator still counts); nothing requires them (the owner's call).
+# SCALP_REQUIRE_REVERSAL=on would need one still live for a new scalp: the
+# scalp-reversal backtest had that lose 95% less than the live rules over
+# Sep-Oct (-$141 vs -$2,881); points alone did not help.
+DEFAULT_REVERSAL_POINTS = 15.0
+REVERSAL_DECAY_BARS = 6
+REVERSAL_LEVEL_PCT = 0.4
+DIVERGENCE_CONFIRM_BARS = 3
+
+
+def reversal_points_each() -> float:
+    if _off("SCALP_REVERSAL_POINTS"):
+        return 0.0
+    return _num_env("SCALP_REVERSAL_POINTS", DEFAULT_REVERSAL_POINTS)
+
+
+def require_reversal() -> bool:
+    """Off by default: the reads add points, they are not a gate."""
+    return os.getenv("SCALP_REQUIRE_REVERSAL", "").strip().lower() in ("1", "on", "true", "yes")
+
+
+def reversal_reads(a: Dict[str, Any], bars: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+    """{"LONG": {read: weight}, "SHORT": {...}}: the reversal reads on a 15m
+    candle analysis `a` of `bars`, each weighted 1.0 (just happened / right at
+    the level) down to 0 (played out). Pure."""
+    out: Dict[str, Dict[str, float]] = {"LONG": {}, "SHORT": {}}
+    if not bars:
+        return out
+
+    def put(d, name, w):
+        if w > 0:
+            out[d][name] = round(max(out[d].get(name, 0.0), min(1.0, w)), 3)
+
+    def fade(age):
+        return 1.0 - max(0, age) / REVERSAL_DECAY_BARS
+
+    for m in a.get("rsi_markers") or []:
+        if m.get("status") not in (None, "active") or m.get("bars_ago") is None:
+            continue
+        if m.get("kind") == "oversold_bottom":
+            put("LONG", "bottom", fade(m["bars_ago"]))
+        elif m.get("kind") == "overbought_top":
+            put("SHORT", "top", fade(m["bars_ago"]))
+    div = a.get("rsi_divergence") or {}
+    kind = str(div.get("type") or "")
+    if kind and not div.get("played_out"):
+        if div.get("forming"):
+            w = 1.0
+        else:
+            curr = ((div.get("points") or {}).get("curr") or {}).get("timestamp")
+            age = (int(bars[-1]["timestamp"]) - int(curr)) // M15_MS if curr is not None else None
+            w = fade(age - DIVERGENCE_CONFIRM_BARS) if age is not None else 0.0
+        if "bullish" in kind:
+            put("LONG", "divergence", w)
+        elif "bearish" in kind:
+            put("SHORT", "divergence", w)
+    fib = a.get("fib") or {}
+    if (fib.get("in_entry_zone") or fib.get("in_golden_pocket")) and fib.get("status") != "void":
+        put("LONG" if fib.get("bias") == "long" else "SHORT", "fib", 1.0)
+    sr = a.get("sr_zones") or {}
+    for side, d, name in (("support", "LONG", "support"), ("resistance", "SHORT", "resistance")):
+        dist = (sr.get(side) or {}).get("dist_pct")
+        if dist is not None and abs(float(dist)) <= REVERSAL_LEVEL_PCT:
+            put(d, name, 1.0 - abs(float(dist)) / (2 * REVERSAL_LEVEL_PCT))
+    return out
+
+
+def reversal_points(reads: Dict[str, float]) -> float:
+    """The points a direction's reads add (weights x SCALP_REVERSAL_POINTS)."""
+    return round(sum(reads.values()) * reversal_points_each(), 1)
+
+
 def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now_ms: int,
           h1_fn: Optional[Callable] = None, floor: Optional[float] = None) -> tuple:
     """(scalp or None, why not). The score: the 15m engine read on the LAST
@@ -326,13 +405,19 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
     if d not in ("LONG", "SHORT"):
         return None, None
     strength = float(sig.get("strength") or 0)
+    rev_reads = (sig.get("_reversal") or {}).get(d) or {}
+    rev = reversal_points(rev_reads)
+    label = f"{symbol.upper()} {d}"
+    if require_reversal() and not rev_reads:
+        return None, (f"{label}: 15m {strength:g}, no fresh bottom / top, divergence, Fib "
+                      f"or S/R" if strength >= floor - 20 else None)
     piv = sweep_fvg.pivots(bars)
     recent = [x for x in sweep_fvg.setups(bars, at=ENTRY_AT,
                                           start_ms=close_ms - SWEEP_RECENT * M15_MS, piv=piv)
               if x["direction"] == d and 0 <= last - x["ready"] < SWEEP_RECENT]
     bonus = SWEEP_BONUS if recent else 0.0
     h1 = 0.0
-    if h1_fn is not None and strength + bonus + H1_POINTS >= floor:
+    if h1_fn is not None and strength + bonus + rev + H1_POINTS >= floor:
         try:
             h1_bars = h1_fn() or []
             hd = (read_fn(list(h1_bars[-H1_WINDOW:]), "1H", symbol) or {}).get("direction") \
@@ -340,10 +425,10 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
         except Exception:                                 # noqa: BLE001
             hd = None
         h1 = H1_POINTS if hd == d else -H1_POINTS if hd in ("LONG", "SHORT") else 0.0
-    score = strength + bonus + h1
+    score = strength + bonus + rev + h1
     parts = f"15m {strength:g}" + (f" + sweep {bonus:g}" if bonus else "") + \
+        (f" + {'/'.join(sorted(rev_reads))} {rev:g}" if rev else "") + \
         (f" {'+' if h1 > 0 else '-'} 1H {abs(h1):g}" if h1 else "")
-    label = f"{symbol.upper()} {d}"
     if score < floor:
         return None, (f"{label}: {parts} = {score:g} < {floor:g}" if strength >= floor - 20
                       else None)
