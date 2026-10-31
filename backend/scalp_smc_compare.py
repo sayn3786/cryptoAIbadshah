@@ -43,12 +43,12 @@ import sweep_fvg as sf
 
 M15 = sc.M15
 HOUR_MS = sc.HOUR_MS
-CHOCH_BARS = 12
-BOS_BARS = 16
+CHOCH_BARS = sf.SMC_CHOCH_BARS
+BOS_BARS = sf.SMC_BOS_BARS
 ENTRY_BARS = 8
 STOP_BUFFER = 0.0005
-MIN_STOP_PCT = 0.0015
-MAX_STOP_PCT = 0.03
+MIN_STOP_PCT = sf.SMC_MIN_STOP_PCT
+MAX_STOP_PCT = sf.SMC_MAX_STOP_PCT
 MAX_HOLD_H = 8
 RISK_USD = 5.0
 LIMIT_FILL = {**cm.LIMIT_TPS, "entry": cm.MAKER_BPS}
@@ -66,78 +66,7 @@ def _f(bar: Dict, k: str) -> float:
     return float(bar[k])
 
 
-def smc_setups(bars: Sequence[Dict], *, start_ms: int = 0, piv: Optional[Dict] = None,
-               entry_at: str = "edge") -> List[Dict]:
-    """Every full sweep -> CHoCH -> BOS -> FVG setup, both ways: {"direction",
-    "sweep", "choch", "bos", "ready" (the candle that completed the gap),
-    "limit", "sl", "slot_ms"}. Pure, no look-ahead."""
-    piv = piv or sf.pivots(bars)
-    n = len(bars)
-    out: List[Dict] = []
-    for d in ("SHORT", "LONG"):
-        short = d == "SHORT"
-        i = sf.SWING * 2 + 2
-        while i < n:
-            b = bars[i]
-            swing = sf._latest(piv["high" if short else "low"], i)
-            guard = sf._latest(piv["low" if short else "high"], i)
-            if not swing or not guard:
-                i += 1
-                continue
-            lvl = swing[1]
-            swept = (_f(b, "high") > lvl and _f(b, "close") < lvl) if short else \
-                (_f(b, "low") < lvl and _f(b, "close") > lvl)
-            if not swept:
-                i += 1
-                continue
-            extreme = _f(b, "high") if short else _f(b, "low")
-            choch = bos = None
-            for j in range(i + 1, min(n, i + 1 + CHOCH_BARS)):
-                c = _f(bars[j], "close")
-                if (c > extreme) if short else (c < extreme):
-                    break                                   # the trap failed
-                extreme = max(extreme, _f(bars[j], "high")) if short else \
-                    min(extreme, _f(bars[j], "low"))
-                if (c < guard[1]) if short else (c > guard[1]):
-                    choch = j
-                    break
-            if choch is not None:
-                for k in range(choch + 2, min(n, choch + 1 + BOS_BARS)):
-                    c = _f(bars[k], "close")
-                    if (c > extreme) if short else (c < extreme):
-                        break
-                    prior = bars[i:k]
-                    edge = min(_f(x, "low") for x in prior) if short else \
-                        max(_f(x, "high") for x in prior)
-                    if (c < edge) if short else (c > edge):
-                        bos = k
-                        break
-            gap = None
-            if bos is not None:
-                for m in range(max(1, bos - 1), min(n - 1, bos + 2)):
-                    a, z = bars[m - 1], bars[m + 1]
-                    if short and _f(z, "high") < _f(a, "low"):
-                        gap = (_f(z, "high"), _f(a, "low"), m + 1)       # (near, far, ready)
-                        break
-                    if not short and _f(z, "low") > _f(a, "high"):
-                        gap = (_f(z, "low"), _f(a, "high"), m + 1)
-                        break
-            if gap is None:
-                i += 1
-                continue
-            near, far, ready = gap
-            limit = near if entry_at == "edge" else (near + far) / 2
-            stop = extreme * (1 + STOP_BUFFER) if short else extreme * (1 - STOP_BUFFER)
-            risk = abs(stop - limit) / limit
-            close_ms = int(bars[ready]["timestamp"]) + M15
-            if not (MIN_STOP_PCT <= risk <= MAX_STOP_PCT):
-                i += 1                                      # unusable stop: keep looking
-                continue
-            if close_ms >= start_ms:
-                out.append({"direction": d, "sweep": i, "choch": choch, "bos": bos,
-                            "ready": ready, "limit": limit, "sl": stop, "slot_ms": close_ms})
-            i = ready + 1                                   # one setup per sweep
-    return sorted(out, key=lambda s: s["slot_ms"])
+smc_setups = sf.smc_setups      # shared with the live scalp book (its +20 bonus)
 
 
 def sweep_fvg_setups(bars: Sequence[Dict], *, start_ms: int, piv: Dict) -> List[Dict]:
