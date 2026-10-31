@@ -44,6 +44,9 @@ def clean_env(monkeypatch):
               "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS", "SCALP_REVERSAL_POINTS"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("SCALP_REQUIRE_REVERSAL", raising=False)   # off by default
+    # The scoring tests below were written at the old 75 floor (the default is
+    # 85 now, test_the_scalp_floor_is_85).
+    monkeypatch.setenv("SCALP_MIN_STRENGTH", "75")
 
 
 def test_defaults_and_switches(monkeypatch):
@@ -961,3 +964,12 @@ def test_blend_adds_reversal_points_and_can_require_one(monkeypatch):
     monkeypatch.setenv("SCALP_REQUIRE_REVERSAL", "on")                  # optional gate
     s, why = sl.blend(bars, "ETH", read(90, {"LONG": {}, "SHORT": {"top": 1.0}}), now_ms=NOW_B)
     assert s is None and "no fresh bottom / top" in why
+
+
+def test_the_scalp_floor_is_85(monkeypatch):
+    monkeypatch.delenv("SCALP_MIN_STRENGTH")
+    assert sl.min_strength() == 85
+    bars = padded()
+    read = lambda s_: (lambda w, tf, sym: {"direction": "LONG", "strength": s_})   # noqa: E731
+    assert sl.blend_signal(bars, "ETH", read(70), now_ms=NOW_B) is None          # 70 + 10 = 80
+    assert sl.blend_signal(bars, "ETH", read(75), now_ms=NOW_B)["strength"] == 85
