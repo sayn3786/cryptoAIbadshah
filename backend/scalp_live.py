@@ -227,9 +227,14 @@ def fix_levels(setup: Dict[str, Any], leverage: int) -> Dict[str, Any]:
 # (sweep_fvg.structure_exit). "sweep_fvg": the sweep -> FVG setup alone, with
 # a limit in the gap (the earlier mode).
 SCALP_MODES = ("blend", "sweep_fvg")
-DEFAULT_MIN_STRENGTH = 85.0   # owner, Oct 31: with the reversal points scores run past 100
+DEFAULT_MIN_STRENGTH = 100.0  # owner, Oct 31: only the strongest (scores run past 100)
 SWEEP_BONUS = 10.0
 SWEEP_RECENT = 4
+# The full smart-money sequence (sweep -> CHoCH -> BOS -> FVG, sweep_fvg.
+# smc_setups) completed the same way in the last SWEEP_RECENT candles: +20 in
+# place of the plain sweep's +10. The scalp-smc backtest: ~5x less loss than
+# the plain sweep -> FVG, break-even over Sep-Oct (owner's call, Oct 31).
+SMC_BONUS = 20.0
 WINDOW = 240
 
 
@@ -415,7 +420,9 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
     recent = [x for x in sweep_fvg.setups(bars, at=ENTRY_AT,
                                           start_ms=close_ms - SWEEP_RECENT * M15_MS, piv=piv)
               if x["direction"] == d and 0 <= last - x["ready"] < SWEEP_RECENT]
-    bonus = SWEEP_BONUS if recent else 0.0
+    smc = [x for x in sweep_fvg.smc_setups(bars, start_ms=close_ms - SWEEP_RECENT * M15_MS, piv=piv)
+           if x["direction"] == d and 0 <= last - x["ready"] < SWEEP_RECENT]
+    bonus = SMC_BONUS if smc else SWEEP_BONUS if recent else 0.0
     h1 = 0.0
     if h1_fn is not None and strength + bonus + rev + H1_POINTS >= floor:
         try:
@@ -426,7 +433,7 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
             hd = None
         h1 = H1_POINTS if hd == d else -H1_POINTS if hd in ("LONG", "SHORT") else 0.0
     score = strength + bonus + rev + h1
-    parts = f"15m {strength:g}" + (f" + sweep {bonus:g}" if bonus else "") + \
+    parts = f"15m {strength:g}" + (f" + {'smc' if smc else 'sweep'} {bonus:g}" if bonus else "") + \
         (f" + {'/'.join(sorted(rev_reads))} {rev:g}" if rev else "") + \
         (f" {'+' if h1 > 0 else '-'} 1H {abs(h1):g}" if h1 else "")
     if score < floor:

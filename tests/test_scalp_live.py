@@ -966,10 +966,25 @@ def test_blend_adds_reversal_points_and_can_require_one(monkeypatch):
     assert s is None and "no fresh bottom / top" in why
 
 
-def test_the_scalp_floor_is_85(monkeypatch):
+def test_the_scalp_floor_is_100(monkeypatch):
     monkeypatch.delenv("SCALP_MIN_STRENGTH")
-    assert sl.min_strength() == 85
+    assert sl.min_strength() == 100
     bars = padded()
     read = lambda s_: (lambda w, tf, sym: {"direction": "LONG", "strength": s_})   # noqa: E731
-    assert sl.blend_signal(bars, "ETH", read(70), now_ms=NOW_B) is None          # 70 + 10 = 80
-    assert sl.blend_signal(bars, "ETH", read(75), now_ms=NOW_B)["strength"] == 85
+    assert sl.blend_signal(bars, "ETH", read(85), now_ms=NOW_B) is None          # 85 + 10 = 95
+    assert sl.blend_signal(bars, "ETH", read(90), now_ms=NOW_B)["strength"] == 100
+
+
+def test_the_full_smc_sequence_is_a_20_bonus(monkeypatch):
+    import sweep_fvg
+    bars = padded()
+    read = lambda w, tf, sym: {"direction": "LONG", "strength": 70}               # noqa: E731
+    last = len(bars) - 1
+    monkeypatch.setattr(sweep_fvg, "smc_setups", lambda b, **kw: [
+        {"direction": "LONG", "ready": last - 1}, {"direction": "SHORT", "ready": last}])
+    got = sl.blend_signal(bars, "ETH", read, now_ms=NOW_B)
+    assert got["strength"] == 90 and got["sweep_bonus"] == 20                     # not 10 + 20
+    assert "smc 20" in got["score_parts"]
+    monkeypatch.setattr(sweep_fvg, "smc_setups", lambda b, **kw: [
+        {"direction": "LONG", "ready": last - 6}])                                # too old
+    assert sl.blend_signal(bars, "ETH", read, now_ms=NOW_B)["sweep_bonus"] == 10  # plain sweep

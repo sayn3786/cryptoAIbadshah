@@ -147,3 +147,95 @@ def structure_exit(bars: Sequence[Dict], i: int, direction: str, piv: Dict,
     if risk <= 0 or reward / risk < min_rr:
         return None
     return {"sl": stop, "target": tgt, "rr": round(reward / risk, 2)}
+
+
+# ── the full smart-money sequence: sweep -> CHoCH -> BOS -> FVG ─────────────
+# SHORT shown (LONG mirrors): a wick above the latest confirmed swing high that
+# closes back below it (the sweep); within SMC_CHOCH_BARS a close below the last
+# confirmed swing low before it (CHoCH); within SMC_BOS_BARS after that, after
+# a bounce, a close below every low since the sweep (BOS); the bearish gap that
+# move leaves; a limit at the gap's near edge (or midpoint), the stop
+# STOP_BUFFER beyond the sweep. Shared by the scalp-smc backtest and the live
+# scalp book (scalp_live: a +20 bonus when one just completed the same way).
+SMC_CHOCH_BARS = 12
+SMC_BOS_BARS = 16
+SMC_MIN_STOP_PCT = 0.0015
+SMC_MAX_STOP_PCT = 0.03
+
+
+def _fv(bar: Dict, k: str) -> float:
+    return float(bar[k])
+
+
+def smc_setups(bars: Sequence[Dict], *, start_ms: int = 0, piv: Optional[Dict] = None,
+               entry_at: str = "edge") -> List[Dict]:
+    """Every full sweep -> CHoCH -> BOS -> FVG setup, both ways: {"direction",
+    "sweep", "choch", "bos", "ready" (the candle that completed the gap),
+    "limit", "sl", "slot_ms"}. Pure, no look-ahead."""
+    piv = piv or pivots(bars)
+    n = len(bars)
+    out: List[Dict] = []
+    for d in ("SHORT", "LONG"):
+        short = d == "SHORT"
+        i = SWING * 2 + 2
+        while i < n:
+            b = bars[i]
+            swing = _latest(piv["high" if short else "low"], i)
+            guard = _latest(piv["low" if short else "high"], i)
+            if not swing or not guard:
+                i += 1
+                continue
+            lvl = swing[1]
+            swept = (_fv(b, "high") > lvl and _fv(b, "close") < lvl) if short else \
+                (_fv(b, "low") < lvl and _fv(b, "close") > lvl)
+            if not swept:
+                i += 1
+                continue
+            extreme = _fv(b, "high") if short else _fv(b, "low")
+            choch = bos = None
+            for j in range(i + 1, min(n, i + 1 + SMC_CHOCH_BARS)):
+                c = _fv(bars[j], "close")
+                if (c > extreme) if short else (c < extreme):
+                    break                                   # the trap failed
+                extreme = max(extreme, _fv(bars[j], "high")) if short else \
+                    min(extreme, _fv(bars[j], "low"))
+                if (c < guard[1]) if short else (c > guard[1]):
+                    choch = j
+                    break
+            if choch is not None:
+                for k in range(choch + 2, min(n, choch + 1 + SMC_BOS_BARS)):
+                    c = _fv(bars[k], "close")
+                    if (c > extreme) if short else (c < extreme):
+                        break
+                    prior = bars[i:k]
+                    edge = min(_fv(x, "low") for x in prior) if short else \
+                        max(_fv(x, "high") for x in prior)
+                    if (c < edge) if short else (c > edge):
+                        bos = k
+                        break
+            gap = None
+            if bos is not None:
+                for m in range(max(1, bos - 1), min(n - 1, bos + 2)):
+                    a, z = bars[m - 1], bars[m + 1]
+                    if short and _fv(z, "high") < _fv(a, "low"):
+                        gap = (_fv(z, "high"), _fv(a, "low"), m + 1)       # (near, far, ready)
+                        break
+                    if not short and _fv(z, "low") > _fv(a, "high"):
+                        gap = (_fv(z, "low"), _fv(a, "high"), m + 1)
+                        break
+            if gap is None:
+                i += 1
+                continue
+            near, far, ready = gap
+            limit = near if entry_at == "edge" else (near + far) / 2
+            stop = extreme * (1 + STOP_BUFFER) if short else extreme * (1 - STOP_BUFFER)
+            risk = abs(stop - limit) / limit
+            close_ms = int(bars[ready]["timestamp"]) + M15
+            if not (SMC_MIN_STOP_PCT <= risk <= SMC_MAX_STOP_PCT):
+                i += 1                                      # unusable stop: keep looking
+                continue
+            if close_ms >= start_ms:
+                out.append({"direction": d, "sweep": i, "choch": choch, "bos": bos,
+                            "ready": ready, "limit": limit, "sl": stop, "slot_ms": close_ms})
+            i = ready + 1                                   # one setup per sweep
+    return sorted(out, key=lambda s: s["slot_ms"])

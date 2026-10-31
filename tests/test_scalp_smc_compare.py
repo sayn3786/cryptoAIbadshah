@@ -32,7 +32,7 @@ BARS = [b(i, *x) for i, x in enumerate(SEQ)]
 
 
 def test_finds_the_full_short_sequence(monkeypatch):
-    monkeypatch.setattr(sm, "MAX_STOP_PCT", 0.05)
+    monkeypatch.setattr(sm.sf, "SMC_MAX_STOP_PCT", 0.05)
     [s] = sm.smc_setups(BARS)
     assert (s["direction"], s["sweep"], s["choch"], s["bos"], s["ready"]) == ("SHORT", 18, 20, 22, 23)
     assert s["limit"] == 103.4 and abs(s["sl"] - 107.8 * 1.0005) < 1e-9
@@ -41,7 +41,7 @@ def test_finds_the_full_short_sequence(monkeypatch):
 
 
 def test_no_choch_no_setup(monkeypatch):
-    monkeypatch.setattr(sm, "MAX_STOP_PCT", 0.05)
+    monkeypatch.setattr(sm.sf, "SMC_MAX_STOP_PCT", 0.05)
     held = [dict(x) for x in BARS]
     for k in range(19, len(held)):                       # price never breaks the higher low
         held[k].update(low=105.0, close=105.5, open=105.5, high=106.0)
@@ -53,7 +53,7 @@ def test_a_wide_stop_is_skipped():
 
 
 def test_trade_fills_on_the_retrace_and_sizes_to_5_risk(monkeypatch):
-    monkeypatch.setattr(sm, "MAX_STOP_PCT", 0.05)
+    monkeypatch.setattr(sm.sf, "SMC_MAX_STOP_PCT", 0.05)
     [s] = sm.smc_setups(BARS)
     assert sm.fill(s, BARS) == 25
     t = sm.trade(s, "ETH", BARS, 2.0)
