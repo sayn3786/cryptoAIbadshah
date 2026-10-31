@@ -93,3 +93,33 @@ def test_cloud_worker_contract():
     subprocess.run([node, str(Path(__file__).resolve().parents[1]/
                              'cloudflare/execution-pilot/worker.test.mjs')],
                    check=True, capture_output=True, text=True, timeout=10)
+
+
+def test_private_alert_reuses_scalp_sender(monkeypatch):
+    import app, auth, weekly_report
+    monkeypatch.setattr(auth, 'enforcement_enabled', lambda: True)
+    monkeypatch.setenv('EXECUTION_PILOT_TOKEN', 'pilot-test-token')
+    monkeypatch.setenv('VERCEL_ENV', 'production')
+    monkeypatch.setenv('EXECUTION_PILOT_ENABLED', 'false')
+    sent = []
+    monkeypatch.setattr(weekly_report, 'send_private', lambda message: sent.append(message) or True)
+    c = app.app.test_client()
+    path = '/api/research/execution-pilot/alert'
+    headers = {'x-execution-pilot-token': 'pilot-test-token'}
+    payload = {'test_only': True, 'category': 'COLLECTION_FAILED', 'slot': None}
+    assert c.post(path, json=payload).status_code == 401
+    for bad in [{**payload, 'chat_id': '123'}, {**payload, 'category': []},
+                {**payload, 'slot': True}, {**payload, 'test_only': 'true'}]:
+        assert c.post(path, headers=headers, json=bad).status_code == 400
+    assert not sent
+    response = c.post(path, headers=headers, json=payload)
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert len(sent) == 1 and sent[0].startswith('TEST ONLY')
+    assert c.post(path, headers=headers, json={**payload, 'test_only': False}).status_code == 409
+    monkeypatch.setenv('VERCEL_ENV', 'preview')
+    assert c.post(path, headers=headers, json=payload).status_code == 403
+    assert len(sent) == 1
+    monkeypatch.setenv('VERCEL_ENV', 'production')
+    monkeypatch.setattr(weekly_report, 'send_private', lambda message: False)
+    assert c.post(path, headers=headers, json=payload).status_code == 503

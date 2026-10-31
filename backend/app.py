@@ -4914,6 +4914,44 @@ def api_execution_pilot_tick():
     return reply({'ok': False, 'error_code': code}, 503)
 
 
+@app.post("/api/research/execution-pilot/alert")
+def api_execution_pilot_alert():
+    """Narrow operational relay using the same sender as private scalp alerts."""
+    def reply(body, status=200):
+        response = jsonify(body)
+        response.headers['Cache-Control'] = 'no-store'
+        return response, status
+    if not _execution_pilot_token_ok():
+        return reply({'ok': False, 'error_code': 'FORBIDDEN'}, 401)
+    if os.getenv('VERCEL_ENV') != 'production':
+        return reply({'ok': False, 'error_code': 'PRODUCTION_ONLY'}, 403)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != {'test_only', 'category', 'slot'}:
+        return reply({'ok': False, 'error_code': 'INVALID_ALERT'}, 400)
+    categories = {'INVALID_START', 'MISSED_COLLECTION_WINDOW', 'TOKEN_MISSING',
+                  'REQUEST_FAILED_OR_COMMIT_UNKNOWN', 'COLLECTION_FAILED', 'REDIRECT_REJECTED'}
+    if (type(data['test_only']) is not bool or not isinstance(data['category'], str)
+            or data['category'] not in categories
+            or (data['slot'] is not None and (type(data['slot']) is not int
+                                             or not 1 <= data['slot'] <= 96))):
+        return reply({'ok': False, 'error_code': 'INVALID_ALERT'}, 400)
+    enabled = os.getenv('EXECUTION_PILOT_ENABLED') == 'true'
+    if data['test_only'] == enabled:
+        return reply({'ok': False, 'error_code': 'ALERT_MODE_DISABLED'}, 409)
+    message = ('TEST ONLY — CryptoStarsSpace pilot alert through the existing scalp-alert sender. '
+               'No trades or research collection were triggered.' if data['test_only'] else
+               f"CryptoStarsSpace testnet observation pilot needs review.\n"
+               f"Slot: {data['slot'] or 'unknown'}/96\nCategory: {data['category']}\n"
+               'Disable the pilot and reconcile operational records. Do not retry uncertain collection.')
+    try:
+        import weekly_report
+        sent = weekly_report.send_private(message)
+    except Exception:
+        # Exceptions may contain the bot-token-bearing URL. Never log them.
+        return reply({'ok': False, 'error_code': 'ALERT_FAILED_OR_DELIVERY_UNKNOWN'}, 502)
+    return reply({'ok': bool(sent)}, 200 if sent else 503)
+
+
 @app.post("/api/research/ml/label")
 def api_ml_research_label():
     return _ml_research_request("label")
@@ -7065,7 +7103,8 @@ def _scheduler_token_ok() -> bool:
 
 def _execution_pilot_token_ok():
     return (request.method == 'POST'
-            and request.path == '/api/research/execution-pilot/tick'
+            and request.path in {'/api/research/execution-pilot/tick',
+                                 '/api/research/execution-pilot/alert'}
             and _token_ok('EXECUTION_PILOT_TOKEN', 'x-execution-pilot-token'))
 
 
