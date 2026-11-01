@@ -6,7 +6,7 @@ The owner's idea (Oct 31): an oversold bottom / overbought top, the Fib
 count for more when they line up with the trade and just happened. Today they
 count for little (the Fib is only a -5 brake against). On the live book
 (engine + sweep +10 +/- 1H 5 at 75+, market entry, the owner's FIXED exits:
-$50 margin at 11x, stop -10% / one target +15% of margin, max 4h, one per
+the live fixed exits (scalp_live: margin, leverage, stop / target % of margin), max 4h, one per
 coin, HL fees), a read counts for a LONG (mirror for a SHORT) when it is FRESH
 (within FRESH_BARS closed candles):
 
@@ -43,8 +43,8 @@ HOUR_MS = sc.HOUR_MS
 FLOOR = 75.0
 FRESH_BARS = 3
 AT_LEVEL_PCT = 0.4
-MARGIN = 50.0
-LEVERAGE = 11
+MARGIN = sl.DEFAULT_FIXED_MARGIN_USD          # the live exits
+LEVERAGE = sl.DEFAULT_SCALP_LEVERAGE
 MAX_HOLD_H = 4
 READS = ("bottom", "divergence", "fib", "support")
 
@@ -99,7 +99,7 @@ def fixed_exits(entry: float, direction: str) -> Dict[str, float]:
 
 def book(scalps: Sequence[Dict], m15: Dict[str, List[Dict]], *,
          sim: Callable = ee.simulate_hl) -> List[Dict]:
-    """One position per coin, fixed exits, $50 x 11x."""
+    """One position per coin, the live fixed exits (MARGIN x LEVERAGE)."""
     trades, open_until = [], {}
     notional = MARGIN * LEVERAGE
     for c in sorted(scalps, key=lambda x: (x["slot_ms"], -x["strength"])):
@@ -201,8 +201,8 @@ def render_telegram(result: Dict) -> str:
     w = result["window"]
     lines = ["🔁 15m scalps: fresh bottoms / tops, Fib, divergence, S/R",
              f"{w['start'][:10]} → {w['end'][:10]} ({w['days']} days) · {len(result['coins'])} coins",
-             f"Live signals, the owner's fixed exits: ${MARGIN:g} margin at {LEVERAGE}x, stop -10% / "
-             "TP +15% of margin, max 4h, one per coin, HL fees",
+             f"Live signals, the owner's fixed exits: ${MARGIN:g} margin at {LEVERAGE}x, stop "
+             f"-{sl.SL_ROE_PCT:g}% / TP +{sl.TP1_ROE_PCT:g}% of margin, max 4h, one per coin, HL fees",
              f"Fresh = within {FRESH_BARS} candles; at S/R = within {AT_LEVEL_PCT:g}%",
              "✅ = works: 30+ trades, profit, PF ≥ 1.2", ""]
     for r in result["rows"]:

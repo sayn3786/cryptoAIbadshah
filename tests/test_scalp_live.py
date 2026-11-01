@@ -45,7 +45,7 @@ def clean_env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("SCALP_REQUIRE_REVERSAL", raising=False)   # off by default
     # The scoring tests below were written at the old 75 floor (the default is
-    # 88 now, test_the_scalp_floor_is_88).
+    # 100 now, test_the_scalp_floor_is_100).
     monkeypatch.setenv("SCALP_MIN_STRENGTH", "75")
 
 
@@ -853,25 +853,25 @@ def test_sweep_setup_shifts_from_its_close_not_its_limit():
     assert abs(got["limit"] - 103.0 * 1.01) < 1e-9 and got["close"] == 105.5 * 1.01
 
 
-# ── fixed margin, exits as % of margin (owner, Oct 30) ──────────────────────
+# ── fixed margin, exits as % of margin (owner, Oct 30; 17x, -5% / +10% Nov 1) ──────────────────────
 
 def test_fixed_levels_are_a_share_of_margin():
     assert sl.fixed_margin_usd() == 50
-    assert [sl.fixed_leverage(x) for x in (2e12, 5e9, 1e8, None)] == [11, 11, 11, 11]   # every coin
+    assert [sl.fixed_leverage(x) for x in (2e12, 5e9, 1e8, None)] == [17, 17, 17, 17]   # every coin
     assert sl.fixed_leverage(2e12, hl_max=3) == 3                         # HL's cap wins
-    assert sl.fixed_leverage(2e12, hl_max=50) == 11
+    assert sl.fixed_leverage(2e12, hl_max=50) == 17
     assert "HL's max" in sl.fix_levels({"entry": 100.0, "direction": "LONG"}, 3)["exit"]
     lv = sl.roe_levels(100.0, "LONG", 10)                                  # 10x: 1% = 10%
-    assert [round(lv[k], 6) for k in ("sl", "tp1", "tp2")] == [99.0, 101.5, 102.5]
+    assert [round(lv[k], 6) for k in ("sl", "tp1", "tp2")] == [99.5, 101.0, 101.5]
     sv = sl.roe_levels(100.0, "SHORT", 20)
-    assert [round(sv[k], 6) for k in ("sl", "tp1", "tp2")] == [100.5, 99.25, 98.75]
+    assert [round(sv[k], 6) for k in ("sl", "tp1", "tp2")] == [100.25, 99.5, 99.25]
     s = sl.fix_levels({"entry": 100.0, "direction": "LONG", "sl": 97, "target": 109}, 10)
-    assert (round(s["sl"], 6), round(s["target"], 6)) == (99.0, 101.5)     # one target, +15%
-    assert s["fixed"] and s["leverage"] == 10 and s["rr"] == 1.5
-    assert "SL -10% / TP +15%" in s["exit"]
+    assert (round(s["sl"], 6), round(s["target"], 6)) == (99.5, 101.0)     # one target, +10%
+    assert s["fixed"] and s["leverage"] == 10 and s["rr"] == 2.0
+    assert "SL -5% / TP +10%" in s["exit"]
     text = sl.message([{**s, "kind": "engine", "symbol": "ETH", "strength": 80,
                         "score_parts": "15m 80", "engine_strength": 80}], auto=True)
-    assert "TP 101.5" in text and "$50 margin a scalp" in text
+    assert "TP 101" in text and "$50 margin a scalp" in text
 
 
 def test_fixed_scalp_opens_50_margin_with_one_target(app_mod, hl_fake, monkeypatch):
@@ -889,9 +889,9 @@ def test_fixed_scalp_opens_50_margin_with_one_target(app_mod, hl_fake, monkeypat
     out = app_mod._scalp_hl([setup], 2 * H)
     assert out["results"][0]["ok"]
     assert seen["cfg"]["notional_usd"] == 500.0 and seen["cfg"]["leverage"] == 10   # $50 x 10
-    assert round(seen["sig"]["sl"], 6) == 99.0 and round(seen["sig"]["tp1"], 6) == 101.5
+    assert round(seen["sig"]["sl"], 6) == 99.5 and round(seen["sig"]["tp1"], 6) == 101.0
     assert seen["sig"]["tp2"] is None                                    # one target, all of it
-    assert [round(x, 6) for x in app_mod._scalp_records()["ETH"]["tps"]] == [101.5]
+    assert [round(x, 6) for x in app_mod._scalp_records()["ETH"]["tps"]] == [101.0]
 
 
 def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch):
@@ -921,9 +921,9 @@ def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch
     rec = app_mod._scalp_records()["AAVE"]
     avg = rec["limit"]
     assert rec["adds"] == 1 and 144.17 < avg < 144.5
-    assert abs(rec["sl"] - avg * 1.01) < 0.02                             # -10% of margin at 10x
-    tp1, tp2 = rec["tps"]                                   # on an add: +15% (half) / +25%
-    assert abs(tp1 - avg * 0.985) < 0.02 and abs(tp2 - avg * 0.975) < 0.02
+    assert abs(rec["sl"] - avg * 1.005) < 0.02                            # -5% of margin at 10x
+    tp1, tp2 = rec["tps"]                                   # on an add: +10% (half) / +15%
+    assert abs(tp1 - avg * 0.99) < 0.02 and abs(tp2 - avg * 0.985) < 0.02
     assert "re-fixed SL" in out["results"][0]["note"]
     # max adds reached: the levels stay fixed
     app_mod._scalp_save({"AAVE": {**rec, "adds": 2}})
@@ -966,13 +966,13 @@ def test_blend_adds_reversal_points_and_can_require_one(monkeypatch):
     assert s is None and "no fresh bottom / top" in why
 
 
-def test_the_scalp_floor_is_88(monkeypatch):
+def test_the_scalp_floor_is_100(monkeypatch):
     monkeypatch.delenv("SCALP_MIN_STRENGTH")
-    assert sl.min_strength() == 88
+    assert sl.min_strength() == 100
     bars = padded()
     read = lambda s_: (lambda w, tf, sym: {"direction": "LONG", "strength": s_})   # noqa: E731
-    assert sl.blend_signal(bars, "ETH", read(77), now_ms=NOW_B) is None          # 77 + 10 = 87
-    assert sl.blend_signal(bars, "ETH", read(78), now_ms=NOW_B)["strength"] == 88
+    assert sl.blend_signal(bars, "ETH", read(89), now_ms=NOW_B) is None          # 89 + 10 = 99
+    assert sl.blend_signal(bars, "ETH", read(90), now_ms=NOW_B)["strength"] == 100
 
 
 def test_the_full_smc_sequence_is_a_20_bonus(monkeypatch):

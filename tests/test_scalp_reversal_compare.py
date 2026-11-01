@@ -32,10 +32,12 @@ def test_stale_reads_do_not_count():
     assert rc.fresh_reads(forming, BARS)["SHORT"] == {"divergence"}
 
 
-def test_fixed_exits_at_11x():
+def test_fixed_exits_follow_the_live_book():
+    # The replay uses the live exits: 17x, -5% / +10% of margin (Nov 1).
+    assert (rc.MARGIN, rc.LEVERAGE) == (50.0, 17)
     ex = rc.fixed_exits(100.0, "LONG")
-    assert abs(ex["sl"] - (100 - 100 * 0.10 / 11)) < 1e-9
-    assert abs(ex["target"] - (100 + 100 * 0.15 / 11)) < 1e-9
+    assert abs(ex["sl"] - (100 - 100 * 0.05 / 17)) < 1e-9
+    assert abs(ex["target"] - (100 + 100 * 0.10 / 17)) < 1e-9
 
 
 def test_compare_and_render():

@@ -10,8 +10,8 @@
             the reversal group capped at 15, structure + reversal at 25,
             the 1H read +/-5 outside the cap
 
-Both run the same candles, the same live exits ($50 margin at 11x, stop
--10% / one target +15% of margin, max 4h, one position per coin) and the same
+Both run the same candles, the same live exits (scalp_live's fixed margin,
+leverage, stop / one target % of margin; max 4h, one position per coin) and the same
 costs (market entry and stop 4.5 bps taker + 2 bps slippage, the target 1.5
 bps maker). Every read sees closed candles only (scalp_compare.coin_candidates;
 confirmed swings for the sweep / SMC setups). EVERY directional 15m read is a
@@ -188,7 +188,8 @@ def render_telegram(result: Dict) -> str:
     w = result["window"]
     lines = ["🧮 15m scalp score: current vs proposed (capped context, 15M tables)",
              f"{w['start'][:10]} → {w['end'][:10]} ({w['days']} days) · {len(result['coins'])} coins",
-             f"Live exits: ${rc.MARGIN:g} margin at {rc.LEVERAGE}x, stop -10% / TP +15% of margin, "
+             f"Live exits: ${rc.MARGIN:g} margin at {rc.LEVERAGE}x, stop -{sl.SL_ROE_PCT:g}% / TP "
+             f"+{sl.TP1_ROE_PCT:g}% of margin, "
              "max 4h, one per coin; costs: entry/stop 6.5 bps, target 1.5 bps",
              "Scores are scores, not probabilities. ✅ = 30+ trades, profit, PF ≥ 1.2", ""]
     for name in ("current", "proposed"):
