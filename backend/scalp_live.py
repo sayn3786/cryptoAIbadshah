@@ -167,14 +167,14 @@ def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
 # and ONE target at +10% for the whole position; at 17x the stop is a ~0.29%
 # move, the target ~0.59%. A later signal the same way adds another $50 and
 # re-fixes the exits from the new average entry as a ladder: TP1 +10% (half),
-# TP2 +25% (the rest). Once TP1 fills the manager moves the stop to entry.
+# TP2 +15% (the rest; owner, Nov 1 - was +25%). Once TP1 fills the manager moves the stop to entry.
 # Nothing else moves them.
 # SCALP_FIXED_MARGIN_USD=0 = the old risk sizing with structure exits.
 DEFAULT_SCALP_LEVERAGE = 17
 DEFAULT_FIXED_MARGIN_USD = 50.0
 SL_ROE_PCT = 5.0
 TP1_ROE_PCT = 10.0          # the single target; on an add, TP1 (half)
-TP2_ROE_PCT = 25.0          # on an add only: TP2 (the rest)
+TP2_ROE_PCT = 15.0          # on an add only: TP2 (the rest)
 
 
 def fixed_margin_usd() -> float:

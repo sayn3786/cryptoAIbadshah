@@ -862,9 +862,9 @@ def test_fixed_levels_are_a_share_of_margin():
     assert sl.fixed_leverage(2e12, hl_max=50) == 17
     assert "HL's max" in sl.fix_levels({"entry": 100.0, "direction": "LONG"}, 3)["exit"]
     lv = sl.roe_levels(100.0, "LONG", 10)                                  # 10x: 1% = 10%
-    assert [round(lv[k], 6) for k in ("sl", "tp1", "tp2")] == [99.5, 101.0, 102.5]
+    assert [round(lv[k], 6) for k in ("sl", "tp1", "tp2")] == [99.5, 101.0, 101.5]
     sv = sl.roe_levels(100.0, "SHORT", 20)
-    assert [round(sv[k], 6) for k in ("sl", "tp1", "tp2")] == [100.25, 99.5, 98.75]
+    assert [round(sv[k], 6) for k in ("sl", "tp1", "tp2")] == [100.25, 99.5, 99.25]
     s = sl.fix_levels({"entry": 100.0, "direction": "LONG", "sl": 97, "target": 109}, 10)
     assert (round(s["sl"], 6), round(s["target"], 6)) == (99.5, 101.0)     # one target, +10%
     assert s["fixed"] and s["leverage"] == 10 and s["rr"] == 2.0
@@ -922,8 +922,8 @@ def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch
     avg = rec["limit"]
     assert rec["adds"] == 1 and 144.17 < avg < 144.5
     assert abs(rec["sl"] - avg * 1.005) < 0.02                            # -5% of margin at 10x
-    tp1, tp2 = rec["tps"]                                   # on an add: +10% (half) / +25%
-    assert abs(tp1 - avg * 0.99) < 0.02 and abs(tp2 - avg * 0.975) < 0.02
+    tp1, tp2 = rec["tps"]                                   # on an add: +10% (half) / +15%
+    assert abs(tp1 - avg * 0.99) < 0.02 and abs(tp2 - avg * 0.985) < 0.02
     assert "re-fixed SL" in out["results"][0]["note"]
     # max adds reached: the levels stay fixed
     app_mod._scalp_save({"AAVE": {**rec, "adds": 2}})
