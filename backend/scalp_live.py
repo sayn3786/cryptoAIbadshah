@@ -160,21 +160,22 @@ def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
 
 
 # ── fixed margin, levels as % of margin (the owner's rules, Oct 30) ─────────
-# Every scalp: SCALP_FIXED_MARGIN_USD ($50) of margin at SCALP_LEVERAGE (17x,
-# every coin; the owner's call, Nov 1 - was 11x), capped only where
-# Hyperliquid's own max for the coin is lower (it rejects more). Fixed exits
-# as a share of that margin (ROE; owner, Nov 1 - was -10% / +15%): stop -5%
-# and ONE target at +10% for the whole position; at 17x the stop is a ~0.29%
-# move, the target ~0.59%. A later signal the same way adds another $50 and
-# re-fixes the exits from the new average entry as a ladder: TP1 +10% (half),
-# TP2 +15% (the rest; owner, Nov 1 - was +25%). Once TP1 fills the manager moves the stop to entry.
+# Every scalp: SCALP_FIXED_MARGIN_USD ($50) of margin at SCALP_LEVERAGE (11x,
+# every coin), capped only where Hyperliquid's own max for the coin is lower
+# (it rejects more). Fixed exits as a share of that margin (ROE): stop -10%
+# and ONE target at +15% for the whole position; at 11x the stop is a ~0.91%
+# move, the target ~1.36%. (Nov 1: 17x with -5% / +10% lost ~65% more in the
+# Apr-Jun replay; the owner went back.) A later signal the same way adds
+# another $50 and re-fixes the exits from the new average entry as a ladder:
+# TP1 +15% (half), TP2 +20% (the rest; owner, Nov 1 - was +25%). Once TP1
+# fills the manager moves the stop to entry.
 # Nothing else moves them.
 # SCALP_FIXED_MARGIN_USD=0 = the old risk sizing with structure exits.
-DEFAULT_SCALP_LEVERAGE = 17
+DEFAULT_SCALP_LEVERAGE = 11
 DEFAULT_FIXED_MARGIN_USD = 50.0
-SL_ROE_PCT = 5.0
-TP1_ROE_PCT = 10.0          # the single target; on an add, TP1 (half)
-TP2_ROE_PCT = 15.0          # on an add only: TP2 (the rest)
+SL_ROE_PCT = 10.0
+TP1_ROE_PCT = 15.0          # the single target; on an add, TP1 (half)
+TP2_ROE_PCT = 20.0          # on an add only: TP2 (the rest)
 
 
 def fixed_margin_usd() -> float:
@@ -189,7 +190,7 @@ def scalp_leverage() -> int:
 
 
 def fixed_leverage(market_cap: Optional[float] = None, hl_max: Optional[float] = None) -> int:
-    """SCALP_LEVERAGE (17x) for every coin, capped by Hyperliquid's maximum for
+    """SCALP_LEVERAGE (11x) for every coin, capped by Hyperliquid's maximum for
     it. `market_cap` is no longer used (kept for callers)."""
     lev = scalp_leverage()
     if hl_max:
