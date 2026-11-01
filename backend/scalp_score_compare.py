@@ -14,8 +14,12 @@ Both run the same candles, the same live exits ($50 margin at 11x, stop
 -10% / one target +15% of margin, max 4h, one position per coin) and the same
 costs (market entry and stop 4.5 bps taker + 2 bps slippage, the target 1.5
 bps maker). Every read sees closed candles only (scalp_compare.coin_candidates;
-confirmed swings for the sweep / SMC setups). For each, the score distribution
-of directional reads and the trades at entry thresholds 85 / 90 / 100 / 110:
+confirmed swings for the sweep / SMC setups). EVERY directional 15m read is a
+candidate (no base-strength cutoff: base 20 + SMC 20 + four fresh reads 60 =
+100 under the current score), with no engine ladder needed (the exits are
+fixed from the close); each threshold keeps the reads whose FINAL score
+reaches it. For each, the score distribution of directional reads and the
+trades at entry thresholds 85 / 88 / 90 / 100 / 110:
 count, win %, PF, net $, max drawdown. Scores are scores, not probabilities.
 Adopt only what holds in both periods (--end-days-ago 0 and 135).
 
@@ -40,8 +44,11 @@ import sweep_fvg as sf
 
 M15 = sc.M15
 HOUR_MS = sc.HOUR_MS
-THRESHOLDS = (85.0, 90.0, 100.0, 110.0)
-KEEP_FROM = 30.0                     # directional reads kept for the distribution
+THRESHOLDS = (85.0, 88.0, 90.0, 100.0, 110.0)
+# No cutoff on the engine strength before the bonuses: a low base can still
+# reach a threshold once structure and the reversal reads are added, so every
+# directional read is kept and the FINAL score decides (evaluate).
+KEEP_FROM = 0.0
 LEGACY_TABLES = (
     (candle_analysis, ("TF_MIN_POLE_PCT", "TF_CANDLE_N")),
     (signals, ("TF_MACRO_W", "TF_CYCLE_W", "TF_SL_MULT", "TF_BASE_ATR_PCT", "TF_MAX_SL",
@@ -83,23 +90,29 @@ def proposed_score(base: float, structure: Optional[str], reads: Dict[str, float
                             floor=0.0)["final"]
 
 
-def read_engine(m15: Dict[str, List[Dict]], *, start_ms: int, legacy: bool, log=print) -> List[Dict]:
-    """Every directional 15m read (strength KEEP_FROM+) with its fresh reversal
-    reads and the 1H read, on the legacy or the reviewed engine."""
+def read_engine(m15: Dict[str, List[Dict]], *, start_ms: int, legacy: bool, log=print,
+                build: Optional[Callable] = None, gen: Optional[Callable] = None,
+                rev: Optional[Callable] = None) -> List[Dict]:
+    """Every directional 15m read with its fresh reversal reads and the 1H
+    read, on the legacy or the reviewed engine (`build` / `gen` / `rev`
+    default to the real analysis, signal and reversal reads)."""
+    build = build or candle_analysis.build_candle_analysis
+    gen = gen or signals.generate_signal
+    rev = rev or sl.reversal_reads
     out: List[Dict] = []
     for sym, bars in m15.items():
         reads: Dict[int, Dict] = {}
 
         def read(win, tf, s, _reads=reads):
-            a = candle_analysis.build_candle_analysis(list(win), tf, s)
+            a = build(list(win), tf, s)
             if tf == "15M":
-                _reads[int(win[-1]["timestamp"]) + M15] = sl.reversal_reads(a, list(win))
-            return signals.generate_signal(a)
+                _reads[int(win[-1]["timestamp"]) + M15] = rev(a, list(win))
+            return gen(a)
 
         ctx = legacy_15m() if legacy else contextlib.nullcontext()
         with ctx:
             cands = sc.coin_candidates(sym, bars, start_ms=start_ms, read_fn=read,
-                                       keep_from=KEEP_FROM)
+                                       keep_from=KEEP_FROM, require_ladder=False)
         for c in cands:
             c["reads"] = (reads.get(c["slot_ms"]) or {}).get(c["direction"]) or {}
         out += cands
@@ -153,7 +166,7 @@ def evaluate(cands: Sequence[Dict], struct: Dict, m15: Dict[str, List[Dict]], sc
 
 
 def compare(m15: Dict[str, List[Dict]], *, start_ms: int, end_ms: int, log=print,
-            sim: Callable = ee.simulate_hl) -> Dict:
+            sim: Callable = ee.simulate_hl, **engine) -> Dict:
     span = (end_ms - start_ms) / (24 * HOUR_MS)
     # Market entry at the next open, at the close the signal was read on: the
     # candidate's entry is that close (coin_candidates keeps the engine's
@@ -163,9 +176,9 @@ def compare(m15: Dict[str, List[Dict]], *, start_ms: int, end_ms: int, log=print
     struct = structure_at(m15, start_ms=start_ms)
     out = {}
     for name, legacy, fn in (("current", True, current_score), ("proposed", False, proposed_score)):
-        cands = read_engine(m15, start_ms=start_ms, legacy=legacy, log=log)
+        cands = read_engine(m15, start_ms=start_ms, legacy=legacy, log=log, **engine)
         for c in cands:
-            c["entry"] = closes[c["symbol"]].get(c["slot_ms"], c["entry"])
+            c["entry"] = closes[c["symbol"]].get(c["slot_ms"]) or c["entry"]
         out[name] = evaluate(cands, struct, m15, fn, span, sim=sim)
     return {"window": {"start": sc._iso(start_ms), "end": sc._iso(end_ms), "days": round(span, 1)},
             "coins": sorted(m15), **out}

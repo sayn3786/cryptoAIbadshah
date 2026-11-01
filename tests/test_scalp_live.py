@@ -45,7 +45,7 @@ def clean_env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("SCALP_REQUIRE_REVERSAL", raising=False)   # off by default
     # The scoring tests below were written at the old 75 floor (the default is
-    # 85 now, test_the_scalp_floor_is_85).
+    # 88 now, test_the_scalp_floor_is_88).
     monkeypatch.setenv("SCALP_MIN_STRENGTH", "75")
 
 
@@ -966,13 +966,13 @@ def test_blend_adds_reversal_points_and_can_require_one(monkeypatch):
     assert s is None and "no fresh bottom / top" in why
 
 
-def test_the_scalp_floor_is_100(monkeypatch):
+def test_the_scalp_floor_is_88(monkeypatch):
     monkeypatch.delenv("SCALP_MIN_STRENGTH")
-    assert sl.min_strength() == 100
+    assert sl.min_strength() == 88
     bars = padded()
     read = lambda s_: (lambda w, tf, sym: {"direction": "LONG", "strength": s_})   # noqa: E731
-    assert sl.blend_signal(bars, "ETH", read(85), now_ms=NOW_B) is None          # 85 + 10 = 95
-    assert sl.blend_signal(bars, "ETH", read(90), now_ms=NOW_B)["strength"] == 100
+    assert sl.blend_signal(bars, "ETH", read(77), now_ms=NOW_B) is None          # 77 + 10 = 87
+    assert sl.blend_signal(bars, "ETH", read(78), now_ms=NOW_B)["strength"] == 88
 
 
 def test_the_full_smc_sequence_is_a_20_bonus(monkeypatch):
