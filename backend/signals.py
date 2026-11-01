@@ -1206,6 +1206,91 @@ def _reversal_freshness(bars_ago) -> float:
     return (REVERSAL_EXPIRE_BARS - b) / (REVERSAL_EXPIRE_BARS - fresh_bars)
 
 
+# ── Per-timeframe tables (module level so tests and replays can read them) ────
+#
+# 15M (added Nov 1): it used to fall through to each table's .get() default, and
+# those defaults are daily-or-wider values (macro / cycle context at FULL weight,
+# a 9% ATR cap, 10% max stop, 20% TP3, 1.5x ATR stop, the 1D leverage ceiling).
+# The 15M values below follow two rules:
+#   * context weights (daily-updating data): BELOW 1H, because a 15m candle is a
+#     quarter of an hour candle and daily data says even less about it;
+#   * price-distance caps scale with the square root of time (volatility over a
+#     window grows ~ sqrt(duration)): 15m = 1H x sqrt(1/4) = 1H x 0.5; ATR
+#     multiples and buffers (already relative to the 15m ATR) match 1H.
+
+# Fear & Greed / news update at most daily: 30% on 1H rising to 100% on 1D+.
+TF_MACRO_W = {
+    "15M": 0.20,
+    "1H": 0.30, "2H": 0.40, "4H": 0.50, "8H": 0.65, "12H": 0.80,
+    "1D": 1.00, "1W": 1.00, "2W": 1.00, "3W": 1.00,  "1M": 1.00,
+}
+# Cycle / on-chain / structural context (ETF flows, macro releases, SOPR, Puell,
+# MVRV, halving, regime, tokenomics): multi-day to multi-month behaviour.
+TF_CYCLE_W = {
+    "15M": 0.10,
+    "1H": 0.15, "2H": 0.25, "4H": 0.45, "8H": 0.65, "12H": 0.82,
+    "1D": 1.00, "1W": 1.00, "2W": 1.00, "3W": 1.00,  "1M": 1.00,
+}
+# The Reversal Radar's daily+ on-chain checks (F&G, SOPR, Puell, MVRV, realized)
+# cannot top or bottom an intraday candle: off on these timeframes.
+INTRADAY_NO_CYCLE_TFS = ("15M", "1H", "2H")
+
+# SL distance multiplier of ATR — same across market caps.
+TF_SL_MULT = {
+    "15M": 0.8,
+    "1H":  0.8, "2H":  0.9,
+    "4H":  1.0, "8H":  1.0, "12H": 1.2,
+    "1D":  1.3, "1W":  1.5, "2W":  1.5,
+    "3W":  1.5, "1M":  1.5,
+}
+# Base ATR cap (mega cap; scaled up by the vol tier's atr_mult).
+TF_BASE_ATR_PCT = {
+    "15M": 0.0075,
+    "1H":  0.015, "2H":  0.022,
+    "4H":  0.030, "8H":  0.040, "12H": 0.050,
+    "1D":  0.065, "1W":  0.090,
+    "2W":  0.100, "3W":  0.100, "1M":  0.100,
+}
+# Hard SL cap (mega cap; x min(atr_mult, 2.5)).
+TF_MAX_SL = {
+    "15M": 0.0125,
+    "1H":  0.025, "2H":  0.035,
+    "4H":  0.050, "8H":  0.065, "12H": 0.080,
+    "1D":  0.100, "1W":  0.140,
+    "2W":  0.160, "3W":  0.160, "1M":  0.180,
+}
+# TP3 cap.
+TF_MAX_TP3 = {
+    "15M": 0.0225,
+    "1H":  0.045, "2H":  0.065,
+    "4H":  0.090, "8H":  0.120, "12H": 0.150,
+    "1D":  0.200, "1W":  0.280,
+    "2W":  0.320, "3W":  0.320, "1M":  0.350,
+}
+# Entry-limit and SL-anchor search windows (structure sits further away on HTF).
+TF_ENTRY_LIMIT = {"15M": 0.010,
+                  "1H": 0.020, "2H": 0.020, "4H": 0.025, "8H": 0.030,
+                  "12H": 0.030, "1D": 0.035, "1W": 0.045, "2W": 0.050,
+                  "3W": 0.050, "1M": 0.060}
+TF_SL_ANCHOR = {"15M": 0.025,
+                "1H": 0.05, "2H": 0.06, "4H": 0.08, "8H": 0.10,
+                "12H": 0.12, "1D": 0.15, "1W": 0.20, "2W": 0.24,
+                "3W": 0.26, "1M": 0.30}
+# SL cushion beyond the anchor, as a fraction of ATR.
+TF_SL_BUF = {"15M": 0.20,
+             "1H": 0.20, "2H": 0.20, "4H": 0.30, "8H": 0.30,
+             "12H": 0.35, "1D": 0.45, "1W": 0.60, "2W": 0.65,
+             "3W": 0.65, "1M": 0.70}
+# Leverage-ceiling multiplier (longer timeframe = lower ceiling).
+TF_LEV_MULT = {
+    "15M": 1.0,
+    "1H": 1.0, "2H": 0.9,
+    "4H": 0.8, "8H": 0.7,  "12H": 0.6,
+    "1D": 0.5, "1W": 0.3,
+    "2W": 0.25, "3W": 0.25, "1M": 0.2,
+}
+
+
 def _latest_reversal_marker(rsi_markers):
     """The most recent swing-reversal marker (largest timestamp), or None."""
     if not isinstance(rsi_markers, list) or not rsi_markers:
@@ -1322,11 +1407,7 @@ def generate_signal(analysis: Dict) -> Dict:
     # Fear & Greed and News update at most once per day. Applying their full
     # weight on a 1H chart is misleading — they carry no 1H-specific edge.
     # Scale linearly from 30% on 1H up to 100% on 1D+.
-    _TF_MACRO_W = {
-        "1H": 0.30, "2H": 0.40, "4H": 0.50, "8H": 0.65, "12H": 0.80,
-        "1D": 1.00, "1W": 1.00, "2W": 1.00, "3W": 1.00,  "1M": 1.00,
-    }
-    tf_macro_w = _TF_MACRO_W.get(timeframe, 1.0)
+    tf_macro_w = TF_MACRO_W.get(timeframe, 1.0)
 
     # ── Timeframe weight for CYCLE / on-chain / structural context ─────────────
     # ETF flows, macro releases, BTC on-chain (SOPR/Puell/MVRV/Hash Ribbon/
@@ -1335,11 +1416,7 @@ def generate_signal(analysis: Dict) -> Dict:
     # top or bottom a 1H/2H candle, so on low timeframes they only clutter and
     # mislead the intraday read. Weighted even lower than macro (down to 15% on
     # 1H) — kept as a faint tilt, not silenced, but never an intraday trigger.
-    _TF_CYCLE_W = {
-        "1H": 0.15, "2H": 0.25, "4H": 0.45, "8H": 0.65, "12H": 0.82,
-        "1D": 1.00, "1W": 1.00, "2W": 1.00, "3W": 1.00,  "1M": 1.00,
-    }
-    tf_cycle_w = _TF_CYCLE_W.get(timeframe, 1.0)
+    tf_cycle_w = TF_CYCLE_W.get(timeframe, 1.0)
     _cyc_note = (f" 🗓️[daily+ context ×{tf_cycle_w:.0%} on {timeframe}]"
                  if tf_cycle_w < 1.0 else "")
     def _cyc(pts):
@@ -2795,7 +2872,7 @@ def generate_signal(analysis: Dict) -> Dict:
     # MANY independent reversal signs fire at once — the same principle as the
     # multi-group amplifier. Elevated = ±4, High = ±8, always AGAINST the
     # exhausted trend (topping subtracts, bottoming adds).
-    _rr = _reversal_radar(analysis, cycle_ok=(timeframe not in ("1H", "2H")))
+    _rr = _reversal_radar(analysis, cycle_ok=(timeframe not in INTRADAY_NO_CYCLE_TFS))
     if _rr.get("level") in ("elevated", "high") and _rr.get("mode"):
         _rr_pts    = 8 if _rr["level"] == "high" else 4
         _rr_labels = ", ".join(s["label"] for s in _rr.get("signals", [])[:4])
@@ -3346,24 +3423,12 @@ def generate_signal(analysis: Dict) -> Dict:
     _tp_anchor = None
 
     # SL distance multiplier — same across market caps; wider ATR cap does the work
-    TF_SL_MULT = {
-        "1H":  0.8, "2H":  0.9,
-        "4H":  1.0, "8H":  1.0, "12H": 1.2,
-        "1D":  1.3, "1W":  1.5, "2W":  1.5,
-        "3W":  1.5, "1M":  1.5,
-    }
     sl_m = TF_SL_MULT.get(timeframe, 1.5)
 
     # Base ATR cap per timeframe — calibrated for mega-cap (BTC/ETH level).
     # Scaled up by atr_mult so smaller caps get room matching their true volatility:
     #   1H BTC cap: 1.5%  |  1H HYPE (small) cap: 1.5% × 3.0 = 4.5%
     #   1W BTC cap: 9.0%  |  1W HYPE cap: 9.0% × 3.0 = 27%
-    TF_BASE_ATR_PCT = {
-        "1H":  0.015, "2H":  0.022,
-        "4H":  0.030, "8H":  0.040, "12H": 0.050,
-        "1D":  0.065, "1W":  0.090,
-        "2W":  0.100, "3W":  0.100, "1M":  0.100,
-    }
     base_pct     = TF_BASE_ATR_PCT.get(timeframe, 0.09)
     max_atr_pct  = base_pct * atr_mult          # e.g. 0.015 × 3.0 = 0.045 (4.5%)
     max_atr_abs  = current_price * max_atr_pct
@@ -3385,21 +3450,9 @@ def generate_signal(analysis: Dict) -> Dict:
         # atr_mult: mega=1.0, large=1.5, mid=2.0, small=3.0, micro=4.0
         # Cap the multiplier at 2.5 so micro caps don't go completely unconstrained.
         _cap_mult = min(atr_mult, 2.5)
-        _TF_MAX_SL = {
-            "1H":  0.025, "2H":  0.035,
-            "4H":  0.050, "8H":  0.065, "12H": 0.080,
-            "1D":  0.100, "1W":  0.140,
-            "2W":  0.160, "3W":  0.160, "1M":  0.180,
-        }
         # TP3 cap also scales — smaller caps have bigger swing targets
-        _TF_MAX_TP3 = {
-            "1H":  0.045, "2H":  0.065,
-            "4H":  0.090, "8H":  0.120, "12H": 0.150,
-            "1D":  0.200, "1W":  0.280,
-            "2W":  0.320, "3W":  0.320, "1M":  0.350,
-        }
-        _max_sl_abs  = current_price * _TF_MAX_SL.get(timeframe, 0.10)  * _cap_mult
-        _max_tp3_abs = current_price * _TF_MAX_TP3.get(timeframe, 0.20) * _cap_mult
+        _max_sl_abs  = current_price * TF_MAX_SL.get(timeframe, 0.10)  * _cap_mult
+        _max_tp3_abs = current_price * TF_MAX_TP3.get(timeframe, 0.20) * _cap_mult
 
         # Clamp effective ATR so SL can't exceed the hard cap
         eff_atr = min(atr, max_atr_abs, _max_sl_abs / max(sl_m, 1.5))
@@ -3410,20 +3463,11 @@ def generate_signal(analysis: Dict) -> Dict:
         # fixed 7% window meant HTF stops almost never found the real swing and
         # fell back to a huge ATR stop (blowing up R/R and pushing TP targets off
         # structure). Wider on HTF lets the SL anchor to the actual invalidation.
-        _TF_ENTRY_LIMIT = {"1H": 0.020, "2H": 0.020, "4H": 0.025, "8H": 0.030,
-                           "12H": 0.030, "1D": 0.035, "1W": 0.045, "2W": 0.050,
-                           "3W": 0.050, "1M": 0.060}
-        _TF_SL_ANCHOR   = {"1H": 0.05, "2H": 0.06, "4H": 0.08, "8H": 0.10,
-                           "12H": 0.12, "1D": 0.15, "1W": 0.20, "2W": 0.24,
-                           "3W": 0.26, "1M": 0.30}
         # SL cushion beyond the anchor, as a fraction of ATR — bigger on HTF so a
         # structure stop isn't wicked out by one large weekly/monthly candle.
-        _TF_SL_BUF      = {"1H": 0.20, "2H": 0.20, "4H": 0.30, "8H": 0.30,
-                           "12H": 0.35, "1D": 0.45, "1W": 0.60, "2W": 0.65,
-                           "3W": 0.65, "1M": 0.70}
-        ENTRY_LIMIT   = _TF_ENTRY_LIMIT.get(timeframe, 0.020)
-        SL_ANCHOR_MAX = _TF_SL_ANCHOR.get(timeframe, 0.07)
-        _sl_buf_mult  = _TF_SL_BUF.get(timeframe, 0.20)
+        ENTRY_LIMIT   = TF_ENTRY_LIMIT.get(timeframe, 0.020)
+        SL_ANCHOR_MAX = TF_SL_ANCHOR.get(timeframe, 0.07)
+        _sl_buf_mult  = TF_SL_BUF.get(timeframe, 0.20)
 
         _ema_t     = analysis.get("ema_trend") or {}
         ema21_val  = _ema_t.get("ema21")
@@ -3740,13 +3784,7 @@ def generate_signal(analysis: Dict) -> Dict:
             _slab_ceil  = _SLAB_CEIL.get(vol_tier_id, 6)
 
             # Longer timeframes = lower ceiling (more overnight risk, larger swings)
-            _TF_LEV_MULT = {
-                "1H": 1.0, "2H": 0.9,
-                "4H": 0.8, "8H": 0.7,  "12H": 0.6,
-                "1D": 0.5, "1W": 0.3,
-                "2W": 0.25, "3W": 0.25, "1M": 0.2,
-            }
-            _tf_mult    = _TF_LEV_MULT.get(timeframe, 0.5)
+            _tf_mult    = TF_LEV_MULT.get(timeframe, 0.5)
             _slab_ceil  = max(_slab_floor, round(_slab_ceil * _tf_mult))
 
             if strength >= 80:     _str_adj = 2

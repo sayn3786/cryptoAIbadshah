@@ -6453,6 +6453,7 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
         _scalp_private(_sl.message(new, auto=_sl.auto_enabled()))
     hl = _scalp_hl(new, now_ms)
     label = [f"{x['symbol']} {x['direction']} {x['strength']:g} R:R {x['rr']:g}"
+             + (f" [{x['score_parts']} vs {_sl.min_strength():g}]" if x.get("score_parts") else "")
              if x.get("kind") == "engine" else f"{x['symbol']} {x['direction']} R:R {x['rr']:g}"
              for x in found]
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
@@ -6490,14 +6491,23 @@ def api_hl_scalp():
     import scalp_live as _sl
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
                     "mode": _sl.mode(), "min_strength": _sl.min_strength(),
-                    "setup": ("score = 15m engine + 10 for a sweep -> FVG the same way "
-                              "+/- 5 for the 1H read with / against; 75+ trades. Stop: the "
-                              "last swing (0.2-3% away) else 1.5 ATR; target: the next "
-                              f"swing if {_sl.target_r():g}R+ away else a "
-                              f"{_sl.target_r():g}R target"
-                              + (f"; R:R filter {_sl.min_rr():g}" if _sl.min_rr() else "")
+                    "setup": ((f"score = 15m engine (0-100) + context capped at "
+                               f"{_sl.context_cap():g} (SMC sequence +{_sl.SMC_BONUS:g} or "
+                               f"sweep -> FVG +{_sl.SWEEP_BONUS:g}; fresh bottom / top, "
+                               f"divergence, Fib, S/R together at most "
+                               f"{_sl.reversal_group_cap():g}) +/- {_sl.H1_POINTS:g} for "
+                               f"the 1H read; {_sl.min_strength():g}+ trades (a score, not a "
+                               "probability). Exits: "
+                               + (f"${_sl.fixed_margin_usd():g} margin at "
+                                  f"{_sl.scalp_leverage()}x, stop -{_sl.SL_ROE_PCT:g}% / "
+                                  f"TP +{_sl.TP1_ROE_PCT:g}% of margin"
+                                  if _sl.fixed_margin_usd() > 0 else
+                                  f"swing / ATR stop, swing / {_sl.target_r():g}R target"))
                               if _sl.mode() == "blend"
                               else "sweep -> FVG, gap top, R:R 1.5+"),
+                    "score_caps": {"reversal_group": _sl.reversal_group_cap(),
+                                   "context": _sl.context_cap(),
+                                   "regime": "reported in each setup's score_detail, not applied"},
                     "max_hold_hours": _sl.max_hold_ms() / 3_600_000,
                     "max_open": _sl.max_open(),
                     "confirm": (_sl.confirm_mode() if _sl.mode() == "sweep_fvg"

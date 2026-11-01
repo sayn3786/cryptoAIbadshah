@@ -59,8 +59,12 @@ __all__ = [
     "build_candle_analysis",
 ]
 
-# Minimum pole size for a flag to count, per timeframe.
+# Minimum pole size for a flag to count, per timeframe. 15M (Nov 1) used to
+# fall back to 5% - a weekly-sized pole no 15m flag clears; 1.0% is 1H's 2.0%
+# scaled by sqrt(time) (a 15m move is ~half an hour move), the rule the
+# signals.py 15M distance caps follow.
 TF_MIN_POLE_PCT = {
+    "15M": 1.0,
     "1H": 2.0, "2H": 2.5,
     "4H": 3.0, "8H": 4.0, "12H": 5.0, "1D":  6.0,
     "1W": 8.0, "2W": 8.0, "3W":  8.0, "1M": 10.0,
@@ -69,6 +73,7 @@ TF_MIN_POLE_PCT = {
 # How many closed candles feed the direction check, per timeframe. Lower
 # timeframes are noisier so they need more.
 TF_CANDLE_N: Dict[str, int] = {
+    "15M": 4,   # explicit (was the same 4 by fallback): as noisy as 1H or more
     "1H": 4, "2H": 4, "4H": 4, "8H": 4, "12H": 4,
     "1D": 3, "1W": 2, "2W": 2, "3W": 2, "1M": 4,
 }

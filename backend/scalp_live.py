@@ -384,14 +384,112 @@ def reversal_points(reads: Dict[str, float]) -> float:
     return round(sum(reads.values()) * reversal_points_each(), 1)
 
 
+# ── the scalp score: base + capped context + 1H (Nov 1) ─────────────────────
+# The 15m engine strength (0-100) already scores RSI level, RSI divergence,
+# S/R zones, the Fib (as a brake), liquidity grabs, CHoCH and FVGs inside its
+# own capped groups. The add-ons below re-read the SAME events (a fresh RSI
+# bottom IS an oversold RSI; a sweep at support IS a support touch), so they
+# are capped as groups instead of stacking:
+#   reversal group  fresh bottom / top, divergence, Fib zone, S/R:
+#                   at most REVERSAL_GROUP_CAP (15 = one fresh read's worth).
+#                   The scalp-reversal replay (Sep-Oct): +10 / +5 per read made
+#                   results WORSE (-$3,050 / -$2,946 vs -$2,881), i.e. extra
+#                   reads carried no extra information.
+#   context         structure (SMC sequence +20 / plain sweep -> FVG +10) and
+#                   the reversal group together: at most CONTEXT_CAP (25), so
+#                   the SMC sequence plus one fresh read still counts in full.
+#   1H read         +/-5, outside the cap (a different timeframe).
+# The cap only trims setups where three or more of these fired at once; a
+# typical setup (one structure read + one fresh read) scores as before.
+# Regime (trend / chop / volatility at the close) is REPORTED, not applied:
+# there is no replay evidence for regime-dependent weights (the scalp-chop
+# study tested regime FILTERS; only the coin's 1H ADX >= 25 helped in both
+# periods, and the owner removed it).
+DEFAULT_REVERSAL_GROUP_CAP = 15.0
+DEFAULT_CONTEXT_CAP = 25.0
+
+
+def reversal_group_cap() -> float:
+    return _num_env("SCALP_REVERSAL_CAP", DEFAULT_REVERSAL_GROUP_CAP)
+
+
+def context_cap() -> float:
+    return _num_env("SCALP_CONTEXT_CAP", DEFAULT_CONTEXT_CAP)
+
+
+def regime_at_close(bars: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Report-only market state from the CLOSED 15m candles: ADX (14) trend
+    strength, Choppiness (14) and ATR (14) against its median over the window.
+    Never changes the score. Pure."""
+    import trend_regime
+    out: Dict[str, Any] = {"applied": False}
+    if len(bars) < 2 * trend_regime.PERIOD + 1:
+        return out
+    adx = trend_regime.adx(bars)[-1]
+    chop = trend_regime.chop(bars)[-1]
+    trs = []
+    for i in range(1, len(bars)):
+        h, lo, pc = float(bars[i]["high"]), float(bars[i]["low"]), float(bars[i - 1]["close"])
+        trs.append(max(h - lo, abs(h - pc), abs(lo - pc)))
+    atrs = [sum(trs[i - 13:i + 1]) / 14 for i in range(13, len(trs))]
+    med = sorted(atrs)[len(atrs) // 2] if atrs else None
+    out.update(adx=None if adx is None else round(adx, 1),
+               chop=None if chop is None else round(chop, 1),
+               atr_vs_median=round(atrs[-1] / med, 2) if atrs and med else None)
+    out["state"] = ("trending" if adx is not None and adx >= 25 else
+                    "choppy" if chop is not None and chop >= 61.8 else "mixed")
+    return out
+
+
+def compose_score(base: float, *, structure: Optional[str], rev_reads: Dict[str, float],
+                  h1: float, floor: float, regime: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The scalp score and how it was built: {"base", "structure", "reversal",
+    "context", "h1", "regime", "final", "threshold", "passes"}. `structure` is
+    "smc", "sweep" or None; `rev_reads` the direction's {read: weight}. Pure.
+    A score, not a probability."""
+    struct_pts = SMC_BONUS if structure == "smc" else SWEEP_BONUS if structure == "sweep" else 0.0
+    rev_raw = reversal_points(rev_reads or {})
+    rev = min(rev_raw, reversal_group_cap())
+    ctx_raw = struct_pts + rev
+    ctx = min(ctx_raw, context_cap())
+    final = round(float(base) + ctx + float(h1), 1)
+    return {"base": round(float(base), 1),
+            "structure": {"kind": structure, "points": struct_pts},
+            "reversal": {"reads": dict(rev_reads or {}), "raw": rev_raw, "points": rev,
+                         "cap": reversal_group_cap()},
+            "context": {"raw": round(ctx_raw, 1), "points": round(ctx, 1), "cap": context_cap()},
+            "h1": float(h1), "regime": regime or {"applied": False},
+            "final": final, "threshold": float(floor), "passes": final >= floor}
+
+
+def score_text(detail: Dict[str, Any]) -> str:
+    """'15m 62 + smc 20 + bottom/fib 15 (30 capped) [context 35 capped 25] + 1H 5'."""
+    t = f"15m {detail['base']:g}"
+    st = detail["structure"]
+    if st["points"]:
+        t += f" + {st['kind']} {st['points']:g}"
+    rv = detail["reversal"]
+    if rv["raw"]:
+        t += f" + {'/'.join(sorted(rv['reads']))} {rv['points']:g}"
+        if rv["points"] < rv["raw"]:
+            t += f" ({rv['raw']:g} capped)"
+    cx = detail["context"]
+    if cx["points"] < cx["raw"]:
+        t += f" [context {cx['raw']:g} capped {cx['points']:g}]"
+    if detail["h1"]:
+        t += f" {'+' if detail['h1'] > 0 else '-'} 1H {abs(detail['h1']):g}"
+    return t
+
+
 def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now_ms: int,
           h1_fn: Optional[Callable] = None, floor: Optional[float] = None) -> tuple:
-    """(scalp or None, why not). The score: the 15m engine read on the LAST
-    closed candle (closed within the last 15 minutes), + SWEEP_BONUS when a
-    sweep -> FVG the same way completed in the last SWEEP_RECENT candles,
-    + H1_POINTS when the coin's 1H engine read agrees / - H1_POINTS when it
-    points the other way (`h1_fn` returns the 1H candles; fetched only when it
-    could change the outcome). Nothing is required but the score at `floor`+
+    """(scalp or None, why not). The score (compose_score): the 15m engine read
+    on the LAST closed candle (closed within the last 15 minutes) + the capped
+    context (SMC sequence +20 / sweep -> FVG +10 completed the same way in the
+    last SWEEP_RECENT candles, and the fresh reversal reads) + H1_POINTS when
+    the coin's 1H engine read agrees / - H1_POINTS when it points the other way
+    (`h1_fn` returns the 1H candles; fetched only when it could change the
+    outcome). The setup carries "score_detail". Nothing is required but the score at `floor`+
     and a structure stop and target at R:R 1.5+; the scalp enters at market.
     "why" is None for a scalp, or a short reason for a directional read that
     did not make it (neutral / stale / no read: ("", None) quietly)."""
@@ -411,7 +509,6 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
         return None, None
     strength = float(sig.get("strength") or 0)
     rev_reads = (sig.get("_reversal") or {}).get(d) or {}
-    rev = reversal_points(rev_reads)
     label = f"{symbol.upper()} {d}"
     if require_reversal() and not rev_reads:
         return None, (f"{label}: 15m {strength:g}, no fresh bottom / top, divergence, Fib "
@@ -422,9 +519,10 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
               if x["direction"] == d and 0 <= last - x["ready"] < SWEEP_RECENT]
     smc = [x for x in sweep_fvg.smc_setups(bars, start_ms=close_ms - SWEEP_RECENT * M15_MS, piv=piv)
            if x["direction"] == d and 0 <= last - x["ready"] < SWEEP_RECENT]
-    bonus = SMC_BONUS if smc else SWEEP_BONUS if recent else 0.0
+    structure = "smc" if smc else "sweep" if recent else None
+    pre = compose_score(strength, structure=structure, rev_reads=rev_reads, h1=0.0, floor=floor)
     h1 = 0.0
-    if h1_fn is not None and strength + bonus + rev + H1_POINTS >= floor:
+    if h1_fn is not None and pre["final"] + H1_POINTS >= floor:
         try:
             h1_bars = h1_fn() or []
             hd = (read_fn(list(h1_bars[-H1_WINDOW:]), "1H", symbol) or {}).get("direction") \
@@ -432,10 +530,11 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
         except Exception:                                 # noqa: BLE001
             hd = None
         h1 = H1_POINTS if hd == d else -H1_POINTS if hd in ("LONG", "SHORT") else 0.0
-    score = strength + bonus + rev + h1
-    parts = f"15m {strength:g}" + (f" + {'smc' if smc else 'sweep'} {bonus:g}" if bonus else "") + \
-        (f" + {'/'.join(sorted(rev_reads))} {rev:g}" if rev else "") + \
-        (f" {'+' if h1 > 0 else '-'} 1H {abs(h1):g}" if h1 else "")
+    detail = compose_score(strength, structure=structure, rev_reads=rev_reads, h1=h1,
+                           floor=floor, regime=regime_at_close(bars))
+    score = detail["final"]
+    parts = score_text(detail)
+    bonus = detail["structure"]["points"]
     if score < floor:
         return None, (f"{label}: {parts} = {score:g} < {floor:g}" if strength >= floor - 20
                       else None)
@@ -447,6 +546,7 @@ def blend(bars: Sequence[Dict[str, Any]], symbol: str, read_fn: Callable, *, now
     return {"kind": "engine", "symbol": symbol.upper(), "direction": d,
             "strength": round(score, 1), "engine_strength": round(strength, 1),
             "sweep_bonus": bonus, "h1_points": h1, "score_parts": parts,
+            "score_detail": detail,
             "entry": float(bars[last]["close"]), "limit": float(bars[last]["close"]),
             "sl": ex["sl"], "target": ex["target"], "rr": ex["rr"], "exit": ex["how"],
             "slot_ms": close_ms}, None
