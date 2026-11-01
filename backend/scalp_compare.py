@@ -50,7 +50,11 @@ VARIANTS = tuple((f"{floor:g}+ · {'1H agrees' if confirm else '15m alone'} · "
 
 # ── data ────────────────────────────────────────────────────────────────────
 
-def _binance_15m(pair: str, start_ms: int, end_ms: int, session=None) -> List[Dict]:
+def _binance_15m(pair: str, start_ms: int, end_ms: int, session=None, *,
+                 taker: bool = False) -> List[Dict]:
+    """Binance 15m klines. `taker` keeps column 9, the taker BUY base volume
+    (real aggressor flow), as "taker_buy_volume"; off by default so the
+    engine studies keep reading the candle-shape CVD estimate as before."""
     out, t = [], start_ms
     while t < end_ms:
         rows = cc._get("https://data-api.binance.vision/api/v3/klines",
@@ -59,7 +63,8 @@ def _binance_15m(pair: str, start_ms: int, end_ms: int, session=None) -> List[Di
         if not rows:
             break
         out += [{"timestamp": int(k[0]), "open": float(k[1]), "high": float(k[2]),
-                 "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])}
+                 "low": float(k[3]), "close": float(k[4]), "volume": float(k[5]),
+                 **({"taker_buy_volume": float(k[9])} if taker and len(k) > 9 else {})}
                 for k in rows]
         t = int(rows[-1][0]) + M15
         if len(rows) < 1000:
@@ -92,14 +97,17 @@ def clean(rows: Sequence[Dict], end_ms: int) -> List[Dict]:
 
 
 def fetch_15m(symbols: Dict[str, str], days: float, *, end_ms: Optional[int] = None,
-              session=None, log=print) -> Dict[str, List[Dict]]:
+              session=None, log=print, taker: bool = False) -> Dict[str, List[Dict]]:
+    """`taker`: Binance rows carry taker_buy_volume (OKX has none)."""
     import time
     end_ms = end_ms or int(time.time() * 1000) // M15 * M15
     start_ms = end_ms - int(days * 24 * HOUR_MS) - (WINDOW + 4 * H1_WINDOW) * M15
     out = {}
     for sym, pair in symbols.items():
         got, src = [], None
-        for name, fn in (("binance", _binance_15m), ("okx", _okx_15m)):
+        binance = (lambda p, a, b, s: _binance_15m(p, a, b, s, taker=True)) if taker \
+            else _binance_15m
+        for name, fn in (("binance", binance), ("okx", _okx_15m)):
             try:
                 rows = clean(fn(pair, start_ms, end_ms, session), end_ms)
             except Exception:                            # noqa: BLE001
@@ -203,8 +211,18 @@ def book(cands: Sequence[Dict], m15: Dict[str, List[Dict]], *, floor: float,
         t["usd"] = USD
         t["pnl_usd"] = round(t["net_pct"] / 100.0 * USD, 4)
         trades.append(t)
-        open_until[c["symbol"]] = t["closed_at"] if t["closed_at"] is not None else float("inf")
+        open_until[c["symbol"]] = busy_until(t)
     return trades
+
+
+def busy_until(t: Dict) -> float:
+    """When the coin is free again after trade `t`: the END of the candle it
+    closed in. `closed_at` is that candle's open time and the exit happens
+    somewhere inside it, so a new entry (filled at a candle's open) must wait
+    for the next candle; freeing the coin at `closed_at` let a new trade enter
+    at the open of the very candle whose move closed the old one - a
+    look-ahead that biased the replays toward the signal's direction."""
+    return t["closed_at"] + M15 if t["closed_at"] is not None else float("inf")
 
 
 def works(r: Dict) -> bool:

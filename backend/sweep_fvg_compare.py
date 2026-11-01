@@ -109,7 +109,7 @@ def book(found: Sequence[Dict], m15: Dict[str, List[Dict]], *,
         t["usd"] = USD
         t["pnl_usd"] = round(t["net_pct"] / 100.0 * USD, 4)
         trades.append(t)
-        open_until[s["symbol"]] = t["closed_at"] if t["closed_at"] is not None else float("inf")
+        open_until[s["symbol"]] = sc.busy_until(t)
     return {"trades": trades, "missed": missed}
 
 

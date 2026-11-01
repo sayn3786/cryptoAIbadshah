@@ -158,7 +158,7 @@ def book(scalps: Sequence[Dict], m15: Dict[str, List[Dict]], regime: Regime, *,
                  pnl_risk=round(t["net_pct"] / 100 * plan["notional_usd"], 4),
                  notional_risk=plan["notional_usd"], lev_risk=plan["leverage"])
         trades.append(t)
-        open_until[sym] = t["closed_at"] if t["closed_at"] is not None else float("inf")
+        open_until[sym] = sc.busy_until(t)
     return {"trades": trades, "skipped": skipped}
 
 

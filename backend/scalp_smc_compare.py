@@ -133,7 +133,7 @@ def book(setups: Dict[str, List[Dict]], m15: Dict[str, List[Dict]], target_r: fl
             missed += 1
             continue
         trades.append(t)
-        open_until[sym] = t["closed_at"] if t["closed_at"] is not None else float("inf")
+        open_until[sym] = sc.busy_until(t)
     return {"trades": trades, "missed": missed}
 
 
