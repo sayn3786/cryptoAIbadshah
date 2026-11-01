@@ -159,6 +159,10 @@ name: Strategy backtests (private Telegram)
 #            FVG, limit in the gap, stop beyond the sweep, 1.5R / 2R / 3R, vs the
 #            plain sweep -> FVG; pure price action; end_days_ago 0 and 135
 #            (backend/scalp_smc_compare.py; ~5 min)
+#   scalp-score  the 15m scalp score before / after the Nov 1 review (explicit
+#            15M tables, capped context): score distribution and trades at
+#            85 / 90 / 100 / 110 with the live fixed exits; end_days_ago 0 and
+#            135 (backend/scalp_score_compare.py; ~45-60 min, two engine passes)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -177,7 +181,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -186,7 +190,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m / sweep-fvg / scalp-struct / scalp-chop / scalp-trend / scalp-sma / scalp-entry / scalp-reversal / scalp-smc: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m / sweep-fvg / scalp-struct / scalp-chop / scalp-trend / scalp-sma / scalp-entry / scalp-reversal / scalp-smc / scalp-score: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -305,6 +309,8 @@ jobs:
                             EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp-smc) MODULE=scalp_smc_compare
                        EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            scalp-score) MODULE=scalp_score_compare
+                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and

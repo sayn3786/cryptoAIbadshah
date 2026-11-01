@@ -52,14 +52,51 @@ Alignment across groups drives the multiplier (see bottom of doc).
 
 Fear & Greed and News update at most daily — applying full weight on 1H is misleading.
 
-| TF | Weight |
-|---|---|
-| 1H | 0.30 |
-| 2H | 0.40 |
-| 4H | 0.50 |
-| 8H | 0.65 |
-| 12H | 0.80 |
-| 1D+ | 1.00 |
+| TF | Macro weight (`TF_MACRO_W`) | Cycle / on-chain weight (`TF_CYCLE_W`) |
+|---|---|---|
+| 15M | 0.20 | 0.10 |
+| 1H | 0.30 | 0.15 |
+| 2H | 0.40 | 0.25 |
+| 4H | 0.50 | 0.45 |
+| 8H | 0.65 | 0.65 |
+| 12H | 0.80 | 0.82 |
+| 1D+ | 1.00 | 1.00 |
+
+15M was missing from both tables until Nov 1 and fell back to **1.00** (full
+weight, more than 1H). The Reversal Radar's daily on-chain checks are off on
+15M, 1H and 2H (`INTRADAY_NO_CYCLE_TFS`).
+
+### 15M settings (Nov 1)
+
+Every per-timeframe table in `signals.py` / `candle_analysis.py` now has an
+explicit 15M entry instead of a daily-scale fallback. Two rules:
+
+* **Daily-updating context** (macro, cycle): below 1H.
+* **Price distances** (ATR cap, max stop, TP3 cap, entry / anchor windows, flag
+  pole) scale with the square root of time: 15M = 1H × √(15/60) = 1H × 0.5.
+  ATR-relative settings (stop × ATR, stop buffer, leverage multiplier, the
+  candle count) match 1H.
+
+## 15M Scalp Score (`scalp_live.compose_score`)
+
+```
+score = 15m engine strength (0-100)
+      + context, capped at 25:
+          structure: full sweep -> CHoCH -> BOS -> FVG +20, or sweep -> FVG +10
+          fresh reversal reads (bottom / top, divergence, Fib zone, S/R),
+            each up to 15 and fading, capped together at 15
+      ± 5 for the 1H engine read (outside the cap)
+trades at SCALP_MIN_STRENGTH (100)
+```
+
+The engine already scores RSI level, RSI divergence, S/R, the Fib (as a
+brake), liquidity grabs, CHoCH and FVGs, so the add-ons re-read the same
+events; the caps stop one event from being paid several times. Each setup
+carries `score_detail` (base, structure, reversal raw / capped, context raw /
+capped, 1H, regime, final, threshold) and the alert shows it, e.g.
+`15m 70 + smc 20 + bottom/fib 15 (30 capped) [context 35 capped 25] + 1H 5`.
+Regime (15m ADX, Choppiness, ATR vs its median, at the close) is reported but
+not applied. A score is not a probability.
 
 ---
 
