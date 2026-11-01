@@ -227,7 +227,7 @@ def fix_levels(setup: Dict[str, Any], leverage: int) -> Dict[str, Any]:
 # (sweep_fvg.structure_exit). "sweep_fvg": the sweep -> FVG setup alone, with
 # a limit in the gap (the earlier mode).
 SCALP_MODES = ("blend", "sweep_fvg")
-DEFAULT_MIN_STRENGTH = 100.0  # owner, Oct 31: only the strongest (scores run past 100)
+DEFAULT_MIN_STRENGTH = 88.0   # owner, Nov 1: down from 100 (scores are capped now)
 SWEEP_BONUS = 10.0
 SWEEP_RECENT = 4
 # The full smart-money sequence (sweep -> CHoCH -> BOS -> FVG, sweep_fvg.

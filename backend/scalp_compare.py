@@ -141,10 +141,13 @@ def engine_read(win: Sequence[Dict], tf: str, symbol: str) -> Dict:
 
 
 def coin_candidates(sym: str, m15: Sequence[Dict], *, start_ms: int,
-                    read_fn: Callable = engine_read, keep_from: float = KEEP_FROM) -> List[Dict]:
+                    read_fn: Callable = engine_read, keep_from: float = KEEP_FROM,
+                    require_ladder: bool = True) -> List[Dict]:
     """A candidate at every 15m close from `start_ms` whose engine read is a
-    LONG / SHORT at `keep_from`+ with a full ladder, with the coin's 1H read at
-    the last closed hour. No look-ahead: each read sees closed candles only."""
+    LONG / SHORT at `keep_from`+ with a full ladder (unless `require_ladder`
+    is off: a study that sets its own exits from the close), with the coin's
+    1H read at the last closed hour. No look-ahead: each read sees closed
+    candles only."""
     h1 = hourly(m15)
     h1_ts = [int(c["timestamp"]) for c in h1]
     h1_cache: Dict[int, Dict] = {}
@@ -161,7 +164,7 @@ def coin_candidates(sym: str, m15: Sequence[Dict], *, start_ms: int,
         d, s = sig.get("direction"), float(sig.get("strength") or 0)
         if d not in ("LONG", "SHORT") or s < keep_from:
             continue
-        if not (sig.get("entry") and sig.get("sl") and sig.get("tp_targets")):
+        if require_ladder and not (sig.get("entry") and sig.get("sl") and sig.get("tp_targets")):
             continue
         k = bisect.bisect_right(h1_ts, close_ms - HOUR_MS) - 1     # last closed hour
         h1_dir = None
@@ -173,8 +176,8 @@ def coin_candidates(sym: str, m15: Sequence[Dict], *, start_ms: int,
                     h1_cache[k] = {}
             h1_dir = h1_cache[k].get("direction")
         out.append({"symbol": sym, "slot_ms": close_ms, "direction": d, "strength": s,
-                    "entry": sig["entry"], "sl": sig["sl"],
-                    "tp_targets": list(sig["tp_targets"]), "h1_dir": h1_dir})
+                    "entry": sig.get("entry"), "sl": sig.get("sl"),
+                    "tp_targets": list(sig.get("tp_targets") or []), "h1_dir": h1_dir})
     return out
 
 

@@ -6456,8 +6456,10 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
              + (f" [{x['score_parts']} vs {_sl.min_strength():g}]" if x.get("score_parts") else "")
              if x.get("kind") == "engine" else f"{x['symbol']} {x['direction']} R:R {x['rr']:g}"
              for x in found]
+    details = [d for d in (_scalp_score_record(x) for x in found) if d]
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "setups": label,
+        **({"score_details": details} if details else {}),
         **({"rejected": sorted(rejected)} if rejected else {}),
         **({"skipped": skipped} if skipped else {}),
         **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held") if hl.get(k)}},
@@ -6476,6 +6478,48 @@ def api_cron_scalp():
     return jsonify(_scalp_run())
 
 
+def _scalp_score_record(setup) -> dict:
+    """The structured score of one engine setup (scalp_live.compose_score's
+    score_detail) with who / which close it was read on, for the run log. {}
+    for a setup without one (sweep_fvg mode). Never raises."""
+    try:
+        d = setup.get("score_detail")
+        if not isinstance(d, dict):
+            return {}
+        close_ms = int(setup.get("slot_ms") or 0)
+        struct, rev, ctx = (d.get("structure") or {}), (d.get("reversal") or {}), \
+            (d.get("context") or {})
+        return {"symbol": setup.get("symbol"), "direction": setup.get("direction"),
+                "close_ms": close_ms,
+                "close_at": (datetime.fromtimestamp(close_ms / 1000, timezone.utc)
+                             .isoformat(timespec="seconds") if close_ms else None),
+                "base": d.get("base"),
+                "structure": {"kind": struct.get("kind"), "points": struct.get("points")},
+                "reversal": {"reads": rev.get("reads") or {}, "raw": rev.get("raw"),
+                             "points": rev.get("points"), "cap": rev.get("cap")},
+                "context": {"raw": ctx.get("raw"), "points": ctx.get("points"),
+                            "cap": ctx.get("cap")},
+                "h1": d.get("h1"), "regime": d.get("regime") or {"applied": False},
+                "final": d.get("final"), "threshold": d.get("threshold"),
+                "passes": d.get("passes")}
+    except Exception:                                    # noqa: BLE001
+        return {}
+
+
+def _scalp_score_details(runs) -> list:
+    """Every structured score in the run log, newest run first, each tagged
+    with its run's time. Older runs (formatted strings only) and malformed
+    entries are skipped."""
+    out = []
+    for run in reversed(runs or []):
+        if not isinstance(run, dict):
+            continue
+        for d in run.get("score_details") or []:
+            if isinstance(d, dict):
+                out.append({"run_at": run.get("at"), **d})
+    return out
+
+
 def _scalp_history() -> dict:
     import scalp_store as _ss
     rows = _ss.recent(_deploy_env(), days=14)
@@ -6489,6 +6533,7 @@ def api_hl_scalp():
     if guard:
         return guard
     import scalp_live as _sl
+    runs = _kv_json_list(f"scalp:runs:{_deploy_env()}")[-48:]
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
                     "mode": _sl.mode(), "min_strength": _sl.min_strength(),
                     "setup": ((f"score = 15m engine (0-100) + context capped at "
@@ -6518,7 +6563,8 @@ def api_hl_scalp():
                                                          "small 5x, micro 3x (HL max caps)"},
                     "open": _scalp_records(),
                     **_scalp_history(),
-                    "runs": _kv_json_list(f"scalp:runs:{_deploy_env()}")[-48:]})
+                    "runs": runs,
+                    "score_details": _scalp_score_details(runs)})
 
 
 def _hl_low_vol_filter(signals, floor):

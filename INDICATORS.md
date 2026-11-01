@@ -86,7 +86,7 @@ score = 15m engine strength (0-100)
           fresh reversal reads (bottom / top, divergence, Fib zone, S/R),
             each up to 15 and fading, capped together at 15
       ± 5 for the 1H engine read (outside the cap)
-trades at SCALP_MIN_STRENGTH (100)
+trades at SCALP_MIN_STRENGTH (88; was 100 until Nov 1)
 ```
 
 The engine already scores RSI level, RSI divergence, S/R, the Fib (as a
@@ -97,6 +97,12 @@ capped, 1H, regime, final, threshold) and the alert shows it, e.g.
 `15m 70 + smc 20 + bottom/fib 15 (30 capped) [context 35 capped 25] + 1H 5`.
 Regime (15m ADX, Choppiness, ATR vs its median, at the close) is reported but
 not applied. A score is not a probability.
+
+Each scalp run stores every setup's structured score (symbol, direction,
+candle close, base, structure, reversal raw / capped, context raw / capped,
+1H, regime, final, threshold) in the run log; `/api/hl/scalp` (HL admin only)
+returns it as `score_details`, newest first. Runs logged before Nov 1 carry
+only the formatted `setups` strings and are skipped there.
 
 ---
 
