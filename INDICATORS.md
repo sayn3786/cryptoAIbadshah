@@ -86,7 +86,7 @@ score = 15m engine strength (0-100)
           fresh reversal reads (bottom / top, divergence, Fib zone, S/R),
             each up to 15 and fading, capped together at 15
       ± 5 for the 1H engine read (outside the cap)
-trades at SCALP_MIN_STRENGTH (88; was 100 until Nov 1)
+trades at SCALP_MIN_STRENGTH (100; briefly 88 on Nov 1)
 ```
 
 The engine already scores RSI level, RSI divergence, S/R, the Fib (as a

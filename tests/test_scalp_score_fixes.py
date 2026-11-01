@@ -90,7 +90,7 @@ def test_low_base_high_bonus_candidate_reaches_the_legacy_book_at_100():
     assert cur["distribution"]["max"] == 100
 
 
-def test_the_replay_has_no_base_cutoff_and_scores_88():
+def test_the_replay_has_no_base_cutoff_and_scores_88_and_100():
     assert ssc.KEEP_FROM == 0.0
     assert 88.0 in ssc.THRESHOLDS and 100.0 in ssc.THRESHOLDS
 
@@ -180,7 +180,7 @@ def test_the_run_log_stores_each_setups_structured_score(app_mod):
     assert d["base"] == 70 and d["structure"] == {"kind": "sweep", "points": 10.0}
     assert d["reversal"]["raw"] == 30 and d["reversal"]["points"] == 15 and d["reversal"]["cap"] == 15
     assert d["context"] == {"raw": 25.0, "points": 25.0, "cap": 25.0}
-    assert d["h1"] == 5 and d["final"] == 100 and d["threshold"] == 88 and d["passes"] is True
+    assert d["h1"] == 5 and d["final"] == 100 and d["threshold"] == 100 and d["passes"] is True
     assert d["regime"]["applied"] is False and "state" in d["regime"]
     assert runs[-1]["setups"][0].startswith("ETH LONG 100")             # the old strings stay
 
@@ -197,7 +197,7 @@ def test_api_serves_details_and_reads_older_runs(app_mod):
     assert r.status_code == 200
     body = r.get_json()
     assert len(body["runs"]) == 4 and body["runs"][0]["setups"][0].startswith("BTC")  # old record
-    assert body["min_strength"] == 88 and "setup" in body and "score_caps" in body
+    assert body["min_strength"] == 100 and "setup" in body and "score_caps" in body
     assert len(body["score_details"]) == 1
     d = body["score_details"][0]
     assert d["symbol"] == "ETH" and d["final"] == 100 and d["run_at"]
