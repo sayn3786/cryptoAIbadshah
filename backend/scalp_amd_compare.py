@@ -32,105 +32,27 @@ from __future__ import annotations
 import sys
 from typing import Dict, List, Optional, Sequence
 
+import amd_live as al
 import scalp_baseline as sb
 
-M15 = sb.M15
-HOUR_MS = sb.HOUR_MS
-DAY_MS = 24 * HOUR_MS
-ASIA_H = 6
-LONDON_END_H = 12
-NY_END_H = 16
-RECLAIM_BARS = 2
-TIGHT_DAYS = 20
-TIGHT_MIN_DAYS = 10
-STOP_BUFFER = 0.0005
+M15 = al.M15
+HOUR_MS = al.HOUR_MS
+DAY_MS = al.DAY_MS
+ASIA_H = al.ASIA_H
+LONDON_END_H = al.LONDON_END_H
+NY_END_H = al.NY_END_H
+RECLAIM_BARS = al.RECLAIM_BARS
+TIGHT_DAYS = al.TIGHT_DAYS
+TIGHT_MIN_DAYS = al.TIGHT_MIN_DAYS
+STOP_BUFFER = al.STOP_BUFFER
 MIN_STOP_PCT = 0.0015
 MAX_STOP_PCT = 0.03
 MIN_RR = 1.0
 STRUCT_HOLD_H = 8
-
-
-def days(bars: Sequence[Dict]) -> Dict[int, List[int]]:
-    """{UTC day start ms: [bar indexes]}."""
-    out: Dict[int, List[int]] = {}
-    for i, b in enumerate(bars):
-        out.setdefault(int(b["timestamp"]) // DAY_MS * DAY_MS, []).append(i)
-    return out
-
-
-def asia_range(bars: Sequence[Dict], idx: Sequence[int], day: int) -> Optional[Dict]:
-    asia = [i for i in idx if int(bars[i]["timestamp"]) < day + ASIA_H * HOUR_MS]
-    if len(asia) != ASIA_H * 4:
-        return None
-    hi = max(float(bars[i]["high"]) for i in asia)
-    lo = min(float(bars[i]["low"]) for i in asia)
-    return {"hi": hi, "lo": lo, "width": (hi - lo) / lo if lo else 0.0}
-
-
-def manipulation(bars: Sequence[Dict], idx: Sequence[int], day: int, rng: Dict, *,
-                 end_h: int, reclaim: bool) -> Optional[Dict]:
-    """The first sweep of the Asia range in [06:00, end_h): {"i" (the candle
-    back inside), "direction", "extreme", "kind"}, or None."""
-    hi, lo = rng["hi"], rng["lo"]
-    win = [i for i in idx
-           if day + ASIA_H * HOUR_MS <= int(bars[i]["timestamp"]) < day + end_h * HOUR_MS]
-    for n, i in enumerate(win):
-        h, l, c = float(bars[i]["high"]), float(bars[i]["low"]), float(bars[i]["close"])
-        up, down = h > hi, l < lo
-        if not (up or down):
-            continue
-        if up and down:
-            return None                                  # both sides in one candle: no read
-        side = "high" if up else "low"
-        inside = lo < c < hi
-        if inside:
-            return {"i": i, "direction": "SHORT" if up else "LONG",
-                    "extreme": h if up else l, "kind": "wick"}
-        if not reclaim:
-            return None
-        ext = h if up else l
-        for j in win[n + 1:n + 1 + RECLAIM_BARS]:
-            hj, lj, cj = float(bars[j]["high"]), float(bars[j]["low"]), float(bars[j]["close"])
-            ext = max(ext, hj) if side == "high" else min(ext, lj)
-            if lo < cj < hi:
-                return {"i": j, "direction": "SHORT" if side == "high" else "LONG",
-                        "extreme": ext, "kind": "reclaim"}
-        return None                                      # a real breakout: no trade
-    return None
-
-
-def setups(sym: str, bars: Sequence[Dict], *, start_ms: int, end_h: int = LONDON_END_H,
-           reclaim: bool = True, tight: bool = False) -> List[Dict]:
-    out = []
-    by = days(bars)
-    widths: List[float] = []
-    for day in sorted(by):
-        rng = asia_range(bars, by[day], day)
-        if rng is None:
-            continue
-        prior = widths[-TIGHT_DAYS:]
-        widths.append(rng["width"])
-        if tight:
-            if len(prior) < TIGHT_MIN_DAYS:
-                continue
-            med = sorted(prior)[len(prior) // 2]
-            if rng["width"] > med:
-                continue
-        m = manipulation(bars, by[day], day, rng, end_h=end_h, reclaim=reclaim)
-        if m is None:
-            continue
-        i = m["i"]
-        slot = int(bars[i]["timestamp"]) + M15
-        if slot < start_ms:
-            continue
-        entry = float(bars[i]["close"])
-        long = m["direction"] == "LONG"
-        sl = m["extreme"] * (1 - STOP_BUFFER) if long else m["extreme"] * (1 + STOP_BUFFER)
-        target = rng["hi"] if long else rng["lo"]
-        out.append({"symbol": sym, "slot_ms": slot, "direction": m["direction"],
-                    "entry": entry, "sl": sl, "target": target, "kind": m["kind"],
-                    "strength": 0.0, "asia_width": rng["width"]})
-    return out
+days = al.days
+asia_range = al.asia_range
+manipulation = al.manipulation
+setups = al.setups
 
 
 def struct_ok(c: Dict) -> bool:

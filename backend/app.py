@@ -6473,7 +6473,90 @@ def api_cron_scalp():
     Internal: CRON_SECRET or the scheduler token."""
     if not (_cron_authorized() or _scheduler_token_ok()):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
-    return jsonify(_scalp_run())
+    out = _scalp_run()
+    out["amd"] = _amd_run()          # the AMD forward test: alerts + paper only
+    return jsonify(out)
+
+
+# ── AMD forward test (amd_live): private alerts and paper trades, no orders ──
+AMD_PAPER_TTL = 90 * 86_400
+
+
+def _amd_key() -> str:
+    return f"amd:paper:{_deploy_env()}"
+
+
+def _amd_load() -> list:
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(_amd_key()) or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _amd_save(trades) -> None:
+    try:
+        import kv as _kv
+        import amd_live as _al
+        _kv.set_value(_amd_key(), json.dumps(list(trades)[-_al.KEEP:]),
+                      ttl_seconds=AMD_PAPER_TTL)
+    except Exception:
+        pass
+
+
+def _amd_run(now_ms=None, *, fetch_fn=None) -> dict:
+    """One 15m pass of the AMD forward test: settle open paper trades on
+    closed candles, then alert (privately) and paper-book any London AMD
+    setup completed on the latest close. Never places an order. Never raises."""
+    import amd_live as _al
+    if not _al.enabled():
+        return {"ran": False, "reason": "AMD_OFF"}
+    try:
+        import kv as _kv
+        import scalp_live as _sl
+        now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+        fetch_fn = fetch_fn or (lambda sym: _sl.fetch_closed(SYMBOLS[sym], now_ms,
+                                                             interval="15m", count=245))
+        syms = [s for s in _al.COINS if s in SYMBOLS]
+
+        def _bars(sym):
+            try:
+                return sym, fetch_fn(sym) or []
+            except Exception:
+                return sym, []
+        with ThreadPoolExecutor(max_workers=7) as ex:
+            bars = dict(ex.map(_bars, syms))
+        trades = _amd_load()
+        closed, new, changed = [], [], False
+        for i, t in enumerate(trades):
+            if not isinstance(t, dict) or t.get("state") != "open":
+                continue
+            res = _al.settle(t, bars.get(t.get("symbol")) or [])
+            if res:
+                trades[i], changed = res, True
+                if res["state"] == "closed":
+                    closed.append(res)
+        known = {t.get("id") for t in trades if isinstance(t, dict)}
+        env = _deploy_env()
+        for sym in syms:
+            s = _al.latest(sym, bars.get(sym) or [], now_ms)
+            if s and s["id"] not in known and \
+                    _kv.claim(f"amd:sig:{env}:{s['id']}", ttl_seconds=2 * 86_400):
+                trades.append(s)
+                new.append(s)
+                changed = True
+        if changed:
+            _amd_save(trades)
+        tally = _al.summary([t for t in trades if isinstance(t, dict)])
+        for s in new:
+            _scalp_private(_al.alert(s))
+        for t in closed:
+            if _kv.claim(f"amd:closed:{env}:{t['id']}", ttl_seconds=2 * 86_400):
+                _scalp_private(_al.closed_note(t, tally))
+        return {"ran": True, "new": len(new), "closed": len(closed), **tally}
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
 
 
 def _scalp_score_record(setup) -> dict:
@@ -6562,7 +6645,17 @@ def api_hl_scalp():
                     "open": _scalp_records(),
                     **_scalp_history(),
                     "runs": runs,
-                    "score_details": _scalp_score_details(runs)})
+                    "score_details": _scalp_score_details(runs),
+                    "amd_forward": _amd_forward_view()})
+
+
+def _amd_forward_view() -> dict:
+    import amd_live as _al
+    trades = [t for t in _amd_load() if isinstance(t, dict)]
+    return {"enabled": _al.enabled(), "alert_only": True, "coins": list(_al.COINS),
+            "exits": f"${_al.MARGIN_USD:g} at {_al.LEVERAGE}x, -{_al.SL_ROE_PCT:g}% / "
+                     f"+{_al.TP_ROE_PCT:g}% of margin, max {_al.MAX_HOLD_H}h (paper)",
+            "summary": _al.summary(trades), "recent": trades[-30:]}
 
 
 def _hl_low_vol_filter(signals, floor):

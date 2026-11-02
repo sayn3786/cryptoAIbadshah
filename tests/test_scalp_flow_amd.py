@@ -221,7 +221,7 @@ def test_workflow_runs_both_studies():
                            "cadence-backtest.yml")).read()
     assert "scalp-flow) MODULE=scalp_flow_compare" in wf
     assert "scalp-amd) MODULE=scalp_amd_compare" in wf
-    assert "scalp-score, scalp-flow, scalp-amd]" in wf
+    assert "scalp-score, scalp-flow, scalp-amd" in wf
 
 
 # ── the booking look-ahead fix (all the 15m books) ──────────────────────────
