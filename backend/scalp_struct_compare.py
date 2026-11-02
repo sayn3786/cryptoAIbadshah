@@ -128,7 +128,7 @@ def trades_for(kind: str, confirm: bool, cands: Sequence[Dict], m15: Dict[str, L
             continue
         t.update(_sizes(t, sym))
         trades.append(t)
-        open_until[sym] = t["closed_at"] if t["closed_at"] is not None else float("inf")
+        open_until[sym] = sc.busy_until(t)
     return trades
 
 

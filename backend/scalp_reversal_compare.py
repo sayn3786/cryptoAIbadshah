@@ -118,7 +118,7 @@ def book(scalps: Sequence[Dict], m15: Dict[str, List[Dict]], *,
         t.update(usd=notional, pnl_usd=pnl, pnl_risk=pnl, notional_risk=notional,
                  lev_risk=LEVERAGE)
         trades.append(t)
-        open_until[sym] = t["closed_at"] if t["closed_at"] is not None else float("inf")
+        open_until[sym] = sc.busy_until(t)
     return trades
 
 

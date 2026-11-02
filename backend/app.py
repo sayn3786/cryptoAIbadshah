@@ -5969,10 +5969,8 @@ def _scalp_add_fixed(rec, setup, st, *, mark, table, acct, recs) -> Optional[dic
         return None                                # TP1 already took part: leave it be
     lev = int(rec.get("leverage") or setup.get("leverage") or 10)
     long = st["side"] == "long"
-    better = mark <= st["entry"] * (1 - _sl.ADD_BETTER) if long else \
-        mark >= st["entry"] * (1 + _sl.ADD_BETTER)
-    if _sl.add_only_better() and not better:
-        return None
+    if not _sl.add_price_ok(st["entry"], mark, long):
+        return None                                # default: only while in profit
     plan, reject = _scalp_size(sym, coin, {"limit": mark, "sl": rec.get("sl"), "leverage": lev},
                                acct=acct, table=table, recs=recs)
     if reject:
@@ -6035,7 +6033,7 @@ def _scalp_add_fixed(rec, setup, st, *, mark, table, acct, recs) -> Optional[dic
 
 
 def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict]:
-    """Add to a running scalp (a same-way signal, any price): a market add sized for
+    """Add to a running scalp (a same-way signal at a price add_price_ok allows): a market add sized for
     $SCALP_RISK_USD to the stop, then the stop re-placed for the WHOLE
     position (first, the old one cancelled after) and the take-profits re-laid
     as a ladder for the whole size. None when the add can't be placed (the

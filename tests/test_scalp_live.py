@@ -40,7 +40,7 @@ NOW = 19 * M + 60_000           # one minute after candle 18 closed
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     for k in ("SCALP_ENABLED", "HL_SCALP_AUTO_EXECUTE", "SCALP_MAX_HOLD_HOURS", "SCALP_MAX_OPEN",
-              "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER",
+              "SCALP_MAX_ADDS", "SCALP_ADD_ONLY_BETTER", "SCALP_ADD_WHEN",
               "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS", "SCALP_REVERSAL_POINTS"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("SCALP_REQUIRE_REVERSAL", raising=False)   # off by default
@@ -736,24 +736,38 @@ def test_plan_add_rules(monkeypatch):
     st = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.5)      # SHORT, avg 144.17
     assert st["cur_sl"] == 145.483 and st["cur_tps"] == [142.201] and st["size"] == 0.75
     new = {"direction": "SHORT", "sl": 145.483, "target": 142.076}
-    assert sl.plan_add(_aave(), new, st, 144.5) == {"stop": 145.483}   # 0.23% better
-    assert sl.plan_add(_aave(), {**new, "sl": 145.2}, st, 144.5) == {"stop": 145.2}  # tighter
-    assert sl.plan_add(_aave(), {**new, "sl": 146.0}, st, 144.5) == {"stop": 145.483}  # never wider
-    profit = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 143.0)    # SHORT in profit
-    assert sl.plan_add(_aave(), new, profit, 143.0) == {"stop": 145.483}  # adds at any price
-    assert sl.plan_add(_aave(adds=1), new, st, 144.5) == {"stop": 145.483}  # second add
-    assert sl.plan_add(_aave(adds=2), new, st, 144.5) is None        # two adds already
+    # Default (owner, Nov 2): add only while the scalp is 0.2%+ in profit.
+    assert sl.add_mode() == "favourable"
+    assert sl.plan_add(_aave(), new, st, 144.5) is None              # losing 0.23%: no add
+    nearly = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.0)
+    assert sl.plan_add(_aave(), new, nearly, 144.0) is None          # only 0.12% in profit
+    profit = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 143.0)    # SHORT 0.81% in profit
+    assert sl.plan_add(_aave(), new, profit, 143.0) == {"stop": 145.483}
+    assert sl.plan_add(_aave(), {**new, "sl": 145.2}, profit, 143.0) == {"stop": 145.2}  # tighter
+    assert sl.plan_add(_aave(), {**new, "sl": 146.0}, profit, 143.0) == {"stop": 145.483}  # never wider
+    assert sl.plan_add(_aave(adds=1), new, profit, 143.0) == {"stop": 145.483}  # second add
+    assert sl.plan_add(_aave(adds=2), new, profit, 143.0) is None    # two adds already
+    assert sl.plan_add(_aave(), {**new, "direction": "LONG"}, profit, 143.0) is None
+    assert sl.add_price_ok(100.0, 100.25, True) and not sl.add_price_ok(100.0, 100.1, True)
+    assert sl.add_price_ok(100.0, 99.75, False) and not sl.add_price_ok(100.0, 100.5, False)
+    # "any": the Oct 30 rule, at any price on the right side of the stop
+    monkeypatch.setenv("SCALP_ADD_WHEN", "any")
+    assert sl.plan_add(_aave(), new, st, 144.5) == {"stop": 145.483}
     assert sl.plan_add(_aave(), new, st, 145.6) is None              # past the stop
-    assert sl.plan_add(_aave(), {**new, "direction": "LONG"}, st, 144.5) is None
+    # "better": averaging down only (also SCALP_ADD_ONLY_BETTER=1)
+    monkeypatch.delenv("SCALP_ADD_WHEN")
     monkeypatch.setenv("SCALP_ADD_ONLY_BETTER", "1")
+    assert sl.add_mode() == "better"
     worse = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.2)
     assert sl.plan_add(_aave(), new, worse, 144.2) is None           # only 0.02% better
     assert sl.plan_add(_aave(), new, st, 144.5) == {"stop": 145.483}
+    assert sl.plan_add(_aave(), new, profit, 143.0) is None
     monkeypatch.setenv("SCALP_MAX_ADDS", "0")
     assert sl.plan_add(_aave(), new, st, 144.5) is None
 
 
 def test_add_averages_in_and_relays_the_exits(app_mod, hl_fake, monkeypatch):
+    monkeypatch.setenv("SCALP_ADD_WHEN", "any")        # the add mechanics, at a losing price
     import hl_account
     import hl_exchange
     import hl_meta
@@ -895,6 +909,7 @@ def test_fixed_scalp_opens_50_margin_with_one_target(app_mod, hl_fake, monkeypat
 
 
 def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch):
+    monkeypatch.setenv("SCALP_ADD_WHEN", "any")        # the add mechanics, at a losing price
     import hl_account
     import hl_exchange
     import hl_meta
@@ -988,3 +1003,36 @@ def test_the_full_smc_sequence_is_a_20_bonus(monkeypatch):
     monkeypatch.setattr(sweep_fvg, "smc_setups", lambda b, **kw: [
         {"direction": "LONG", "ready": last - 6}])                                # too old
     assert sl.blend_signal(bars, "ETH", read, now_ms=NOW_B)["sweep_bonus"] == 10  # plain sweep
+
+
+def test_fixed_scalp_adds_only_while_in_profit(app_mod, hl_fake, monkeypatch):
+    # Owner, Nov 2: a same-way signal adds $50 only when the scalp is in
+    # profit; a losing scalp keeps its size and its levels.
+    import hl_account
+    import hl_exchange
+    import hl_meta
+    calls = []
+    mid = {"AAVE": "144.5"}
+    monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
+        "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: dict(mid))
+    monkeypatch.setattr(hl_exchange, "send_market_open", lambda coin, buy, size, cloid, env=None,
+                        leverage=None: calls.append(("open", size, leverage)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_stop", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("sl", size, px)) or {"status": "ok"})
+    monkeypatch.setattr(hl_exchange, "send_take_profit", lambda coin, buy, size, px, cloid=None,
+                        env=None: calls.append(("tp", size, px)) or {"status": "ok"})
+    hl_fake["positions"] = AAVE_POS                                       # SHORT avg 144.17
+    hl_fake["orders"] = AAVE_ORDERS
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0, leverage=10, size=0.75,
+                                       notional_usd=108.0)})
+    setup = sl.fix_levels({"kind": "engine", "symbol": "AAVE", "direction": "SHORT",
+                           "strength": 100.0, "entry": 144.5, "limit": 144.5, "sl": 146.0,
+                           "target": 140.0, "rr": 1.5, "slot_ms": 9}, 10)
+    out = app_mod._scalp_hl([setup], 2 * H)                               # losing: 144.5
+    assert out["results"][0]["reason"] == "FIXED_LEVELS_KEPT" and calls == []
+    assert app_mod._scalp_records()["AAVE"].get("adds", 0) == 0
+    mid["AAVE"] = "143.5"                                                 # 0.46% in profit
+    out = app_mod._scalp_hl([{**setup, "entry": 143.5, "limit": 143.5, "slot_ms": 10}], 3 * H)
+    assert out["results"][0].get("ok") and [c for c in calls if c[0] == "open"]
+    assert app_mod._scalp_records()["AAVE"]["adds"] == 1

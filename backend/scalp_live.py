@@ -906,16 +906,40 @@ def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
             "cancel_tp": [o.get("oid") for o in tps] if ladder is not None else []}
 
 
-# ── adding: every same-way signal adds a $1-risk slice to the scalp ─────────
-# At any price (better or in profit), up to max_adds() adds. SCALP_ADD_ONLY_BETTER
-# brings back the old rule: only when price is ADD_BETTER better than the
-# average entry.
-ADD_BETTER = 0.001        # at least 0.1% better than the current average entry
+# ── adding: a same-way signal adds to the running scalp ─────────────────────
+# Only while the scalp is IN PROFIT (owner, Nov 2): price at least ADD_FAVOUR
+# past the average entry in the trade's favour, up to max_adds() adds. Adding
+# to a losing scalp (averaging down) grew a $50 BTC scalp into a -$23 stop.
+# SCALP_ADD_WHEN: "favourable" (default) | "any" (any price, the Oct 30 rule) |
+# "better" (only ADD_BETTER below a long's / above a short's average entry,
+# i.e. averaging down; SCALP_ADD_ONLY_BETTER=1 also selects it).
+ADD_FAVOUR = 0.002        # at least 0.2% in profit (clears the round-trip costs)
+ADD_BETTER = 0.001        # "better": at least 0.1% beyond the average entry
 DEFAULT_MAX_ADDS = 2
+ADD_MODES = ("favourable", "any", "better")
+
+
+def add_mode() -> str:
+    v = os.getenv("SCALP_ADD_WHEN", "").strip().lower()
+    if v in ADD_MODES:
+        return v
+    if os.getenv("SCALP_ADD_ONLY_BETTER", "").strip().lower() in ("1", "true", "yes", "on"):
+        return "better"
+    return "favourable"
 
 
 def add_only_better() -> bool:
-    return os.getenv("SCALP_ADD_ONLY_BETTER", "").strip().lower() in ("1", "true", "yes", "on")
+    return add_mode() == "better"
+
+
+def add_price_ok(entry: float, mark: float, long: bool) -> bool:
+    """May a same-way signal add at `mark` to a scalp averaged at `entry`? Pure."""
+    mode = add_mode()
+    if mode == "any":
+        return True
+    if mode == "better":
+        return mark <= entry * (1 - ADD_BETTER) if long else mark >= entry * (1 + ADD_BETTER)
+    return mark >= entry * (1 + ADD_FAVOUR) if long else mark <= entry * (1 - ADD_FAVOUR)
 
 
 def max_adds() -> int:
@@ -960,8 +984,8 @@ def exit_state(rec: Dict[str, Any], positions: Sequence[Dict[str, Any]],
 def plan_add(rec: Dict[str, Any], setup: Dict[str, Any], st: Optional[Dict[str, Any]],
              mark: Optional[float]) -> Optional[Dict[str, Any]]:
     """Add to it? A same-way signal while price is still on the right side of
-    the stop and fewer than max_adds() adds so far, at any price (with
-    SCALP_ADD_ONLY_BETTER: only ADD_BETTER better than the average entry).
+    the stop and fewer than max_adds() adds so far, at a price add_price_ok()
+    allows (default: the scalp ADD_FAVOUR in profit).
     Returns {"stop"} (the stop for the WHOLE position: the tighter of the
     current one and the new signal's, never wider) or None. Pure."""
     if st is None or mark is None or setup.get("direction") != rec.get("direction"):
@@ -970,8 +994,7 @@ def plan_add(rec: Dict[str, Any], setup: Dict[str, Any], st: Optional[Dict[str, 
         return None
     long = st["side"] == "long"
     entry = st["entry"]
-    better = mark <= entry * (1 - ADD_BETTER) if long else mark >= entry * (1 + ADD_BETTER)
-    if add_only_better() and not better:
+    if not add_price_ok(entry, mark, long):
         return None
     stop = st["cur_sl"]
     new = float(setup["sl"])
