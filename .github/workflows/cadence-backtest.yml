@@ -180,6 +180,10 @@ name: Strategy backtests (private Telegram)
 #   close-picks-funding  the same, run twice: candles only, then with each
 #            close's funding from Binance's monthly archives
 #            (backend/close_picks_compare.py --funding; ~45-70 min)
+#   confluence  multi-timeframe confluence zones (swings, fibs, EMAs, previous
+#            H / L / O from 1H to 1M, clustered): does price bounce more at a
+#            touched zone than at a random level? end_days_ago 0, 65 and 135
+#            (backend/confluence_study.py; ~5 min)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -201,7 +205,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -210,7 +214,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m / sweep-fvg / scalp-struct / scalp-chop / scalp-trend / scalp-sma / scalp-entry / scalp-reversal / scalp-smc / scalp-score / scalp-flow / scalp-amd: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m / sweep-fvg / scalp-struct / scalp-chop / scalp-trend / scalp-sma / scalp-entry / scalp-reversal / scalp-smc / scalp-score / scalp-flow / scalp-amd / confluence: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -335,6 +339,8 @@ jobs:
                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp-amd) MODULE=scalp_amd_compare
                        EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            confluence) MODULE=confluence_study
+                        EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             *)     MODULE=cadence_compare ;;
           esac
           # Output is only per-coin download counts and
