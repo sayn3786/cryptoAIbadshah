@@ -254,4 +254,126 @@ def test_workflow_runs_close_picks():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     assert "python -m close_picks_compare --telegram --days 540" in wf
-    assert "scalp-amd, close-picks]" in wf
+    assert "scalp-amd, close-picks" in wf
+
+
+# ── the funding layer ───────────────────────────────────────────────────────
+
+def test_parse_funding_csv_by_header_and_by_position():
+    with_head = ("calc_time,funding_interval_hours,last_funding_rate\n"
+                 "1700000000000,8,0.0001\n1700028800000,8,-0.00025\n")
+    assert cpc.parse_funding_csv(with_head) == [(1700000000000, 0.01, 8.0),
+                                                (1700028800000, -0.025, 8.0)]
+    bare = "1700000000000,4,0.0002\n"
+    assert cpc.parse_funding_csv(bare) == [(1700000000000, 0.02, 4.0)]
+    odd = "funding_time,funding_rate\n1700000000000,0.0003\n"
+    assert cpc.parse_funding_csv(odd) == [(1700000000000, 0.03, 8.0)]
+    assert cpc.parse_funding_csv("") == []
+
+
+def test_funding_at_uses_only_settlements_before_the_close():
+    t0 = 20000 * DAY
+    series = [(t0 + k * 8 * H, 0.01 * (k + 1), 8.0) for k in range(15)]
+    close = t0 + 5 * 8 * H                                  # settlement k=5 is AT the close
+    f = cpc.funding_at(series, close)
+    assert f["current"] == 0.06 and f["history"][-1]["timestamp"] == close
+    assert len(f["history"]) == 6 and f["current_8h"] == 0.06
+    assert cpc.funding_at(series, t0 - 1) is None            # nothing yet
+    assert cpc.funding_at(series, t0 + 30 * DAY) is None     # stale: no data
+    four = [(t0, 0.02, 4.0)]
+    assert cpc.funding_at(four, t0)["current_8h"] == 0.04     # normalised to 8h
+
+
+def test_the_engine_sees_the_closes_funding_and_the_report_says_so():
+    syms = ("BTC", "ETH")
+    d = {s: daily(420, i + 1, start=100 * (i + 1)) for i, s in enumerate(syms)}
+    h4s = {s: [bar(c["timestamp"] + k * cpc.H4_MS, c["open"], c["high"], c["low"], c["close"])
+               for c in d[s] for k in range(6)] for s in syms}
+    seen = []
+
+    def read(win, tf, sym, extra=None):
+        seen.append(extra)
+        p = float(win[-1]["close"])
+        long = not extra or extra["funding_rate"]["current"] < 0     # funding flips it
+        return {"direction": "LONG" if long else "SHORT", "strength": 90, "entry": p,
+                "sl": p * (0.97 if long else 1.03), "rr_ratio": 2.0, "current_price": p,
+                "tp_targets": [p * (1.03 if long else 0.97), p * (1.06 if long else 0.94)]}
+    end = d["BTC"][-40]["timestamp"]
+    fund = {"ETH": [(t, 0.05, 8.0) for t in range(end - 90 * DAY, end + DAY, 8 * H)]}
+    res = cpc.compare(d, h4s, start_ms=end - 30 * DAY, end_ms=end, corr={}, read_fn=read,
+                      seeds=2, funding=fund, log=lambda *_: None)
+    assert res["variants"] == [cpc.CANDLES_ONLY, cpc.WITH_FUNDING]
+    assert any(e and e["funding_rate"]["current"] == 0.05 for e in seen)
+    assert res["funding"]["coins"] == ["ETH"] and 0 < res["funding"]["with_funding"] < res["funding"]["reads"]
+    text = cpc.render_telegram(res)
+    assert "Funding found for 1 of 2 coins" in text and "candles + funding" in text
+
+
+def test_workflow_runs_the_funding_and_record_studies():
+    root = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows")
+    wf = open(os.path.join(root, "cadence-backtest.yml")).read()
+    assert "python -m close_picks_compare --telegram --days 540 --funding" in wf
+    assert "python -m close_record --telegram" in wf
+    weekly = open(os.path.join(root, "close-record.yml")).read()
+    assert "schedule:" in weekly and "python -m close_record --telegram" in weekly
+
+
+# ── the live record ─────────────────────────────────────────────────────────
+
+import close_record as cr                                              # noqa: E402
+
+
+def _row(status="TP_HIT", ret=2.0, tf="1D", sym="ETH", gen=None, **kw):
+    gen = gen if gen is not None else 20380 * DAY
+    return {"id": f"{sym}{gen}{status}", "symbol": sym, "timeframe": tf, "direction": "LONG",
+            "entry_price": "100", "stop_loss": "98", "status": status,
+            "realized_return_pct": ret, "generated_at": datetime.fromtimestamp(
+                gen / 1000, timezone.utc).isoformat(),
+            "targets": [{"target_number": 2, "target_price": "104"},
+                        {"target_number": 1, "target_price": "102"}], **kw}
+
+
+def test_record_rows_become_settle_inputs_and_tracker_r():
+    rec = cr.to_rec(_row())
+    assert rec["tp_targets"] == [102.0, 104.0] and rec["entry"] == 100 and rec["sl"] == 98
+    assert cr.to_rec(_row(targets=[])) is None
+    assert cr.tracker_r(_row(ret=-2.0)) == -1.0 and cr.tracker_r(_row(ret=None)) is None
+    t = cr.tracker_stats([_row(), _row(status="SL_HIT", ret=-2.0), _row(status="CANCELLED"),
+                          _row(status="OPEN", ret=None)])
+    assert (t["trades"], t["unfilled"], t["running"], t["win_rate_pct"]) == (2, 1, 1, 50.0)
+    assert t["r_total"] == 0.0 and t["pf"] == 1.0
+
+
+def test_record_report_is_too_early_with_few_trades():
+    gen = 20380 * DAY
+    h4s = {"ETH": [bar(gen + k * cpc.H4_MS, 100, 100.5, 99.5, 100) for k in range(60)]}
+    res = cr.compare([_row(gen=gen), _row(tf="1W", gen=gen)], h4s, seeds=2)
+    text = cr.render_telegram(res)
+    assert "live record" in text and "too early" in text and "no picks yet" in text
+
+
+def test_history_endpoint_attaches_targets_on_request(monkeypatch):
+    pytest.importorskip("flask")
+    import app
+    calls = []
+
+    class Store:
+        DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE = 50, 200
+        SignalValidationError = ValueError
+
+        def list_signals(self, **kw):
+            calls.append(kw)
+            return {"items": [{"id": "x"}], "has_more": False}
+
+        def attach_targets(self, rows):
+            for r in rows:
+                r["targets"] = [{"target_number": 1}]
+            return rows
+    monkeypatch.setattr(app, "_signal_store", lambda: Store())
+    monkeypatch.setattr(app, "_db_guard", lambda: None)
+    c = app.app.test_client()
+    plain = c.get("/api/signals/history").get_json()
+    assert "targets" not in plain["items"][0]                       # unchanged by default
+    got = c.get("/api/signals/history?include_targets=1&strategy_version=v60_close_top5").get_json()
+    assert got["items"][0]["targets"] == [{"target_number": 1}]
+    assert calls[-1]["strategy_version"] == "v60_close_top5"

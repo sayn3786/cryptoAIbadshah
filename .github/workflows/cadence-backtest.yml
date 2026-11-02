@@ -177,6 +177,12 @@ name: Strategy backtests (private Telegram)
 #            by the live tracker's rules, per third of the window, vs a matched
 #            random-direction baseline; `days` / `end_days_ago` are ignored
 #            (backend/close_picks_compare.py; ~25-40 min)
+#   close-picks-funding  the same, run twice: candles only, then with each
+#            close's funding from Binance's monthly archives
+#            (backend/close_picks_compare.py --funding; ~45-70 min)
+#   close-record  the published close picks' LIVE record (read with APP_URL +
+#            CRON_SECRET) vs a random-direction baseline; also every Monday
+#            from close-record.yml (backend/close_record.py; ~2 min)
 #
 # All use HL auto-exec's rules (strength >= min_strength, one position per coin).
 #
@@ -195,7 +201,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -343,6 +349,10 @@ jobs:
             python -m combo_study --telegram --days 1500
           elif [ "$STUDY" = "close-picks" ]; then
             python -m close_picks_compare --telegram --days 540
+          elif [ "$STUDY" = "close-picks-funding" ]; then
+            python -m close_picks_compare --telegram --days 540 --funding
+          elif [ "$STUDY" = "close-record" ]; then
+            python -m close_record --telegram
           elif [ "$STUDY" = "factors" ]; then
             python -m factor_study --telegram --fetch-days 260
           else
