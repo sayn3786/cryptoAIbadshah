@@ -7661,14 +7661,15 @@ def api_signals_history():
     Filters: symbol, timeframe, direction, status (repeatable), strategy_version,
     exchange, include_archived=1, environment. Archived rows are hidden by
     default, and results are scoped to this deployment's environment unless
-    environment=all (or a specific slug) is given.
+    environment=all (or a specific slug) is given. include_targets=1 adds each
+    signal's target ladder (one extra query for the page).
     """
     guard = _db_guard()
     if guard:
         return guard
     store = _signal_store()
     try:
-        return jsonify(store.list_signals(
+        page = store.list_signals(
             statuses=request.args.getlist("status") or None,
             symbol=request.args.get("symbol"),
             timeframe=request.args.get("timeframe"),
@@ -7679,7 +7680,10 @@ def api_signals_history():
             environment=request.args.get("environment"),
             limit=_int_arg("limit", store.DEFAULT_PAGE_SIZE, 1, store.MAX_PAGE_SIZE),
             offset=_int_arg("offset", 0, 0, 10_000_000),
-        ))
+        )
+        if request.args.get("include_targets") == "1":
+            store.attach_targets(page.get("items") or [])
+        return jsonify(page)
     except store.SignalValidationError as exc:
         return jsonify({"error": str(exc), "error_code": "BAD_REQUEST"}), 400
     except Exception as exc:

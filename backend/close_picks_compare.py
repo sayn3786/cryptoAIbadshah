@@ -28,11 +28,15 @@ close price and the direction a coin flip (20 runs). PASS = 30+ trades, a
 profit, PF >= 1.2 and above the best 5% of random runs, in every period.
 
 What the replay cannot see: the live analysis also reads funding, open
-interest, CVD from CoinGlass and the macro / on-chain context; here only the
-candles (plus BTC's read for the BTC adjustment, on-chain score neutral).
-So this tests the candle engine + the selection, not the full live read.
+interest, CVD from CoinGlass and the macro / on-chain context; the base run
+uses only the candles (plus BTC's read for the BTC adjustment, on-chain score
+neutral). With --funding it runs a second time with each close's FUNDING
+added, as live builds it (current rate, per-8h normalised, interval, the last
+ten settlements' average), from Binance's monthly USDⓈ-M funding archives
+(data.binance.vision); only settlements at or before the close are used.
+Open-interest history is not archived far enough back to replay.
 
-    python -m close_picks_compare --days 540
+    python -m close_picks_compare --days 540 [--funding]
 """
 from __future__ import annotations
 
@@ -121,27 +125,120 @@ def candles_for(tf: str, daily: Sequence[Dict], close_ms: int) -> List[Dict]:
 
 # ── reads ───────────────────────────────────────────────────────────────────
 
-def engine_read(win: Sequence[Dict], tf: str, sym: str) -> Dict:
+def engine_read(win: Sequence[Dict], tf: str, sym: str, extra: Optional[Dict] = None) -> Dict:
     import candle_analysis
     import signals
     label = "1W" if tf == cp.BUSINESS else tf          # live: the weekly settings
-    return signals.generate_signal(candle_analysis.build_candle_analysis(list(win), label, sym))
+    a = candle_analysis.build_candle_analysis(list(win), label, sym)
+    if extra:
+        a.update(extra)                                 # e.g. the close's funding
+    return signals.generate_signal(a)
+
+
+# ── funding (Binance USDⓈ-M monthly archives) ───────────────────────────────
+
+FUNDING_STALE_MS = DAY_MS          # a last settlement older than this = no data
+FUNDING_N = 10                     # live: the last ten settlements
+
+
+def parse_funding_csv(text: str) -> List[tuple]:
+    """[(settlement ms, rate %, interval h)] from an archive CSV. Header columns
+    by name (calc_time / funding_interval_hours / last_funding_rate), else
+    Binance's documented order (time, interval, rate)."""
+    import csv
+    rows = [r for r in csv.reader(text.splitlines()) if r]
+    if not rows:
+        return []
+    head = [h.strip().lower() for h in rows[0]]
+    try:
+        float(head[0])
+        ti, ii, ri, body = 0, 1, 2, rows
+    except ValueError:
+        ti = next((k for k, h in enumerate(head) if "time" in h), 0)
+        ri = next((k for k, h in enumerate(head) if "rate" in h), len(head) - 1)
+        ii = next((k for k, h in enumerate(head) if "interval" in h), None)
+        body = rows[1:]
+    out = []
+    for r in body:
+        try:
+            ih = float(r[ii]) if ii is not None and r[ii] != "" else 8.0
+            out.append((int(float(r[ti])), float(r[ri]) * 100, ih or 8.0))
+        except (ValueError, IndexError):
+            continue
+    return sorted(out)
+
+
+def funding_at(series: Sequence[tuple], close_ms: int) -> Optional[Dict]:
+    """The funding dict live builds, from settlements at or before `close_ms`."""
+    import bisect
+    k = bisect.bisect_right([t for t, _r, _i in series], close_ms)
+    past = list(series[max(0, k - FUNDING_N):k])
+    if not past or close_ms - past[-1][0] > FUNDING_STALE_MS:
+        return None
+    rates = [round(r, 4) for _t, r, _i in past]
+    ih = past[-1][2] or 8.0
+    cur = rates[-1]
+    return {"current": cur, "current_8h": round(cur * 8.0 / ih, 6), "interval_hours": ih,
+            "average": round(sum(rates) / len(rates), 4),
+            "history": [{"timestamp": t, "rate": round(r, 4)} for t, r, _i in past]}
+
+
+def fetch_funding(pairs: Dict[str, str], start_ms: int, end_ms: int, *, session=None,
+                  log=print) -> Dict[str, List[tuple]]:
+    """{symbol: settlements} from the monthly archives covering the window."""
+    import io
+    import zipfile
+    import requests
+    s = session or requests.Session()
+    months, d = [], datetime.fromtimestamp(start_ms / 1000, timezone.utc).replace(day=1)
+    end = datetime.fromtimestamp(end_ms / 1000, timezone.utc)
+    while d <= end:
+        months.append((d.year, d.month))
+        d = datetime(d.year + (d.month == 12), d.month % 12 + 1, 1, tzinfo=timezone.utc)
+    out = {}
+    for sym, pair in pairs.items():
+        got: List[tuple] = []
+        for y, m in months:
+            url = ("https://data.binance.vision/data/futures/um/monthly/fundingRate/"
+                   f"{pair}/{pair}-fundingRate-{y}-{m:02d}.zip")
+            try:
+                r = s.get(url, timeout=30)
+                if r.status_code != 200:
+                    continue
+                zf = zipfile.ZipFile(io.BytesIO(r.content))
+                got += parse_funding_csv(zf.read(zf.namelist()[0]).decode("utf-8", "replace"))
+            except Exception:                            # noqa: BLE001
+                continue
+        if got:
+            out[sym] = sorted(set(got))
+        log(f"  {sym:<6} funding:{len(got)}")
+    return out
 
 
 class Reader:
-    """Cached reads: (symbol, timeframe, last candle) -> the screen's dict."""
+    """Cached reads: (symbol, timeframe, last candle[, funding]) -> the screen's
+    dict. With `funding`, each read gets the close's funding added."""
 
-    def __init__(self, daily: Dict[str, List[Dict]], read_fn: Callable = engine_read):
+    def __init__(self, daily: Dict[str, List[Dict]], read_fn: Callable = engine_read,
+                 funding: Optional[Dict[str, List[tuple]]] = None):
         self.daily, self.read_fn, self.cache = daily, read_fn, {}
+        self.funding = funding
+        self.reads = self.with_funding = 0
 
     def __call__(self, sym: str, tf: str, close_ms: int) -> Optional[Dict]:
         win = candles_for(tf, self.daily.get(sym) or [], close_ms)
         if len(win) < 30:
             return None
-        key = (sym, tf, int(win[-1]["timestamp"]))
+        fr = funding_at(self.funding.get(sym) or [], close_ms) \
+            if self.funding is not None else None
+        key = (sym, tf, int(win[-1]["timestamp"]),
+               fr["history"][-1]["timestamp"] if fr else None)
         if key not in self.cache:
+            self.reads += 1
+            self.with_funding += bool(fr)
             try:
-                sig = self.read_fn(win, tf, sym) or {}
+                sig = (self.read_fn(win, tf, sym, {"funding_rate": fr}) if fr
+                       else self.read_fn(win, tf, sym)) or {}
             except Exception:                            # noqa: BLE001
                 sig = {}
             px = float(win[-1]["close"])
@@ -289,32 +386,43 @@ def closes(start_ms: int, end_ms: int) -> List[tuple]:
     return out
 
 
+CANDLES_ONLY = "candles only"
+WITH_FUNDING = "candles + funding"
+
+
 def compare(daily: Dict[str, List[Dict]], h4: Dict[str, List[Dict]], *, start_ms: int,
             end_ms: int, corr: Dict[str, float], read_fn: Callable = engine_read,
-            seeds: int = SEEDS, log=print) -> Dict:
+            seeds: int = SEEDS, funding: Optional[Dict[str, List[tuple]]] = None,
+            log=print) -> Dict:
     syms = sorted(daily)
-    reader = Reader(daily, read_fn)
-    picks: Dict[str, List[Dict]] = {tf: [] for tf in cp.ORDER}
-    every: Dict[str, List[Dict]] = {tf: [] for tf in cp.ORDER}
-    for tf, c in closes(start_ms, end_ms):
-        got = picks_at(tf, c, syms, reader, corr)
-        picks[tf] += got["top"]
-        every[tf] += got["all"]
-    log("  picks replayed")                              # no results in the (public) log
     span = (end_ms - start_ms) / PERIODS
     bounds = [(start_ms + int(k * span), start_ms + int((k + 1) * span)) for k in range(PERIODS)]
-    rows = []
-    for tf in cp.ORDER:
-        for k, (a, b) in enumerate(bounds):
-            sel = [r for r in picks[tf] if a <= r["close_ms"] < b or (k == PERIODS - 1
-                                                                       and r["close_ms"] == b)]
-            rows.append({"tf": tf, "period": k, "from": a, "to": b, **evaluate(sel, h4,
-                                                                               seeds=seeds)})
-        allm = metrics([x for x in (settle(r, h4.get(r["symbol"]) or []) for r in every[tf]) if x],
-                       len(every[tf]))
-        rows.append({"tf": tf, "period": "all-candidates", **allm})
-    log("  settled")
-    return {"start": start_ms, "end": end_ms, "coins": syms, "rows": rows}
+    variants = [(CANDLES_ONLY, None)] + ([(WITH_FUNDING, funding)] if funding is not None else [])
+    rows, coverage = [], {}
+    for name, fund in variants:
+        reader = Reader(daily, read_fn, fund)
+        picks: Dict[str, List[Dict]] = {tf: [] for tf in cp.ORDER}
+        every: Dict[str, List[Dict]] = {tf: [] for tf in cp.ORDER}
+        for tf, c in closes(start_ms, end_ms):
+            got = picks_at(tf, c, syms, reader, corr)
+            picks[tf] += got["top"]
+            every[tf] += got["all"]
+        if fund is not None:
+            coverage = {"reads": reader.reads, "with_funding": reader.with_funding,
+                        "coins": sorted(fund)}
+        log(f"  {name}: picks replayed")                 # no results in the (public) log
+        for tf in cp.ORDER:
+            for k, (a, b) in enumerate(bounds):
+                sel = [r for r in picks[tf] if a <= r["close_ms"] < b
+                       or (k == PERIODS - 1 and r["close_ms"] == b)]
+                rows.append({"variant": name, "tf": tf, "period": k, "from": a, "to": b,
+                             **evaluate(sel, h4, seeds=seeds)})
+            allm = metrics([x for x in (settle(r, h4.get(r["symbol"]) or []) for r in every[tf])
+                            if x], len(every[tf]))
+            rows.append({"variant": name, "tf": tf, "period": "all-candidates", **allm})
+        log(f"  {name}: settled")
+    return {"start": start_ms, "end": end_ms, "coins": syms, "rows": rows,
+            "variants": [v for v, _f in variants], "funding": coverage}
 
 
 def _d(ms: int) -> str:
@@ -322,17 +430,27 @@ def _d(ms: int) -> str:
 
 
 def render_telegram(res: Dict) -> str:
+    variants = res.get("variants") or [CANDLES_ONLY]
+    fund = res.get("funding") or {}
     lines = ["📅 Close picks replayed: 1D / business week / crypto week top fives",
              f"{_d(res['start'])} → {_d(res['end'])} · {len(res['coins'])} coins · candle "
-             "engine + live selection (no funding / OI / macro in the replay)",
+             "engine + live selection"
+             + (" · run twice: candles only, then with each close's funding"
+                if WITH_FUNDING in variants else " (no funding / OI / macro in the replay)"),
              "Settled by the live tracker's rules on 4H candles; R = stop distance, equal "
              f"split across the targets, costs 1.5 / 6.5 bps; $ at ${RISK_USD:g} risk",
              "✅ = 30+ trades, profit, PF ≥ 1.2 AND above the best 5% of random-direction "
-             "runs (same picks, levels mirrored)", ""]
-    for tf in cp.ORDER:
-        lines.append(f"• {cp.LABELS[tf]}")
+             "runs (same picks, levels mirrored)"]
+    if WITH_FUNDING in variants:
+        lines.append(f"Funding found for {len(fund.get('coins') or [])} of {len(res['coins'])} "
+                     f"coins; {fund.get('with_funding', 0)} of {fund.get('reads', 0)} reads had "
+                     "it (the latest month is not archived yet)")
+    lines.append("")
+    for tf, vname in [(t, v) for t in cp.ORDER for v in variants]:
+        lines.append(f"• {cp.LABELS[tf]}" + (f" · {vname}" if len(variants) > 1 else ""))
         passed = 0
-        for r in [x for x in res["rows"] if x["tf"] == tf]:
+        for r in [x for x in res["rows"] if x["tf"] == tf
+                  and x.get("variant", CANDLES_ONLY) == vname]:
             if r["period"] == "all-candidates":
                 if r["trades"]:
                     lines.append(f"  every pick that passed the screen: {r['trades']} trades · win "
@@ -419,6 +537,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="close_picks_compare", description=__doc__.split("\n\n")[0])
     ap.add_argument("--days", type=int, default=540, help="replay window (closes)")
     ap.add_argument("--warmup-days", type=int, default=420)
+    ap.add_argument("--funding", action="store_true",
+                    help="also run with each close's funding (Binance monthly archives)")
     ap.add_argument("--telegram", action="store_true",
                     help="send to TELEGRAM_REPORT_CHAT_ID (private); print only whether it was sent")
     args = ap.parse_args(argv)
@@ -437,8 +557,12 @@ def main(argv=None) -> int:
     daily = rs.fetch_daily(syms, args.days + args.warmup_days + 29, end_ms=now, log=log)
     daily = {s: b for s, b in daily.items() if len(b) >= LOOKBACK["1D"]}
     h4 = fetch_4h({s: syms[s] for s in daily}, start_ms, now, log=log)
+    funding = None
+    if args.funding:
+        funding = fetch_funding({s: syms[s] for s in daily}, start_ms - 10 * DAY_MS, end_ms,
+                                log=log)
     res = compare(daily, h4, start_ms=start_ms, end_ms=end_ms, corr=dict(appmod._BTC_CORR),
-                  log=log)
+                  funding=funding, log=log)
     if args.telegram:
         import weekly_report
         try:
