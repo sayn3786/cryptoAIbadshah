@@ -409,15 +409,36 @@ def split_message(text: str, limit: int = 3800) -> List[str]:
     return parts
 
 
-def send_parts(parts: Sequence[str], send, *, gap_s: float = 1.2, sleep=None) -> bool:
+SEND_RETRY_WAITS = (5.0, 20.0, 60.0)
+
+
+def send_parts(parts: Sequence[str], send, *, gap_s: float = 1.2, sleep=None,
+               retry_waits: Sequence[float] = SEND_RETRY_WAITS) -> bool:
     """Send each part in order, `gap_s` apart (Telegram rate-limits bursts to
-    one chat). Stops at the first failure; True only if every part went."""
+    one chat). A part that fails - False, or a network error - is retried
+    after each of `retry_waits` (a one-off blip must not throw away an
+    hour-long replay: close-picks-regime finished and then lost its report to a
+    single ConnectionError). Stops when a part still fails after the retries;
+    True only if every part went. The last error is raised as before."""
     import time
     sleep = sleep or time.sleep
     for i, p in enumerate(parts):
         if i:
             sleep(gap_s)
-        if not send(p):
+        last_exc = None
+        for attempt in range(len(retry_waits) + 1):
+            if attempt:
+                sleep(retry_waits[attempt - 1])
+            try:
+                if send(p):
+                    last_exc = None
+                    break
+                last_exc = None
+            except Exception as exc:                     # noqa: BLE001
+                last_exc = exc
+        else:
+            if last_exc is not None:
+                raise last_exc
             return False
     return True
 

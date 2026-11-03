@@ -238,5 +238,29 @@ def test_send_parts_spaces_them_and_stops_on_failure():
     assert ok and sent == ["a", "b", "c"] and waits == [1.2, 1.2]
     sent.clear()
     assert ee.send_parts(["a", "b", "c"], lambda p: sent.append(p) or p != "b",
-                         sleep=lambda s: None) is False
+                         sleep=lambda s: None, retry_waits=()) is False
     assert sent == ["a", "b"]
+
+
+def test_send_parts_retries_a_blip_then_gives_up():
+    import entry_exit_compare as ee
+    calls, waits = [], []
+
+    def flaky(p):
+        calls.append(p)
+        if p == "b" and calls.count("b") < 3:
+            raise ConnectionError("blip")
+        return True
+    assert ee.send_parts(["a", "b", "c"], flaky, sleep=waits.append) is True
+    assert calls == ["a", "b", "b", "b", "c"]
+    assert waits == [1.2, 5.0, 20.0, 1.2]                  # the gaps and two retry waits
+
+    def down(p):
+        raise ConnectionError("down")
+    import pytest
+    with pytest.raises(ConnectionError):
+        ee.send_parts(["a"], down, sleep=lambda s: None)    # still down: the error, as before
+    tries = []
+    assert ee.send_parts(["a"], lambda p: tries.append(p) or False,
+                         sleep=lambda s: None) is False
+    assert len(tries) == 1 + len(ee.SEND_RETRY_WAITS)
