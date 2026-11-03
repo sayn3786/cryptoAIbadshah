@@ -189,6 +189,11 @@ name: Strategy backtests (private Telegram)
 #            (3 / 7 / 14d, low broken, +10% vs -10% first) vs an ordinary day,
 #            older vs newer half; ~1500 days, `days` / `end_days_ago` ignored
 #            (backend/rsi_retest_study.py; ~3 min)
+#   reversal-audit  every daily swing low (high) in a 15%+ down (up) trend,
+#            confirmed 3 days later and graded only by what follows (+10% vs
+#            -10% first): what the engine scored, which score parts tell real
+#            turns from false ones, which to raise / lower; ~1500 days,
+#            `days` / `end_days_ago` ignored (backend/reversal_audit.py; ~10 min)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -210,7 +215,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -362,6 +367,8 @@ jobs:
             python -m close_picks_compare --telegram --days 540
           elif [ "$STUDY" = "close-picks-funding" ]; then
             python -m close_picks_compare --telegram --days 540 --funding
+          elif [ "$STUDY" = "reversal-audit" ]; then
+            python -m reversal_audit --telegram --days 1500
           elif [ "$STUDY" = "rsi-retest" ]; then
             python -m rsi_retest_study --telegram --days 1500
           elif [ "$STUDY" = "close-record" ]; then
