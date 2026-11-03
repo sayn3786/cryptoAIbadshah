@@ -107,7 +107,7 @@ def test_workflow_runs_both_and_the_arguments_parse():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     cmds = [ln.strip() for ln in wf.splitlines() if "--tunings" in ln and "python -m" in ln]
-    assert len(cmds) == 2
+    assert len(cmds) == 3
     for cmd in cmds:
         argv = shlex.split(cmd)
         mod = argv[2]
@@ -127,5 +127,15 @@ def test_workflow_runs_both_and_the_arguments_parse():
         finally:
             module.argparse.ArgumentParser.parse_args = orig
         assert e.value.code == 0, cmd
-        assert captured["ns"].tunings == "-,A,B,C,D,ABC", cmd
+        want = cmd.split("--tunings=")[1].split()[0]
+        assert captured["ns"].tunings == want, cmd
+        if "--end-days-ago" in cmd:
+            assert captured["ns"].end_days_ago == 540
     assert re.search(r"close_picks_compare --telegram --days 540 --tunings=", wf)
+
+
+def test_the_d_check_runs_on_the_earlier_window():
+    wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
+                           "cadence-backtest.yml")).read()
+    assert "close_picks_compare --telegram --days 540 --end-days-ago 540 --tunings=-,D" in wf
+    assert "close-picks-d-check]" in wf

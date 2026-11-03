@@ -40,7 +40,11 @@ With --tunings "-,A,B,C,D,ABC" it runs once per set of the engine's reversal
 tuning switches (signals.TUNING; "-" = today's engine) and reports them side
 by side, per period.
 
-    python -m close_picks_compare --days 540 [--funding] [--tunings -,A,B]
+--end-days-ago N moves the whole replay N days back (an earlier, unseen
+window: 540 = the 540 days before the default one).
+
+    python -m close_picks_compare --days 540 [--funding] [--tunings=-,A,B]
+                                  [--end-days-ago 540]
 """
 from __future__ import annotations
 
@@ -580,6 +584,8 @@ def main(argv=None) -> int:
     ap.add_argument("--warmup-days", type=int, default=420)
     ap.add_argument("--funding", action="store_true",
                     help="also run with each close's funding (Binance monthly archives)")
+    ap.add_argument("--end-days-ago", type=int, default=0,
+                    help="move the replay this many days back (an earlier window)")
     ap.add_argument("--tunings", default="",
                     help="comma-separated tuning sets, '-' = today's engine (e.g. -,A,B,C,D,ABC)")
     ap.add_argument("--telegram", action="store_true",
@@ -591,7 +597,7 @@ def main(argv=None) -> int:
     import entry_exit_compare as ee
     import read_study as rs
     log = lambda m: print(m, file=sys.stderr)        # noqa: E731
-    now = int(time.time() * 1000) // DAY_MS * DAY_MS
+    now = int(time.time() * 1000) // DAY_MS * DAY_MS - args.end_days_ago * DAY_MS
     # The last close whose longest trade (28 days) has fully played out.
     end_ms = now - 29 * DAY_MS
     start_ms = end_ms - args.days * DAY_MS
