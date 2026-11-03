@@ -138,4 +138,4 @@ def test_the_d_check_runs_on_the_earlier_window():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     assert "close_picks_compare --telegram --days 540 --end-days-ago 540 --tunings=-,D" in wf
-    assert "close-picks-d-check]" in wf
+    assert "close-picks-d-check" in wf
