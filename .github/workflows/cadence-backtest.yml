@@ -201,6 +201,10 @@ name: Strategy backtests (private Telegram)
 #            side by side per period (~60-90 min)
 #   close-picks-d-check  today's engine vs tuning D on the 540 days BEFORE the
 #            close-picks-tuning window (an unseen check; ~25-35 min)
+#   close-picks-regime  the close picks over ~3 years tagged by market condition
+#            at each close (BTC vs 200-day, BTC 50/200, BTC ADX, the coin vs its
+#            200-day) and filters on them vs all picks, per 180-day period and
+#            half, vs random direction (backend/close_regime_study.py; ~60 min)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -222,7 +226,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -380,6 +384,8 @@ jobs:
             python -m close_picks_compare --telegram --days 540 --tunings=-,A,B,C,D,ABC
           elif [ "$STUDY" = "close-picks-d-check" ]; then
             python -m close_picks_compare --telegram --days 540 --end-days-ago 540 --tunings=-,D
+          elif [ "$STUDY" = "close-picks-regime" ]; then
+            python -m close_regime_study --telegram --days 1080
           elif [ "$STUDY" = "reversal-audit" ]; then
             python -m reversal_audit --telegram --days 1500
           elif [ "$STUDY" = "rsi-retest" ]; then
