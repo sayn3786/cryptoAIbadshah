@@ -419,6 +419,7 @@ function renderAll(a) {
   renderBollingerCard(a.bollinger);
   renderRsiDivCard(a.rsi_divergence, a.candles, a.rsi_series,
                    { price: a.live_price ?? a.signal_price, rsi: a.rsi });
+  renderRsiRetestNote(a.rsi_retest);
   renderRsiSwingPanel(a.rsi_markers, a.candles, a.rsi_series,
                       { price: a.live_price ?? a.signal_price, rsi: a.rsi });
   renderVwapCard(a.vwap);
@@ -2059,6 +2060,20 @@ function renderRsiSwingPanel(markers, candles, rsiSeries, now) {
     sub.textContent = `RSI ${m.rsi != null ? (+m.rsi).toFixed(1) : ''} at a swing ${os ? 'low' : 'high'}`
       + (ago ? ` · ${ago}` : '');
   }
+}
+
+/* Price back at the oversold-bottom low: how RSI compares with the bottom, and
+   (daily) how often such a low broke historically. Hidden when not retesting. */
+function renderRsiRetestNote(rt) {
+  const el = document.getElementById('rsiRetestNote');
+  if (!el) return;
+  if (!rt || !rt.note) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const color = rt.kind === 'weaker' ? 'var(--bear)'
+    : rt.kind === 'stronger' ? 'var(--bull)' : 'var(--muted)';
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  el.innerHTML = `<strong style="color:${color}">${rt.kind === 'weaker' ? '⚠️ ' : ''}${esc(rt.headline)}</strong>`
+    + ` <span>${esc(rt.note)}</span>`;
+  el.style.display = '';
 }
 
 /* "N bars ago" from a timestamp against the candle set (0 = the last bar). */

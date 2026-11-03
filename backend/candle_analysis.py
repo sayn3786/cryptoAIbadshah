@@ -94,7 +94,7 @@ SIGNAL_WINDOW_BARS = 60
 # here without a detector behind it will fail rather than quietly return None.
 CANDLE_DERIVED_KEYS = (
     "symbol", "timeframe", "candles", "signal_price",
-    "rsi", "rsi_slope", "rsi_series", "rsi_markers", "price_roc", "candle_dirs",
+    "rsi", "rsi_slope", "rsi_series", "rsi_markers", "rsi_retest", "price_roc", "candle_dirs",
     "macd", "ema_trend", "ema_lines", "supertrend", "ichimoku", "bollinger",
     "stoch_rsi", "vwap", "vol_signal", "obv", "vol_regime",
     "spot_cvd", "cvd_divergence", "fib",
@@ -148,6 +148,69 @@ def _rsi_mark_status(candles, i, kind):
         if last_close >= piv_close * (1 + RSI_MARK_PLAYOUT_PCT):
             return "played_out"
     return "active"
+
+
+# ── Back at the oversold-bottom low (rsi_retest_study, Nov 2026) ─────────────
+# Price closing within RETEST_PCT of the latest oversold-bottom marker's low,
+# within RETEST_MAX_BARS of it, without a close more than RETEST_PCT under it
+# first. On DAILY candles (28 coins, Sep 2022 - Nov 2026) the low then broke
+# (a close 3% under it within 7 days) far more often when RSI was LOWER than at
+# the bottom - and that held in both halves of the history - while the 1-2
+# weeks after were no better or worse than an ordinary week. Display only.
+RETEST_PCT = 0.02
+RETEST_MAX_BARS = 15
+RETEST_RSI_GAP = 2.0
+RETEST_BREAK_PCT = 0.03
+RETEST_STATS_1D = {          # cases, % where the low broke within 7 days
+    "weaker": {"n": 89, "broke_pct": 66.7},
+    "similar": {"n": 291, "broke_pct": 48.3},
+    "stronger": {"n": 191, "broke_pct": 42.9},
+}
+
+
+def rsi_retest(candles: Sequence[Dict], rsi_raw: Sequence, markers: Sequence[Dict],
+               timeframe: str) -> Optional[Dict]:
+    """Is price back at the latest oversold-bottom marker's low, and is RSI
+    weaker, similar or stronger than it was there? None when not. Pure."""
+    bottoms = [m for m in markers or [] if m and m.get("kind") == "oversold_bottom"]
+    if not bottoms or not candles:
+        return None
+    m = max(bottoms, key=lambda x: x.get("timestamp") or 0)
+    idx = next((i for i, c in enumerate(candles) if c.get("timestamp") == m.get("timestamp")),
+               None)
+    if idx is None:
+        return None
+    n = len(candles)
+    bars_ago = n - 1 - idx
+    low, r0 = m.get("price"), m.get("rsi")
+    r_now = rsi_raw[-1] if rsi_raw else None
+    if low is None or r0 is None or r_now is None or not 3 <= bars_ago <= RETEST_MAX_BARS:
+        return None
+    floor = low * (1 - RETEST_PCT)
+    if any(candles[j]["close"] < floor for j in range(idx + 1, n)):
+        return None                                # broke and came back: a new story
+    close = candles[-1]["close"]
+    if close > low * (1 + RETEST_PCT):
+        return None
+    gap = r_now - r0
+    kind = "weaker" if gap <= -RETEST_RSI_GAP else "stronger" if gap >= RETEST_RSI_GAP \
+        else "similar"
+    stats = RETEST_STATS_1D.get(kind) if timeframe == "1D" else None
+    brk = low * (1 - RETEST_BREAK_PCT)
+    head = {"weaker": "Low at risk", "similar": "Retesting the low",
+            "stronger": "Retest with stronger RSI"}[kind]
+    what = {"weaker": f"RSI is lower than at the bottom ({r0:.1f} → {r_now:.1f}): selling "
+                      "momentum is stronger than when the low was made.",
+            "similar": f"RSI is about where it was at the bottom ({r0:.1f} → {r_now:.1f}).",
+            "stronger": f"RSI is higher than at the bottom ({r0:.1f} → {r_now:.1f}), a "
+                        "bullish-divergence-like retest."}[kind]
+    hist = (f" In {stats['n']} past daily cases the low broke (a close under {brk:,.6g}, 3% "
+            f"below it) within a week {stats['broke_pct']:g}% of the time; the 1-2 weeks after "
+            "were no better or worse than an ordinary week." if stats else
+            " (The history check covers daily candles only.)")
+    return {"kind": kind, "headline": head, "low": low, "close": close,
+            "bottom_rsi": round(r0, 1), "rsi": round(r_now, 1), "bars_ago": bars_ago,
+            "break_level": brk, "stats": stats, "note": what + hist}
 
 
 def rsi_swing_markers(candles: Sequence[Dict], rsi_raw: Sequence,
@@ -438,6 +501,7 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
         "rsi_slope": rsi_slope,
         "rsi_series": rsi_with_ts[-30:],
         "rsi_markers": rsi_markers,
+        "rsi_retest": rsi_retest(candles, rsi_raw, rsi_markers, timeframe),
         "price_roc": price_roc,
         "candle_dirs": candle_dirs,
 
