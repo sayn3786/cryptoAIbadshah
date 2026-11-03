@@ -36,7 +36,11 @@ ten settlements' average), from Binance's monthly USDⓈ-M funding archives
 (data.binance.vision); only settlements at or before the close are used.
 Open-interest history is not archived far enough back to replay.
 
-    python -m close_picks_compare --days 540 [--funding]
+With --tunings "-,A,B,C,D,ABC" it runs once per set of the engine's reversal
+tuning switches (signals.TUNING; "-" = today's engine) and reports them side
+by side, per period.
+
+    python -m close_picks_compare --days 540 [--funding] [--tunings -,A,B]
 """
 from __future__ import annotations
 
@@ -390,23 +394,33 @@ CANDLES_ONLY = "candles only"
 WITH_FUNDING = "candles + funding"
 
 
+def tuning_label(flags: str) -> str:
+    return "today's engine" if not flags or flags == "-" else f"tuning {flags}"
+
+
 def compare(daily: Dict[str, List[Dict]], h4: Dict[str, List[Dict]], *, start_ms: int,
             end_ms: int, corr: Dict[str, float], read_fn: Callable = engine_read,
             seeds: int = SEEDS, funding: Optional[Dict[str, List[tuple]]] = None,
-            log=print) -> Dict:
+            tunings: Optional[Sequence[str]] = None, log=print) -> Dict:
+    import signals
     syms = sorted(daily)
     span = (end_ms - start_ms) / PERIODS
     bounds = [(start_ms + int(k * span), start_ms + int((k + 1) * span)) for k in range(PERIODS)]
-    variants = [(CANDLES_ONLY, None)] + ([(WITH_FUNDING, funding)] if funding is not None else [])
+    if tunings:
+        variants = [(tuning_label(t), None, t.replace("-", "")) for t in tunings]
+    else:
+        variants = [(CANDLES_ONLY, None, "")] + ([(WITH_FUNDING, funding, "")]
+                                                 if funding is not None else [])
     rows, coverage = [], {}
-    for name, fund in variants:
+    for name, fund, flags in variants:
         reader = Reader(daily, read_fn, fund)
         picks: Dict[str, List[Dict]] = {tf: [] for tf in cp.ORDER}
         every: Dict[str, List[Dict]] = {tf: [] for tf in cp.ORDER}
-        for tf, c in closes(start_ms, end_ms):
-            got = picks_at(tf, c, syms, reader, corr)
-            picks[tf] += got["top"]
-            every[tf] += got["all"]
+        with signals.tuning(*flags):
+            for tf, c in closes(start_ms, end_ms):
+                got = picks_at(tf, c, syms, reader, corr)
+                picks[tf] += got["top"]
+                every[tf] += got["all"]
         if fund is not None:
             coverage = {"reads": reader.reads, "with_funding": reader.with_funding,
                         "coins": sorted(fund)}
@@ -422,7 +436,34 @@ def compare(daily: Dict[str, List[Dict]], h4: Dict[str, List[Dict]], *, start_ms
             rows.append({"variant": name, "tf": tf, "period": "all-candidates", **allm})
         log(f"  {name}: settled")
     return {"start": start_ms, "end": end_ms, "coins": syms, "rows": rows,
-            "variants": [v for v, _f in variants], "funding": coverage}
+            "variants": [v[0] for v in variants], "funding": coverage,
+            "tunings": bool(tunings)}
+
+
+def render_tunings(res: Dict) -> str:
+    """The tuning runs side by side: per timeframe and set, R per period, the
+    total, and how many periods beat random / pass."""
+    lines = ["🎛 Close picks replayed with the reversal tuning switches",
+             f"{_d(res['start'])} → {_d(res['end'])} · {len(res['coins'])} coins · candle engine "
+             "+ live selection, settled by the live tracker's rules; R per third of the window",
+             "A = RSI slope / momentum-against-trend ×1.5 at a downtrend · B = no overbought "
+             "penalty in an uptrend (+ Radar) · C = trendline / 200-EMA / flow+trend bullish "
+             "×0.5 at a downtrend · D = CVD / FVG ×0.5",
+             "Keep a set only if it beats today's engine in all three periods AND beats random "
+             "more often", ""]
+    for tf in cp.ORDER:
+        lines.append(f"• {cp.LABELS[tf]}")
+        for v in res["variants"]:
+            per = [r for r in res["rows"] if r["tf"] == tf and r["variant"] == v
+                   and r["period"] != "all-candidates"]
+            rs_ = [r["r_total"] if r.get("trades") else 0.0 for r in per]
+            n = sum(r.get("trades") or 0 for r in per)
+            lines.append(f"  {v}: " + " / ".join(f"{x:+.1f}R" for x in rs_)
+                         + f" · total {sum(rs_):+.1f}R · {n} trades · beats random "
+                         f"{sum(bool(r.get('beats_random')) for r in per)}/{len(per)} · passes "
+                         f"{sum(bool(r.get('passes')) for r in per)}/{len(per)}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _d(ms: int) -> str:
@@ -539,6 +580,8 @@ def main(argv=None) -> int:
     ap.add_argument("--warmup-days", type=int, default=420)
     ap.add_argument("--funding", action="store_true",
                     help="also run with each close's funding (Binance monthly archives)")
+    ap.add_argument("--tunings", default="",
+                    help="comma-separated tuning sets, '-' = today's engine (e.g. -,A,B,C,D,ABC)")
     ap.add_argument("--telegram", action="store_true",
                     help="send to TELEGRAM_REPORT_CHAT_ID (private); print only whether it was sent")
     args = ap.parse_args(argv)
@@ -561,19 +604,21 @@ def main(argv=None) -> int:
     if args.funding:
         funding = fetch_funding({s: syms[s] for s in daily}, start_ms - 10 * DAY_MS, end_ms,
                                 log=log)
+    tunings = [t.strip().upper() for t in args.tunings.split(",") if t.strip()] or None
     res = compare(daily, h4, start_ms=start_ms, end_ms=end_ms, corr=dict(appmod._BTC_CORR),
-                  funding=funding, log=log)
+                  funding=funding, tunings=tunings, log=log)
+    render = render_tunings if tunings else render_telegram
     if args.telegram:
         import weekly_report
         try:
-            sent = ee.send_parts(ee.split_message(render_telegram(res)),
+            sent = ee.send_parts(ee.split_message(render(res)),
                                  weekly_report.send_private)
         except Exception as exc:                         # noqa: BLE001
             sent = False          # never print it: the URL carries the bot token
             print(f"telegram error: {type(exc).__name__}")
         print(f"coins replayed: {len(daily)}; telegram: {'sent' if sent else 'NOT sent'}")
         return 0 if sent else 1
-    print(render_telegram(res))
+    print(render(res))
     return 0
 
 

@@ -833,6 +833,70 @@ def _candle_volume_ratio(candles: List[Dict], candles_ago) -> Optional[float]:
     return round(vol / avg, 2) if avg > 0 and vol > 0 else None
 
 
+# ── Reversal tuning switches (reversal_audit, Nov 2026) — OFF by default ─────
+# Candidate changes the 1D reversal audit pointed to, each a switch so a replay
+# can compare them with today's engine before anything changes live:
+#   A  at a downtrend, RSI-slope and momentum-against-trend bullish points x1.5
+#      (fired 1.4-1.6x more at real bottoms than false lows, both halves)
+#   B  at an uptrend, overbought RSI scores no bearish points, and the Radar's
+#      topping count leaves out "RSI overbought" and "Distribution volume"
+#      (fired MORE at highs that kept going: x0.63 / x0.68)
+#   C  at a downtrend, bullish trendline / 200-EMA-retest / flow+trend points
+#      x0.5 (fired more at lows that broke: x0.64-0.73)
+#   D  CVD and FVG points x0.5 everywhere (no information at turns, ~14 pts)
+# SIGNAL_TUNING="A,B" turns them on; the studies use tuning(...) instead.
+TUNING = frozenset(x for x in os.getenv("SIGNAL_TUNING", "").upper().replace(" ", "").split(",")
+                   if x in ("A", "B", "C", "D"))
+TREND_CTX_BARS = 30
+TREND_CTX_PCT = 0.15
+
+
+class tuning:
+    """with signals.tuning("A", "C"): ... - the switches for one block."""
+
+    def __init__(self, *flags):
+        self.flags = frozenset(f for f in flags if f in ("A", "B", "C", "D"))
+
+    def __enter__(self):
+        global TUNING
+        self._old, TUNING = TUNING, self.flags
+        return self
+
+    def __exit__(self, *exc):
+        global TUNING
+        TUNING = self._old
+        return False
+
+
+def _price_trend(candles: List[Dict]) -> Optional[str]:
+    """"down" / "up" / None: the close 15%+ under its 30-bar high close, or
+    15%+ over its 30-bar low close (the reversal audit's trend test)."""
+    if len(candles) < TREND_CTX_BARS + 1:
+        return None
+    closes = [float(c["close"]) for c in candles[-TREND_CTX_BARS - 1:]]
+    now, prior = closes[-1], closes[:-1]
+    if now <= max(prior) * (1 - TREND_CTX_PCT):
+        return "down"
+    if now >= min(prior) * (1 + TREND_CTX_PCT):
+        return "up"
+    return None
+
+
+def _tune_factor(name: str, pts: float, ctx: Optional[str]) -> float:
+    """The multiplier the switches put on one section's points."""
+    if not TUNING or not pts:
+        return 1.0
+    if "A" in TUNING and ctx == "down" and pts > 0 and name == "rsi_slope":
+        return 1.5
+    if "B" in TUNING and ctx == "up" and pts < 0 and name == "rsi_level":
+        return 0.0
+    if "C" in TUNING and ctx == "down" and pts > 0 and name in ("trendlines", "ema200_retest"):
+        return 0.5
+    if "D" in TUNING and name in ("cvd", "fvg"):
+        return 0.5
+    return 1.0
+
+
 def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
     """Exhaustion / reversal detector — flips the question from "go with the
     trend?" to "is this trend running out of fuel?".
@@ -933,7 +997,7 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
 
     if mode == "top":
         # ── TOPPING checklist (uptrend exhaustion) ─────────────────────────────
-        check(rsi is not None, rsi is not None and rsi >= 70,
+        check(rsi is not None and "B" not in TUNING, rsi is not None and rsi >= 70,
               "RSI overbought", f"RSI {rsi} ≥ 70 — buyers stretched" if rsi else "")
         check(True, rsi_div == "bearish",
               "Bearish RSI divergence", "price higher high, RSI lower high — momentum not confirming")
@@ -945,7 +1009,7 @@ def _reversal_radar(analysis: Dict, cycle_ok: bool = True) -> Dict:
               "Riding upper Bollinger", (f"%B {bb_pctb:.2f} — price pinned to upper band, mean-reversion pressure" if bb_pctb is not None else ""))
         check(srsi_sig is not None, srsi_sig in ("bear_cross_overbought", "overbought"),
               "Stoch RSI rolling over", "fast momentum topping out from overbought")
-        check(vol_sig is not None, vol_sig == "bearish" and vol_ratio >= 1.5,
+        check(vol_sig is not None and "B" not in TUNING, vol_sig == "bearish" and vol_ratio >= 1.5,
               "Distribution volume", f"heavy volume on down candles ({vol_ratio:.1f}× avg) — selling into strength")
         check(ls_ratio is not None and ls_ratio > 0, ls_ratio is not None and ls_ratio >= 2.5,
               "Crowd extremely long", f"L/S {ls_ratio} — one-sided positioning, fuel for a long flush")
@@ -1384,6 +1448,22 @@ def generate_signal(analysis: Dict) -> Dict:
         if prev is not None and now != at:
             score_breakdown[prev] = round(score_breakdown.get(prev, 0) + (now - at), 2)
         _mark_at[:] = [name, now]
+
+    # The reversal tuning switches (off by default): scale the section now
+    # closing; returns the points to add (and moves its group by the same).
+    _trend_ctx = _price_trend(analysis.get("candles") or []) if TUNING else None
+
+    def _tuned(name, now, gkey):
+        if not TUNING or _mark_at[0] != name:
+            return 0
+        pts = now - _mark_at[1]
+        f = _tune_factor(name, pts, _trend_ctx)
+        if f == 1.0:
+            return 0
+        adj = round(pts * (f - 1), 2)
+        if gkey:
+            g[gkey] += adj
+        return adj
     bull_reasons: List[str] = []
     bear_reasons: List[str] = []
 
@@ -1445,6 +1525,7 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= 12; g['momentum'] -= 12
             bear_reasons.append(f"RSI overbought ({rsi}) — buying pressure elevated, watch for reversal")
         # 45–65: genuinely neutral — no score (same reading in uptrends and dead-cat bounces)
+    score += _tuned('rsi_level', score, 'momentum')
 
     # ── RSI slope (momentum direction — catches building/fading pressure) ────
     _mark('rsi_slope', score)
@@ -1472,6 +1553,8 @@ def generate_signal(analysis: Dict) -> Dict:
         elif rsi_slope < -4:
             score -= 4; g['momentum'] -= 4
             bear_reasons.append(f"RSI drifting lower ({rsi_slope:.1f} over 5 candles) — mild downward pressure")
+
+    score += _tuned('rsi_slope', score, 'momentum')
 
     # ── Price Rate-of-Change (ROC) ────────────────────────────────────────────
     _mark('roc', score)
@@ -1643,6 +1726,8 @@ def generate_signal(analysis: Dict) -> Dict:
             score -= 7; g['flow'] -= 7
             bear_reasons.append("Futures CVD bearish — speculative selling rising; no divergence with spot")
 
+    score += _tuned('cvd', score, 'flow')
+
     # ── Funding Rate ─────────────────────────────────────────────────────────
     _mark('funding', score)
     # v58: halved (extreme 30 -> 16, elevated 15 -> 8). Funding is a contrarian
@@ -1776,6 +1861,8 @@ def generate_signal(analysis: Dict) -> Dict:
         bear_reasons.append(
             f"{len(above)} bearish gap(s) as resistance above (nearest: {_near_label})"
         )
+
+    score += _tuned('fvg', score, 'pattern')
 
     # ── CHoCH — Change of Character (structure shift) ────────────────────────
     _mark('choch', score)
@@ -2074,6 +2161,8 @@ def generate_signal(analysis: Dict) -> Dict:
         elif _tagged and _dn_struct and _rejected:
             score -= 12; g['trend'] -= 12
             bear_reasons.append(f"200 EMA retest → rejection (${ema200_v:,.4f}) — price rallied into the 200 EMA in a downtrend and turned back down; trend-continuation sell")
+
+    score += _tuned('ema200_retest', score, 'trend')
 
     # ── Order Book Imbalance ──────────────────────────────────────────────────
     _mark('order_book', score)
@@ -2545,6 +2634,8 @@ def generate_signal(analysis: Dict) -> Dict:
             score += 5; g['trend'] += 5
             bull_reasons.append(f"⤴ Above the macro ascending floor (~${mv:,.4f}, {mdist:.0f}% above) — dominant uptrend intact; counter-trend shorts are lower-probability")
 
+    score += _tuned('trendlines', score, 'trend')
+
     # ── Supply / demand zones (S/R bands) ─────────────────────────────────────
     _mark('sr_zones', score)
     # Price inside or approaching an overhead supply zone = sellers likely to
@@ -2942,6 +3033,8 @@ def generate_signal(analysis: Dict) -> Dict:
     if gdir['flow'] == gdir['trend'] != 'neutral':
         pts = 12
         agree_bull = gdir['trend'] == 'bull'
+        if "C" in TUNING and agree_bull and _trend_ctx == "down":
+            pts = 6                                    # tuning C: halved at a downtrend
         combo_pts += pts if agree_bull else -pts
         label = "🔗 Flow+Trend confluence — CVD/OI confirms trend direction; real money behind the move"
         (bull_reasons if agree_bull else bear_reasons).append(label)
@@ -2974,6 +3067,8 @@ def generate_signal(analysis: Dict) -> Dict:
     if gdir['momentum'] not in ('neutral', gdir['trend']) and gdir['trend'] != 'neutral':
         penalty = min(abs(g['momentum']), 12)
         trend_bull = gdir['trend'] == 'bull'
+        if "A" in TUNING and not trend_bull and _trend_ctx == "down":
+            penalty = round(penalty * 1.5)             # tuning A: x1.5 at a downtrend
         combo_pts += -penalty if trend_bull else penalty
         if trend_bull:
             bear_reasons.append(f"⚠️ Momentum diverging from trend (−{penalty} pts) — MACD/RSI losing alignment; trend exhaustion risk")
