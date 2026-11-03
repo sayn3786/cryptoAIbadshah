@@ -42,7 +42,11 @@ in the turn's favour (bullish points at a bottom, bearish at a top):
 
 Private report. ~1500 days, all scanned coins.
 
-    python -m reversal_audit --days 1500
+With --tunings "-,A,B,C,D,ABC" it reads every turn once per set of the
+engine's reversal tuning switches (signals.TUNING; "-" = today's engine) and
+compares how well each set's call separates real turns from false ones.
+
+    python -m reversal_audit --days 1500 [--tunings -,A,B]
 """
 from __future__ import annotations
 
@@ -318,6 +322,83 @@ def render_telegram(res: Dict) -> str:
     return "\n".join(lines)
 
 
+def separation(rows: Sequence[Dict]) -> List[Dict]:
+    """Per day 0-3: the call the turn's way at real vs false turns, the gap,
+    and how often a 'with' call was a real turn (precision)."""
+    real = [e for e in rows if e["real"]]
+    fake = [e for e in rows if not e["real"]]
+    out = []
+    for k, off in enumerate(OFFSETS):
+        def with_n(es):
+            return sum(1 for e in es if e["calls"][k] is not None and e["calls"][k] > 0)
+        nr = sum(1 for e in real if e["calls"][k] is not None)
+        nf = sum(1 for e in fake if e["calls"][k] is not None)
+        wr, wf = with_n(real), with_n(fake)
+        avg_r = [e["calls"][k] for e in real if e["calls"][k] is not None]
+        avg_f = [e["calls"][k] for e in fake if e["calls"][k] is not None]
+        out.append({"day": off,
+                    "with_real": round(100 * wr / nr, 1) if nr else None,
+                    "with_false": round(100 * wf / nf, 1) if nf else None,
+                    "gap": round(100 * (wr / nr - wf / nf), 1) if nr and nf else None,
+                    "precision": round(100 * wr / (wr + wf), 1) if wr + wf else None,
+                    "avg_gap": round(statistics.mean(avg_r) - statistics.mean(avg_f), 1)
+                    if avg_r and avg_f else None})
+    return out
+
+
+def compare_tunings(daily: Dict[str, List[Dict]], tunings: Sequence[str], *,
+                    read_fn: Callable = engine_read, log=print) -> Dict:
+    import signals
+    out = []
+    for t in tunings:
+        flags = t.replace("-", "")
+        events: List[Dict] = []
+        with signals.tuning(*flags):
+            for sym, bars in daily.items():
+                events += coin_events(sym, bars, read_fn)
+        log(f"  tuning {t or '-'}: done")               # no results in the (public) log
+        base = {}
+        for side, real_k, fake_k in (("bottom", "real_bottom", "false_low"),
+                                     ("top", "real_top", "false_high")):
+            rows = [e for e in events if e["kind"] in (real_k, fake_k)]
+            base[side] = {"n_real": sum(1 for e in rows if e["real"]),
+                          "n_false": sum(1 for e in rows if not e["real"]),
+                          "sep": separation(rows)}
+        out.append({"tuning": t, **base})
+    return {"coins": sorted(daily), "variants": out,
+            "first": min((int(b[0]["timestamp"]) for b in daily.values() if b), default=0),
+            "last": max((int(b[-1]["timestamp"]) for b in daily.values() if b), default=0)}
+
+
+def render_tunings(res: Dict) -> str:
+    lines = ["🎛 Reversal audit (1D) with the tuning switches: does the call separate real "
+             "turns from false ones better?",
+             f"{_d(res['first'])} → {_d(res['last'])} · {len(res['coins'])} coins · same turns, "
+             "same grading (+10% vs -10% from the confirmation close)",
+             "A = RSI slope / momentum-against-trend ×1.5 at a downtrend · B = no overbought "
+             "penalty in an uptrend (+ Radar) · C = trendline / 200-EMA / flow+trend bullish "
+             "×0.5 at a downtrend · D = CVD / FVG ×0.5",
+             "gap = the call the turn's way at real turns minus at false ones (points; 0 = no "
+             "separation); precision = of the 'with' calls, how many were real turns", ""]
+    for side, word in (("bottom", "BOTTOMS (LONG calls)"), ("top", "TOPS (SHORT calls)")):
+        v0 = res["variants"][0][side]
+        lines.append(f"• {word}: {v0['n_real']} real vs {v0['n_false']} false · base rate "
+                     f"{100 * v0['n_real'] / max(1, v0['n_real'] + v0['n_false']):.1f}% real")
+        for v in res["variants"]:
+            name = "today's engine" if v["tuning"] in ("", "-") else f"tuning {v['tuning']}"
+            parts = []
+            for d in v[side]["sep"][1:]:
+                if d["gap"] is None:
+                    continue
+                parts.append(f"d{d['day']} {d['with_real']}/{d['with_false']}% gap {d['gap']:+.1f}"
+                             + (f" prec {d['precision']}%" if d["precision"] is not None else ""))
+            lines.append(f"  {name}: " + " · ".join(parts))
+        lines.append("")
+    lines.append("Better = a bigger positive gap and a precision above the base rate, in both "
+                 "bottoms and tops; confirm with the close-picks replay before going live.")
+    return "\n".join(lines)
+
+
 def compare(daily: Dict[str, List[Dict]], *, read_fn: Callable = engine_read, log=print) -> Dict:
     events: List[Dict] = []
     for sym, bars in daily.items():
@@ -331,6 +412,8 @@ def compare(daily: Dict[str, List[Dict]], *, read_fn: Callable = engine_read, lo
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="reversal_audit", description=__doc__.split("\n\n")[0])
     ap.add_argument("--days", type=int, default=1500)
+    ap.add_argument("--tunings", default="",
+                    help="comma-separated tuning sets, '-' = today's engine (e.g. -,A,B,C,D,ABC)")
     ap.add_argument("--telegram", action="store_true",
                     help="send to TELEGRAM_REPORT_CHAT_ID (private); print only whether it was sent")
     args = ap.parse_args(argv)
@@ -342,18 +425,25 @@ def main(argv=None) -> int:
     now = int(time.time() * 1000) // DAY_MS * DAY_MS
     syms = {s: appmod.SYMBOLS[s] for s in appmod.SCAN_SYMBOLS if s in appmod.SYMBOLS}
     daily = rs.fetch_daily(syms, args.days, end_ms=now, log=log)
-    res = compare({s: b for s, b in daily.items() if len(b) > 120}, log=log)
+    daily = {s: b for s, b in daily.items() if len(b) > 120}
+    tunings = [t.strip().upper() for t in args.tunings.split(",") if t.strip()]
+    if tunings:
+        res = compare_tunings(daily, tunings, log=log)
+        render = render_tunings
+    else:
+        res = compare(daily, log=log)
+        render = render_telegram
     if args.telegram:
         import weekly_report
         try:
-            sent = ee.send_parts(ee.split_message(render_telegram(res)),
+            sent = ee.send_parts(ee.split_message(render(res)),
                                  weekly_report.send_private)
         except Exception as exc:                         # noqa: BLE001
             sent = False          # never print it: the URL carries the bot token
             print(f"telegram error: {type(exc).__name__}")
         print(f"coins: {len(daily)}; telegram: {'sent' if sent else 'NOT sent'}")
         return 0 if sent else 1
-    print(render_telegram(res))
+    print(render(res))
     return 0
 
 

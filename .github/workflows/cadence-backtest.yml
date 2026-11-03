@@ -194,6 +194,11 @@ name: Strategy backtests (private Telegram)
 #            -10% first): what the engine scored, which score parts tell real
 #            turns from false ones, which to raise / lower; ~1500 days,
 #            `days` / `end_days_ago` ignored (backend/reversal_audit.py; ~10 min)
+#   reversal-tuning  the reversal audit once per set of the engine's tuning
+#            switches (today's engine, A, B, C, D, A+B+C): how well each
+#            set's call separates real turns from false ones (~40-60 min)
+#   close-picks-tuning  the 540-day close-picks replay once per tuning set,
+#            side by side per period (~60-90 min)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -215,7 +220,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -230,7 +235,7 @@ on:
 jobs:
   compare:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240           # the tuning studies replay six engine variants
     steps:
       - uses: actions/checkout@v4
 
@@ -367,6 +372,10 @@ jobs:
             python -m close_picks_compare --telegram --days 540
           elif [ "$STUDY" = "close-picks-funding" ]; then
             python -m close_picks_compare --telegram --days 540 --funding
+          elif [ "$STUDY" = "reversal-tuning" ]; then
+            python -m reversal_audit --telegram --days 1500 --tunings "-,A,B,C,D,ABC"
+          elif [ "$STUDY" = "close-picks-tuning" ]; then
+            python -m close_picks_compare --telegram --days 540 --tunings "-,A,B,C,D,ABC"
           elif [ "$STUDY" = "reversal-audit" ]; then
             python -m reversal_audit --telegram --days 1500
           elif [ "$STUDY" = "rsi-retest" ]; then
