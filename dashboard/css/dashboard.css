@@ -2329,6 +2329,9 @@ html { overflow-x: hidden; }
    as "no data" when the truth is "no divergence". */
 .div-panel { width: 100%; }
 .div-panel svg { display: block; width: 100%; height: auto; }
+.rsi-retest-note { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border, #24324a);
+  border-radius: 10px; font-size: 13px; line-height: 1.45; color: var(--muted2, #94a3b8); }
+.rsi-retest-note strong { margin-right: 4px; }
 .chart-sub { font-size: .72rem; color: var(--muted2); margin-left: auto; }
 .dvp-cap {
   fill: var(--muted2); font-size: 10px; font-weight: 700; letter-spacing: .12em;
