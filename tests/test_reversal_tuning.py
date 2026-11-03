@@ -98,7 +98,34 @@ def test_the_studies_run_tuning_sets():
     assert cpc.tuning_label("-") == "today's engine" and cpc.tuning_label("AB") == "tuning AB"
 
 
-def test_workflow_runs_both():
+def test_workflow_runs_both_and_the_arguments_parse():
+    """The first run failed in seconds: `--tunings "-,A,..."` starts with a dash,
+    so argparse took it for an option. The workflow's exact command lines must
+    parse."""
+    import re
+    import shlex
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
-    assert '--tunings "-,A,B,C,D,ABC"' in wf and "close_picks_compare --telegram --days 540 --tunings" in wf
+    cmds = [ln.strip() for ln in wf.splitlines() if "--tunings" in ln and "python -m" in ln]
+    assert len(cmds) == 2
+    for cmd in cmds:
+        argv = shlex.split(cmd)
+        mod = argv[2]
+        assert mod in ("reversal_audit", "close_picks_compare")
+        module = __import__(mod)
+        captured = {}
+
+        def fake_parse(self, args=None, namespace=None, _orig=module.argparse.ArgumentParser.parse_args):
+            ns = _orig(self, args, namespace)
+            captured["ns"] = ns
+            raise SystemExit(0)
+        orig = module.argparse.ArgumentParser.parse_args
+        module.argparse.ArgumentParser.parse_args = fake_parse
+        try:
+            with pytest.raises(SystemExit) as e:
+                module.main(argv[3:])
+        finally:
+            module.argparse.ArgumentParser.parse_args = orig
+        assert e.value.code == 0, cmd
+        assert captured["ns"].tunings == "-,A,B,C,D,ABC", cmd
+    assert re.search(r"close_picks_compare --telegram --days 540 --tunings=", wf)

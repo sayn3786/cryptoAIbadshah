@@ -373,9 +373,9 @@ jobs:
           elif [ "$STUDY" = "close-picks-funding" ]; then
             python -m close_picks_compare --telegram --days 540 --funding
           elif [ "$STUDY" = "reversal-tuning" ]; then
-            python -m reversal_audit --telegram --days 1500 --tunings "-,A,B,C,D,ABC"
+            python -m reversal_audit --telegram --days 1500 --tunings=-,A,B,C,D,ABC
           elif [ "$STUDY" = "close-picks-tuning" ]; then
-            python -m close_picks_compare --telegram --days 540 --tunings "-,A,B,C,D,ABC"
+            python -m close_picks_compare --telegram --days 540 --tunings=-,A,B,C,D,ABC
           elif [ "$STUDY" = "reversal-audit" ]; then
             python -m reversal_audit --telegram --days 1500
           elif [ "$STUDY" = "rsi-retest" ]; then
