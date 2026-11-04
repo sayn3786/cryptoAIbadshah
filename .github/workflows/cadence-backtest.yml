@@ -205,6 +205,9 @@ name: Strategy backtests (private Telegram)
 #            at each close (BTC vs 200-day, BTC 50/200, BTC ADX, the coin vs its
 #            200-day) and filters on them vs all picks, per 180-day period and
 #            half, vs random direction (backend/close_regime_study.py; ~60 min)
+#   close-picks-regime-2022  the same on the unseen Oct 2021 - Oct 2023 window
+#            (the 2022 bear market): does the rule found later - no shorts while
+#            BTC < 200-day - hold? (~40 min)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -226,7 +229,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -384,6 +387,8 @@ jobs:
             python -m close_picks_compare --telegram --days 540 --tunings=-,A,B,C,D,ABC
           elif [ "$STUDY" = "close-picks-d-check" ]; then
             python -m close_picks_compare --telegram --days 540 --end-days-ago 540 --tunings=-,D
+          elif [ "$STUDY" = "close-picks-regime-2022" ]; then
+            python -m close_regime_study --telegram --days 720 --end-days-ago 1080
           elif [ "$STUDY" = "close-picks-regime" ]; then
             python -m close_regime_study --telegram --days 1080
           elif [ "$STUDY" = "reversal-audit" ]; then

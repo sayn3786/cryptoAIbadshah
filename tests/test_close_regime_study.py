@@ -44,7 +44,9 @@ def test_filters_keep_the_right_picks():
     assert f["with the coin's 200-day"](short_up) and not f["BTC trending (ADX ≥ 20)"](long_up)
     unknown = {"direction": "LONG", "cond": {"btc200": None, "btc50": None, "adx_trend": None,
                                              "coin200": None}}
-    assert not any(keep(unknown) for name, keep in cr.FILTERS[1:])
+    # The regime filters drop a pick whose condition is unknown; the rule under
+    # test only drops shorts KNOWN to be below the 200-day.
+    assert not any(keep(unknown) for name, keep in cr.FILTERS[1:] if name != cr.RULE)
 
 
 def test_adx_reads_trend_vs_chop():
@@ -92,3 +94,23 @@ def test_candidate_needs_both_halves_profit_size_and_random():
     assert not cr.candidate({"r_total": -1.0, "trades": 40}, ok[1], 3, 6, base)  # a losing half
     assert not cr.candidate(*ok, 2, 6, base)                                      # random < half
     assert not cr.candidate(*ok, 1, 2, (-10.0, -5.0, 1))                          # not more than base
+
+
+def test_the_rule_under_test_and_its_check():
+    keep = dict(cr.FILTERS)[cr.RULE]
+    short_below = {"direction": "SHORT", "cond": {"btc200": False}}
+    assert not keep(short_below)
+    assert keep({"direction": "LONG", "cond": {"btc200": False}})
+    assert keep({"direction": "SHORT", "cond": {"btc200": True}})
+    assert keep({"direction": "SHORT", "cond": {"btc200": None}})      # unknown: kept
+    res = {"cuts": {"1D": {"BTC<200|SHORT|older": (10, -4.0), "BTC<200|SHORT|newer": (5, 1.0)},
+                    "BW": {"BTC<200|SHORT|older": (3, 2.5)}, "1W": {}}}
+    lines = cr.rule_check(res)
+    assert "15 trades, -3.0R" in lines[0] and "HOLDS" in lines[0]
+    assert "does NOT hold" in lines[1] and "no shorts below" in lines[2]
+
+
+def test_workflow_runs_the_bear_market_check():
+    wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
+                           "cadence-backtest.yml")).read()
+    assert "python -m close_regime_study --telegram --days 720 --end-days-ago 1080" in wf

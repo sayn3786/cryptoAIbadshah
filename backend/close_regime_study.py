@@ -33,7 +33,13 @@ conditions. Even then it needs a forward check before going live.
 
 Private report.
 
-    python -m close_regime_study --days 1080
+The rule found in Oct 2023 - Oct 2026 - SHORT picks while BTC is under its
+200-day lost in both halves - is a filter of its own here ("no shorts while
+BTC < 200-day"), fixed BEFORE it is run on an earlier, unseen window: with
+--days 720 --end-days-ago 1080, Oct 2021 - Oct 2023, which holds the 2022 bear
+market, where shorting below the 200-day should have worked if anything did.
+
+    python -m close_regime_study --days 1080 [--end-days-ago 1080 --days 720]
 """
 from __future__ import annotations
 
@@ -113,6 +119,8 @@ FILTERS = (   # (label, keep(pick) -> bool)
     ("with BTC's 50/200", lambda p: _with(p["cond"]["btc50"], p["direction"])),
     ("with the coin's 200-day", lambda p: _with(p["cond"]["coin200"], p["direction"])),
     ("BTC trending (ADX ≥ 20)", lambda p: p["cond"]["adx_trend"] is True),
+    (RULE := "no shorts while BTC < 200-day (rule under test)",
+     lambda p: not (p["direction"] == "SHORT" and p["cond"]["btc200"] is False)),
 )
 
 
@@ -189,6 +197,26 @@ def _d(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%d")
 
 
+def rule_check(res: Dict) -> List[str]:
+    """Did the losing bucket (SHORT picks while BTC < 200-day) lose here too?"""
+    out = []
+    for tf in cp.ORDER:
+        cut = res["cuts"].get(tf) or {}
+        n = r = 0.0
+        for half in ("older", "newer"):
+            v = cut.get(f"BTC<200|SHORT|{half}")
+            if v:
+                n += v[0]
+                r += v[1]
+        if not n:
+            out.append(f"  {cp.LABELS[tf]}: no shorts below the 200-day here")
+            continue
+        out.append(f"  {cp.LABELS[tf]}: SHORT picks while BTC < 200-day: {int(n)} trades, "
+                   f"{r:+.1f}R → " + ("the rule HOLDS (they lost again)" if r < 0
+                                      else "the rule does NOT hold (they made money here)"))
+    return out
+
+
 def render_telegram(res: Dict, coins: int) -> str:
     b = res["bounds"]
     lines = ["🧭 Close picks by market condition: would a filter have helped in BOTH windows?",
@@ -198,7 +226,9 @@ def render_telegram(res: Dict, coins: int) -> str:
              "Conditions from closed daily candles at each close: BTC vs its 200-day, BTC "
              "50/200, BTC ADX ≥ 20, the coin vs its own 200-day",
              "✅ candidate = beats 'all picks' in both halves, profitable in both, 30+ trades in "
-             "each, beats random in at least half the periods and more than all picks", ""]
+             "each, beats random in at least half the periods and more than all picks", "",
+             "The rule under test (found in Oct 2023 - Oct 2026): no SHORT picks while BTC is "
+             "below its 200-day. In THIS window:"] + rule_check(res) + [""]
     for tf in cp.ORDER:
         lines.append(f"• {cp.LABELS[tf]}")
         base = None
@@ -238,6 +268,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="close_regime_study", description=__doc__.split("\n\n")[0])
     ap.add_argument("--days", type=int, default=1080)
     ap.add_argument("--warmup-days", type=int, default=420)
+    ap.add_argument("--end-days-ago", type=int, default=0,
+                    help="move the window this many days back (1080 = Oct 2021 - Oct 2023 "
+                         "with --days 720)")
     ap.add_argument("--telegram", action="store_true",
                     help="send to TELEGRAM_REPORT_CHAT_ID (private); print only whether it was sent")
     args = ap.parse_args(argv)
@@ -246,7 +279,7 @@ def main(argv=None) -> int:
     import entry_exit_compare as ee
     import read_study as rs
     log = lambda m: print(m, file=sys.stderr)        # noqa: E731
-    now = int(time.time() * 1000) // DAY_MS * DAY_MS
+    now = int(time.time() * 1000) // DAY_MS * DAY_MS - args.end_days_ago * DAY_MS
     end_ms = now - 29 * DAY_MS                       # every trade fully played out
     start_ms = end_ms - args.days * DAY_MS
     syms = {s: appmod.SYMBOLS[s] for s in appmod.SCAN_SYMBOLS if s in appmod.SYMBOLS}
