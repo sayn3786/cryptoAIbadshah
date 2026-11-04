@@ -1203,11 +1203,12 @@ class BinanceClient:
                     "history": [{"timestamp": int(d["fundingTime"]),
                                  "rate": round(float(d["fundingRate"]) * 100, 4)}
                                 for d in data],
+                    "source": "binance",
                 }
         except Exception:
             pass
         from mock_data import mock_funding_rate
-        return mock_funding_rate(symbol, limit)
+        return {**mock_funding_rate(symbol, limit), "source": "mock"}
 
     # OI history granularity per request timeframe: intraday TFs get HOURLY
     # OI bars (so "OI rising while price falls" is visible on the TF you
@@ -1296,11 +1297,12 @@ class BinanceClient:
                 "recent": [{"side": "LONG" if d.get("side") == "SELL" else "SHORT",
                             "qty": float(d["origQty"]), "price": float(d["price"]),
                             "timestamp": int(d["time"])} for d in data[:20]],
+                "source": "binance",
             }
         except Exception:
             pass
         from mock_data import mock_liquidations
-        return mock_liquidations(symbol)
+        return {**mock_liquidations(symbol), "source": "mock"}
 
     def get_long_short_ratio(self, symbol: str) -> Dict:
         """Aggregated long/short ratio — fetches Binance, Bybit, OKX in parallel
