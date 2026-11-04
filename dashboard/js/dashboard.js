@@ -147,7 +147,14 @@ function initCharts() {
     width: rsiEl.clientWidth,
     height: 120,
   });
-  S.rsiSeries = S.rsiChart.addLineSeries({ color: '#f59e0b', lineWidth: 2 });
+  // RSI lives on 0-100: a fixed range keeps the 70 / 30 lines in place. With
+  // autoscale the panel framed only the data - a coin pinned at RSI 30-38 for a
+  // month showed a 30-35 scale, the OB 70 line fell off the bottom and its badge
+  // landed under OS 30 with a stray "250.00".
+  S.rsiSeries = S.rsiChart.addLineSeries({
+    color: '#f59e0b', lineWidth: 2,
+    autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
+  });
 
   /* Overbought / oversold thresholds as PRICE LINES, not data series.
 
