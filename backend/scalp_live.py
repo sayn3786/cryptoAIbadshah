@@ -48,7 +48,9 @@ MAX_BASIS = 0.01          # skip a coin whose HL price is >1% from the candles' 
 ENTRY_AT = "top"
 ENTRY_MS = sweep_fvg.ENTRY_BARS * M15_MS          # a limit is good for 2 hours
 DEFAULT_MAX_HOLD_HOURS = 4.0     # a scalp that drifts for hours is not a scalp
-DEFAULT_MAX_OPEN = len(SYMBOLS)   # one per scalp coin: in effect no cap (owner's call)
+DEFAULT_MAX_OPEN = 4              # Nov 2026: was len(SYMBOLS) (18) - in effect no cap;
+                                  # with SCALP_MAX_LONGS / _SHORTS and the $ risk cap
+                                  # (scalp_guard) a broad move no longer opens a book
 ENTRY_MATCH = 0.02        # a held position is "the scalp" within 2% of its entry
 
 
@@ -915,7 +917,7 @@ def plan_update(rec: Dict[str, Any], setup: Dict[str, Any],
 # i.e. averaging down; SCALP_ADD_ONLY_BETTER=1 also selects it).
 ADD_FAVOUR = 0.002        # at least 0.2% in profit (clears the round-trip costs)
 ADD_BETTER = 0.001        # "better": at least 0.1% beyond the average entry
-DEFAULT_MAX_ADDS = 2
+DEFAULT_MAX_ADDS = 0       # Nov 2026: adds off unless SCALP_MAX_ADDS is set (was 2)
 ADD_MODES = ("favourable", "any", "better")
 
 

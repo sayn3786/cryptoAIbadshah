@@ -5815,6 +5815,76 @@ def _scalp_save(records) -> None:
         pass
 
 
+# ── portfolio / re-entry state (scalp_guard), kept in the same KV as the book ──
+SCALP_LOCK_TTL_S = 110             # one HL pass at a time; outlives a slow run
+SCALP_AUDIT_CAP = 200
+
+
+def _scalp_exits_key():
+    return f"scalp:exits:{_deploy_env()}"
+
+
+def _scalp_exits() -> dict:
+    """{"SYM:DIR": {"reason", "at_ms", "reset", ...}}: how each coin / direction
+    last ended (scalp_guard.record_exit). Never raises."""
+    try:
+        import kv as _kv
+        data = json.loads(_kv.get_value(_scalp_exits_key()) or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _scalp_exits_save(memory) -> None:
+    try:
+        import kv as _kv
+        import scalp_guard as _sg
+        _kv.set_value(_scalp_exits_key(), json.dumps(memory or {}),
+                      ttl_seconds=_sg.EXIT_MEMORY_MS // 1000 + 86_400)
+    except Exception:
+        pass
+
+
+def _scalp_slot_key(slot_ms):
+    return f"scalp:slot:{_deploy_env()}:{int(slot_ms)}"
+
+
+def _scalp_slot_entries(slot_ms) -> int:
+    """New entries (and adds) already made on this 15m candle, by any run."""
+    try:
+        import kv as _kv
+        return int(json.loads(_kv.get_value(_scalp_slot_key(slot_ms)) or "{}").get("entries") or 0)
+    except Exception:
+        return 0
+
+
+def _scalp_slot_save(slot_ms, entries) -> None:
+    try:
+        import kv as _kv
+        _kv.set_value(_scalp_slot_key(slot_ms), json.dumps({"entries": int(entries)}),
+                      ttl_seconds=86_400)
+    except Exception:
+        pass
+
+
+def _scalp_audit(entry) -> None:
+    """One line of the trade audit (entries, protection, exits), bounded."""
+    _kv_append_json(f"scalp:audit:{_deploy_env()}", entry, cap=SCALP_AUDIT_CAP)
+
+
+def _scalp_exit_reason(res, *, timed_out=False, flip=False) -> str:
+    """The exit reason to remember: a confirmed one from the fills, else
+    "unknown" - never a guessed stop-out."""
+    if flip:
+        return "flip"
+    if timed_out:
+        return "timeout"
+    r = (res or {}).get("exit_reason")
+    if not res or res.get("exit_price") is None or r in (None, ""):
+        return "unknown"
+    return r
+
+
 def _scalp_engine_read(win, tf, symbol):
     import candle_analysis
     import scalp_live as _sl
@@ -5891,6 +5961,7 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
     import scalp_live as _sl
     import hl_autoexec as _ax
     import hl_exchange as _he
+    import hl_execution as _hx
     import hl_meta as _hm
     sym = setup["symbol"]
     coin = _hm.resolve_coin(sym, table)
@@ -5912,19 +5983,58 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
         return {"symbol": sym, "ok": False, "reason": r.get("reason"),
                 **{k: r[k] for k in ("drift_pct", "allowed_pct") if r.get(k) is not None}}
     px = r.get("mark_px") or setup["entry"]
+    placed_sl = (r.get("exit_prices") or {}).get("sl") or setup["sl"]
+    q = setup.get("quality") or {}
+    atr = q.get("atr")
+    dist = abs(float(px) - float(placed_sl)) if px and placed_sl else None
+    audit = {"signal_slot_ms": setup["slot_ms"], "ref_entry": setup.get("entry"),
+             "fill_px": px, "fill_px_source": "mark at fill (exact fill from fills on close)",
+             "size": r.get("size"), "placed_sl": placed_sl, "sl_ack": r.get("sl_ack"),
+             "sl_trigger": "stop-market (isMarket trigger, reduce-only)",
+             "atr_15m": atr, "fill_to_stop_pct": round(dist / float(px) * 100, 3)
+             if dist and px else None,
+             "fill_to_stop_atr": round(dist / atr, 2) if dist and atr else None,
+             "strength": setup.get("strength")}
     recs[coin] = {"coin": coin, "symbol": sym, "direction": setup["direction"], "limit": px,
-                  "sl": setup["sl"], "target": setup["target"], "placed_ms": now_ms,
-                  "slot_ms": setup["slot_ms"], "size": r.get("size"),
+                  "sl": placed_sl, "target": setup["target"], "placed_ms": now_ms,
+                  "slot_ms": setup["slot_ms"], "last_entry_slot": setup["slot_ms"],
+                  "reset_since_entry": False, "size": r.get("size"),
                   "notional_usd": r.get("notional_usd") or plan["notional_usd"],
                   "leverage": plan["leverage"], "state": "open", "opened_ms": now_ms,
-                  "fill_price": px, "kind": "engine",
+                  "fill_price": px, "kind": "engine", "audit": audit,
                   **({"tps": [setup["target"]]} if setup.get("fixed") else {}),
                   **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
     import scalp_store as _ss
     _ss.placed(_deploy_env(), recs[coin], rr=setup.get("rr"))
+    if not r.get("exits_ok", True):
+        # The stop was not confirmed: an unprotected scalp is closed at once
+        # rather than left to run (the 4h book only alerts; a scalp has no
+        # reason to be held without its stop).
+        cloid = _hx.client_order_id(sig["id"], "unprotected", setup["slot_ms"])
+        try:
+            closed, _d = _he.order_accepted(_he.send_market_close(coin, cloid))
+        except Exception:
+            closed = False
+        left = _scalp_left_open(coin) if closed else None
+        outcome = "UNPROTECTED_CLOSED" if closed and left == 0 else "UNPROTECTED_OPEN"
+        recs[coin]["protection"] = outcome
+        _scalp_audit({"at_ms": now_ms, "event": "entry", "symbol": sym, "coin": coin,
+                      "direction": setup["direction"], **audit, "protection": outcome,
+                      "exits_error": r.get("exits_error")})
+        if outcome == "UNPROTECTED_CLOSED":
+            recs.pop(coin, None)
+            _ss.closed(_deploy_env(), {**audit, "coin": coin, "symbol": sym,
+                                       "direction": setup["direction"], "slot_ms": setup["slot_ms"]},
+                       at_ms=now_ms, result={"exit_reason": "unprotected"})
+        return {"symbol": sym, "ok": False, "reason": outcome, "entered": True,
+                "exits_error": r.get("exits_error"), "notional_usd": plan["notional_usd"],
+                "leverage": plan["leverage"]}
+    recs[coin]["protection"] = "STOP_CONFIRMED" if r.get("sl_ack") == "accepted" else "STOP_UNVERIFIED"
+    _scalp_audit({"at_ms": now_ms, "event": "entry", "symbol": sym, "coin": coin,
+                  "direction": setup["direction"], **audit,
+                  "protection": recs[coin]["protection"]})
     return {"symbol": sym, "ok": True, "state": "open", "notional_usd": recs[coin]["notional_usd"],
-            "leverage": plan["leverage"],
-            **({} if r.get("exits_ok", True) else {"exits_error": r.get("exits_error")})}
+            "leverage": plan["leverage"], "protection": recs[coin]["protection"]}
 
 
 def _scalp_left_open(coin: str) -> Optional[float]:
@@ -5940,7 +6050,7 @@ def _scalp_left_open(coin: str) -> Optional[float]:
         return None
 
 
-def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
+def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms, gate=None, memory=None) -> dict:
     """An opposite engine signal on a running scalp: close it at market,
     cancel its stop / target, record its result, then open the new direction
     (HL holds one net position per coin, so both can't run) only when the
@@ -5979,7 +6089,14 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
     except Exception:
         fills = []
     res = _sl.settle(fills, rec) or {}
-    _ss.closed(_deploy_env(), rec, at_ms=now_ms, result={**res, "exit_reason": "other"})
+    _ss.closed(_deploy_env(), rec, at_ms=now_ms, result={**res, "exit_reason": "flip"})
+    if memory is not None:
+        import scalp_guard as _sg
+        _sg.record_exit(memory, sym, rec["direction"], "flip", now_ms, source="flip")
+    _scalp_audit({"at_ms": now_ms, "event": "exit", "symbol": sym, "coin": coin,
+                  "direction": rec["direction"], "exit_reason": "flip",
+                  "exit_px": res.get("exit_price"), "pnl_usd": res.get("pnl_usd"),
+                  **(rec.get("audit") or {})})
     recs.pop(coin, None)
     closed = (f"closed {sym} {rec['direction']} on an opposite signal"
               + (f" (${res['pnl_usd']:+.2f})" if res.get("pnl_usd") is not None else ""))
@@ -5992,7 +6109,7 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
         recent = bool(_kv.exists(flip_key))
     except Exception:
         recent = False
-    why = _sl.flip_block(setup, flipped_recently=recent)
+    why = _sl.flip_block(setup, flipped_recently=recent) or (gate(setup) if gate else None)
     if why:
         # Close and wait: in chop the opposite read is usually noise.
         return {"symbol": sym, "ok": True, "closed": True, "flipped": False,
@@ -6010,7 +6127,62 @@ def _scalp_flip(rec, setup, *, acct, table, recs, orders, now_ms) -> dict:
     return {**r, "flipped": True, "note": note}
 
 
-def _scalp_add_fixed(rec, setup, st, *, mark, table, acct, recs) -> Optional[dict]:
+def _scalp_add_gate(rec, setup, *, mark, stop, notional, batch) -> Optional[str]:
+    """Why an add must not happen (None: it may). Adds are off unless
+    SCALP_MAX_ADDS > 0; then a distinct fresh setup and the book's room."""
+    import scalp_live as _sl
+    import scalp_guard as _sg
+    if int(rec.get("adds") or 0) >= _sl.max_adds():
+        return "ADDS_OFF" if _sl.max_adds() == 0 else "MAX_ADDS"
+    why = _sg.add_block(rec, setup)
+    if why:
+        return why
+    if batch is not None:
+        return batch.check(rec["direction"], _sg.risk_usd(mark, stop, notional), add=True)
+    return None
+
+
+def _scalp_protect_add(coin, *, long, before, added, stop_px, stops, sid, ts) -> dict:
+    """After an add filled: a stop for the WHOLE position, confirmed, before
+    the old stops go. If it is not confirmed, the added size is closed again
+    (reduce-only) so only the original, still-protected part remains; if even
+    that fails the result says so loudly. Never raises."""
+    import hl_exchange as _he
+    import hl_execution as _hx
+    total = _scalp_left_open(coin)
+    if total is None:
+        total = before + added                       # account unreadable: the planned size
+    try:
+        ok, detail = _he.order_accepted(_he.send_stop(
+            coin, not long, total, stop_px, cloid=_hx.client_order_id(sid, "sl-add", ts)))
+    except Exception as exc:
+        ok, detail = False, type(exc).__name__
+    if ok:
+        for o in stops or []:
+            try:
+                _he.cancel_order(coin, o.get("oid"))
+            except Exception:
+                pass
+        return {"ok": True, "protection": "STOP_CONFIRMED", "total": total}
+    extra = max(0.0, total - before)
+    try:
+        undone, _d = _he.order_accepted(_he.send_market_reduce(
+            coin, extra, _hx.client_order_id(sid, "add-unwind", ts)))
+    except Exception:
+        undone = False
+    left = _scalp_left_open(coin) if undone else None
+    if undone and left is not None and abs(left - before) <= max(1e-9, before * 0.001):
+        return {"ok": False, "protection": "ADD_UNWOUND", "reason": "ADD_UNWOUND",
+                "detail": f"stop for the whole size rejected ({detail}); the add was closed, "
+                          "the original part keeps its stop"}
+    return {"ok": False, "protection": "ADD_UNWIND_FAILED", "reason": "ADD_UNWIND_FAILED",
+            "detail": f"stop for the whole size rejected ({detail}) and the added size could "
+                      f"not be confirmed closed ({'unknown' if left is None else left} held) - "
+                      "check the position on Hyperliquid now"}
+
+
+def _scalp_add_fixed(rec, setup, st, *, mark, table, acct, recs, batch=None,
+                     now_ms=None) -> Optional[dict]:
     """Fixed-margin add: another $margin at market at the scalp's leverage,
     then the stop (for the WHOLE size, placed first, the old one cancelled
     after), TP1 (half) and TP2 re-fixed from the new average entry. None when
@@ -6021,19 +6193,32 @@ def _scalp_add_fixed(rec, setup, st, *, mark, table, acct, recs) -> Optional[dic
     import hl_exchange as _he
     import hl_execution as _hx
     import hl_meta as _hm
+    import scalp_guard as _sg
     sym, coin = rec["symbol"], rec["coin"]
-    if mark is None or int(rec.get("adds") or 0) >= _sl.max_adds() or not st.get("entry"):
+    if mark is None or not st.get("entry"):
         return None
     if rec.get("size") and st["size"] < float(rec["size"]) * 0.98:
         return None                                # TP1 already took part: leave it be
     lev = int(rec.get("leverage") or setup.get("leverage") or 10)
     long = st["side"] == "long"
+    if int(rec.get("adds") or 0) >= _sl.max_adds():
+        return {"symbol": sym, "ok": False,
+                "reason": "ADDS_OFF" if _sl.max_adds() == 0 else "MAX_ADDS"}
     if not _sl.add_price_ok(st["entry"], mark, long):
         return None                                # default: only while in profit
     plan, reject = _scalp_size(sym, coin, {"limit": mark, "sl": rec.get("sl"), "leverage": lev},
                                acct=acct, table=table, recs=recs)
     if reject:
         return None
+    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
+    projected_avg = (st["entry"] * st["size"] + mark * plan["size"]) / (st["size"] + plan["size"])
+    stop_px = _hm.round_price(_sg.never_looser(rec["direction"], st.get("cur_sl"),
+                                               _sl.roe_levels(projected_avg, rec["direction"],
+                                                              lev)["sl"]), sz)
+    why = _scalp_add_gate(rec, setup, mark=mark, stop=stop_px, notional=plan["notional_usd"],
+                          batch=batch)
+    if why:
+        return {"symbol": sym, "ok": False, "reason": why}
     sid, ts = _sl.signal_id(sym), setup["slot_ms"]
     try:
         ok, _d = _he.order_accepted(_he.send_market_open(
@@ -6042,27 +6227,25 @@ def _scalp_add_fixed(rec, setup, st, *, mark, table, acct, recs) -> Optional[dic
         ok = False
     if not ok:
         return None
-    sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
-    total = round(st["size"] + plan["size"], sz)
+    prot = _scalp_protect_add(coin, long=long, before=st["size"], added=plan["size"],
+                              stop_px=stop_px, stops=st["stops"], sid=sid, ts=ts)
+    if batch is not None:
+        batch.commit(rec["direction"], _sg.risk_usd(mark, stop_px, plan["notional_usd"]) or 0.0,
+                     add=True)                    # the add filled: it used the candle's room
+    _scalp_audit({"at_ms": now_ms, "event": "add", "symbol": sym, "coin": coin,
+                  "direction": rec["direction"], "add_px": mark, "added_size": plan["size"],
+                  "stop_px": stop_px, "protection": prot["protection"]})
+    if not prot["ok"]:
+        rec["protection"] = prot["protection"]
+        return {"symbol": sym, "ok": False, "reason": prot["reason"],
+                "note": f"{sym}: {prot['detail']}"}
+    total = round(prot["total"], sz)
     old_avg = st["entry"]
-    avg = (old_avg * st["size"] + mark * plan["size"]) / total
+    avg = (old_avg * st["size"] + mark * (total - st["size"])) / total if total else old_avg
     lv = _sl.roe_levels(avg, rec["direction"], lev)
     px = lambda v: _hm.round_price(v, sz)                             # noqa: E731
     exit_buy = not long
     warn = ""
-    try:
-        sl_ok, _d = _he.order_accepted(_he.send_stop(
-            coin, exit_buy, total, px(lv["sl"]), cloid=_hx.client_order_id(sid, "sl-add", ts)))
-    except Exception:
-        sl_ok = False
-    if sl_ok:
-        for o in st["stops"]:
-            try:
-                _he.cancel_order(coin, o.get("oid"))
-            except Exception:
-                pass
-    else:
-        warn = " ⚠️ the new stop was NOT placed (the old stop still covers the first part)"
     for o in st["tps"]:
         try:
             _he.cancel_order(coin, o.get("oid"))
@@ -6080,18 +6263,21 @@ def _scalp_add_fixed(rec, setup, st, *, mark, table, acct, recs) -> Optional[dic
             tp_ok = False
         if tp_ok:
             placed.append(f"TP{k} {lvl:,.6g}")
-    rec.update(adds=int(rec.get("adds") or 0) + 1, limit=round(avg, 8), sl=px(lv["sl"]),
+    rec.update(adds=int(rec.get("adds") or 0) + 1, limit=round(avg, 8), sl=stop_px,
                target=legs[-1][0], tps=[lvl for lvl, _s in legs], size=total,
-               notional_usd=round(float(rec.get("notional_usd") or 0) + plan["notional_usd"], 2))
+               notional_usd=round(float(rec.get("notional_usd") or 0) + plan["notional_usd"], 2),
+               last_entry_slot=setup["slot_ms"], reset_since_entry=False,
+               protection="STOP_CONFIRMED")
     import scalp_store as _ss
     _ss.levels(_deploy_env(), rec)
     note = (f"added ${_sl.fixed_margin_usd():g} margin to {sym} {rec['direction']} at ~{mark:,.6g} "
-            f"({lev}x): avg entry {old_avg:,.6g} → {avg:,.6g}; re-fixed SL {px(lv['sl']):,.6g}"
+            f"({lev}x): avg entry {old_avg:,.6g} → {avg:,.6g}; SL {stop_px:,.6g} for the whole size"
             + (", " + ", ".join(placed) if placed else "") + warn)
     return {"symbol": sym, "ok": True, "added": plan["notional_usd"], "note": note}
 
 
-def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict]:
+def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs, batch=None,
+               now_ms=None) -> Optional[dict]:
     """Add to a running scalp (a same-way signal at a price add_price_ok allows): a market add sized for
     $SCALP_RISK_USD to the stop, then the stop re-placed for the WHOLE
     position (first, the old one cancelled after) and the take-profits re-laid
@@ -6101,11 +6287,17 @@ def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict
     import hl_exchange as _he
     import hl_execution as _hx
     import hl_meta as _hm
+    import scalp_guard as _sg
     sym, coin = rec["symbol"], rec["coin"]
     plan, reject = _scalp_size(sym, coin, {"limit": mark, "sl": add["stop"]}, acct=acct,
                                table=table, recs=recs)
     if reject:
         return None
+    stop_px = _sg.never_looser(rec["direction"], st.get("cur_sl"), float(add["stop"]))
+    why = _scalp_add_gate(rec, setup, mark=mark, stop=stop_px, notional=plan["notional_usd"],
+                          batch=batch)
+    if why:
+        return {"symbol": sym, "ok": False, "reason": why}
     long = st["side"] == "long"
     sid, ts = _sl.signal_id(sym), setup["slot_ms"]
     try:
@@ -6117,25 +6309,24 @@ def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict
     if not ok:
         return None
     sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
-    total = round(st["size"] + plan["size"], sz)
-    old_avg = st["entry"]
-    avg = (old_avg * st["size"] + mark * plan["size"]) / total
-    exit_buy = not long
     px = lambda v: _hm.round_price(v, sz)                             # noqa: E731
+    prot = _scalp_protect_add(coin, long=long, before=st["size"], added=plan["size"],
+                              stop_px=px(stop_px), stops=st["stops"], sid=sid, ts=ts)
+    if batch is not None:
+        batch.commit(rec["direction"], _sg.risk_usd(mark, stop_px, plan["notional_usd"]) or 0.0,
+                     add=True)
+    _scalp_audit({"at_ms": now_ms, "event": "add", "symbol": sym, "coin": coin,
+                  "direction": rec["direction"], "add_px": mark, "added_size": plan["size"],
+                  "stop_px": px(stop_px), "protection": prot["protection"]})
+    if not prot["ok"]:
+        rec["protection"] = prot["protection"]
+        return {"symbol": sym, "ok": False, "reason": prot["reason"],
+                "note": f"{sym}: {prot['detail']}"}
+    total = round(prot["total"], sz)
+    old_avg = st["entry"]
+    avg = (old_avg * st["size"] + mark * (total - st["size"])) / total if total else old_avg
+    exit_buy = not long
     warn = ""
-    try:
-        sl_ok, _d = _he.order_accepted(_he.send_stop(
-            coin, exit_buy, total, px(add["stop"]), cloid=_hx.client_order_id(sid, "sl-add", ts)))
-    except Exception:
-        sl_ok = False
-    if sl_ok:
-        for o in st["stops"]:
-            try:
-                _he.cancel_order(coin, o.get("oid"))
-            except Exception:
-                pass
-    else:
-        warn = " ⚠️ the stop for the whole size was NOT placed (the old stop still covers the first part)"
     ladder = (_sl.tp_ladder(st["cur_tps"], float(setup["target"]), total, sz, long=long,
                             mark=mark)
               or _sl.split(st["cur_tps"] or [float(setup["target"])], total, sz, mark))
@@ -6156,19 +6347,22 @@ def _scalp_add(rec, setup, st, add, *, mark, table, acct, recs) -> Optional[dict
                 placed.append(f"TP{k} {px(lvl):,.6g} ({round(size / total * 100):d}%)")
         rec["target"] = px(ladder[-1][0])
         rec["tps"] = [px(lvl) for lvl, _s in ladder]
-    rec.update(adds=int(rec.get("adds") or 0) + 1, limit=round(avg, 8), sl=px(add["stop"]),
+    rec.update(adds=int(rec.get("adds") or 0) + 1, limit=round(avg, 8), sl=px(stop_px),
                size=total, notional_usd=round(float(rec.get("notional_usd") or 0)
-                                              + plan["notional_usd"], 2))
+                                              + plan["notional_usd"], 2),
+               last_entry_slot=setup["slot_ms"], reset_since_entry=False,
+               protection="STOP_CONFIRMED")
     import scalp_store as _ss
     _ss.levels(_deploy_env(), rec)
     note = (f"added to {sym} {rec['direction']} at ~{mark:,.6g} (${plan['notional_usd']:,.0f} at "
             f"{plan['leverage']:g}x, +${_sl.risk_usd():g} risk): avg entry {old_avg:,.6g} → "
-            f"{avg:,.6g}; SL {px(add['stop']):,.6g} for the whole size"
+            f"{avg:,.6g}; SL {px(stop_px):,.6g} for the whole size"
             + (f"; TP ladder " + ", ".join(placed) if placed else "") + warn)
     return {"symbol": sym, "ok": True, "added": plan["notional_usd"], "note": note}
 
 
-def _scalp_update(rec, setup, *, positions, orders, mids, table, acct=None, recs=None) -> dict:
+def _scalp_update(rec, setup, *, positions, orders, mids, table, acct=None, recs=None,
+                  batch=None, now_ms=None) -> dict:
     """A fresh signal the same way on a running scalp: move its target, and
     its stop only if tighter (scalp_live.plan_update). New orders first, then
     the old ones cancelled, so the position is never without a stop. Never
@@ -6186,7 +6380,8 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table, acct=None, recs
         # Fixed exits: a same-way signal only adds $margin and re-fixes them.
         st = _sl.exit_state(rec, positions, orders, mark)
         if acct is not None and recs is not None and st is not None:
-            r = _scalp_add_fixed(rec, setup, st, mark=mark, table=table, acct=acct, recs=recs)
+            r = _scalp_add_fixed(rec, setup, st, mark=mark, table=table, acct=acct, recs=recs,
+                                 batch=batch, now_ms=now_ms)
             if r:
                 return r
         return {"symbol": sym, "ok": False, "reason": "FIXED_LEVELS_KEPT"}
@@ -6194,7 +6389,8 @@ def _scalp_update(rec, setup, *, positions, orders, mids, table, acct=None, recs
         st = _sl.exit_state(rec, positions, orders, mark)
         add = _sl.plan_add(rec, setup, st, mark)
         if add:
-            r = _scalp_add(rec, setup, st, add, mark=mark, table=table, acct=acct, recs=recs)
+            r = _scalp_add(rec, setup, st, add, mark=mark, table=table, acct=acct, recs=recs,
+                           batch=batch, now_ms=now_ms)
             if r:
                 return r
     sz = int((table.get(coin) or {}).get("sz_decimals") or 0)
@@ -6303,20 +6499,68 @@ def _scalp_place(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
             "notional_usd": plan["notional_usd"], "leverage": plan["leverage"]}
 
 
-def _scalp_hl(setups, now_ms) -> dict:
-    """Cancel stale entries, promote filled ones, time out old scalps, then
-    place new limit entries (testnet only). Never raises."""
+def _scalp_gate(setup, *, memory, batch, mids, table, now_ms) -> tuple:
+    """(reason or None, detail, risk $) for a NEW position: the stop-out
+    re-entry rule, the closed-candle entry quality, the live-price check, then
+    the book's limits. Mirrored LONG / SHORT; missing inputs are reasons."""
     import scalp_live as _sl
+    import scalp_guard as _sg
+    import hl_meta as _hm
+    sym, d = setup["symbol"], setup["direction"]
+    why = _sg.reentry_block(memory, sym, d, now_ms)
+    if why:
+        return why, {}, None
+    q = setup.get("quality")
+    if q is None:
+        return "ENTRY_QUALITY_UNKNOWN", {}, None
+    if not q.get("ok"):
+        return "ENTRY_QUALITY", {"quality": q}, None
+    coin = _hm.resolve_coin(sym, table) if table else None
+    try:
+        mark = float((mids or {}).get(coin)) if coin else None
+    except (TypeError, ValueError):
+        mark = None
+    live = _sg.live_check(d, mark, setup.get("sl"), setup.get("target"), setup.get("entry"))
+    if not live.get("ok"):
+        return "LIVE_PRICE", {"live": live}, None
+    if setup.get("leverage") and _sl.fixed_margin_usd() > 0:
+        notional = _sl.fixed_margin_usd() * float(setup["leverage"])
+    else:
+        stop_pct = abs(float(setup["entry"]) - float(setup["sl"])) / float(setup["entry"])
+        notional = _sl.risk_usd() / max(stop_pct, _sl.MIN_STOP_PCT)
+    risk = _sg.risk_usd(mark, setup.get("sl"), notional)
+    why = batch.check(d, risk)
+    return why, {"live": live, "quality": q}, risk
+
+
+def _scalp_hl(setups, now_ms, reads=None) -> dict:
+    """Manage the running scalps (cancel stale entries, promote fills, time out,
+    settle and remember how each ended), then take NEW entries from the RANKED
+    setups within the book's limits (scalp_guard): per candle, per direction,
+    in all and $ at risk, each counted the moment it fills; the stop-out
+    re-entry rule; the entry-quality and live-price checks. Running scalps are
+    always managed, even when new entries are blocked. One pass at a time
+    (KV lock). Testnet only. Never raises."""
+    import scalp_live as _sl
+    import scalp_guard as _sg
     import hl_account as _ha
     import hl_exchange as _he
     import hl_execution as _hx
     import hl_meta as _hm
+    import kv as _kv
     if not _sl.auto_enabled():
         return {"ran": False, "reason": "HL_SCALP_AUTO_EXECUTE_OFF"}
     if _ha._env() != "testnet":
         return {"ran": False, "reason": "TESTNET_ONLY"}
     if not _hx.arm_status()["armed"]:
         return {"ran": False, "reason": "DISARMED"}
+    lock = f"scalp:lock:{_deploy_env()}"
+    try:
+        got = _kv.claim(lock, ttl_seconds=SCALP_LOCK_TTL_S)
+    except Exception:
+        got = False
+    if not got:
+        return {"ran": False, "reason": "BUSY"}         # another pass holds the book
     out: dict = {"ran": True}
     try:
         with _hl_execute_lock:
@@ -6332,7 +6576,11 @@ def _scalp_hl(setups, now_ms) -> dict:
             except Exception:
                 orders = None
             recs = _scalp_records()
-            mids = _ha.all_mids() if recs else {}
+            memory = _sg.prune(_scalp_exits(), now_ms)
+            try:
+                mids = _ha.all_mids() or {}
+            except Exception:
+                mids = {}
             act = _sl.sweep(recs, positions, orders, mids, now_ms=now_ms)
             import scalp_store as _ss
             env = _deploy_env()
@@ -6344,6 +6592,19 @@ def _scalp_hl(setups, now_ms) -> dict:
                 except Exception:
                     fills = None
             notes = []
+
+            def _ended(rec, res, reason):
+                _sg.record_exit(memory, rec["symbol"], rec["direction"], reason, now_ms,
+                                source="fills" if res else "no fills")
+                _scalp_audit({"at_ms": now_ms, "event": "exit", "symbol": rec["symbol"],
+                              "coin": rec.get("coin"), "direction": rec["direction"],
+                              "exit_reason": reason,
+                              "exit_px": (res or {}).get("exit_price"),
+                              "exit_ms": (res or {}).get("closed_ms"),
+                              "fill_px_actual": (res or {}).get("fill_price"),
+                              "pnl_usd": (res or {}).get("pnl_usd"),
+                              "held_ms": now_ms - int(rec.get("opened_ms") or now_ms),
+                              **(rec.get("audit") or {})})
             for coin in act["promote"]:
                 px = next((p.get("entry_px") for p in positions
                            if str(p.get("coin")) == coin), None)
@@ -6374,6 +6635,7 @@ def _scalp_hl(setups, now_ms) -> dict:
                     recs.pop(coin, None)
                     res = _sl.settle(fills, rec, timed_out=True) if fills is not None else None
                     _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "timeout"})
+                    _ended(rec, res, "timeout")
                     notes.append(f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h"
                                  + (f" (${res['pnl_usd']:+.2f})" if res else ""))
             for coin in act["drop"]:
@@ -6381,40 +6643,91 @@ def _scalp_hl(setups, now_ms) -> dict:
                 res = _sl.settle(fills, rec) if (fills is not None and rec) else None
                 if res and res.get("exit_price") is not None:
                     _ss.closed(env, rec, at_ms=now_ms, result=res)
+                    _ended(rec, res, _scalp_exit_reason(res))
                     notes.append(f"{rec['symbol']} closed at {res['exit_reason']} "
                                  f"(${res['pnl_usd']:+.2f})")
                 elif rec.get("state") == "open":
-                    _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "other"})
+                    # Gone, but the fills can't say how: "unknown", never a
+                    # guessed stop-out (it starts no cooldown).
+                    _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "unknown"})
+                    _ended(rec, res, "unknown")
                 elif rec.get("state") == "pending" and fills is not None:
                     _ss.cancelled(env, rec, reason="gone from HL without a fill")
+            # This candle's reads: a direction with no qualifying setup resets a
+            # stop-out (and makes a running scalp's next same-way setup fresh).
+            for sym, rd in (reads or {}).items():
+                _sg.observe(memory, sym, rd, max((s["slot_ms"] for s in setups), default=now_ms))
+                for r in recs.values():
+                    if r.get("symbol") == sym and r.get("direction") in rd and \
+                            not rd[r["direction"]]:
+                        r["reset_since_entry"] = True
             table = _hm.asset_table()
             held = {str(p.get("coin") or "").upper() for p in positions}
-            results = []
-            for s in setups:
+            slot = max((s["slot_ms"] for s in setups), default=None)
+            batch = _sg.Batch(recs, max_open=_sl.max_open(),
+                              entries_this_candle=_scalp_slot_entries(slot) if slot else 0)
+            results, decisions = [], []
+
+            def _gate(s):
+                why, _det, _risk = _scalp_gate(s, memory=memory, batch=batch, mids=mids,
+                                               table=table, now_ms=now_ms)
+                return why
+            for rank, s in enumerate(setups, start=1):
                 coin = (_hm.resolve_coin(s["symbol"], table) or "").upper()
                 if coin:                  # the levels onto HL's own prices
                     s = _sl.on_hl_prices(s, _ha.candle_close(
                         _hm.resolve_coin(s["symbol"], table), s["slot_ms"] - _sl.M15_MS))
+                dec = {"rank": rank, "symbol": s["symbol"], "direction": s["direction"],
+                       "strength": s.get("strength"),
+                       "ext_atr": (s.get("quality") or {}).get("ext_atr")}
                 rec = next((r for c, r in recs.items() if c.upper() == coin), None)
                 if rec is not None and rec.get("state") == "open" and \
                         s.get("kind") == "engine" and s["direction"] != rec["direction"]:
+                    before = batch.candle
                     r = _scalp_flip(rec, s, acct=acct, table=table, recs=recs,
-                                    orders=orders or [], now_ms=now_ms)
+                                    orders=orders or [], now_ms=now_ms, gate=_gate, memory=memory)
+                    if r.get("flipped"):
+                        batch.commit(s["direction"], _sg.record_risk(recs.get(coin) or {}))
                     results.append(r)
+                    decisions.append({**dec, "decision": "flip" if r.get("flipped") else "close",
+                                      "reason": r.get("reason")})
                     if r.get("note"):
                         notes.append(r["note"])
+                    if batch.candle != before:
+                        _scalp_slot_save(slot, batch.candle)
+                    _scalp_save(recs)
                     continue
                 if rec is not None and rec.get("state") == "open":
                     r = _scalp_update(rec, s, positions=positions, orders=orders or [],
-                                      mids=mids, table=table, acct=acct, recs=recs)
+                                      mids=mids, table=table, acct=acct, recs=recs,
+                                      batch=batch, now_ms=now_ms)
                     results.append(r)
+                    decisions.append({**dec, "decision": "managed",
+                                      "reason": r.get("reason") or "updated"})
                     if r.get("note"):
                         notes.append(r["note"])
+                    if r.get("added"):
+                        _scalp_slot_save(slot, batch.candle)
+                    _scalp_save(recs)
                     continue
-                if _sl.room(recs) <= 0:
-                    break
                 if coin in held or coin in {c.upper() for c in recs}:
                     results.append({"symbol": s["symbol"], "ok": False, "reason": "POSITION_EXISTS"})
+                    decisions.append({**dec, "decision": "rejected", "reason": "POSITION_EXISTS"})
+                    batch.note("POSITION_EXISTS")
+                    continue
+                if s.get("kind") == "engine":
+                    why, detail, risk = _scalp_gate(s, memory=memory, batch=batch, mids=mids,
+                                                    table=table, now_ms=now_ms)
+                else:                     # the old sweep -> FVG limit book: limits only
+                    stop_pct = max(abs(float(s["limit"]) - float(s["sl"])) / float(s["limit"]),
+                                   _sl.MIN_STOP_PCT)
+                    risk = _sg.risk_usd(s["limit"], s["sl"], _sl.risk_usd() / stop_pct)
+                    why, detail = batch.check(s["direction"], risk), {}
+                if why:
+                    batch.note(why.split(" ")[0])
+                    results.append({"symbol": s["symbol"], "ok": False, "reason": why})
+                    decisions.append({**dec, "decision": "rejected", "reason": why,
+                                      **{k: v for k, v in detail.items() if k in ("live", "quality")}})
                     continue
                 try:
                     place = _scalp_market if s.get("kind") == "engine" else _scalp_place
@@ -6424,6 +6737,13 @@ def _scalp_hl(setups, now_ms) -> dict:
                     r = {"symbol": s["symbol"], "ok": False, "reason": "ERROR",
                          "error": type(exc).__name__}
                 results.append(r)
+                if r.get("ok") or r.get("entered"):
+                    # Counted at once: the next candidate in this batch sees it.
+                    batch.commit(s["direction"], risk or 0.0)
+                    _scalp_slot_save(slot, batch.candle)
+                    _scalp_save(recs)
+                decisions.append({**dec, "decision": "entered" if r.get("ok") else "failed",
+                                  "reason": r.get("reason"), "protection": r.get("protection")})
                 if r.get("ok") and s.get("kind") == "engine":
                     notes.append(f"opened {s['symbol']} {s['direction']} {s['strength']:g} at "
                                  f"market (${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
@@ -6434,13 +6754,26 @@ def _scalp_hl(setups, now_ms) -> dict:
                     notes.append(f"placed {s['symbol']} {s['direction']} limit {s['limit']:,.6g} "
                                  f"(${r['notional_usd']:,.0f} at {r['leverage']:g}x, "
                                  f"${_sl.risk_usd():g} risk)")
+                elif r.get("entered"):
+                    notes.append(f"⚠️ {s['symbol']} opened but its stop was not confirmed: "
+                                 f"{r.get('reason')}")
             _scalp_save(recs)
+            _scalp_exits_save(memory)
         out.update({"results": results, "notes": notes, "held": sorted(held),
-                    "open": {c: r.get("state") for c, r in recs.items()}})
+                    "open": {c: r.get("state") for c, r in recs.items()},
+                    "batch": {"slot_ms": slot, "candidates": len(setups),
+                              "entered": sum(1 for d in decisions if d["decision"] == "entered"),
+                              **batch.view()},
+                    "decisions": decisions})
         if notes:
             _scalp_private("🪤 scalp book (testnet): " + "; ".join(notes))
     except Exception as exc:
         out.update({"ok": False, "error": type(exc).__name__})
+    finally:
+        try:
+            _kv.release(lock)
+        except Exception:
+            pass
     return out
 
 
@@ -6464,6 +6797,8 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
             if why_not:
                 skipped[sym] = why_not
                 return None
+            fresh = bool(m15) and len(m15) >= _sl.WINDOW and \
+                0 <= now_ms - (int(m15[-1]["timestamp"]) + _sl.M15_MS) < _sl.M15_MS
             if _sl.mode() == "blend":
                 # The 15m engine triggers; sweep -> FVG and the 1H read only add
                 # (or, the 1H against, take) strength — no requirement.
@@ -6475,6 +6810,14 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
                     # The owner's fixed exits: % of a fixed margin at the
                     # coin's leverage, replacing the structure stop / target.
                     s = _sl.fix_levels(s, _scalp_leverage(sym, hl_table))
+                if s is not None:
+                    # Execution eligibility from the CLOSED candles (scalp_guard):
+                    # stretch from the mean, room to the opposing swing.
+                    s = {**s, "quality": _sg.entry_quality(m15, s["direction"], s["entry"],
+                                                            s["sl"])}
+                if fresh:            # this candle's read, for the stop-out reset rule
+                    reads[sym] = {"LONG": bool(s and s["direction"] == "LONG"),
+                                  "SHORT": bool(s and s["direction"] == "SHORT")}
                 return s
             s = _sl.new_setup(m15, sym, now_ms=now_ms)
             if s is None:
@@ -6485,7 +6828,9 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
 
     rejected: list = []
     skipped: dict = {}
+    reads: dict = {}
     import hl_meta as _hm
+    import scalp_guard as _sg
     hl_table, hl_mids = None, None
     if _sl.auto_enabled():
         try:                               # which coins HL can actually trade now
@@ -6496,7 +6841,10 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     syms = [s for s in _sl.SYMBOLS if s in SYMBOLS]
     with ThreadPoolExecutor(max_workers=6) as ex:
         found = [x for x in ex.map(_one, syms) if x]
-    found.sort(key=lambda x: -x["rr"])
+    # Explicit ranking (scalp_guard.rank_key): entry quality passed, then the
+    # higher score, then the less stretched entry. R:R is the same 1.5 for
+    # every fixed-exit scalp, so sorting by it left the coin list to decide.
+    found.sort(key=_sg.rank_key)
     new = []
     for x in found:
         try:
@@ -6508,7 +6856,7 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
             pass
     if new:
         _scalp_private(_sl.message(new, auto=_sl.auto_enabled()))
-    hl = _scalp_hl(new, now_ms)
+    hl = _scalp_hl(new, now_ms, reads=reads)
     label = [f"{x['symbol']} {x['direction']} {x['strength']:g} R:R {x['rr']:g}"
              + (f" [{x['score_parts']} vs {_sl.min_strength():g}]" if x.get("score_parts") else "")
              if x.get("kind") == "engine" else f"{x['symbol']} {x['direction']} R:R {x['rr']:g}"
@@ -6519,7 +6867,8 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
         **({"score_details": details} if details else {}),
         **({"rejected": sorted(rejected)} if rejected else {}),
         **({"skipped": skipped} if skipped else {}),
-        **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held") if hl.get(k)}},
+        **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held", "batch",
+                                  "decisions") if hl.get(k)}},
         cap=96)
     return {"ok": True, "ran": True, "coins": len(syms), "signals": label,
             "rejected": sorted(rejected), "skipped": skipped,
@@ -6705,7 +7054,30 @@ def api_hl_scalp():
                     **_scalp_history(),
                     "runs": runs,
                     "score_details": _scalp_score_details(runs),
+                    "portfolio": _scalp_portfolio_view(),
+                    "trade_audit": _kv_json_list(f"scalp:audit:{_deploy_env()}")[-60:],
                     "amd_forward": _amd_forward_view()})
+
+
+def _scalp_portfolio_view() -> dict:
+    """The book against its limits now, and each coin / direction's stop-out
+    state (cooldown left, reset seen). Read only. Never raises."""
+    try:
+        import scalp_live as _sl
+        import scalp_guard as _sg
+        recs = _scalp_records()
+        now_ms = int(time.time() * 1000)
+        reentry = {}
+        for k, e in sorted(_sg.prune(_scalp_exits(), now_ms).items()):
+            sym, d = k.split(":", 1)
+            reentry[k] = {**e, "blocked": _sg.reentry_block({k: e}, sym, d, now_ms)}
+        slot = now_ms // _sl.M15_MS * _sl.M15_MS
+        return {"limits": _sg.limits(_sl.max_open()), "state": _sg.book_state(recs),
+                "entries_this_candle": _scalp_slot_entries(slot), "max_adds": _sl.max_adds(),
+                "protection": {c: r.get("protection") for c, r in recs.items()},
+                "reentry": reentry}
+    except Exception as exc:
+        return {"error": type(exc).__name__}
 
 
 def _amd_forward_view() -> dict:

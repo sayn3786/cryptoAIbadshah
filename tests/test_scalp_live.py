@@ -51,7 +51,7 @@ def clean_env(monkeypatch):
 
 def test_defaults_and_switches(monkeypatch):
     assert sl.enabled() and sl.auto_enabled()
-    assert sl.max_hold_ms() == 4 * H and sl.max_open() == 18 and sl.ENTRY_MS == 2 * H
+    assert sl.max_hold_ms() == 4 * H and sl.max_open() == 4 and sl.ENTRY_MS == 2 * H  # Nov 2026
     monkeypatch.setenv("HL_SCALP_AUTO_EXECUTE", "0")
     assert sl.enabled() and not sl.auto_enabled()
     monkeypatch.setenv("SCALP_ENABLED", "off")
@@ -110,7 +110,7 @@ def test_sweep_open_scalps():
 
 
 def test_room(monkeypatch):
-    assert sl.room({}) == 18 and sl.room({"A": {}, "B": {}, "C": {}}) == 15
+    assert sl.room({}) == 4 and sl.room({"A": {}, "B": {}, "C": {}}) == 1   # default 4 (Nov 2026)
     monkeypatch.setenv("SCALP_MAX_OPEN", "2")
     assert sl.room({}) == 2 and sl.room({"A": {}, "B": {}, "C": {}}) == 0
     monkeypatch.setenv("SCALP_MAX_OPEN", "4")
@@ -172,6 +172,7 @@ def app_mod(monkeypatch):
     monkeypatch.setattr(kv, "exists", lambda k: k in mem)
     monkeypatch.setattr(kv, "claim", lambda k, ttl_seconds=0: (k not in mem)
                         and (mem.__setitem__(k, "1") or True))
+    monkeypatch.setattr(kv, "release", lambda k: mem.pop(k, None))
     sent = []
     monkeypatch.setattr(app, "_scalp_private", lambda t: sent.append(t))
     import hl_meta
@@ -187,7 +188,7 @@ def app_mod(monkeypatch):
 def test_run_alerts_each_setup_once_and_needs_1h(app_mod, monkeypatch):
     monkeypatch.setenv("SCALP_MODE", "sweep_fvg")
     calls = []
-    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now, **kw: calls.append(s) or {"ran": False})
     h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
     fetch = lambda sym, iv: setup_bars() if iv == "15m" else h1                  # noqa: E731
     read = lambda w, tf, s: {"direction": "LONG" if s == "ETH" else "SHORT"}      # noqa: E731
@@ -436,7 +437,7 @@ def test_blend_engine_triggers_and_sweep_only_adds_strength(monkeypatch):
 
 def test_blend_run_alerts_engine_scalps(app_mod, monkeypatch):
     calls = []
-    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now, **kw: calls.append(s) or {"ran": False})
     h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
     fetch = lambda sym, iv: padded() if iv == "15m" else h1                          # noqa: E731
     read = lambda w, tf, s: {"direction": "LONG", "strength": 80} if s == "ETH" else {}  # noqa
@@ -460,7 +461,7 @@ def test_no_adx_filter_in_the_live_book(app_mod, monkeypatch):
     assert not hasattr(sl, "adx_block") and not hasattr(sl, "min_adx")
     monkeypatch.setenv("SCALP_MIN_ADX", "25")                       # no longer read
     calls = []
-    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: calls.append(s) or {"ran": False})
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now, **kw: calls.append(s) or {"ran": False})
     fetch = lambda sym, iv: padded() if iv == "15m" else _h1_bars(False)            # noqa: E731
     read = lambda w, tf, s: {"direction": "LONG", "strength": 80} if s == "ETH" else {}  # noqa
     out = app_mod._scalp_run(NOW_B, fetch_fn=fetch, read_fn=read)
@@ -476,9 +477,11 @@ def test_engine_scalp_opens_at_market_risk_sized(app_mod, hl_fake, monkeypatch):
         return {"results": [{"ok": True, "coin": "ETH", "mark_px": 103.1, "size": 2.4,
                              "notional_usd": 247.4, "exits_ok": True}]}
     monkeypatch.setattr(hl_autoexec, "execute", execute)
+    import hl_account
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"ETH": "103"})
     setup = {"kind": "engine", "symbol": "ETH", "direction": "LONG", "strength": 80.0,
              "engine_strength": 80.0, "sweep_bonus": 0.0, "entry": 103.0, "limit": 103.0,
-             "sl": 102.6, "target": 104.0, "rr": 2.5, "slot_ms": 7}
+             "sl": 102.6, "target": 104.0, "rr": 2.5, "slot_ms": 7, "quality": GOOD_Q}
     out = app_mod._scalp_hl([setup], H)
     assert seen["sig"]["tp1"] == 104.0 and seen["sig"]["sl"] == 102.6 and seen["sig"]["entry"] == 103
     # $1 / 0.39% stop -> ~$256, capped at $25 x 10 = $250, rounded to the lot size
@@ -540,6 +543,9 @@ def test_exits_prefer_the_swing_structure():
 
 
 # ── a fresh signal on a running scalp moves its levels ──────────────────────
+
+GOOD_Q = {"ok": True, "reasons": [], "ext_atr": 0.4, "room_r": None, "atr": 0.5}
+
 
 def _aave(**kw):
     r = {"coin": "AAVE", "symbol": "AAVE", "direction": "SHORT", "state": "open",
@@ -622,7 +628,7 @@ def test_opposite_signal_flips_the_scalp(app_mod, hl_fake, monkeypatch):
     app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0)})
     long_ = {"kind": "engine", "symbol": "AAVE", "direction": "LONG", "strength": 88.0,
              "entry": 144.1, "limit": 144.1, "sl": 143.2, "target": 145.5, "rr": 1.55,
-             "slot_ms": 9}
+             "slot_ms": 9, "quality": GOOD_Q}
     out = app_mod._scalp_hl([long_], 2 * H)
     assert hl_fake["closed"] == ["AAVE"]                                  # old SHORT closed
     assert sorted(hl_fake["cancelled"]) == [("AAVE", 1), ("AAVE", 2)]     # its exits gone
@@ -653,7 +659,7 @@ def _flip_setup(app_mod, hl_fake, monkeypatch, opened):
 def _long(strength):
     return {"kind": "engine", "symbol": "AAVE", "direction": "LONG", "strength": strength,
             "entry": 144.1, "limit": 144.1, "sl": 143.2, "target": 145.5, "rr": 1.55,
-            "slot_ms": 9}
+            "slot_ms": 9, "quality": GOOD_Q}
 
 
 def test_a_weak_opposite_signal_closes_and_waits(app_mod, hl_fake, monkeypatch):
@@ -733,6 +739,7 @@ def test_tp_ladder_grows_to_three_then_moves_the_furthest():
 # ── adding to a running scalp ───────────────────────────────────────────────
 
 def test_plan_add_rules(monkeypatch):
+    monkeypatch.setenv("SCALP_MAX_ADDS", "2")            # off by default since Nov 2026
     st = sl.exit_state(_aave(), AAVE_POS, AAVE_ORDERS, 144.5)      # SHORT, avg 144.17
     assert st["cur_sl"] == 145.483 and st["cur_tps"] == [142.201] and st["size"] == 0.75
     new = {"direction": "SHORT", "sl": 145.483, "target": 142.076}
@@ -776,15 +783,21 @@ def test_add_averages_in_and_relays_the_exits(app_mod, hl_fake, monkeypatch):
         "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
     monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"AAVE": "144.5"})
     monkeypatch.setattr(app_mod.client, "get_market_cap", lambda pair: 4e9)
-    monkeypatch.setattr(hl_exchange, "send_market_open", lambda coin, buy, size, cloid, env=None,
-                        leverage=None: calls.append(("open", coin, buy, size)) or {"status": "ok"})
+    monkeypatch.setenv("SCALP_MAX_ADDS", "2")          # adds are off by default (Nov 2026)
+    pos = [dict(AAVE_POS[0])]
+
+    def _open(coin, buy, size, cloid, env=None, leverage=None):
+        calls.append(("open", coin, buy, size))
+        pos[0]["size"] = str(round(float(pos[0]["size"]) + size, 8))   # the add fills
+        return {"status": "ok"}
+    monkeypatch.setattr(hl_exchange, "send_market_open", _open)
     monkeypatch.setattr(hl_exchange, "send_stop", lambda coin, buy, size, px, cloid=None,
                         env=None: calls.append(("sl", coin, buy, size, px)) or {"status": "ok"})
     monkeypatch.setattr(hl_exchange, "send_take_profit", lambda coin, buy, size, px, cloid=None,
                         env=None: calls.append(("tp", coin, buy, size, px)) or {"status": "ok"})
-    hl_fake["positions"] = AAVE_POS
+    hl_fake["positions"] = pos
     hl_fake["orders"] = AAVE_ORDERS
-    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0, notional_usd=108.0)})
+    app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0, notional_usd=108.0, reset_since_entry=True)})
     setup = {"kind": "engine", "symbol": "AAVE", "direction": "SHORT", "strength": 83.0,
              "entry": 144.5, "limit": 144.5, "sl": 145.483, "target": 142.076, "rr": 1.5,
              "slot_ms": 9}
@@ -820,7 +833,7 @@ def test_run_skips_and_logs_untradeable(app_mod, monkeypatch):
     import hl_meta
     monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {"ETH": {}})
     monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"ETH": "103"})
-    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now: {"ran": False})
+    monkeypatch.setattr(app_mod, "_scalp_hl", lambda s, now, **kw: {"ran": False})
     h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
     fetch = lambda sym, iv: padded() if iv == "15m" else h1                          # noqa
     read = lambda w, tf, s: {"direction": "LONG", "strength": 80}                    # noqa
@@ -849,9 +862,11 @@ def test_engine_scalp_uses_the_hl_close(app_mod, hl_fake, monkeypatch):
                              "notional_usd": 247.9, "exits_ok": True}]}
     monkeypatch.setattr(hl_autoexec, "execute", execute)
     hl_fake["hl_close"] = 103.25                                           # HL 0.24% above
+    import hl_account
+    monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"ETH": "103.3"})
     setup = {"kind": "engine", "symbol": "ETH", "direction": "LONG", "strength": 80.0,
              "engine_strength": 80.0, "sweep_bonus": 0.0, "entry": 103.0, "limit": 103.0,
-             "sl": 102.6, "target": 104.0, "rr": 2.5, "slot_ms": 7 * M}
+             "sl": 102.6, "target": 104.0, "rr": 2.5, "slot_ms": 7 * M, "quality": GOOD_Q}
     app_mod._scalp_hl([setup], H)
     k = 103.25 / 103.0
     assert seen["sig"]["entry"] == 103.25                                  # the guard's reference
@@ -899,7 +914,7 @@ def test_fixed_scalp_opens_50_margin_with_one_target(app_mod, hl_fake, monkeypat
     monkeypatch.setattr(hl_autoexec, "execute", execute)
     setup = sl.fix_levels({"kind": "engine", "symbol": "ETH", "direction": "LONG",
                            "strength": 80.0, "entry": 100.0, "limit": 100.0, "sl": 97.0,
-                           "target": 109.0, "rr": 3.0, "slot_ms": 9}, 10)
+                           "target": 109.0, "rr": 3.0, "slot_ms": 9, "quality": GOOD_Q}, 10)
     out = app_mod._scalp_hl([setup], 2 * H)
     assert out["results"][0]["ok"]
     assert seen["cfg"]["notional_usd"] == 500.0 and seen["cfg"]["leverage"] == 10   # $50 x 10
@@ -917,16 +932,22 @@ def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch
     monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
         "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
     monkeypatch.setattr(hl_account, "all_mids", lambda env=None: {"AAVE": "144.5"})
-    monkeypatch.setattr(hl_exchange, "send_market_open", lambda coin, buy, size, cloid, env=None,
-                        leverage=None: calls.append(("open", size, leverage)) or {"status": "ok"})
+    monkeypatch.setenv("SCALP_MAX_ADDS", "2")          # adds are off by default (Nov 2026)
+    pos = [dict(AAVE_POS[0])]
+
+    def _open(coin, buy, size, cloid, env=None, leverage=None):
+        calls.append(("open", size, leverage))
+        pos[0]["size"] = str(round(float(pos[0]["size"]) + size, 8))   # the add fills
+        return {"status": "ok"}
+    monkeypatch.setattr(hl_exchange, "send_market_open", _open)
     monkeypatch.setattr(hl_exchange, "send_stop", lambda coin, buy, size, px, cloid=None,
                         env=None: calls.append(("sl", size, px)) or {"status": "ok"})
     monkeypatch.setattr(hl_exchange, "send_take_profit", lambda coin, buy, size, px, cloid=None,
                         env=None: calls.append(("tp", size, px)) or {"status": "ok"})
-    hl_fake["positions"] = AAVE_POS
+    hl_fake["positions"] = pos
     hl_fake["orders"] = AAVE_ORDERS
     app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0, leverage=10, size=0.75,
-                                       notional_usd=108.0)})
+                                       notional_usd=108.0, reset_since_entry=True)})
     setup = sl.fix_levels({"kind": "engine", "symbol": "AAVE", "direction": "SHORT",
                            "strength": 83.0, "entry": 144.5, "limit": 144.5, "sl": 146.0,
                            "target": 140.0, "rr": 1.5, "slot_ms": 9}, 10)
@@ -936,15 +957,17 @@ def test_fixed_same_way_signal_adds_50_and_refixes(app_mod, hl_fake, monkeypatch
     rec = app_mod._scalp_records()["AAVE"]
     avg = rec["limit"]
     assert rec["adds"] == 1 and 144.17 < avg < 144.5
-    assert abs(rec["sl"] - avg * 1.01) < 0.02                             # -10% of margin at 10x
+    # Re-fixed from the higher SHORT average, -10% of margin would be 145.89 -
+    # looser than the 145.48 already in place, so the stop stays (never loosened).
+    assert rec["sl"] == 145.48 and avg * 1.01 > 145.48
     tp1, tp2 = rec["tps"]                                   # on an add: +15% (half) / +20%
     assert abs(tp1 - avg * 0.985) < 0.02 and abs(tp2 - avg * 0.98) < 0.02
-    assert "re-fixed SL" in out["results"][0]["note"]
+    assert "for the whole size" in out["results"][0]["note"]
     # max adds reached: the levels stay fixed
     app_mod._scalp_save({"AAVE": {**rec, "adds": 2}})
     calls.clear()
     out = app_mod._scalp_hl([{**setup, "slot_ms": 10}], 3 * H)
-    assert out["results"][0]["reason"] == "FIXED_LEVELS_KEPT" and calls == []
+    assert out["results"][0]["reason"] == "MAX_ADDS" and calls == []
 
 
 # ── fresh reversal reads: big points at the turn, fading (owner, Oct 31) ────
@@ -1016,16 +1039,22 @@ def test_fixed_scalp_adds_only_while_in_profit(app_mod, hl_fake, monkeypatch):
     monkeypatch.setattr(hl_meta, "asset_table", lambda env=None: {
         "AAVE": {"sz_decimals": 2, "max_leverage": 10, "asset_id": 1}})
     monkeypatch.setattr(hl_account, "all_mids", lambda env=None: dict(mid))
-    monkeypatch.setattr(hl_exchange, "send_market_open", lambda coin, buy, size, cloid, env=None,
-                        leverage=None: calls.append(("open", size, leverage)) or {"status": "ok"})
+    monkeypatch.setenv("SCALP_MAX_ADDS", "2")          # adds are off by default (Nov 2026)
+    pos = [dict(AAVE_POS[0])]
+
+    def _open(coin, buy, size, cloid, env=None, leverage=None):
+        calls.append(("open", size, leverage))
+        pos[0]["size"] = str(round(float(pos[0]["size"]) + size, 8))   # the add fills
+        return {"status": "ok"}
+    monkeypatch.setattr(hl_exchange, "send_market_open", _open)
     monkeypatch.setattr(hl_exchange, "send_stop", lambda coin, buy, size, px, cloid=None,
                         env=None: calls.append(("sl", size, px)) or {"status": "ok"})
     monkeypatch.setattr(hl_exchange, "send_take_profit", lambda coin, buy, size, px, cloid=None,
                         env=None: calls.append(("tp", size, px)) or {"status": "ok"})
-    hl_fake["positions"] = AAVE_POS                                       # SHORT avg 144.17
+    hl_fake["positions"] = pos                                       # SHORT avg 144.17
     hl_fake["orders"] = AAVE_ORDERS
     app_mod._scalp_save({"AAVE": _aave(opened_ms=0, placed_ms=0, leverage=10, size=0.75,
-                                       notional_usd=108.0)})
+                                       notional_usd=108.0, reset_since_entry=True)})
     setup = sl.fix_levels({"kind": "engine", "symbol": "AAVE", "direction": "SHORT",
                            "strength": 100.0, "entry": 144.5, "limit": 144.5, "sl": 146.0,
                            "target": 140.0, "rr": 1.5, "slot_ms": 9}, 10)
