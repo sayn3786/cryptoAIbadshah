@@ -56,3 +56,13 @@ def test_dashboard_renders_the_note():
     html = open(os.path.join(root, "index.html")).read()
     assert "function renderRsiRetestNote" in js and "renderRsiRetestNote(a.rsi_retest)" in js
     assert 'id="rsiRetestNote"' in html
+
+
+def test_rsi_panel_is_pinned_to_0_100():
+    """A coin pinned at RSI 30-38 autoscaled the panel to ~30-35: the OB 70 line
+    fell off and its badge drew under OS 30 (TAO, Nov 2026)."""
+    js = open(os.path.join(os.path.dirname(__file__), "..", "dashboard", "js",
+                           "dashboard.js")).read()
+    i = js.index("S.rsiSeries = S.rsiChart.addLineSeries(")
+    block = js[i:i + 300]
+    assert "autoscaleInfoProvider" in block and "minValue: 0, maxValue: 100" in block
