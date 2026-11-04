@@ -364,11 +364,30 @@ def _attach_exits(sig: Dict[str, Any], res: Dict[str, Any], *,
             sl_cloid=hl_execution.client_order_id(sid, "sl", cts) if sl_px else None,
             tp_cloid=hl_execution.client_order_id(sid, "tp1", cts) if tp_px else None,
             **extra)
-        res["exits_ok"] = True
         res["exit_prices"] = {"sl": sl_px, "tp": tp_px,
                               "tp2": tp2_px if split else None,
                               "signal_sl": sig.get("sl")}
         res["tp_split"] = list(split) if split else None
+        # Hyperliquid rejects an order INSIDE a 200 (status ok, per-order
+        # error), so "no exception" is not "placed": the stop counts only when
+        # its own response is accepted. Before Nov 2026 a rejected stop was
+        # recorded as exits_ok and the position ran unprotected unnoticed.
+        sl_resp = (res["exits"] or {}).get("sl") if isinstance(res["exits"], dict) else None
+        if not sl_px:
+            res["exits_ok"] = False
+            res["exits_error"] = "no stop price"
+        elif isinstance(sl_resp, dict):
+            ok, detail = hl_exchange.order_accepted(sl_resp)
+            res["exits_ok"] = ok
+            res["sl_ack"] = "accepted" if ok else "rejected"
+            if not ok:
+                res["exits_error"] = f"stop rejected: {detail}"
+        else:
+            res["exits_ok"] = True                      # an exit_fn that reports no detail
+            res["sl_ack"] = "unverified"
+        tp_resp = (res["exits"] or {}).get("tp") if isinstance(res["exits"], dict) else None
+        if isinstance(tp_resp, dict):
+            res["tp_ok"] = hl_exchange.order_accepted(tp_resp)[0]
     except Exception as exc:                              # noqa: BLE001
         res["exits_ok"] = False
         res["exits_error"] = str(exc)

@@ -180,6 +180,15 @@ def send_market_close(coin: str, cloid_str: str, env: Optional[str] = None) -> A
     return _exchange(env).market_close(coin, cloid=Cloid.from_str(cloid_str))
 
 
+def send_market_reduce(coin: str, size: float, cloid_str: str,
+                       env: Optional[str] = None) -> Any:
+    """Close only `size` of the position on `coin` at market (reduce-only via
+    the SDK's market_close with sz) - used to unwind an add whose stop could
+    not be placed, leaving the original part and its stop as they were."""
+    from hyperliquid.utils.signing import Cloid
+    return _exchange(env).market_close(coin, sz=float(size), cloid=Cloid.from_str(cloid_str))
+
+
 def _send_trigger(ex, coin: str, is_buy_exit: bool, size: float, px: float,
                   tpsl: str, cloid: Optional[str]) -> Any:
     """One REDUCE-ONLY market-trigger order (tpsl 'sl' or 'tp')."""

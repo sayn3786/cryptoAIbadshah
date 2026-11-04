@@ -104,6 +104,13 @@ candle close, base, structure, reversal raw / capped, context raw / capped,
 returns it as `score_details`, newest first. Runs logged before Nov 1 carry
 only the formatted `setups` strings and are skipped there.
 
+The score only decides which setups qualify. Since Nov 4 an execution gate
+decides which of them trade: portfolio limits per candle, direction and
+aggregate risk, a stop-out cooldown plus a fresh-setup reset, adds off by
+default, and an anti-chase check (ATR extension, room to opposing structure,
+live net reward:risk). A high score does not override it. See
+`docs/scalp-execution-review-20261104.md`.
+
 ---
 
 ## Indicators — Full Scoring Table

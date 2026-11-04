@@ -145,7 +145,7 @@ def app_mod(monkeypatch):
     monkeypatch.setattr(kv, "claim", lambda k, ttl_seconds=0: (k not in mem)
                         and (mem.__setitem__(k, "1") or True))
     monkeypatch.setattr(app, "_scalp_private", lambda t: None)        # no notifications
-    monkeypatch.setattr(app, "_scalp_hl", lambda s, now: {"ran": False})  # no orders
+    monkeypatch.setattr(app, "_scalp_hl", lambda s, now, **kw: {"ran": False})  # no orders
 
     def _no_hl(env=None):
         raise RuntimeError("no HL in tests")
