@@ -4646,6 +4646,60 @@ def _close_read(data: dict) -> dict:
             "closed_at": data.get("signal_candle_closed_at")}
 
 
+def _flowlog_key(day: str) -> str:
+    return f"flowlog:{_deploy_env()}:{day}"
+
+
+def _flowlog_record(day: str, close_ms: int, analyses: dict) -> bool:
+    """Store the day's non-candle snapshots (flowlog). Never raises."""
+    try:
+        import flowlog as _fl
+        import kv as _kv
+        rec = _fl.day_record(day, close_ms, analyses)
+        _kv.set_value(_flowlog_key(day), json.dumps(rec), ttl_seconds=_fl.TTL_DAYS * 86_400)
+        return True
+    except Exception:
+        return False
+
+
+def _flowlog_days(days: int, until=None) -> list:
+    """The logged days, oldest first, from `until` (a date, default today) back."""
+    import kv as _kv
+    end = until or datetime.now(timezone.utc).date()
+    out = []
+    for k in range(days):
+        day = (end - timedelta(days=k)).strftime("%Y-%m-%d")
+        try:
+            raw = _kv.get_value(_flowlog_key(day))
+            if raw:
+                out.append(json.loads(raw))
+        except Exception:
+            continue
+    return sorted(out, key=lambda d: d.get("date") or "")
+
+
+@app.get("/api/flowlog")
+def api_flowlog():
+    """The forward log of non-candle data at each 1D close (flowlog).
+    CRON_SECRET or the HL admin token. ?days=N (1-200, default 30),
+    ?until=YYYY-MM-DD, ?summary=1 for the counts only."""
+    if not (_cron_authorized() or _hl_admin_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    import flowlog as _fl
+    days = _int_arg("days", 30, 1, 200)
+    until = None
+    if request.args.get("until"):
+        try:
+            until = datetime.strptime(request.args["until"], "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"ok": False, "error": "until must be YYYY-MM-DD"}), 400
+    got = _flowlog_days(days, until)
+    body = {"ok": True, "summary": _fl.summary(got)}
+    if request.args.get("summary") != "1":
+        body["days"] = got
+    return jsonify(body)
+
+
 def _close_set_key(day: str, tf: str) -> str:
     return f"close:set:{_deploy_env()}:{day}:{tf}"
 
@@ -4682,6 +4736,11 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
     current = {sym for sym, r in reads.items() if r.get("closed_at") == expected}
     if len(current) < CLOSE_MIN_CURRENT * len(syms):
         return {"ready": False, "current": len(current), "of": len(syms)}
+    if tf == close_publish.DAILY:
+        # Forward log of the non-candle data at this close (flowlog): the
+        # reversal studies had no history of it. Best effort, never blocks.
+        _flowlog_record(close_publish.close_key(now), expected,
+                        {sym: analyses[sym] for sym in current})
 
     htf = close_publish.HIGHER_TF[tf]
     wanted = [sym for sym in current if reads[sym]["direction"] in ("LONG", "SHORT")]

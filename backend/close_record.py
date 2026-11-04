@@ -69,6 +69,30 @@ def fetch_records(app_url: str, secret: str, *, session=None, page: int = 100,
     return out
 
 
+def fetch_flowlog_summary(app_url: str, secret: str, *, session=None) -> Optional[Dict]:
+    """The forward log's counts (flowlog), or None if unreachable."""
+    import requests
+    s = session or requests.Session()
+    try:
+        r = s.get(f"{app_url.rstrip('/')}/api/flowlog", params={"days": 200, "summary": "1"},
+                  headers={"x-cron-secret": secret}, timeout=60)
+        r.raise_for_status()
+        return (r.json() or {}).get("summary")
+    except Exception:                                    # noqa: BLE001
+        return None
+
+
+def flowlog_line(fs: Optional[Dict]) -> str:
+    if not fs:
+        return "Forward log (funding / OI / liquidations at each close): not reachable"
+    if not fs.get("days_logged"):
+        return "Forward log (funding / OI / liquidations at each close): nothing logged yet"
+    rp = fs.get("real_pct") or {}
+    return (f"Forward log (funding / OI / liquidations at each close): {fs['days_logged']} days "
+            f"since {fs['first']} · {fs['coins_per_day']} coins a day · real data: funding "
+            f"{rp.get('funding')}%, OI {rp.get('oi')}%, liquidations {rp.get('liquidations')}%")
+
+
 def to_rec(row: Dict) -> Optional[Dict]:
     """A stored pick -> the dict close_picks_compare.settle takes."""
     try:
@@ -160,6 +184,8 @@ def render_telegram(res: Dict) -> str:
         lines.append("")
     lines.append("The replay over 540 days (candles only) found no edge on any of the three; "
                  "this record includes the live funding / OI / macro read the replay lacks.")
+    if "flowlog" in res:
+        lines.append(flowlog_line(res["flowlog"]))
     return "\n".join(lines)
 
 
@@ -187,6 +213,7 @@ def main(argv=None) -> int:
                       min(starts) - cpc.DAY_MS if starts else now, now,
                       log=lambda m: print(m, file=sys.stderr))
     res = compare(rows, h4)
+    res["flowlog"] = fetch_flowlog_summary(app_url, secret)
     if args.telegram:
         import weekly_report
         try:
