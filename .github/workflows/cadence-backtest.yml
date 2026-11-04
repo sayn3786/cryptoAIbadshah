@@ -208,6 +208,10 @@ name: Strategy backtests (private Telegram)
 #   close-picks-regime-2022  the same on the unseen Oct 2021 - Oct 2023 window
 #            (the 2022 bear market): does the rule found later - no shorts while
 #            BTC < 200-day - hold? (~40 min)
+#   reversal-score  a combined score of the reversal audit's weak tells: per
+#            score, how many confirmed turns were real, on the audit's window
+#            (in-sample) and the 1000 days before it (unseen, the real test)
+#            (backend/reversal_score_study.py; ~15-25 min)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -229,7 +233,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -389,6 +393,8 @@ jobs:
             python -m close_picks_compare --telegram --days 540 --end-days-ago 540 --tunings=-,D
           elif [ "$STUDY" = "close-picks-regime-2022" ]; then
             python -m close_regime_study --telegram --days 720 --end-days-ago 1080
+          elif [ "$STUDY" = "reversal-score" ]; then
+            python -m reversal_score_study --telegram --days 1500 --unseen-days 1000
           elif [ "$STUDY" = "close-picks-regime" ]; then
             python -m close_regime_study --telegram --days 1080
           elif [ "$STUDY" = "reversal-audit" ]; then
