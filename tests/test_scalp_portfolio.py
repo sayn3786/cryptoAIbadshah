@@ -509,8 +509,8 @@ def test_the_admin_view_shows_the_heat(app_mod, market, monkeypatch):
     import scalp_store
     monkeypatch.setattr(scalp_store, "recent", lambda env, days=14: [])
     monkeypatch.setenv("HL_ADMIN_TOKEN", "t")
-    now = int(time.time() * 1000) // M * M
-    app_mod._scalp_heat_save(sg.heat_update({}, now, 7, 0))
+    now = int(time.time() * 1000)            # exact, not the candle: the minutes left
+    app_mod._scalp_heat_save(sg.heat_update({}, now, 7, 0))   # must not depend on the clock
     p = app_mod.app.test_client().get("/api/hl/scalp", headers={"x-hl-token": "t"}).get_json()["portfolio"]
     hm = p["hot_market"]
     assert hm["enabled"] is False and hm["reads_at"] == 6 and hm["LONG"]["reads"] == 7
