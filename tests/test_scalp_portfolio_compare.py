@@ -49,7 +49,7 @@ def data(cands):
 
 def run(d, **flags):
     m15 = {s: flat() for s in COINS}
-    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "hot": 0,
+    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "hot": None,
           **flags}
     return spc.run_book(d, m15, start_ms=0, end_ms=400 * M, sim=stop_sim(), **kw)
 
@@ -110,11 +110,11 @@ def test_the_hot_market_cooldown_in_the_replay():
                  [cand("ETH", 120 * M, d="SHORT")])
     kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "start_ms": 0,
           "end_ms": 400 * M, "sim": stop_sim()}
-    off = spc.run_book(burst, m15, hot=0, **kw)
-    on = spc.run_book(burst, m15, hot=2.0, **kw)
+    off = spc.run_book(burst, m15, hot=None, **kw)
+    on = spc.run_book(burst, m15, hot=(2.0, 6, 3), **kw)
     assert off["trades"] == 8
     assert on["rejected"] == {"HOT_MARKET": 7} and on["trades"] == 1      # only the short
-    short = spc.run_book(burst, m15, hot=0.5, **kw)                      # 30m: BTC at 104 is free
+    short = spc.run_book(burst, m15, hot=(0.5, 6, 3), **kw)                      # 30m: BTC at 104 is free
     assert short["rejected"] == {"HOT_MARKET": 6} and short["trades"] == 2
     assert os.getenv("SCALP_HOT_COOLDOWN_HOURS") is None
     assert os.getenv("SCALP_HOT_GUARD") is None
@@ -122,9 +122,13 @@ def test_the_hot_market_cooldown_in_the_replay():
     reads = {b["bucket"]: b["trades"] for b in off["split"]["reads"]}
     assert reads["6-9"] == 6 and reads["1-2"] == 2     # the hour is 4 closes: 104 no longer sees 100
     assert {b["bucket"]: b["trades"] for b in off["split"]["tps"]}["0"] == 8
-    assert [v[0] for v in spc.VARIANTS][-3:] == ["+ hot-market cooldown 30m",
-                                                 "+ hot-market cooldown 2h",
-                                                 "all changes + hot-market cooldown 30m"]
+    labels = [v[0] for v in spc.VARIANTS]
+    assert {"+ hot-market cooldown 30m", "+ hot-market cooldown 2h",
+            "all changes + hot-market cooldown 30m", "+ burst pause (10+ setups, 30m)",
+            "all changes + burst pause"} <= set(labels)
+    # a 6-coin burst does not reach the burst pause's 10
+    assert spc.run_book(burst, m15, hot=(0.5, 10, 0), **kw)["trades"] == 8
+    assert os.getenv("SCALP_HOT_READS") is None and os.getenv("SCALP_HOT_TPS") is None
 
 
 def test_basket_move_is_the_median_the_trades_way():
@@ -134,3 +138,20 @@ def test_basket_move_is_the_median_the_trades_way():
     assert spc.basket_move(cl, 4 * H_, "LONG") == pytest.approx(1.0)
     assert spc.basket_move(cl, 4 * H_, "SHORT") == pytest.approx(-1.0)
     assert spc.basket_move({}, 4 * H_, "LONG") is None
+
+
+def test_the_burst_pause_needs_ten_setups_and_ignores_targets():
+    coins = tuple(f"C{k}" for k in range(11))
+    m15 = {c: flat() for c in coins}
+    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "start_ms": 0,
+          "end_ms": 400 * M, "sim": stop_sim()}
+    ten = data([cand(c, 100 * M) for c in coins[:10]])
+    assert spc.run_book(ten, m15, hot=(0.5, 10, 0), **kw)["rejected"] == {"HOT_MARKET": 10}
+    nine = data([cand(c, 100 * M) for c in coins[:9]])
+    assert spc.run_book(nine, m15, hot=(0.5, 10, 0), **kw)["trades"] == 9
+
+    def win(rec, bars, **k):            # every trade hits its target 2 candles later
+        return {"taken": True, "outcome": "tp1", "closed_at": rec["slot_ms"] + 2 * M, "net_pct": 1.28}
+    runs = data([cand(c, (100 + 4 * k) * M) for k, c in enumerate(coins)])
+    r = spc.run_book(runs, m15, hot=(0.5, 10, 0), **{**kw, "sim": win})
+    assert r["trades"] == 11 and r["rejected"] == {}                     # targets: off
