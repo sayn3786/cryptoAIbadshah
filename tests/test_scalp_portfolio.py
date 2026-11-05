@@ -530,3 +530,14 @@ def test_a_quiet_market_is_free_after_30_minutes(monkeypatch):
     monkeypatch.setenv("SCALP_HOT_COOLDOWN_HOURS", "2")
     h = sg.heat_update({}, 10 * M, 6, 0)
     assert sg.hot_block(h, "LONG", 17 * M)                               # a 2h setting still works
+
+
+
+def test_the_targets_trigger_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("SCALP_HOT_GUARD", "1")
+    monkeypatch.setenv("SCALP_HOT_TPS", "0")
+    h = {}
+    for k in range(5):
+        sg.heat_target(h, "LONG", k * M)
+    h = sg.heat_update(h, 6 * M, 0, 0)
+    assert sg.hot_block(h, "LONG", 6 * M) is None and sg.heat_view(h, 6 * M)["tps_at"] == 0

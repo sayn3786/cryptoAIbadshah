@@ -41,6 +41,7 @@ often means the move is late. When either fires, new entries that way wait:
   SCALP_HOT_READS            same-way qualifying setups across the coins
                              in the last hour (this candle included)    6
   SCALP_HOT_TPS              same-way targets hit in the last 4 hours   3
+                             (0 = off: the burst of setups alone)
   SCALP_HOT_COOLDOWN_HOURS   no new entries that way after it fires    0.5
 
 It (re)starts only when a NEW same-way setup or target pushes a count over,
@@ -419,7 +420,8 @@ def hot_reads() -> int:
 
 
 def hot_tps() -> int:
-    return max(1, int(_num_env("SCALP_HOT_TPS", 3)))
+    """0 turns the targets trigger off (the burst of setups alone)."""
+    return max(0, int(_num_env("SCALP_HOT_TPS", 3)))
 
 
 def hot_cooldown_ms() -> int:
@@ -468,7 +470,7 @@ def heat_update(heat: Optional[Dict[str, Any]], slot_ms: int, longs: int, shorts
         # is still inside the hour does not keep extending a short cooldown.
         new_tp = any(t[1] == d and (prev is None or int(t[0]) > int(prev))
                      for t in h["targets"])
-        if (c["reads"] >= hot_reads() and now_n > 0) or (c["tps"] >= hot_tps() and new_tp):
+        if (c["reads"] >= hot_reads() and now_n > 0) or (hot_tps() > 0 and c["tps"] >= hot_tps() and new_tp):
             h["until"][d] = int(slot_ms) + hot_cooldown_ms()
             h["fired"][d] = {"at_ms": int(slot_ms), **c}
     cut = int(slot_ms) - HEAT_KEEP_MS

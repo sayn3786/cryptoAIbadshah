@@ -101,6 +101,13 @@ recorded (KV `scalp:heat:{env}`, 24h) and shown in `/api/hl/scalp` under
 `portfolio.hot_market` even while the guard is off. Its untouched period is
 `end_days_ago` 270, because 200 has already been read.
 
+Nov 5 replay (0, 65, 135, and 270 untouched): the 6-setup / 3-target rule
+helped alone but not on top of the live rules (PF 0.86 → 0.84, 0.70 → 0.68,
+0.73 → 0.72 on the test periods; 0.72 → 0.83 on 270). Left off. A narrower
+burst pause (`SCALP_HOT_READS` 10, `SCALP_HOT_TPS` 0 = targets off, 30 min)
+was chosen after reading the heat split, so it is judged only on a fresh
+period, `end_days_ago` 340.
+
 Deployed values were not inspected (no access to the deployment settings);
 set them explicitly there rather than relying on these defaults.
 
