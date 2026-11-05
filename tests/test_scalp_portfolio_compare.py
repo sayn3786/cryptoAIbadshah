@@ -16,7 +16,7 @@ COINS = ("BTC", "ETH", "SOL", "ADA")
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
     for k in ("SCALP_MAX_NEW_PER_CANDLE", "SCALP_MAX_LONGS", "SCALP_MAX_SHORTS",
-              "SCALP_MAX_RISK_USD", "SCALP_STOPOUT_COOLDOWN_HOURS"):
+              "SCALP_MAX_RISK_USD", "SCALP_STOPOUT_COOLDOWN_HOURS", "SCALP_HOT_GUARD"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -49,7 +49,8 @@ def data(cands):
 
 def run(d, **flags):
     m15 = {s: flat() for s in COINS}
-    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, **flags}
+    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "hot": 0,
+          **flags}
     return spc.run_book(d, m15, start_ms=0, end_ms=400 * M, sim=stop_sim(), **kw)
 
 
@@ -88,7 +89,8 @@ def test_report_and_workflow():
     res = {"start": 0, "end": 400 * M, "days": 4.2, "coins": list(COINS),
            "rows": [{"label": v[0], **run(data([cand("ETH", 100 * M)]))} for v in spc.VARIANTS]}
     text = spc.render_telegram(res)
-    assert "portfolio" in text and "UNTOUCHED" in text and "stop-out run" in text
+    assert "portfolio" in text and "end_days_ago 270" in text and "stop-out run" in text
+    assert "how hot the market was" in text and "same-way targets hit" in text
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     assert "scalp-portfolio) MODULE=scalp_portfolio_compare" in wf
@@ -99,3 +101,36 @@ def test_the_replay_uses_the_live_rules():
     for name in ("sg.Batch", "sg.reentry_block", "sg.observe", "sg.record_exit", "sg.rank_key",
                  "sg.entry_quality"):
         assert name in src, name
+
+
+def test_the_hot_market_cooldown_in_the_replay():
+    coins6 = ("BTC", "ETH", "SOL", "ADA", "XRP", "DOGE")
+    m15 = {s: flat() for s in coins6}
+    burst = data([cand(s, 100 * M) for s in coins6] + [cand("BTC", 104 * M)] +
+                 [cand("ETH", 120 * M, d="SHORT")])
+    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "start_ms": 0,
+          "end_ms": 400 * M, "sim": stop_sim()}
+    off = spc.run_book(burst, m15, hot=0, **kw)
+    on = spc.run_book(burst, m15, hot=2.0, **kw)
+    assert off["trades"] == 8
+    assert on["rejected"] == {"HOT_MARKET": 7} and on["trades"] == 1      # only the short
+    short = spc.run_book(burst, m15, hot=0.5, **kw)                      # 30m: BTC at 104 is free
+    assert short["rejected"] == {"HOT_MARKET": 6} and short["trades"] == 2
+    assert os.getenv("SCALP_HOT_COOLDOWN_HOURS") is None
+    assert os.getenv("SCALP_HOT_GUARD") is None
+    # entries are tagged with the heat at entry
+    reads = {b["bucket"]: b["trades"] for b in off["split"]["reads"]}
+    assert reads["6-9"] == 6 and reads["1-2"] == 2     # the hour is 4 closes: 104 no longer sees 100
+    assert {b["bucket"]: b["trades"] for b in off["split"]["tps"]}["0"] == 8
+    assert [v[0] for v in spc.VARIANTS][-3:] == ["+ hot-market cooldown 30m",
+                                                 "+ hot-market cooldown 2h",
+                                                 "all changes + hot-market cooldown 30m"]
+
+
+def test_basket_move_is_the_median_the_trades_way():
+    H_ = spc.HOUR_MS
+    cl = {"A": {0: 100.0, 4 * H_: 102.0}, "B": {0: 100.0, 4 * H_: 101.0},
+          "C": {0: 100.0, 4 * H_: 97.0}, "D": {4 * H_: 50.0}}
+    assert spc.basket_move(cl, 4 * H_, "LONG") == pytest.approx(1.0)
+    assert spc.basket_move(cl, 4 * H_, "SHORT") == pytest.approx(-1.0)
+    assert spc.basket_move({}, 4 * H_, "LONG") is None

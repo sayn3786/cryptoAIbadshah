@@ -18,7 +18,8 @@ from test_scalp_live import (AAVE_ORDERS, AAVE_POS, GOOD_Q, H, _aave,   # noqa: 
 M = sl.M15_MS
 NEW_ENVS = ("SCALP_MAX_NEW_PER_CANDLE", "SCALP_MAX_LONGS", "SCALP_MAX_SHORTS", "SCALP_MAX_RISK_USD",
             "SCALP_STOPOUT_COOLDOWN_HOURS", "SCALP_MAX_ATR_EXTENSION", "SCALP_MIN_ROOM_R",
-            "SCALP_MIN_NET_RR", "SCALP_MIN_STOP_FRACTION", "SCALP_MAX_OPEN", "SCALP_MAX_ADDS")
+            "SCALP_MIN_NET_RR", "SCALP_MIN_STOP_FRACTION", "SCALP_MAX_OPEN", "SCALP_MAX_ADDS",
+            "SCALP_HOT_GUARD", "SCALP_HOT_READS", "SCALP_HOT_TPS", "SCALP_HOT_COOLDOWN_HOURS")
 
 
 @pytest.fixture(autouse=True)
@@ -452,3 +453,80 @@ def test_the_run_ranks_by_score_attaches_quality_and_passes_the_reads(app_mod, m
     assert syms[:2] == ["SOL", "BTC"] and all("quality" in x for x in seen["setups"])
     assert seen["reads"]["SOL"] == {"LONG": True, "SHORT": False}
     assert seen["reads"]["XRP"] == {"LONG": False, "SHORT": False}       # a read, no setup
+
+
+# ── 7. hot-market cooldown (off by default) ─────────────────────────────────
+
+def test_a_burst_of_same_way_setups_starts_a_cooldown_that_way(monkeypatch):
+    h = sg.heat_update({}, 10 * M, 3, 1)
+    h = sg.heat_update(h, 11 * M, 2, 0)
+    assert sg.heat_counts(h, "LONG", 11 * M) == {"reads": 5, "tps": 0}
+    assert sg.hot_block(h, "LONG", 11 * M) is None                       # off anyway
+    h = sg.heat_update(h, 12 * M, 1, 0)                                  # 6 longs in the hour
+    assert h["until"]["LONG"] == 12 * M + 30 * 60_000 and "SHORT" not in h["until"]
+    assert sg.hot_block(h, "LONG", 12 * M) is None                       # default: OFF
+    monkeypatch.setenv("SCALP_HOT_GUARD", "1")
+    assert sg.hot_block(h, "LONG", 12 * M).startswith("HOT_MARKET (6 long setups in 1h, 0 targets")
+    assert sg.hot_block(h, "SHORT", 12 * M) is None                      # the other way: free
+    assert sg.hot_block(h, "LONG", 12 * M + 29 * 60_000)                 # 30 minutes
+    assert sg.hot_block(h, "LONG", 12 * M + 30 * 60_000) is None         # cooldown over
+    # the window is one hour: the candle at 10 M has left it by 14 M
+    assert sg.heat_counts(h, "LONG", 14 * M)["reads"] == 3
+
+
+def test_a_run_of_same_way_targets_starts_it_too(monkeypatch):
+    monkeypatch.setenv("SCALP_HOT_GUARD", "1")
+    h = {}
+    for k in range(3):
+        sg.heat_target(h, "SHORT", k * H)
+    sg.heat_target(h, "LONG", 2 * H)
+    h = sg.heat_update(h, 3 * H, 0, 0)                                   # 3 short targets in 4h
+    assert sg.hot_block(h, "SHORT", 3 * H).startswith("HOT_MARKET (0 short setups in 1h, 3 targets")
+    assert sg.hot_block(h, "LONG", 3 * H) is None
+    h2 = sg.heat_update({"targets": [[0, "SHORT"], [H, "SHORT"], [2 * H, "SHORT"]]}, 5 * H, 0, 0)
+    assert "SHORT" not in h2["until"]                                    # the first is > 4h old
+    big = {}
+    for k in range(300):
+        big = sg.heat_update(big, k * M, 0, 0)
+    assert len(big["slots"]) <= 96                                       # bounded
+
+
+def test_the_book_waits_after_a_burst_when_enabled(app_mod, market, monkeypatch):
+    reads = {c: {"LONG": True, "SHORT": False} for c in ("ETH", "SOL", "XRP", "ADA", "BTC", "AVAX")}
+    out = app_mod._scalp_hl([engine("ETH")], 2 * H, reads=reads)          # guard off: trades
+    assert [s["symbol"] for s in market["opened"]] == ["ETH"]
+    assert app_mod._scalp_heat()["until"]["LONG"] > 2 * H                 # still recorded
+    monkeypatch.setenv("SCALP_HOT_GUARD", "1")
+    out = app_mod._scalp_hl([engine("SOL", slot=8 * M)], 2 * H + M, reads=reads)
+    assert [s["symbol"] for s in market["opened"]] == ["ETH"]
+    assert out["decisions"][0]["reason"].startswith("HOT_MARKET")
+    out = app_mod._scalp_hl([engine("SOL", d="SHORT", slot=8 * M)], 2 * H + M)
+    assert [s["symbol"] for s in market["opened"]] == ["ETH", "SOL"]     # shorts unaffected
+
+
+def test_the_admin_view_shows_the_heat(app_mod, market, monkeypatch):
+    import time
+    import scalp_store
+    monkeypatch.setattr(scalp_store, "recent", lambda env, days=14: [])
+    monkeypatch.setenv("HL_ADMIN_TOKEN", "t")
+    now = int(time.time() * 1000) // M * M
+    app_mod._scalp_heat_save(sg.heat_update({}, now, 7, 0))
+    p = app_mod.app.test_client().get("/api/hl/scalp", headers={"x-hl-token": "t"}).get_json()["portfolio"]
+    hm = p["hot_market"]
+    assert hm["enabled"] is False and hm["reads_at"] == 6 and hm["LONG"]["reads"] == 7
+    assert 20 < hm["LONG"]["cooling_min"] <= 30 and hm["SHORT"]["cooling_min"] == 0
+    assert hm["cooldown_hours"] == 0.5
+
+
+def test_a_quiet_market_is_free_after_30_minutes(monkeypatch):
+    monkeypatch.setenv("SCALP_HOT_GUARD", "1")
+    h = sg.heat_update({}, 10 * M, 6, 0)                                 # burst: until 12 M
+    h = sg.heat_update(h, 11 * M, 0, 0)                                  # quiet candles: the
+    h = sg.heat_update(h, 12 * M, 0, 0)                                  # burst is still in the
+    assert sg.heat_counts(h, "LONG", 12 * M)["reads"] == 6               # hour, but nothing new
+    assert sg.hot_block(h, "LONG", 12 * M) is None
+    h = sg.heat_update(h, 13 * M, 1, 0)                                  # a new long setup
+    assert sg.hot_block(h, "LONG", 13 * M).startswith("HOT_MARKET (7 long")
+    monkeypatch.setenv("SCALP_HOT_COOLDOWN_HOURS", "2")
+    h = sg.heat_update({}, 10 * M, 6, 0)
+    assert sg.hot_block(h, "LONG", 17 * M)                               # a 2h setting still works

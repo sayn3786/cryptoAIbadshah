@@ -5845,6 +5845,31 @@ def _scalp_exits_save(memory) -> None:
         pass
 
 
+def _scalp_heat_key():
+    return f"scalp:heat:{_deploy_env()}"
+
+
+def _scalp_heat() -> dict:
+    """The hot-market state (scalp_guard.heat_update): qualifying setups per
+    closed candle, targets hit, cooldowns. Never raises."""
+    try:
+        import kv as _kv
+        data = json.loads(_kv.get_value(_scalp_heat_key()) or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _scalp_heat_save(heat) -> None:
+    try:
+        import kv as _kv
+        import scalp_guard as _sg
+        _kv.set_value(_scalp_heat_key(), json.dumps(heat or {}),
+                      ttl_seconds=_sg.HEAT_KEEP_MS // 1000 + 3_600)
+    except Exception:
+        pass
+
+
 def _scalp_slot_key(slot_ms):
     return f"scalp:slot:{_deploy_env()}:{int(slot_ms)}"
 
@@ -6135,6 +6160,9 @@ def _scalp_add_gate(rec, setup, *, mark, stop, notional, batch) -> Optional[str]
     if int(rec.get("adds") or 0) >= _sl.max_adds():
         return "ADDS_OFF" if _sl.max_adds() == 0 else "MAX_ADDS"
     why = _sg.add_block(rec, setup)
+    if why:
+        return why
+    why = _sg.hot_block(getattr(batch, "heat", None), rec["direction"], int(time.time() * 1000))
     if why:
         return why
     if batch is not None:
@@ -6499,7 +6527,7 @@ def _scalp_place(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
             "notional_usd": plan["notional_usd"], "leverage": plan["leverage"]}
 
 
-def _scalp_gate(setup, *, memory, batch, mids, table, now_ms) -> tuple:
+def _scalp_gate(setup, *, memory, batch, mids, table, now_ms, heat=None) -> tuple:
     """(reason or None, detail, risk $) for a NEW position: the stop-out
     re-entry rule, the closed-candle entry quality, the live-price check, then
     the book's limits. Mirrored LONG / SHORT; missing inputs are reasons."""
@@ -6507,7 +6535,8 @@ def _scalp_gate(setup, *, memory, batch, mids, table, now_ms) -> tuple:
     import scalp_guard as _sg
     import hl_meta as _hm
     sym, d = setup["symbol"], setup["direction"]
-    why = _sg.reentry_block(memory, sym, d, now_ms)
+    why = _sg.reentry_block(memory, sym, d, now_ms) or \
+        _sg.hot_block(heat if heat is not None else getattr(batch, "heat", None), d, now_ms)
     if why:
         return why, {}, None
     q = setup.get("quality")
@@ -6577,6 +6606,7 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                 orders = None
             recs = _scalp_records()
             memory = _sg.prune(_scalp_exits(), now_ms)
+            heat = _scalp_heat()
             try:
                 mids = _ha.all_mids() or {}
             except Exception:
@@ -6596,6 +6626,8 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
             def _ended(rec, res, reason):
                 _sg.record_exit(memory, rec["symbol"], rec["direction"], reason, now_ms,
                                 source="fills" if res else "no fills")
+                if reason == "target":
+                    _sg.heat_target(heat, rec["direction"], now_ms)
                 _scalp_audit({"at_ms": now_ms, "event": "exit", "symbol": rec["symbol"],
                               "coin": rec.get("coin"), "direction": rec["direction"],
                               "exit_reason": reason,
@@ -6661,11 +6693,18 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                     if r.get("symbol") == sym and r.get("direction") in rd and \
                             not rd[r["direction"]]:
                         r["reset_since_entry"] = True
+            if reads:                # how hot: this candle's qualifying setups, all coins
+                heat = _sg.heat_update(
+                    heat, max((s["slot_ms"] for s in setups),
+                              default=now_ms // _sl.M15_MS * _sl.M15_MS),
+                    sum(1 for rd in reads.values() if rd.get("LONG")),
+                    sum(1 for rd in reads.values() if rd.get("SHORT")))
             table = _hm.asset_table()
             held = {str(p.get("coin") or "").upper() for p in positions}
             slot = max((s["slot_ms"] for s in setups), default=None)
             batch = _sg.Batch(recs, max_open=_sl.max_open(),
                               entries_this_candle=_scalp_slot_entries(slot) if slot else 0)
+            batch.heat = heat
             results, decisions = [], []
 
             def _gate(s):
@@ -6759,6 +6798,7 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                                  f"{r.get('reason')}")
             _scalp_save(recs)
             _scalp_exits_save(memory)
+            _scalp_heat_save(heat)
         out.update({"results": results, "notes": notes, "held": sorted(held),
                     "open": {c: r.get("state") for c, r in recs.items()},
                     "batch": {"slot_ms": slot, "candidates": len(setups),
@@ -7075,7 +7115,7 @@ def _scalp_portfolio_view() -> dict:
         return {"limits": _sg.limits(_sl.max_open()), "state": _sg.book_state(recs),
                 "entries_this_candle": _scalp_slot_entries(slot), "max_adds": _sl.max_adds(),
                 "protection": {c: r.get("protection") for c, r in recs.items()},
-                "reentry": reentry}
+                "reentry": reentry, "hot_market": _sg.heat_view(_scalp_heat(), now_ms)}
     except Exception as exc:
         return {"error": type(exc).__name__}
 
