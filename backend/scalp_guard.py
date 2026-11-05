@@ -34,6 +34,18 @@ Limits (SCALP_*; the defaults are the proposal, see EXECUTION.md):
   SCALP_MIN_STOP_FRACTION    the live price's distance to the stop vs
                              the planned distance                       0.5
 
+Hot-market cooldown (OFF unless SCALP_HOT_GUARD=1; replay before enabling):
+a burst of same-way setups across the coins, or a run of same-way targets,
+often means the move is late. When either fires, new entries that way wait:
+
+  SCALP_HOT_READS            same-way qualifying setups across the coins
+                             in the last hour (this candle included)    6
+  SCALP_HOT_TPS              same-way targets hit in the last 4 hours   3
+  SCALP_HOT_COOLDOWN_HOURS   no new entries that way after it fires     2
+
+The thresholds were set before any replay of them; the other direction and
+running positions are not affected.
+
 A stop-out blocks the same direction on that coin until BOTH the cooldown
 has passed AND the setup has genuinely reset: at least one later closed
 candle on which the coin had no qualifying read that way. A new candle alone
@@ -387,3 +399,91 @@ def never_looser(direction: str, current: Optional[float], proposed: float) -> f
     if current is None:
         return proposed
     return max(current, proposed) if direction == "LONG" else min(current, proposed)
+
+
+# ── hot-market cooldown ──────────────────────────────────────────────────────
+
+HOT_READ_WINDOW_MS = H1_MS            # setups counted over the last hour
+HOT_TP_WINDOW_MS = 4 * H1_MS          # targets counted over the last 4 hours
+HEAT_KEEP_MS = 24 * H1_MS
+
+
+def hot_guard_on() -> bool:
+    return os.getenv("SCALP_HOT_GUARD", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def hot_reads() -> int:
+    return max(1, int(_num_env("SCALP_HOT_READS", 6)))
+
+
+def hot_tps() -> int:
+    return max(1, int(_num_env("SCALP_HOT_TPS", 3)))
+
+
+def hot_cooldown_ms() -> int:
+    return int(max(0.0, _num_env("SCALP_HOT_COOLDOWN_HOURS", 2.0)) * H1_MS)
+
+
+def _heat(heat: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    h = heat if isinstance(heat, dict) else {}
+    h.setdefault("slots", [])          # [slot_ms, longs, shorts] per closed candle
+    h.setdefault("targets", [])        # [at_ms, direction] per target hit
+    h.setdefault("until", {})          # direction -> cooldown end (ms)
+    h.setdefault("fired", {})          # direction -> what fired it last
+    return h
+
+
+def heat_target(heat: Dict[str, Any], direction: str, at_ms: int) -> Dict[str, Any]:
+    """A position that ended at its target (confirmed, not guessed)."""
+    h = _heat(heat)
+    h["targets"].append([int(at_ms), direction])
+    return h
+
+
+def heat_counts(heat: Dict[str, Any], direction: str, now_ms: int) -> Dict[str, int]:
+    h = _heat(heat)
+    i = 1 if direction == "LONG" else 2
+    reads = sum(int(s[i]) for s in h["slots"] if int(s[0]) > int(now_ms) - HOT_READ_WINDOW_MS
+                and int(s[0]) <= int(now_ms))
+    tps = sum(1 for at, d in h["targets"] if d == direction
+              and int(now_ms) - HOT_TP_WINDOW_MS < int(at) <= int(now_ms))
+    return {"reads": reads, "tps": tps}
+
+
+def heat_update(heat: Optional[Dict[str, Any]], slot_ms: int, longs: int, shorts: int) -> Dict[str, Any]:
+    """Record a closed candle's qualifying setups (all coins) and start the
+    cooldown in a direction that is hot now. Runs whether or not the guard
+    blocks, so the admin view shows it either way."""
+    h = _heat(heat)
+    h["slots"] = [s for s in h["slots"] if int(s[0]) != int(slot_ms)]
+    h["slots"].append([int(slot_ms), int(longs), int(shorts)])
+    for d in ("LONG", "SHORT"):
+        c = heat_counts(h, d, slot_ms)
+        if c["reads"] >= hot_reads() or c["tps"] >= hot_tps():
+            h["until"][d] = int(slot_ms) + hot_cooldown_ms()
+            h["fired"][d] = {"at_ms": int(slot_ms), **c}
+    cut = int(slot_ms) - HEAT_KEEP_MS
+    h["slots"] = sorted(s for s in h["slots"] if int(s[0]) > cut)[-96:]
+    h["targets"] = [t for t in h["targets"] if int(t[0]) > cut][-100:]
+    return h
+
+
+def hot_block(heat: Optional[Dict[str, Any]], direction: str, now_ms: int) -> Optional[str]:
+    if not hot_guard_on():
+        return None
+    h = _heat(heat)
+    left = int(h["until"].get(direction) or 0) - int(now_ms)
+    if left <= 0:
+        return None
+    f = h["fired"].get(direction) or {}
+    return (f"HOT_MARKET ({f.get('reads', '?')} {direction.lower()} setups in 1h, "
+            f"{f.get('tps', '?')} targets in 4h; {left // 60_000}m left)")
+
+
+def heat_view(heat: Optional[Dict[str, Any]], now_ms: int) -> Dict[str, Any]:
+    h = _heat(dict(heat or {}))
+    return {"enabled": hot_guard_on(), "reads_at": hot_reads(), "tps_at": hot_tps(),
+            "cooldown_hours": hot_cooldown_ms() / H1_MS,
+            **{d: {**heat_counts(h, d, now_ms),
+                   "cooling_min": max(0, int(h["until"].get(d) or 0) - int(now_ms)) // 60_000,
+                   "fired": h["fired"].get(d)} for d in ("LONG", "SHORT")}}

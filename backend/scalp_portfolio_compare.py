@@ -26,6 +26,17 @@ Variants - the baseline and EACH change on its own, then all of them:
   quality      + the closed-candle entry quality (ATR extension, room to the
                opposing swing)
   all          every change (the proposed defaults)
+  hot          + the hot-market cooldown (scalp_guard.hot_block, Nov 5): after
+               6+ same-way setups across the coins in an hour, or 3+ same-way
+               targets in 4 hours, no new entries that way for 2 hours -
+               alone, and on top of all the changes
+
+Every trade is also tagged, at its entry, with how hot the market was: the
+same-way setups in the last hour, the same-way targets in the last 4 hours,
+and the basket's 4h move the trade's way (median over the coins). The report
+splits the baseline and the all-changes book by those, so the question
+"do entries after a burst of setups / targets end at the stop?" is answered
+directly, not only through the rule.
 
 An add is modelled as a second position on the same coin with its own fixed
 exits from the add price (live re-fixes one combined position: an
@@ -64,14 +75,20 @@ NOTIONAL = rc.MARGIN * rc.LEVERAGE
 ADD_FAVOUR = sl.ADD_FAVOUR
 BASE_ENV = {"SCALP_MAX_NEW_PER_CANDLE": "1000", "SCALP_MAX_LONGS": "1000",
             "SCALP_MAX_SHORTS": "1000", "SCALP_MAX_RISK_USD": "1000000"}
-VARIANTS = (   # (label, limits, re-entry rule, adds, quality)
-    ("baseline (before Nov 2026)", False, False, True, False),
-    ("+ portfolio limits", True, False, True, False),
-    ("+ stop-out re-entry rule", False, True, True, False),
-    ("+ adds off", False, False, False, False),
-    ("+ entry quality", False, False, True, True),
-    ("all changes (proposed)", True, True, False, True),
+VARIANTS = (   # (label, limits, re-entry rule, adds, quality, hot-market cooldown)
+    ("baseline (before Nov 2026)", False, False, True, False, False),
+    ("+ portfolio limits", True, False, True, False, False),
+    ("+ stop-out re-entry rule", False, True, True, False, False),
+    ("+ adds off", False, False, False, False, False),
+    ("+ entry quality", False, False, True, True, False),
+    ("all changes (proposed)", True, True, False, True, False),
+    ("+ hot-market cooldown", False, False, True, False, True),
+    ("all changes + hot-market cooldown", True, True, False, True, True),
 )
+SPLIT_ROWS = ("baseline (before Nov 2026)", "all changes (proposed)")
+READ_BUCKETS = ((1, 2, "1-2"), (3, 5, "3-5"), (6, 9, "6-9"), (10, 10**6, "10+"))
+TP_BUCKETS = ((0, 0, "0"), (1, 2, "1-2"), (3, 10**6, "3+"))
+MOVE_BUCKETS = ((-1e9, 0.0, "against"), (0.0, 1.0, "0-1%"), (1.0, 2.0, "1-2%"), (2.0, 1e9, "2%+"))
 
 
 @contextmanager
@@ -128,8 +145,20 @@ def _settle(pos: Dict, bars: Sequence[Dict], ts: Sequence[int], sim: Callable) -
     return t
 
 
+def basket_move(close_at: Dict[str, Dict[int, float]], t: int, direction: str) -> Optional[float]:
+    """The median coin's 4h move to this close, % the trade's way."""
+    sgn = 1 if direction == "LONG" else -1
+    moves = sorted(sgn * (cl[t] / cl[t - 4 * HOUR_MS] - 1) * 100 for cl in close_at.values()
+                   if cl.get(t) and cl.get(t - 4 * HOUR_MS))
+    if not moves:
+        return None
+    k = len(moves) // 2
+    return moves[k] if len(moves) % 2 else (moves[k - 1] + moves[k]) / 2
+
+
 def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: bool, adds: bool,
-             quality: bool, start_ms: int, end_ms: int, sim: Callable = ee.simulate_hl) -> Dict:
+             quality: bool, start_ms: int, end_ms: int, sim: Callable = ee.simulate_hl,
+             hot: bool = False) -> Dict:
     ts = {s: [int(b["timestamp"]) for b in bars] for s, bars in m15.items()}
     close_at = {s: {int(b["timestamp"]) + M15: float(b["close"]) for b in bars}
                 for s, bars in m15.items()}
@@ -144,12 +173,13 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
     open_pos: Dict[str, List[Dict]] = {}
     closed: List[Dict] = []
     memory: Dict = {}
+    heat: Dict = {}
     rejected: Dict[str, int] = {}
     considered = 0
     max_same = 0
     crowded_candles = 0
     max_open = sl.DEFAULT_MAX_OPEN if limits else 18
-    overrides = {} if limits else BASE_ENV
+    overrides = {**({} if limits else BASE_ENV), "SCALP_HOT_GUARD": "1" if hot else "0"}
     with env(overrides):
         for t in slots:
             # 1. positions that closed by now (simulated exits), remembered
@@ -159,6 +189,8 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
                     if p["closed_at"] is not None and p["closed_at"] < t:
                         closed.append(p)
                         sg.record_exit(memory, sym, p["direction"], p["reason"], p["closed_at"])
+                        if p["reason"] == "target":
+                            sg.heat_target(heat, p["direction"], p["closed_at"])
                     else:
                         keep.append(p)
                 if keep:
@@ -174,6 +206,8 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
                 for p in open_pos.get(sym, []):
                     if not rd.get(p["direction"]):
                         p["reset"] = True
+            heat = sg.heat_update(heat, t, sum(1 for r in q_now.values() if r.get("LONG")),
+                                  sum(1 for r in q_now.values() if r.get("SHORT")))
             recs = {f"{s}#{k}": {"direction": p["direction"], "fill_price": p["entry"],
                                  "sl": p["sl"], "notional_usd": NOTIONAL, "state": "open"}
                     for s, ps in open_pos.items() for k, p in enumerate(ps)}
@@ -207,6 +241,9 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
                     if reentry and not p0.get("reset"):
                         rejected["ADD_NO_RESET"] = rejected.get("ADD_NO_RESET", 0) + 1
                         continue
+                    if sg.hot_block(heat, c["direction"], t):
+                        rejected["HOT_MARKET"] = rejected.get("HOT_MARKET", 0) + 1
+                        continue
                     why = batch.check(c["direction"], sg.risk_usd(c["entry"], c["sl"], NOTIONAL),
                                       add=True) if limits else None
                     if why:
@@ -220,6 +257,8 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
                                      add=True)
                     continue
                 why = sg.reentry_block(memory, sym, c["direction"], t) if reentry else None
+                if not why:
+                    why = sg.hot_block(heat, c["direction"], t)
                 if not why and quality and not (c["quality"] or {}).get("ok"):
                     why = "ENTRY_QUALITY"
                 if not why:
@@ -230,6 +269,8 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
                     continue
                 pos = _open(c, m15[sym], ts[sym], sim, kind="entry")
                 if pos:
+                    pos.update(sg.heat_counts(heat, c["direction"], t),
+                               move=basket_move(close_at, t, c["direction"]))
                     open_pos[sym] = [pos]
                     batch.commit(c["direction"], sg.risk_usd(c["entry"], c["sl"], NOTIONAL) or 0)
                     opened_dirs.append(c["direction"])
@@ -269,7 +310,11 @@ def metrics(closed: Sequence[Dict], rejected: Dict[str, int], considered: int, m
         run = run + 1 if p["reason"] == "stop" else 0
         longest = max(longest, run)
     n_rej = sum(rejected.values())
-    return {"trades": len(trades), "net_usd": round(sum(pnl), 2),
+    entries = [p for p in trades if p["kind"] == "entry"]
+    return {"split": {"reads": _buckets(entries, "reads", READ_BUCKETS),
+                      "tps": _buckets(entries, "tps", TP_BUCKETS),
+                      "move": _buckets(entries, "move", MOVE_BUCKETS)},
+            "trades": len(trades), "net_usd": round(sum(pnl), 2),
             "pf": round(wins / losses, 2) if losses else None, "max_dd_usd": round(dd, 2),
             "win_pct": round(100 * sum(1 for x in pnl if x > 0) / len(pnl), 1) if pnl else None,
             "max_stop_run": longest, "max_same_way": max_same, "crowded_candles": crowded,
@@ -280,14 +325,27 @@ def metrics(closed: Sequence[Dict], rejected: Dict[str, int], considered: int, m
             "rejected": dict(sorted(rejected.items(), key=lambda kv: -kv[1]))}
 
 
+def _buckets(trades: Sequence[Dict], key: str, edges) -> List[Dict]:
+    out = []
+    for lo, hi, label in edges:
+        ps = [p["pnl"] for p in trades if p.get(key) is not None and (
+            lo <= p[key] <= hi if isinstance(lo, int) else lo <= p[key] < hi)]
+        w, lo_ = sum(x for x in ps if x > 0), -sum(x for x in ps if x <= 0)
+        out.append({"bucket": label, "trades": len(ps),
+                    "win_pct": round(100 * sum(1 for x in ps if x > 0) / len(ps), 1) if ps else None,
+                    "avg_usd": round(sum(ps) / len(ps), 2) if ps else None,
+                    "pf": round(w / lo_, 2) if lo_ else None})
+    return out
+
+
 def compare(m15: Dict[str, List[Dict]], *, start_ms: int, end_ms: int, log=print,
             read_kw: Optional[Dict] = None, sim: Callable = ee.simulate_hl) -> Dict:
     data = candidates(m15, start_ms=start_ms, log=log, read_kw=read_kw)
     rows = []
-    for label, limits, reentry, adds, quality in VARIANTS:
+    for label, limits, reentry, adds, quality, hot in VARIANTS:
         rows.append({"label": label, **run_book(data, m15, limits=limits, reentry=reentry,
                                                 adds=adds, quality=quality, start_ms=start_ms,
-                                                end_ms=end_ms, sim=sim)})
+                                                end_ms=end_ms, sim=sim, hot=hot)})
         log(f"  {label}: done")                          # no results in the (public) log
     span = (end_ms - start_ms) / (24 * HOUR_MS)
     return {"start": start_ms, "end": end_ms, "days": round(span, 1), "coins": sorted(m15),
@@ -315,8 +373,23 @@ def render_telegram(res: Dict) -> str:
                   f"{r['max_same_way']} · candles opening 2+ the same way {r['crowded_candles']}",
                   f"  rejected {r['rejected_pct']}% of {r['considered']} qualifying reads: {rej}",
                   ""]
-    lines.append("Judge on the UNTOUCHED period (end_days_ago 200); a rule that only helps in "
-                 "one period is not evidence. Passing tests do not make the book profitable.")
+    names = {"reads": "same-way setups across the coins, last 1h",
+             "tps": "same-way targets hit, last 4h",
+             "move": "basket 4h move, the trade's way"}
+    for r in res["rows"]:
+        if r["label"] not in SPLIT_ROWS or not r.get("split"):
+            continue
+        lines.append(f"🌡 how hot the market was at entry: {r['label']} (entries; trades · win "
+                     "· avg $ · PF)")
+        for key, name in names.items():
+            lines.append(f"  {name}:")
+            lines += [f"    {b['bucket']}: {b['trades']} · {b['win_pct']}% · ${b['avg_usd']} · "
+                      f"PF {b['pf']}" for b in r["split"][key]]
+        lines.append("")
+    lines.append("Break-even win rate with these exits and costs is about 45%. Judge a new rule "
+                 "on a period not looked at before (the hot-market cooldown: end_days_ago 270; "
+                 "200 has been read once). A rule that only helps in one period is not evidence. "
+                 "Passing tests do not make the book profitable.")
     return "\n".join(lines)
 
 

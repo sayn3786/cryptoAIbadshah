@@ -91,6 +91,16 @@ reason, so the next stop-outs can be attributed.
 | `SCALP_MIN_NET_RR` | 1.1 | none | The fixed exits give ≈1.23 after costs at the plan; less means the price moved. |
 | `SCALP_MIN_STOP_FRACTION` | 0.5 | none | Fill-to-stop at least half the planned distance (hypothesis 1). |
 
+| `SCALP_HOT_GUARD` | off | — | Nov 5: hot-market cooldown, off until the replay supports it. |
+| `SCALP_HOT_READS` | 6 | — | Same-way qualifying setups across the coins in the last hour (4 closes). |
+| `SCALP_HOT_TPS` | 3 | — | Same-way targets hit in the last 4 hours. |
+| `SCALP_HOT_COOLDOWN_HOURS` | 2 | — | No new entries or adds that way once either fires. |
+
+The hot-market thresholds were fixed before any replay of them. The heat is
+recorded (KV `scalp:heat:{env}`, 24h) and shown in `/api/hl/scalp` under
+`portfolio.hot_market` even while the guard is off. Its untouched period is
+`end_days_ago` 270, because 200 has already been read.
+
 Deployed values were not inspected (no access to the deployment settings);
 set them explicitly there rather than relying on these defaults.
 
