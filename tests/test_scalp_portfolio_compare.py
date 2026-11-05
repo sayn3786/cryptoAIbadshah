@@ -49,7 +49,7 @@ def data(cands):
 
 def run(d, **flags):
     m15 = {s: flat() for s in COINS}
-    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "hot": False,
+    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "hot": 0,
           **flags}
     return spc.run_book(d, m15, start_ms=0, end_ms=400 * M, sim=stop_sim(), **kw)
 
@@ -110,17 +110,21 @@ def test_the_hot_market_cooldown_in_the_replay():
                  [cand("ETH", 120 * M, d="SHORT")])
     kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "start_ms": 0,
           "end_ms": 400 * M, "sim": stop_sim()}
-    off = spc.run_book(burst, m15, hot=False, **kw)
-    on = spc.run_book(burst, m15, hot=True, **kw)
+    off = spc.run_book(burst, m15, hot=0, **kw)
+    on = spc.run_book(burst, m15, hot=2.0, **kw)
     assert off["trades"] == 8
     assert on["rejected"] == {"HOT_MARKET": 7} and on["trades"] == 1      # only the short
+    short = spc.run_book(burst, m15, hot=0.5, **kw)                      # 30m: BTC at 104 is free
+    assert short["rejected"] == {"HOT_MARKET": 6} and short["trades"] == 2
+    assert os.getenv("SCALP_HOT_COOLDOWN_HOURS") is None
     assert os.getenv("SCALP_HOT_GUARD") is None
     # entries are tagged with the heat at entry
     reads = {b["bucket"]: b["trades"] for b in off["split"]["reads"]}
     assert reads["6-9"] == 6 and reads["1-2"] == 2     # the hour is 4 closes: 104 no longer sees 100
     assert {b["bucket"]: b["trades"] for b in off["split"]["tps"]}["0"] == 8
-    assert [v[0] for v in spc.VARIANTS][-2:] == ["+ hot-market cooldown",
-                                                 "all changes + hot-market cooldown"]
+    assert [v[0] for v in spc.VARIANTS][-3:] == ["+ hot-market cooldown 30m",
+                                                 "+ hot-market cooldown 2h",
+                                                 "all changes + hot-market cooldown 30m"]
 
 
 def test_basket_move_is_the_median_the_trades_way():

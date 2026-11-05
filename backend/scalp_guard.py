@@ -41,9 +41,11 @@ often means the move is late. When either fires, new entries that way wait:
   SCALP_HOT_READS            same-way qualifying setups across the coins
                              in the last hour (this candle included)    6
   SCALP_HOT_TPS              same-way targets hit in the last 4 hours   3
-  SCALP_HOT_COOLDOWN_HOURS   no new entries that way after it fires     2
+  SCALP_HOT_COOLDOWN_HOURS   no new entries that way after it fires    0.5
 
-The thresholds were set before any replay of them; the other direction and
+It (re)starts only when a NEW same-way setup or target pushes a count over,
+so a burst still inside the hour does not keep extending the pause. The
+thresholds were set before any replay of them; the other direction and
 running positions are not affected.
 
 A stop-out blocks the same direction on that coin until BOTH the cooldown
@@ -421,7 +423,7 @@ def hot_tps() -> int:
 
 
 def hot_cooldown_ms() -> int:
-    return int(max(0.0, _num_env("SCALP_HOT_COOLDOWN_HOURS", 2.0)) * H1_MS)
+    return int(max(0.0, _num_env("SCALP_HOT_COOLDOWN_HOURS", 0.5)) * H1_MS)
 
 
 def _heat(heat: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -455,11 +457,18 @@ def heat_update(heat: Optional[Dict[str, Any]], slot_ms: int, longs: int, shorts
     cooldown in a direction that is hot now. Runs whether or not the guard
     blocks, so the admin view shows it either way."""
     h = _heat(heat)
+    prev = h.get("last_slot")
     h["slots"] = [s for s in h["slots"] if int(s[0]) != int(slot_ms)]
     h["slots"].append([int(slot_ms), int(longs), int(shorts)])
-    for d in ("LONG", "SHORT"):
+    h["last_slot"] = int(slot_ms)
+    for d, now_n in (("LONG", int(longs)), ("SHORT", int(shorts))):
         c = heat_counts(h, d, slot_ms)
-        if c["reads"] >= hot_reads() or c["tps"] >= hot_tps():
+        # (Re)starts only when something NEW pushes it over - a same-way setup
+        # on this candle, or a target since the last candle - so a burst that
+        # is still inside the hour does not keep extending a short cooldown.
+        new_tp = any(t[1] == d and (prev is None or int(t[0]) > int(prev))
+                     for t in h["targets"])
+        if (c["reads"] >= hot_reads() and now_n > 0) or (c["tps"] >= hot_tps() and new_tp):
             h["until"][d] = int(slot_ms) + hot_cooldown_ms()
             h["fired"][d] = {"at_ms": int(slot_ms), **c}
     cut = int(slot_ms) - HEAT_KEEP_MS

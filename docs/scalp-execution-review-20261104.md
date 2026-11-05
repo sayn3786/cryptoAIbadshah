@@ -94,9 +94,9 @@ reason, so the next stop-outs can be attributed.
 | `SCALP_HOT_GUARD` | off | — | Nov 5: hot-market cooldown, off until the replay supports it. |
 | `SCALP_HOT_READS` | 6 | — | Same-way qualifying setups across the coins in the last hour (4 closes). |
 | `SCALP_HOT_TPS` | 3 | — | Same-way targets hit in the last 4 hours. |
-| `SCALP_HOT_COOLDOWN_HOURS` | 2 | — | No new entries or adds that way once either fires. |
+| `SCALP_HOT_COOLDOWN_HOURS` | 0.5 | — | No new entries or adds that way once either fires; 30 minutes (owner's choice, before any replay), the replay also shows 2h. |
 
-The hot-market thresholds were fixed before any replay of them. The heat is
+The hot-market thresholds were fixed before any replay of them. The pause (re)starts only when a new same-way setup or target pushes a count over, so a burst still inside the hour does not stretch 30 minutes into an hour or more. The heat is
 recorded (KV `scalp:heat:{env}`, 24h) and shown in `/api/hl/scalp` under
 `portfolio.hot_market` even while the guard is off. Its untouched period is
 `end_days_ago` 270, because 200 has already been read.

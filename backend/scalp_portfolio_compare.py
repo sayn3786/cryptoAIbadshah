@@ -28,8 +28,9 @@ Variants - the baseline and EACH change on its own, then all of them:
   all          every change (the proposed defaults)
   hot          + the hot-market cooldown (scalp_guard.hot_block, Nov 5): after
                6+ same-way setups across the coins in an hour, or 3+ same-way
-               targets in 4 hours, no new entries that way for 2 hours -
-               alone, and on top of all the changes
+               targets in 4 hours, no new entries that way for 30 minutes (the
+               default) - alone, with 2 hours for comparison, and on top of
+               all the changes
 
 Every trade is also tagged, at its entry, with how hot the market was: the
 same-way setups in the last hour, the same-way targets in the last 4 hours,
@@ -75,15 +76,16 @@ NOTIONAL = rc.MARGIN * rc.LEVERAGE
 ADD_FAVOUR = sl.ADD_FAVOUR
 BASE_ENV = {"SCALP_MAX_NEW_PER_CANDLE": "1000", "SCALP_MAX_LONGS": "1000",
             "SCALP_MAX_SHORTS": "1000", "SCALP_MAX_RISK_USD": "1000000"}
-VARIANTS = (   # (label, limits, re-entry rule, adds, quality, hot-market cooldown)
-    ("baseline (before Nov 2026)", False, False, True, False, False),
-    ("+ portfolio limits", True, False, True, False, False),
-    ("+ stop-out re-entry rule", False, True, True, False, False),
-    ("+ adds off", False, False, False, False, False),
-    ("+ entry quality", False, False, True, True, False),
-    ("all changes (proposed)", True, True, False, True, False),
-    ("+ hot-market cooldown", False, False, True, False, True),
-    ("all changes + hot-market cooldown", True, True, False, True, True),
+VARIANTS = (   # (label, limits, re-entry rule, adds, quality, hot-market cooldown hours; 0 = off)
+    ("baseline (before Nov 2026)", False, False, True, False, 0),
+    ("+ portfolio limits", True, False, True, False, 0),
+    ("+ stop-out re-entry rule", False, True, True, False, 0),
+    ("+ adds off", False, False, False, False, 0),
+    ("+ entry quality", False, False, True, True, 0),
+    ("all changes (proposed)", True, True, False, True, 0),
+    ("+ hot-market cooldown 30m", False, False, True, False, 0.5),
+    ("+ hot-market cooldown 2h", False, False, True, False, 2.0),
+    ("all changes + hot-market cooldown 30m", True, True, False, True, 0.5),
 )
 SPLIT_ROWS = ("baseline (before Nov 2026)", "all changes (proposed)")
 READ_BUCKETS = ((1, 2, "1-2"), (3, 5, "3-5"), (6, 9, "6-9"), (10, 10**6, "10+"))
@@ -158,7 +160,7 @@ def basket_move(close_at: Dict[str, Dict[int, float]], t: int, direction: str) -
 
 def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: bool, adds: bool,
              quality: bool, start_ms: int, end_ms: int, sim: Callable = ee.simulate_hl,
-             hot: bool = False) -> Dict:
+             hot: float = 0) -> Dict:
     ts = {s: [int(b["timestamp"]) for b in bars] for s, bars in m15.items()}
     close_at = {s: {int(b["timestamp"]) + M15: float(b["close"]) for b in bars}
                 for s, bars in m15.items()}
@@ -179,7 +181,8 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
     max_same = 0
     crowded_candles = 0
     max_open = sl.DEFAULT_MAX_OPEN if limits else 18
-    overrides = {**({} if limits else BASE_ENV), "SCALP_HOT_GUARD": "1" if hot else "0"}
+    overrides = {**({} if limits else BASE_ENV), "SCALP_HOT_GUARD": "1" if hot else "0",
+                 "SCALP_HOT_COOLDOWN_HOURS": str(hot or 0.5)}
     with env(overrides):
         for t in slots:
             # 1. positions that closed by now (simulated exits), remembered

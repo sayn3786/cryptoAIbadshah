@@ -463,12 +463,13 @@ def test_a_burst_of_same_way_setups_starts_a_cooldown_that_way(monkeypatch):
     assert sg.heat_counts(h, "LONG", 11 * M) == {"reads": 5, "tps": 0}
     assert sg.hot_block(h, "LONG", 11 * M) is None                       # off anyway
     h = sg.heat_update(h, 12 * M, 1, 0)                                  # 6 longs in the hour
-    assert h["until"]["LONG"] == 12 * M + 2 * H and "SHORT" not in h["until"]
+    assert h["until"]["LONG"] == 12 * M + 30 * 60_000 and "SHORT" not in h["until"]
     assert sg.hot_block(h, "LONG", 12 * M) is None                       # default: OFF
     monkeypatch.setenv("SCALP_HOT_GUARD", "1")
     assert sg.hot_block(h, "LONG", 12 * M).startswith("HOT_MARKET (6 long setups in 1h, 0 targets")
     assert sg.hot_block(h, "SHORT", 12 * M) is None                      # the other way: free
-    assert sg.hot_block(h, "LONG", 12 * M + 2 * H) is None               # cooldown over
+    assert sg.hot_block(h, "LONG", 12 * M + 29 * 60_000)                 # 30 minutes
+    assert sg.hot_block(h, "LONG", 12 * M + 30 * 60_000) is None         # cooldown over
     # the window is one hour: the candle at 10 M has left it by 14 M
     assert sg.heat_counts(h, "LONG", 14 * M)["reads"] == 3
 
@@ -513,4 +514,19 @@ def test_the_admin_view_shows_the_heat(app_mod, market, monkeypatch):
     p = app_mod.app.test_client().get("/api/hl/scalp", headers={"x-hl-token": "t"}).get_json()["portfolio"]
     hm = p["hot_market"]
     assert hm["enabled"] is False and hm["reads_at"] == 6 and hm["LONG"]["reads"] == 7
-    assert hm["LONG"]["cooling_min"] > 100 and hm["SHORT"]["cooling_min"] == 0
+    assert 20 < hm["LONG"]["cooling_min"] <= 30 and hm["SHORT"]["cooling_min"] == 0
+    assert hm["cooldown_hours"] == 0.5
+
+
+def test_a_quiet_market_is_free_after_30_minutes(monkeypatch):
+    monkeypatch.setenv("SCALP_HOT_GUARD", "1")
+    h = sg.heat_update({}, 10 * M, 6, 0)                                 # burst: until 12 M
+    h = sg.heat_update(h, 11 * M, 0, 0)                                  # quiet candles: the
+    h = sg.heat_update(h, 12 * M, 0, 0)                                  # burst is still in the
+    assert sg.heat_counts(h, "LONG", 12 * M)["reads"] == 6               # hour, but nothing new
+    assert sg.hot_block(h, "LONG", 12 * M) is None
+    h = sg.heat_update(h, 13 * M, 1, 0)                                  # a new long setup
+    assert sg.hot_block(h, "LONG", 13 * M).startswith("HOT_MARKET (7 long")
+    monkeypatch.setenv("SCALP_HOT_COOLDOWN_HOURS", "2")
+    h = sg.heat_update({}, 10 * M, 6, 0)
+    assert sg.hot_block(h, "LONG", 17 * M)                               # a 2h setting still works
