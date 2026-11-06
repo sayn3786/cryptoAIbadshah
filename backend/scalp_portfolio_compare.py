@@ -31,6 +31,12 @@ Variants - the baseline and EACH change on its own, then all of them:
                targets in 4 hours, no new entries that way for 30 minutes (the
                default) - alone, with 2 hours for comparison, and on top of
                all the changes
+  wins-then-batch  the owner's rule (Nov 6, scalp_guard.win_block): 3+
+               same-way targets hit in the last hour AND 2+ new same-way
+               setups on this candle - that batch is skipped and that way
+               waits 30 minutes; also with 2 targets, because with the live
+               limits (2 longs / 2 shorts open) 3 in an hour is rare. Judged
+               on 0 / 65 / 135 and the fresh end_days_ago 410.
   burst        the narrower version (Nov 5, chosen after reading the heat
                split above, so judged ONLY on a fresh period, end_days_ago
                340): 10+ same-way setups across the coins in an hour, the
@@ -82,18 +88,20 @@ ADD_FAVOUR = sl.ADD_FAVOUR
 BASE_ENV = {"SCALP_MAX_NEW_PER_CANDLE": "1000", "SCALP_MAX_LONGS": "1000",
             "SCALP_MAX_SHORTS": "1000", "SCALP_MAX_RISK_USD": "1000000"}
 VARIANTS = (   # (label, limits, re-entry rule, adds, quality, hot-market rule: None = off, else
-#  (pause hours, setups in 1h, targets in 4h; 0 = that trigger off))
-    ("baseline (before Nov 2026)", False, False, True, False, None),
-    ("+ portfolio limits", True, False, True, False, None),
-    ("+ stop-out re-entry rule", False, True, True, False, None),
-    ("+ adds off", False, False, False, False, None),
-    ("+ entry quality", False, False, True, True, None),
-    ("all changes (proposed)", True, True, False, True, None),
-    ("+ hot-market cooldown 30m", False, False, True, False, (0.5, 6, 3)),
-    ("+ hot-market cooldown 2h", False, False, True, False, (2.0, 6, 3)),
-    ("all changes + hot-market cooldown 30m", True, True, False, True, (0.5, 6, 3)),
-    ("+ burst pause (10+ setups, 30m)", False, False, True, False, (0.5, 10, 0)),
-    ("all changes + burst pause", True, True, False, True, (0.5, 10, 0)),
+#  (pause hours, setups in 1h, targets in 4h; 0 = that trigger off),
+#  wins-then-batch: None = off, else the targets needed in the last hour)
+    ("baseline (before Nov 2026)", False, False, True, False, None, None),
+    ("+ portfolio limits", True, False, True, False, None, None),
+    ("+ stop-out re-entry rule", False, True, True, False, None, None),
+    ("+ adds off", False, False, False, False, None, None),
+    ("+ entry quality", False, False, True, True, None, None),
+    ("all changes (proposed)", True, True, False, True, None, None),
+    # the hot-market (6 setups / 3 targets) and burst (10+) pauses were judged
+    # on Nov 5-6 and left off; their rows are no longer reported
+    ("+ wins-then-batch (3 targets in 1h)", False, False, True, False, None, 3),
+    ("+ wins-then-batch (2 targets in 1h)", False, False, True, False, None, 2),
+    ("all changes + wins-then-batch (3)", True, True, False, True, None, 3),
+    ("all changes + wins-then-batch (2)", True, True, False, True, None, 2),
 )
 SPLIT_ROWS = ("baseline (before Nov 2026)", "all changes (proposed)")
 READ_BUCKETS = ((1, 2, "1-2"), (3, 5, "3-5"), (6, 9, "6-9"), (10, 10**6, "10+"))
@@ -168,7 +176,7 @@ def basket_move(close_at: Dict[str, Dict[int, float]], t: int, direction: str) -
 
 def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: bool, adds: bool,
              quality: bool, start_ms: int, end_ms: int, sim: Callable = ee.simulate_hl,
-             hot: Optional[Sequence[float]] = None) -> Dict:
+             hot: Optional[Sequence[float]] = None, win: Optional[int] = None) -> Dict:
     ts = {s: [int(b["timestamp"]) for b in bars] for s, bars in m15.items()}
     close_at = {s: {int(b["timestamp"]) + M15: float(b["close"]) for b in bars}
                 for s, bars in m15.items()}
@@ -189,7 +197,8 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
     max_same = 0
     crowded_candles = 0
     max_open = sl.DEFAULT_MAX_OPEN if limits else 18
-    overrides = {**({} if limits else BASE_ENV), "SCALP_HOT_GUARD": "1" if hot else "0"}
+    overrides = {**({} if limits else BASE_ENV), "SCALP_HOT_GUARD": "1" if hot else "0",
+                 "SCALP_WIN_PAUSE": "1" if win else "0", "SCALP_WIN_PAUSE_TPS": str(win or 3)}
     if hot:
         overrides.update({"SCALP_HOT_COOLDOWN_HOURS": str(hot[0]),
                           "SCALP_HOT_READS": str(int(hot[1])), "SCALP_HOT_TPS": str(int(hot[2]))})
@@ -254,7 +263,7 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
                     if reentry and not p0.get("reset"):
                         rejected["ADD_NO_RESET"] = rejected.get("ADD_NO_RESET", 0) + 1
                         continue
-                    if sg.hot_block(heat, c["direction"], t):
+                    if sg.hot_block(heat, c["direction"], t) or sg.win_block(heat, c["direction"], t):
                         rejected["HOT_MARKET"] = rejected.get("HOT_MARKET", 0) + 1
                         continue
                     why = batch.check(c["direction"], sg.risk_usd(c["entry"], c["sl"], NOTIONAL),
@@ -271,7 +280,7 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
                     continue
                 why = sg.reentry_block(memory, sym, c["direction"], t) if reentry else None
                 if not why:
-                    why = sg.hot_block(heat, c["direction"], t)
+                    why = sg.hot_block(heat, c["direction"], t) or sg.win_block(heat, c["direction"], t)
                 if not why and quality and not (c["quality"] or {}).get("ok"):
                     why = "ENTRY_QUALITY"
                 if not why:
@@ -283,7 +292,9 @@ def run_book(data: Dict, m15: Dict[str, List[Dict]], *, limits: bool, reentry: b
                 pos = _open(c, m15[sym], ts[sym], sim, kind="entry")
                 if pos:
                     pos.update(sg.heat_counts(heat, c["direction"], t),
-                               move=basket_move(close_at, t, c["direction"]))
+                               move=basket_move(close_at, t, c["direction"]),
+                               win_tps=sg.recent_targets(heat, c["direction"], t, HOUR_MS),
+                               batch=sum(1 for r in q_now.values() if r.get(c["direction"])))
                     open_pos[sym] = [pos]
                     batch.commit(c["direction"], sg.risk_usd(c["entry"], c["sl"], NOTIONAL) or 0)
                     opened_dirs.append(c["direction"])
@@ -326,7 +337,8 @@ def metrics(closed: Sequence[Dict], rejected: Dict[str, int], considered: int, m
     entries = [p for p in trades if p["kind"] == "entry"]
     return {"split": {"reads": _buckets(entries, "reads", READ_BUCKETS),
                       "tps": _buckets(entries, "tps", TP_BUCKETS),
-                      "move": _buckets(entries, "move", MOVE_BUCKETS)},
+                      "move": _buckets(entries, "move", MOVE_BUCKETS),
+                      "wins": _win_buckets(entries)},
             "trades": len(trades), "net_usd": round(sum(pnl), 2),
             "pf": round(wins / losses, 2) if losses else None, "max_dd_usd": round(dd, 2),
             "win_pct": round(100 * sum(1 for x in pnl if x > 0) / len(pnl), 1) if pnl else None,
@@ -351,14 +363,33 @@ def _buckets(trades: Sequence[Dict], key: str, edges) -> List[Dict]:
     return out
 
 
+def _win_buckets(trades: Sequence[Dict]) -> List[Dict]:
+    """Entries by the owner's rule: same-way targets in the last hour, and
+    whether the entry came in a batch of 2+ same-way setups."""
+    groups = (("alone (batch 1)", lambda p: p.get("batch", 0) < 2),
+              ("batch 2+, no target in 1h", lambda p: p.get("batch", 0) >= 2 and p["win_tps"] == 0),
+              ("batch 2+, 1 target", lambda p: p.get("batch", 0) >= 2 and p["win_tps"] == 1),
+              ("batch 2+, 2 targets", lambda p: p.get("batch", 0) >= 2 and p["win_tps"] == 2),
+              ("batch 2+, 3+ targets", lambda p: p.get("batch", 0) >= 2 and p["win_tps"] >= 3))
+    out = []
+    for label, keep in groups:
+        ps = [p["pnl"] for p in trades if p.get("win_tps") is not None and keep(p)]
+        w, lo = sum(x for x in ps if x > 0), -sum(x for x in ps if x <= 0)
+        out.append({"bucket": label, "trades": len(ps),
+                    "win_pct": round(100 * sum(1 for x in ps if x > 0) / len(ps), 1) if ps else None,
+                    "avg_usd": round(sum(ps) / len(ps), 2) if ps else None,
+                    "pf": round(w / lo, 2) if lo else None})
+    return out
+
+
 def compare(m15: Dict[str, List[Dict]], *, start_ms: int, end_ms: int, log=print,
             read_kw: Optional[Dict] = None, sim: Callable = ee.simulate_hl) -> Dict:
     data = candidates(m15, start_ms=start_ms, log=log, read_kw=read_kw)
     rows = []
-    for label, limits, reentry, adds, quality, hot in VARIANTS:
+    for label, limits, reentry, adds, quality, hot, win in VARIANTS:
         rows.append({"label": label, **run_book(data, m15, limits=limits, reentry=reentry,
                                                 adds=adds, quality=quality, start_ms=start_ms,
-                                                end_ms=end_ms, sim=sim, hot=hot)})
+                                                end_ms=end_ms, sim=sim, hot=hot, win=win)})
         log(f"  {label}: done")                          # no results in the (public) log
     span = (end_ms - start_ms) / (24 * HOUR_MS)
     return {"start": start_ms, "end": end_ms, "days": round(span, 1), "coins": sorted(m15),
@@ -386,7 +417,8 @@ def render_telegram(res: Dict) -> str:
                   f"{r['max_same_way']} · candles opening 2+ the same way {r['crowded_candles']}",
                   f"  rejected {r['rejected_pct']}% of {r['considered']} qualifying reads: {rej}",
                   ""]
-    names = {"reads": "same-way setups across the coins, last 1h",
+    names = {"wins": "your rule: same-way targets in the last 1h, in a batch of 2+ setups",
+             "reads": "same-way setups across the coins, last 1h",
              "tps": "same-way targets hit, last 4h",
              "move": "basket 4h move, the trade's way"}
     for r in res["rows"]:
@@ -400,8 +432,8 @@ def render_telegram(res: Dict) -> str:
                       f"PF {b['pf']}" for b in r["split"][key]]
         lines.append("")
     lines.append("Break-even win rate with these exits and costs is about 45%. Judge a new rule "
-                 "on a period not looked at before (the hot-market cooldown: end_days_ago 270; "
-                 "the burst pause: 340, nothing else; 200 has been read once). A rule that only helps in one period is not evidence. "
+                 "on a period not looked at before (wins-then-batch: end_days_ago 410; "
+                 "0 / 65 / 135 / 200 / 270 / 340 have all been read). A rule that only helps in one period is not evidence. "
                  "Passing tests do not make the book profitable.")
     return "\n".join(lines)
 

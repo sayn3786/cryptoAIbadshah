@@ -19,7 +19,9 @@ M = sl.M15_MS
 NEW_ENVS = ("SCALP_MAX_NEW_PER_CANDLE", "SCALP_MAX_LONGS", "SCALP_MAX_SHORTS", "SCALP_MAX_RISK_USD",
             "SCALP_STOPOUT_COOLDOWN_HOURS", "SCALP_MAX_ATR_EXTENSION", "SCALP_MIN_ROOM_R",
             "SCALP_MIN_NET_RR", "SCALP_MIN_STOP_FRACTION", "SCALP_MAX_OPEN", "SCALP_MAX_ADDS",
-            "SCALP_HOT_GUARD", "SCALP_HOT_READS", "SCALP_HOT_TPS", "SCALP_HOT_COOLDOWN_HOURS")
+            "SCALP_HOT_GUARD", "SCALP_HOT_READS", "SCALP_HOT_TPS", "SCALP_HOT_COOLDOWN_HOURS",
+            "SCALP_WIN_PAUSE", "SCALP_WIN_PAUSE_TPS", "SCALP_WIN_PAUSE_WINDOW_MIN",
+            "SCALP_WIN_PAUSE_BATCH", "SCALP_WIN_PAUSE_MIN")
 
 
 @pytest.fixture(autouse=True)
@@ -541,3 +543,41 @@ def test_the_targets_trigger_can_be_turned_off(monkeypatch):
         sg.heat_target(h, "LONG", k * M)
     h = sg.heat_update(h, 6 * M, 0, 0)
     assert sg.hot_block(h, "LONG", 6 * M) is None and sg.heat_view(h, 6 * M)["tps_at"] == 0
+
+
+
+# ── 8. wins-then-batch pause (the owner's rule, off by default) ────────────
+
+def test_targets_then_a_same_way_batch_pauses_that_way(monkeypatch):
+    h = {}
+    for k in range(3):
+        sg.heat_target(h, "LONG", 9 * M + k * 60_000)                    # 3 longs hit targets
+    h = sg.heat_update(h, 10 * M, 1, 0)                                  # one new long: no
+    assert not h.get("win_until")
+    h = sg.heat_update(h, 11 * M, 2, 2)                                  # a batch of 2 longs
+    assert h["win_until"] == {"LONG": 11 * M + 30 * 60_000}              # shorts: no targets
+    assert sg.win_block(h, "LONG", 11 * M) is None                       # default: OFF
+    monkeypatch.setenv("SCALP_WIN_PAUSE", "1")
+    assert sg.win_block(h, "LONG", 11 * M).startswith(
+        "WINS_THEN_BATCH (3 long targets in 60m, then 2 new long setups")
+    assert sg.win_block(h, "LONG", 12 * M)                               # next candle too
+    assert sg.win_block(h, "LONG", 13 * M) is None                       # 30 minutes later: free
+    assert sg.win_block(h, "SHORT", 11 * M) is None
+    late = sg.heat_update({"targets": [[0, "LONG"]] * 3}, 5 * H, 3, 0)   # targets > 1h ago
+    assert not late.get("win_until")
+    view = sg.heat_view(h, 11 * M)["wins_then_batch"]
+    assert view["enabled"] and view["targets_at"] == 3 and view["LONG"]["targets"] == 3
+    assert view["LONG"]["pause_min_left"] == 30
+
+
+def test_the_book_skips_the_batch_after_wins_when_enabled(app_mod, market, monkeypatch):
+    monkeypatch.setenv("SCALP_WIN_PAUSE", "1")
+    heat = {}
+    for k in range(3):
+        sg.heat_target(heat, "LONG", 2 * H - (k + 1) * 60_000)
+    app_mod._scalp_heat_save(heat)
+    reads = {c: {"LONG": c in ("ETH", "SOL"), "SHORT": c == "XRP"} for c in COINS}
+    out = app_mod._scalp_hl([engine("ETH"), engine("SOL"), engine("XRP", d="SHORT")], 2 * H,
+                            reads=reads)
+    assert [s["symbol"] for s in market["opened"]] == ["XRP"]            # the short still trades
+    assert [d["reason"].split(" ")[0] for d in out["decisions"][:2]] == ["WINS_THEN_BATCH"] * 2

@@ -49,6 +49,19 @@ so a burst still inside the hour does not keep extending the pause. The
 thresholds were set before any replay of them; the other direction and
 running positions are not affected.
 
+Wins-then-batch pause (OFF unless SCALP_WIN_PAUSE=1; the owner's rule, Nov 6):
+several same-way trades just closed at their targets AND the next candle
+again brings a batch of same-way setups - often the late end of a move. When
+both hold, that batch's same-way entries are skipped and that way waits:
+
+  SCALP_WIN_PAUSE_TPS        same-way targets hit in the window         3
+  SCALP_WIN_PAUSE_WINDOW_MIN the window, minutes                        60
+  SCALP_WIN_PAUSE_BATCH      same-way setups on the new candle          2
+  SCALP_WIN_PAUSE_MIN        pause, minutes (the batch's candle on)     30
+
+With the live limits (2 longs / 2 shorts open) 3 same-way targets in an
+hour is rare; the replay also reports 2 targets.
+
 A stop-out blocks the same direction on that coin until BOTH the cooldown
 has passed AND the setup has genuinely reset: at least one later closed
 candle on which the coin had no qualifying read that way. A new candle alone
@@ -454,7 +467,8 @@ def heat_counts(heat: Dict[str, Any], direction: str, now_ms: int) -> Dict[str, 
     return {"reads": reads, "tps": tps}
 
 
-def heat_update(heat: Optional[Dict[str, Any]], slot_ms: int, longs: int, shorts: int) -> Dict[str, Any]:
+def heat_update(heat: Optional[Dict[str, Any]], slot_ms: int, longs: int, shorts: int,
+                now_ms: Optional[int] = None) -> Dict[str, Any]:
     """Record a closed candle's qualifying setups (all coins) and start the
     cooldown in a direction that is hot now. Runs whether or not the guard
     blocks, so the admin view shows it either way."""
@@ -473,10 +487,62 @@ def heat_update(heat: Optional[Dict[str, Any]], slot_ms: int, longs: int, shorts
         if (c["reads"] >= hot_reads() and now_n > 0) or (hot_tps() > 0 and c["tps"] >= hot_tps() and new_tp):
             h["until"][d] = int(slot_ms) + hot_cooldown_ms()
             h["fired"][d] = {"at_ms": int(slot_ms), **c}
+    # live records a target at the run's time, just after the candle close
+    _win_check(h, max(int(slot_ms), int(now_ms or 0)), {"LONG": int(longs), "SHORT": int(shorts)})
     cut = int(slot_ms) - HEAT_KEEP_MS
     h["slots"] = sorted(s for s in h["slots"] if int(s[0]) > cut)[-96:]
     h["targets"] = [t for t in h["targets"] if int(t[0]) > cut][-100:]
     return h
+
+
+def win_pause_on() -> bool:
+    return os.getenv("SCALP_WIN_PAUSE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def win_pause_tps() -> int:
+    return max(1, int(_num_env("SCALP_WIN_PAUSE_TPS", 3)))
+
+
+def win_pause_window_ms() -> int:
+    return int(max(1.0, _num_env("SCALP_WIN_PAUSE_WINDOW_MIN", 60)) * 60_000)
+
+
+def win_pause_batch() -> int:
+    return max(1, int(_num_env("SCALP_WIN_PAUSE_BATCH", 2)))
+
+
+def win_pause_ms() -> int:
+    return int(max(0.0, _num_env("SCALP_WIN_PAUSE_MIN", 30)) * 60_000)
+
+
+def recent_targets(heat: Dict[str, Any], direction: str, now_ms: int, window_ms: int) -> int:
+    return sum(1 for at, d in _heat(heat)["targets"] if d == direction
+               and int(now_ms) - int(window_ms) < int(at) <= int(now_ms))
+
+
+def _win_check(h: Dict[str, Any], slot_ms: int, counts: Dict[str, int]) -> None:
+    """Targets just hit + a new same-way batch on this candle: pause that way.
+    Recorded whether or not the rule blocks (the admin view shows it)."""
+    h.setdefault("win_until", {})
+    h.setdefault("win_fired", {})
+    for d in ("LONG", "SHORT"):
+        tps = recent_targets(h, d, slot_ms, win_pause_window_ms())
+        if tps >= win_pause_tps() and counts[d] >= win_pause_batch():
+            h["win_until"][d] = int(slot_ms) + win_pause_ms()
+            h["win_fired"][d] = {"at_ms": int(slot_ms), "targets": tps, "batch": counts[d]}
+
+
+def win_block(heat: Optional[Dict[str, Any]], direction: str, now_ms: int) -> Optional[str]:
+    if not win_pause_on():
+        return None
+    h = _heat(heat)
+    until = int((h.get("win_until") or {}).get(direction) or 0)
+    if int(now_ms) >= until:                 # the batch's candle and the next one
+        return None
+    f = (h.get("win_fired") or {}).get(direction) or {}
+    return (f"WINS_THEN_BATCH ({f.get('targets', '?')} {direction.lower()} targets in "
+            f"{win_pause_window_ms() // 60_000}m, then {f.get('batch', '?')} new "
+            f"{direction.lower()} setups; {max(0, until - int(now_ms)) // 60_000}m left)")
 
 
 def hot_block(heat: Optional[Dict[str, Any]], direction: str, now_ms: int) -> Optional[str]:
@@ -495,6 +561,14 @@ def heat_view(heat: Optional[Dict[str, Any]], now_ms: int) -> Dict[str, Any]:
     h = _heat(dict(heat or {}))
     return {"enabled": hot_guard_on(), "reads_at": hot_reads(), "tps_at": hot_tps(),
             "cooldown_hours": hot_cooldown_ms() / H1_MS,
+            "wins_then_batch": {
+                "enabled": win_pause_on(), "targets_at": win_pause_tps(),
+                "window_min": win_pause_window_ms() // 60_000, "batch_at": win_pause_batch(),
+                "pause_min": win_pause_ms() // 60_000,
+                **{d: {"targets": recent_targets(h, d, now_ms, win_pause_window_ms()),
+                       "pause_min_left": max(0, int((h.get("win_until") or {}).get(d) or 0)
+                                             - int(now_ms)) // 60_000,
+                       "fired": (h.get("win_fired") or {}).get(d)} for d in ("LONG", "SHORT")}},
             **{d: {**heat_counts(h, d, now_ms),
                    "cooling_min": max(0, int(h["until"].get(d) or 0) - int(now_ms)) // 60_000,
                    "fired": h["fired"].get(d)} for d in ("LONG", "SHORT")}}

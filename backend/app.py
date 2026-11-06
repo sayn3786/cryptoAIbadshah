@@ -6162,7 +6162,9 @@ def _scalp_add_gate(rec, setup, *, mark, stop, notional, batch) -> Optional[str]
     why = _sg.add_block(rec, setup)
     if why:
         return why
-    why = _sg.hot_block(getattr(batch, "heat", None), rec["direction"], int(time.time() * 1000))
+    now = int(time.time() * 1000)
+    why = _sg.hot_block(getattr(batch, "heat", None), rec["direction"], now) or \
+        _sg.win_block(getattr(batch, "heat", None), rec["direction"], now)
     if why:
         return why
     if batch is not None:
@@ -6535,8 +6537,9 @@ def _scalp_gate(setup, *, memory, batch, mids, table, now_ms, heat=None) -> tupl
     import scalp_guard as _sg
     import hl_meta as _hm
     sym, d = setup["symbol"], setup["direction"]
-    why = _sg.reentry_block(memory, sym, d, now_ms) or \
-        _sg.hot_block(heat if heat is not None else getattr(batch, "heat", None), d, now_ms)
+    h = heat if heat is not None else getattr(batch, "heat", None)
+    why = _sg.reentry_block(memory, sym, d, now_ms) or _sg.hot_block(h, d, now_ms) or \
+        _sg.win_block(h, d, now_ms)
     if why:
         return why, {}, None
     q = setup.get("quality")
@@ -6698,7 +6701,7 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                     heat, max((s["slot_ms"] for s in setups),
                               default=now_ms // _sl.M15_MS * _sl.M15_MS),
                     sum(1 for rd in reads.values() if rd.get("LONG")),
-                    sum(1 for rd in reads.values() if rd.get("SHORT")))
+                    sum(1 for rd in reads.values() if rd.get("SHORT")), now_ms=now_ms)
             table = _hm.asset_table()
             held = {str(p.get("coin") or "").upper() for p in positions}
             slot = max((s["slot_ms"] for s in setups), default=None)
