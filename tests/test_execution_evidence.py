@@ -78,6 +78,52 @@ def test_unknown_order_is_not_a_fill():
                 now=NOW,candidates=[c],read=read)
     assert b['unresolved_links']==1 and not b['links']
 
+
+def test_text_candle_identity_is_not_silently_converted():
+    # Execution hashes the original representation. ISO text and epoch ms
+    # are not interchangeable identities, even for the same instant.
+    raw = '2026-09-01T00:00:00+00:00'
+    text_id = hashlib.sha256(f'{SID}|open|{raw}'.encode()).hexdigest()[:32]
+    epoch_id = hashlib.sha256(f'{SID}|open|{END}'.encode()).hexdigest()[:32]
+    assert text_id != epoch_id
+    queries = []
+    def read(body):
+        queries.append(body)
+        if body['type'] == 'userFillsByTime':
+            return []
+        return {'status':'order', 'order':{'order':{
+            'oid':2, 'coin':'BTC', 'cloid':body['oid'], 'timestamp':END-100}}}
+    result = e.collect(network='testnet', account=ACCOUNT, start_ms=END-1000,
+                       end_ms=END, now=NOW,
+                       candidates=[dict(signal_id=SID, candle_ts=raw,
+                                        intent='open', instrument='BTC')], read=read)
+    assert queries[-1]['oid'] == '0x' + text_id
+    assert result['links'][0]['client_order_id'] == '0x' + text_id
+    assert not result['training_eligible']
+
+
+@pytest.mark.parametrize('raw', [True, -1, 1.5, None, '', '2026-09-01',
+                               '2026-09-01T00:00:00', ' 2026-09-01T00:00:00Z'])
+def test_invalid_candle_identity_rejected(raw):
+    with pytest.raises(e.EvidenceError):
+        e.candle_identity(raw)
+
+
+def test_equivalent_instants_preserve_distinct_original_representations():
+    for raw in ('2026-09-01T00:00:00Z', '2026-09-01T00:00:00+00:00',
+                '2026-09-01 00:00:00+00:00', END):
+        assert e.candle_identity(raw) == raw
+
+
+@pytest.mark.parametrize('nested', [None, [], {'order':None}, {'order':[]}])
+def test_malformed_order_envelope_fails_closed(nested):
+    def read(body):
+        return [] if body['type']=='userFillsByTime' else {'status':'order','order':nested}
+    with pytest.raises(e.EvidenceError, match='INVALID_ORDER_RESPONSE'):
+        e.collect(network='testnet',account=ACCOUNT,start_ms=END-1000,end_ms=END,
+                  now=NOW,candidates=[dict(signal_id=SID,candle_ts=END,
+                                          intent='open',instrument='BTC')],read=read)
+
 def test_persist_rejects_instrument_mismatch_before_sql():
     b = collect([fill()])
     b['links'] = [{'order_id':'2', 'instrument':'ETH'}]

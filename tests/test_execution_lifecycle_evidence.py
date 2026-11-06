@@ -48,6 +48,37 @@ def test_repeated_batch_not_double_counted():
     assert result['linkage_consistent'] and result['fills']==3 and result['funding_events']==1
 
 
+@pytest.mark.parametrize('short', [False, True])
+def test_partial_entry_then_stop_exit_stays_research_only(short):
+    data = fixture(short)
+    b = data[2][0]
+    first = b['fills'][0]
+    first['sz'] = '0.4'
+    second = deepcopy(first)
+    second.update(tid='4', time=END-800, sz='0.6',
+                  startPosition='-0.4' if short else '0.4')
+    b['fills'].insert(1, second)
+    for link in b['links'][1:]:
+        link['intent'] = 'sl'
+    result = audit(data)
+    assert result['linkage_consistent']
+    assert result['fills'] == 4
+    assert not result['training_eligible']
+
+
+def test_cancelled_unfilled_order_link_does_not_create_trade():
+    # A known order identity is not evidence of a fill, regardless of its status.
+    data = fixture()
+    b = data[2][0]
+    b['fills'] = []
+    b['funding'] = []
+    b['account_observation']['funding_count'] = 0
+    result = audit(data)
+    assert 'NO_TRADE_FILLS' in result['issues']
+    assert result['linked_fill_ids'] == []
+    assert not result['training_eligible']
+
+
 @pytest.mark.parametrize('case,expected',[
     ('missing_link','UNLINKED_OR_FOREIGN_FILL'),
     ('foreign_link','UNLINKED_OR_FOREIGN_FILL'),
