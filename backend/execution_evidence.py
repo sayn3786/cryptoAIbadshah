@@ -41,6 +41,25 @@ def number(value, positive=False):
         raise EvidenceError('INVALID_NUMBER') from None
 
 
+def candle_identity(value):
+    """Validate without changing the original input hashed by execution.
+
+    Never reconstruct this value from a timestamp that has been reformatted.
+    The same instant written with Z, +00:00 or epoch milliseconds has different
+    execution identities. Missing original identity must remain unresolved.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return integer(value)
+    if isinstance(value, str) and 0 < len(value) <= 64 and value == value.strip():
+        try:
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+                return value
+        except ValueError:
+            pass
+    raise EvidenceError('INVALID_CANDLE_IDENTITY')
+
+
 def normalize_fill(fill, start, end):
     if not isinstance(fill, dict):
         raise EvidenceError('INVALID_FILL')
@@ -65,7 +84,8 @@ def normalize_fill(fill, start, end):
 def collect(*, network, account, start_ms, end_ms, candidates=(), read=None, now=None):
     """Bounded snapshot; candidates are original persisted signal metadata.
 
-    Each candidate: signal_id, candle_ts (ms), intent, instrument. Links are
+    Each candidate: signal_id, original candle_ts (ms or aware ISO text),
+    intent, instrument. Links are
     accepted only when venue orderStatus echoes the deterministic client ID.
     No mapping by symbol alone, no guessed fills, no progress cursor advanced.
     """
@@ -87,7 +107,7 @@ def collect(*, network, account, start_ms, end_ms, candidates=(), read=None, now
     queries = []
     for c in candidates:
         sid = str(uuid.UUID(c['signal_id']))
-        ts = integer(c['candle_ts'])
+        ts = candle_identity(c['candle_ts'])
         intent = c['intent']
         if intent not in ('open','sl','tp1','tp2') or not c.get('instrument'):
             raise EvidenceError('INVALID_CANDIDATE')
@@ -112,7 +132,10 @@ def collect(*, network, account, start_ms, end_ms, candidates=(), read=None, now
             continue
         if not isinstance(response, dict) or response.get('status') != 'order':
             raise EvidenceError('INVALID_ORDER_RESPONSE')
-        order = response.get('order', {}).get('order', {})
+        envelope = response.get('order')
+        order = envelope.get('order') if isinstance(envelope, dict) else None
+        if not isinstance(order, dict):
+            raise EvidenceError('INVALID_ORDER_RESPONSE')
         if order.get('cloid') != cloid or order.get('coin') != coin:
             raise EvidenceError('ORDER_LINK_MISMATCH')
         placed = integer(order.get('timestamp'))
