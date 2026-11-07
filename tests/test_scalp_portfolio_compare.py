@@ -16,7 +16,8 @@ COINS = ("BTC", "ETH", "SOL", "ADA")
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
     for k in ("SCALP_MAX_NEW_PER_CANDLE", "SCALP_MAX_LONGS", "SCALP_MAX_SHORTS",
-              "SCALP_MAX_RISK_USD", "SCALP_STOPOUT_COOLDOWN_HOURS", "SCALP_HOT_GUARD"):
+              "SCALP_MAX_RISK_USD", "SCALP_STOPOUT_COOLDOWN_HOURS", "SCALP_HOT_GUARD",
+              "SCALP_WIN_PAUSE", "SCALP_WIN_PAUSE_TPS"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -89,7 +90,7 @@ def test_report_and_workflow():
     res = {"start": 0, "end": 400 * M, "days": 4.2, "coins": list(COINS),
            "rows": [{"label": v[0], **run(data([cand("ETH", 100 * M)]))} for v in spc.VARIANTS]}
     text = spc.render_telegram(res)
-    assert "portfolio" in text and "end_days_ago 270" in text and "stop-out run" in text
+    assert "portfolio" in text and "end_days_ago 410" in text and "stop-out run" in text
     assert "how hot the market was" in text and "same-way targets hit" in text
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
@@ -123,9 +124,8 @@ def test_the_hot_market_cooldown_in_the_replay():
     assert reads["6-9"] == 6 and reads["1-2"] == 2     # the hour is 4 closes: 104 no longer sees 100
     assert {b["bucket"]: b["trades"] for b in off["split"]["tps"]}["0"] == 8
     labels = [v[0] for v in spc.VARIANTS]
-    assert {"+ hot-market cooldown 30m", "+ hot-market cooldown 2h",
-            "all changes + hot-market cooldown 30m", "+ burst pause (10+ setups, 30m)",
-            "all changes + burst pause"} <= set(labels)
+    assert {"+ wins-then-batch (3 targets in 1h)", "+ wins-then-batch (2 targets in 1h)",
+            "all changes + wins-then-batch (3)", "all changes + wins-then-batch (2)"} <= set(labels)
     # a 6-coin burst does not reach the burst pause's 10
     assert spc.run_book(burst, m15, hot=(0.5, 10, 0), **kw)["trades"] == 8
     assert os.getenv("SCALP_HOT_READS") is None and os.getenv("SCALP_HOT_TPS") is None
@@ -155,3 +155,30 @@ def test_the_burst_pause_needs_ten_setups_and_ignores_targets():
     runs = data([cand(c, (100 + 4 * k) * M) for k, c in enumerate(coins)])
     r = spc.run_book(runs, m15, hot=(0.5, 10, 0), **{**kw, "sim": win})
     assert r["trades"] == 11 and r["rejected"] == {}                     # targets: off
+
+
+def test_wins_then_batch_in_the_replay():
+    """3 longs hit their targets, then a batch of 2 new longs: skipped. A
+    single new long, or a batch with fewer targets behind it, still trades."""
+    coins = ("A", "B", "C", "D", "E", "F", "G")
+    m15 = {c: flat() for c in coins}
+
+    def sim(rec, bars, **k):      # the first three win at 102 M, the rest lose
+        win = rec["slot_ms"] == 100 * M
+        return {"taken": True, "outcome": "tp1" if win else "stop",
+                "closed_at": rec["slot_ms"] + 2 * M, "net_pct": 1.28 if win else -1.04}
+    kw = {"limits": False, "reentry": False, "adds": False, "quality": False, "start_ms": 0,
+          "end_ms": 400 * M, "sim": sim}
+    cs = [cand(c, 100 * M) for c in ("A", "B", "C")] + \
+         [cand(c, 104 * M) for c in ("D", "E")] + [cand("F", 110 * M)] + [cand("G", 112 * M)]
+    off = spc.run_book(data(cs), m15, win=None, **kw)
+    assert off["trades"] == 7
+    rows = {b["bucket"]: b["trades"] for b in off["split"]["wins"]}
+    assert rows["batch 2+, 3+ targets"] == 2 and rows["batch 2+, no target in 1h"] == 3
+    on = spc.run_book(data(cs), m15, win=3, **kw)
+    # D, E skipped at 104; F at 110 is alone, but the pause runs to 104 + 30m = 106 M only
+    assert on["rejected"] == {"WINS_THEN_BATCH": 2} and on["trades"] == 5
+    assert spc.run_book(data(cs), m15, win=4, **kw)["trades"] == 7       # 4 targets needed: no
+    one = [cand(c, 100 * M) for c in ("A", "B", "C")] + [cand("D", 104 * M)]
+    assert spc.run_book(data(one), m15, win=3, **kw)["trades"] == 4      # a batch of 1: trades
+    assert os.getenv("SCALP_WIN_PAUSE") is None

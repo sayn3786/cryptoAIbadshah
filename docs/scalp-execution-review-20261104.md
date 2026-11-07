@@ -108,6 +108,16 @@ burst pause (`SCALP_HOT_READS` 10, `SCALP_HOT_TPS` 0 = targets off, 30 min)
 was chosen after reading the heat split, so it is judged only on a fresh
 period, `end_days_ago` 340.
 
+Nov 6: the burst pause failed on 340 (alone PF 0.90 → 0.87; on top of all
+changes 0.89 → 0.85), and the 10+ bucket was profitable there - left off.
+
+Wins-then-batch pause (`SCALP_WIN_PAUSE`, off; the owner's rule): 3+
+same-way targets in the last hour (`SCALP_WIN_PAUSE_TPS`, `_WINDOW_MIN` 60)
+AND 2+ new same-way setups on the candle (`SCALP_WIN_PAUSE_BATCH`) - that
+batch is skipped and that way waits 30 minutes (`SCALP_WIN_PAUSE_MIN`).
+With 2 longs / 2 shorts open at most, 3 same-way targets in an hour is rare,
+so the replay also shows 2. Judged on 0 / 65 / 135 and the fresh 410.
+
 Deployed values were not inspected (no access to the deployment settings);
 set them explicitly there rather than relying on these defaults.
 

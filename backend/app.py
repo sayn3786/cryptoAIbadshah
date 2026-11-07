@@ -5817,6 +5817,55 @@ def _scalp_save(records) -> None:
 
 # ── portfolio / re-entry state (scalp_guard), kept in the same KV as the book ──
 SCALP_LOCK_TTL_S = 110             # one HL pass at a time; outlives a slow run
+
+
+def _scalp_lock_take(lock: str, now_ms: int) -> bool:
+    """Take the one-pass lock. kv.claim expires after SCALP_LOCK_TTL_S in
+    Upstash, but its local-file fallback (no KV, or a failed KV call) never
+    expires: a pass killed before its `finally` would leave every later pass
+    BUSY for good. So the taking time is stored next to it, and a lock older
+    than the TTL is stale and taken over. Never raises."""
+    import kv as _kv
+    try:
+        got = _kv.claim(lock, ttl_seconds=SCALP_LOCK_TTL_S)
+    except Exception:
+        got = False
+    if not got:
+        try:
+            raw = _kv.get_value(lock + ":at")
+        except Exception:
+            return False
+        try:
+            at = int(raw or 0)
+        except (TypeError, ValueError):
+            at = 0
+        if at <= 0:
+            # Held, but no time beside it (taken an instant ago, or left by an
+            # older pass): start its clock now and wait one TTL.
+            try:
+                _kv.set_value(lock + ":at", str(int(now_ms)), ttl_seconds=SCALP_LOCK_TTL_S * 10)
+            except Exception:
+                pass
+            return False
+        if now_ms - at < SCALP_LOCK_TTL_S * 1000:
+            return False                                 # a live pass holds it
+    try:
+        _kv.set_value(lock + ":at", str(int(now_ms)), ttl_seconds=SCALP_LOCK_TTL_S * 10)
+    except Exception:
+        pass
+    return True
+
+
+def _scalp_lock_drop(lock: str) -> None:
+    import kv as _kv
+    try:
+        _kv.release(lock)
+    except Exception:
+        pass
+    try:            # cleared, not deleted: the file fallback keeps values
+        _kv.set_value(lock + ":at", "0", ttl_seconds=60)
+    except Exception:
+        pass
 SCALP_AUDIT_CAP = 200
 
 
@@ -6162,7 +6211,9 @@ def _scalp_add_gate(rec, setup, *, mark, stop, notional, batch) -> Optional[str]
     why = _sg.add_block(rec, setup)
     if why:
         return why
-    why = _sg.hot_block(getattr(batch, "heat", None), rec["direction"], int(time.time() * 1000))
+    now = int(time.time() * 1000)
+    why = _sg.hot_block(getattr(batch, "heat", None), rec["direction"], now) or \
+        _sg.win_block(getattr(batch, "heat", None), rec["direction"], now)
     if why:
         return why
     if batch is not None:
@@ -6535,8 +6586,9 @@ def _scalp_gate(setup, *, memory, batch, mids, table, now_ms, heat=None) -> tupl
     import scalp_guard as _sg
     import hl_meta as _hm
     sym, d = setup["symbol"], setup["direction"]
-    why = _sg.reentry_block(memory, sym, d, now_ms) or \
-        _sg.hot_block(heat if heat is not None else getattr(batch, "heat", None), d, now_ms)
+    h = heat if heat is not None else getattr(batch, "heat", None)
+    why = _sg.reentry_block(memory, sym, d, now_ms) or _sg.hot_block(h, d, now_ms) or \
+        _sg.win_block(h, d, now_ms)
     if why:
         return why, {}, None
     q = setup.get("quality")
@@ -6584,11 +6636,7 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
     if not _hx.arm_status()["armed"]:
         return {"ran": False, "reason": "DISARMED"}
     lock = f"scalp:lock:{_deploy_env()}"
-    try:
-        got = _kv.claim(lock, ttl_seconds=SCALP_LOCK_TTL_S)
-    except Exception:
-        got = False
-    if not got:
+    if not _scalp_lock_take(lock, int(time.time() * 1000)):
         return {"ran": False, "reason": "BUSY"}         # another pass holds the book
     out: dict = {"ran": True}
     try:
@@ -6698,7 +6746,7 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                     heat, max((s["slot_ms"] for s in setups),
                               default=now_ms // _sl.M15_MS * _sl.M15_MS),
                     sum(1 for rd in reads.values() if rd.get("LONG")),
-                    sum(1 for rd in reads.values() if rd.get("SHORT")))
+                    sum(1 for rd in reads.values() if rd.get("SHORT")), now_ms=now_ms)
             table = _hm.asset_table()
             held = {str(p.get("coin") or "").upper() for p in positions}
             slot = max((s["slot_ms"] for s in setups), default=None)
@@ -6810,10 +6858,7 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
     except Exception as exc:
         out.update({"ok": False, "error": type(exc).__name__})
     finally:
-        try:
-            _kv.release(lock)
-        except Exception:
-            pass
+        _scalp_lock_drop(lock)
     return out
 
 
