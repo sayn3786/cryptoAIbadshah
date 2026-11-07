@@ -128,6 +128,23 @@ def test_a_concurrent_pass_is_refused(app_mod, market):
     assert f"scalp:lock:{app_mod._deploy_env()}" not in app_mod._mem    # released after
 
 
+def test_a_stuck_lock_is_taken_over_after_its_ttl(app_mod, market, monkeypatch):
+    """The file fallback never expires a claim: a pass killed before it let
+    go must not leave every later pass BUSY."""
+    import time
+    lock = f"scalp:lock:{app_mod._deploy_env()}"
+    now = [1_000_000_000_000]
+    monkeypatch.setattr(time, "time", lambda: now[0] / 1000)
+    app_mod._mem[lock] = "1"                                             # stuck, no time beside it
+    assert app_mod._scalp_hl([engine("ETH")], 2 * H)["reason"] == "BUSY"
+    now[0] += 60_000                                                     # within the TTL: wait
+    assert app_mod._scalp_hl([engine("ETH")], 2 * H)["reason"] == "BUSY"
+    now[0] += app_mod.SCALP_LOCK_TTL_S * 1000                            # past it: taken over
+    out = app_mod._scalp_hl([engine("ETH")], 2 * H)
+    assert out["ran"] is True and len(market["opened"]) == 1
+    assert app_mod._mem.get(lock + ":at") == "0"                         # let go after
+
+
 def test_candidates_are_ranked_explicitly():
     a = {"symbol": "ADA", "strength": 105, "quality": {"ok": True, "ext_atr": 1.5}}
     b = {"symbol": "BTC", "strength": 120, "quality": {"ok": False, "ext_atr": 0.1}}
