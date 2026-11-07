@@ -711,13 +711,16 @@ def confirmed(setup: Dict[str, Any], m15: Sequence[Dict[str, Any]], fetch_h1: Ca
 
 
 def settle(fills: Sequence[Dict[str, Any]], rec: Dict[str, Any], *,
-           timed_out: bool = False) -> Optional[Dict[str, Any]]:
+           timed_out: bool = False, until_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """The scalp's result from the account's fills on its coin since it was
-    placed: entry and exit (volume-weighted), P&L after fees (Hyperliquid's
-    closedPnl minus every fee), and why it closed. None if it never filled. Pure."""
+    placed (and, for a past scalp, up to `until_ms`, so a later trade on the
+    coin is not mixed in): entry and exit (volume-weighted), P&L after fees
+    (Hyperliquid's closedPnl minus every fee), and why it closed. None if it
+    never filled. Pure."""
     since = int(rec.get("placed_ms") or 0)
     mine = [f for f in fills or [] if str(f.get("coin")) == rec["coin"]
-            and int(f.get("time") or 0) >= since]
+            and int(f.get("time") or 0) >= since
+            and (until_ms is None or int(f.get("time") or 0) <= int(until_ms))]
     opens = [f for f in mine if str(f.get("dir") or "").startswith("Open")]
     closes = [f for f in mine if str(f.get("dir") or "").startswith("Close")]
     if not opens:

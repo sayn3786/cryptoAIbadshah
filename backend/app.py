@@ -5919,6 +5919,74 @@ def _scalp_heat_save(heat) -> None:
         pass
 
 
+SCALP_REPAIR_EVERY_S = 3600
+
+
+def _scalp_repair(recs, now_ms, *, fills=None) -> dict:
+    """Fill in results the history never got, from the account's fills: a
+    timeout recorded with no exit price, and a row still OPEN / PENDING long
+    after the book let it go. Each is settled only from the fills inside its
+    own window (placed .. placed + max hold + 1h), so a later trade on the coin
+    is not mixed in. Nothing found: a filled row is closed as "unknown" (no
+    P&L, never a guessed stop), a never-filled one is cancelled. At most once
+    an hour, 20 rows a pass. Never raises."""
+    import kv as _kv
+    import hl_account as _ha
+    import scalp_live as _sl
+    import scalp_store as _ss
+    out = {"checked": 0, "settled": 0, "unknown": 0, "cancelled": 0}
+    try:
+        env = _deploy_env()
+        if not _kv.claim(f"scalp:repair:{env}", ttl_seconds=SCALP_REPAIR_EVERY_S):
+            return {**out, "skipped": "ran this hour"}
+        hold = _sl.max_hold_ms()
+        live = {str(r.get("symbol")) + ":" + str(r.get("slot_ms")) for r in (recs or {}).values()}
+        rows = [r for r in _ss.to_repair(env, stale_before_ms=now_ms - hold - 2 * 3_600_000)
+                if f"{r['symbol']}:{r['slot_ms']}" not in live]
+        if not rows:
+            return out
+        if fills is None:
+            fills = _ha._post_info({"type": "userFills", "user": _ha.account_address()}) or []
+        tried_key = f"scalp:repair_tried:{env}"
+        try:
+            tried = json.loads(_kv.get_value(tried_key) or "{}")
+        except Exception:
+            tried = {}
+        for r in rows:
+            out["checked"] += 1
+            key = f"{r['symbol']}:{r['slot_ms']}"
+            until = int(r["placed_ms"] or 0) + hold + 3_600_000
+            res = _sl.settle(fills, r, timed_out=r.get("exit_reason") == "timeout",
+                             until_ms=until)
+            if res and res.get("exit_price") is not None:
+                _ss.closed(env, r, at_ms=res.get("closed_ms") or until, result=res)
+                out["settled"] += 1
+                tried.pop(key, None)
+                continue
+            tried[key] = int(tried.get(key) or 0) + 1
+            if tried[key] < 3 and r["status"] == "CLOSED":
+                continue                      # the close fill may still appear
+            if res is None and not r.get("filled_ms"):
+                _ss.cancelled(env, r, reason="never filled (repaired from the account's fills)")
+                out["cancelled"] += 1
+            else:
+                _ss.closed(env, r, at_ms=r.get("closed_ms") or until,
+                           result={"exit_reason": "unknown", "pnl_usd": None,
+                                   **({"fill_price": res.get("fill_price"),
+                                       "filled_ms": res.get("filled_ms"),
+                                       "fees_usd": res.get("fees_usd")} if res else {})})
+                out["unknown"] += 1
+            tried.pop(key, None)
+        try:
+            _kv.set_value(tried_key, json.dumps(dict(list(tried.items())[-500:])),
+                          ttl_seconds=14 * 86_400)
+        except Exception:
+            pass
+    except Exception as exc:
+        out["error"] = type(exc).__name__
+    return out
+
+
 def _scalp_slot_key(slot_ms):
     return f"scalp:slot:{_deploy_env()}:{int(slot_ms)}"
 
@@ -6703,6 +6771,7 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                 recs.pop(coin, None)
                 _ss.cancelled(env, rec, reason="not filled in 2h or price through the stop")
                 notes.append(f"cancelled {rec['symbol']} (not filled in 2h or through its stop)")
+            timed = []
             for coin in act["close"]:
                 rec = recs[coin]
                 cloid = _hx.client_order_id(_sl.signal_id(rec["symbol"]), "timeout",
@@ -6713,11 +6782,26 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                     ok = False
                 if ok:
                     recs.pop(coin, None)
-                    res = _sl.settle(fills, rec, timed_out=True) if fills is not None else None
-                    _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "timeout"})
-                    _ended(rec, res, "timeout")
-                    notes.append(f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h"
-                                 + (f" (${res['pnl_usd']:+.2f})" if res else ""))
+                    timed.append(rec)
+            if timed:
+                # The fills read above came BEFORE these closes, so they hold
+                # no exit: read them again, or the timeout is recorded with no
+                # exit price and only the fees as its P&L. A close fill that is
+                # still missing is settled by a later pass (_scalp_repair).
+                try:
+                    fills = _ha._post_info({"type": "userFills",
+                                            "user": _ha.account_address()}) or []
+                except Exception:
+                    pass
+            for rec in timed:
+                res = _sl.settle(fills, rec, timed_out=True) if fills is not None else None
+                if res and res.get("exit_price") is None:
+                    res = {**res, "pnl_usd": None}     # not known yet: not a "fees only" loss
+                _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "timeout"})
+                _ended(rec, res, "timeout")
+                notes.append(f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h"
+                             + (f" (${res['pnl_usd']:+.2f})"
+                                if res and res.get("pnl_usd") is not None else ""))
             for coin in act["drop"]:
                 rec = recs.pop(coin, None) or {}
                 res = _sl.settle(fills, rec) if (fills is not None and rec) else None
@@ -6733,6 +6817,9 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                     _ended(rec, res, "unknown")
                 elif rec.get("state") == "pending" and fills is not None:
                     _ss.cancelled(env, rec, reason="gone from HL without a fill")
+            repair = _scalp_repair(recs, now_ms, fills=fills)
+            if repair.get("settled") or repair.get("unknown") or repair.get("cancelled"):
+                out["repair"] = repair
             # This candle's reads: a direction with no qualifying setup resets a
             # stop-out (and makes a running scalp's next same-way setup fresh).
             for sym, rd in (reads or {}).items():
@@ -6953,7 +7040,7 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
         **({"rejected": sorted(rejected)} if rejected else {}),
         **({"skipped": skipped} if skipped else {}),
         **{k: hl.get(k) for k in ("reason", "results", "notes", "error", "held", "batch",
-                                  "decisions") if hl.get(k)}},
+                                  "decisions", "repair") if hl.get(k)}},
         cap=96)
     return {"ok": True, "ran": True, "coins": len(syms), "signals": label,
             "rejected": sorted(rejected), "skipped": skipped,

@@ -106,6 +106,36 @@ def closed(env: str, rec: Dict[str, Any], *, at_ms: int, result: Dict[str, Any])
                     "filled": _ts(result.get("filled_ms"))})
 
 
+def _ms(v) -> Optional[int]:
+    return None if v is None else int(v.timestamp() * 1000)
+
+
+def to_repair(env: str, *, stale_before_ms: int, days: int = 14,
+              limit: int = 20) -> List[Dict[str, Any]]:
+    """Rows whose result was never recorded: CLOSED with a fill but no exit
+    price (a timeout settled from fills read before its close was sent), and
+    OPEN / PENDING rows placed before `stale_before_ms` (gone from the book).
+    Each as a book-style rec plus its status. Oldest first."""
+    def work(s):
+        rows = s.execute(_sql("""
+            SELECT symbol, coin, direction, setup_close_time, stop_price, target_price,
+                   placed_at, filled_at, closed_at, status, exit_reason
+            FROM scalp_trades
+            WHERE environment = :env AND placed_at >= now() - make_interval(days => :days)
+              AND ((status = 'CLOSED' AND exit_price IS NULL AND filled_at IS NOT NULL
+                    AND COALESCE(exit_reason, '') <> 'unknown')
+                   OR (status IN ('OPEN', 'PENDING') AND placed_at < :stale))
+            ORDER BY placed_at LIMIT :limit
+        """), {"env": env, "days": int(days), "limit": int(limit),
+               "stale": _ts(stale_before_ms)}).mappings().all()
+        return [{"symbol": r["symbol"], "coin": r["coin"], "direction": r["direction"],
+                 "slot_ms": _ms(r["setup_close_time"]), "sl": float(r["stop_price"]),
+                 "target": float(r["target_price"]), "placed_ms": _ms(r["placed_at"]),
+                 "filled_ms": _ms(r["filled_at"]), "closed_ms": _ms(r["closed_at"]),
+                 "status": r["status"], "exit_reason": r["exit_reason"]} for r in rows]
+    return _run(work) or []
+
+
 def recent(env: str, *, days: int = 14, limit: int = 200) -> List[Dict[str, Any]]:
     def work(s):
         rows = s.execute(_sql("""
@@ -138,4 +168,7 @@ def summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "pnl_usd": round(sum(pnl), 2),
             "pf": round(sum(wins) / -sum(losses), 2) if losses and sum(losses) < 0 else None,
             "by_reason": {k: sum(1 for r in done if r.get("exit_reason") == k)
-                          for k in ("target", "stop", "breakeven", "timeout", "other")}}
+                          for k in ("target", "stop", "breakeven", "timeout", "other")},
+            # closed, but the fills never showed the result: not in the P&L
+            "no_result": sum(1 for r in rows
+                             if r.get("status") == "CLOSED" and r.get("pnl_usd") is None)}
