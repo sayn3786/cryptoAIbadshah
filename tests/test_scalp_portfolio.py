@@ -627,3 +627,35 @@ def test_the_run_sends_why_an_alerted_setup_was_not_traded(app_mod, monkeypatch)
     assert app_mod._scalp_why_not(new[1:], hl) == ""                    # all traded: nothing
     off = app_mod._scalp_why_not(new, {"ran": False, "reason": "DISARMED"})
     assert off == "🚦 Not traded: INJ LONG, ETH SHORT - Hyperliquid execution is disarmed."
+
+
+# ── 10. the Scalp Terminal page ─────────────────────────────────────────────
+
+def test_the_api_explains_each_rejection_for_the_terminal(app_mod, market, monkeypatch):
+    import scalp_store
+    monkeypatch.setattr(scalp_store, "recent", lambda env, days=14: [])
+    monkeypatch.setenv("HL_ADMIN_TOKEN", "t")
+    key = f"scalp:runs:{app_mod._deploy_env()}"
+    app_mod._mem[key] = json.dumps([
+        {"at": "2026-11-08T03:00:00+00:00", "coins": 14, "decisions": [
+            {"symbol": "ONDO", "direction": "SHORT", "decision": "rejected", "reason": "ENTRY_QUALITY",
+             "quality": {"reasons": ["EXTENDED"], "ext_atr": 2.34}},
+            {"symbol": "INJ", "direction": "LONG", "decision": "entered"}, "junk"]},
+        "garbage"])
+    body = app_mod.app.test_client().get("/api/hl/scalp", headers={"x-hl-token": "t"}).get_json()
+    d = body["runs"][0]["decisions"]
+    assert d[0]["why"].startswith("already stretched 2.34 ATR") and "why" not in d[1]
+    assert body["runs"][0]["coins"] == 14
+
+
+def test_the_terminal_page_is_admin_and_text_only():
+    root = os.path.join(os.path.dirname(__file__), "..", "dashboard")
+    page = open(os.path.join(root, "scalp.html")).read()
+    js = open(os.path.join(root, "js", "scalp.js")).read()
+    assert "/dashboard/js/scalp.js" in page and 'name="robots" content="noindex"' in page
+    assert 'fetch("/api/hl/scalp", { credentials: "same-origin"' in js
+    assert "innerHTML" not in js and "insertAdjacentHTML" not in js     # API text as text only
+    assert "status === 401" in js                                       # signed out: the note
+    assert "illustrative" not in page.lower()
+    idx = open(os.path.join(root, "index.html")).read()
+    assert "/dashboard/scalp.html" in idx and 'getElementById("cm-scalp").style.display = isAdmin' in idx

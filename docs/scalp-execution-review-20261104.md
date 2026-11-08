@@ -133,3 +133,17 @@ set them explicitly there rather than relying on these defaults.
   untouched validation period: do not change settings after looking at it.
 * Replay limits: an add is approximated as a second position; the live
   mid-price check cannot be replayed; flips close at the candle close.
+
+
+## Scalp Terminal page (Nov 8)
+
+`/dashboard/scalp.html` (admin toolbar → "Scalp terminal") shows the book on
+one page from `GET /api/hl/scalp` with the admin session:
+- status, and real results for today / 7 / 14 days;
+- each pass as scan → score → checks → execute, with every rejection in words;
+- a decision log of entries, skips and exits;
+- the limits in use, open scalps with their stop check, and cooldowns;
+- the realised P&L curve and the closed trades.
+
+A signed-out visitor sees only the sign-in note. API text is inserted as
+text, never as HTML.
