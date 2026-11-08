@@ -572,3 +572,62 @@ def heat_view(heat: Optional[Dict[str, Any]], now_ms: int) -> Dict[str, Any]:
             **{d: {**heat_counts(h, d, now_ms),
                    "cooling_min": max(0, int(h["until"].get(d) or 0) - int(now_ms)) // 60_000,
                    "fired": h["fired"].get(d)} for d in ("LONG", "SHORT")}}
+
+
+# ── why a setup was not traded, in words (for the Telegram follow-up) ────────
+
+_PLAIN = {
+    "CANDLE_LIMIT": "already {n} new trades this candle (max per candle)",
+    "LONG_LIMIT": "already at the max open longs",
+    "SHORT_LIMIT": "already at the max open shorts",
+    "OPEN_LIMIT": "already at the max open trades",
+    "RISK_LIMIT": "the book's total $ at risk is full",
+    "RISK_UNKNOWN": "risk could not be worked out (no price)",
+    "POSITION_EXISTS": "a position is already open on this coin",
+    "STOPOUT_NO_RESET": "stopped out earlier and the setup has not reset since",
+    "ENTRY_QUALITY_UNKNOWN": "not enough closed candles to judge the entry",
+    "ADDS_OFF": "adds are off",
+}
+
+
+def explain(decision: Dict[str, Any]) -> str:
+    """One short plain reason for a rejected decision from _scalp_hl."""
+    why = str(decision.get("reason") or "")
+    code = why.split(" ")[0]
+    if code == "ENTRY_QUALITY":
+        q = decision.get("quality") or {}
+        parts = []
+        for r in q.get("reasons") or []:
+            if r == "EXTENDED":
+                parts.append(f"already stretched {q.get('ext_atr')} ATR from its 20-EMA "
+                             f"(max {max_atr_extension():g}) - chasing")
+            elif r == "OPPOSING_STRUCTURE":
+                parts.append(f"a swing {'high' if decision.get('direction') == 'LONG' else 'low'}"
+                             f" only {q.get('room_r')}R away (needs {min_room_r():g}R) - "
+                             "little room to the target")
+            elif r in ("NO_ATR", "NO_LEVELS"):
+                parts.append("not enough data to judge the entry")
+        return "; ".join(parts) or "entry quality check failed"
+    if code == "LIVE_PRICE":
+        lv = decision.get("live") or {}
+        parts = []
+        for r in lv.get("reasons") or []:
+            if r == "LOW_NET_RR":
+                parts.append(f"price moved: reward/risk left after fees {lv.get('net_rr')} "
+                             f"(needs {min_net_rr():g})")
+            elif r == "STOP_TOO_CLOSE":
+                parts.append(f"price moved toward the stop: only {lv.get('stop_fraction')} of "
+                             f"the planned stop distance left (needs {min_stop_fraction():g})")
+            elif r == "PRICE_PAST_LEVELS":
+                parts.append("price is already past the stop or the target")
+            elif r == "NO_MARK":
+                parts.append("no live Hyperliquid price")
+        return "; ".join(parts) or "live price check failed"
+    if code == "STOPOUT_COOLDOWN":
+        return "stopped out on this coin recently - cooldown " + why[len(code):].strip(" ()")
+    if code in ("HOT_MARKET", "WINS_THEN_BATCH"):
+        return why
+    text = _PLAIN.get(code)
+    if text:
+        return text.format(n=max_new_per_candle())
+    return why or "not traded"

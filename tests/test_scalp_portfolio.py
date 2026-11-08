@@ -598,3 +598,32 @@ def test_the_book_skips_the_batch_after_wins_when_enabled(app_mod, market, monke
                             reads=reads)
     assert [s["symbol"] for s in market["opened"]] == ["XRP"]            # the short still trades
     assert [d["reason"].split(" ")[0] for d in out["decisions"][:2]] == ["WINS_THEN_BATCH"] * 2
+
+
+# ── 9. the follow-up says why an alerted setup was not traded ──────────────
+
+def test_explain_rejections_in_words():
+    q = {"decision": "rejected", "reason": "ENTRY_QUALITY", "direction": "LONG",
+         "quality": {"reasons": ["EXTENDED", "OPPOSING_STRUCTURE"], "ext_atr": 2.4, "room_r": 0.1}}
+    t = sg.explain(q)
+    assert "stretched 2.4 ATR" in t and "swing high only 0.1R away" in t
+    lv = {"reason": "LIVE_PRICE", "live": {"reasons": ["LOW_NET_RR"], "net_rr": 0.9}}
+    assert "reward/risk left after fees 0.9 (needs 1.1)" in sg.explain(lv)
+    assert "cooldown 120m left" in sg.explain({"reason": "STOPOUT_COOLDOWN (120m left)"})
+    assert sg.explain({"reason": "CANDLE_LIMIT"}).startswith("already 2 new trades")
+
+
+def test_the_run_sends_why_an_alerted_setup_was_not_traded(app_mod, monkeypatch):
+    sent = []
+    monkeypatch.setattr(app_mod, "_scalp_private", lambda t: sent.append(t))
+    new = [{"symbol": "INJ", "direction": "LONG"}, {"symbol": "ETH", "direction": "SHORT"}]
+    hl = {"ran": True, "decisions": [
+        {"symbol": "INJ", "direction": "LONG", "decision": "rejected", "reason": "ENTRY_QUALITY",
+         "quality": {"reasons": ["EXTENDED"], "ext_atr": 2.6}},
+        {"symbol": "ETH", "direction": "SHORT", "decision": "entered"}]}
+    text = app_mod._scalp_why_not(new, hl)
+    assert text.startswith("🚦 Alerted but NOT traded") and "INJ LONG: already stretched 2.6" in text
+    assert "ETH" not in text
+    assert app_mod._scalp_why_not(new[1:], hl) == ""                    # all traded: nothing
+    off = app_mod._scalp_why_not(new, {"ran": False, "reason": "DISARMED"})
+    assert off == "🚦 Not traded: INJ LONG, ETH SHORT - Hyperliquid execution is disarmed."

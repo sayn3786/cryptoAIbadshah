@@ -6949,6 +6949,43 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
     return out
 
 
+_HL_SKIP_TEXT = {
+    "TESTNET_ONLY": "the book trades on testnet only",
+    "DISARMED": "Hyperliquid execution is disarmed",
+    "BUSY": "another pass was running; it will be looked at again next candle",
+}
+
+
+def _scalp_why_not(new, hl) -> str:
+    """The alert goes out before the book runs; this follow-up says which
+    alerted setups were NOT traded and why, in words. "" when all traded."""
+    import scalp_guard as _sg
+    if not isinstance(hl, dict):
+        return ""
+    if hl.get("ran") is False:
+        if not hl.get("reason") or hl.get("reason") == "HL_SCALP_AUTO_EXECUTE_OFF":
+            return ""                    # the alert already says "alert only"
+        reason = _HL_SKIP_TEXT.get(hl.get("reason"), str(hl.get("reason")))
+        return "🚦 Not traded: " + ", ".join(f"{s['symbol']} {s['direction']}" for s in new) \
+            + f" - {reason}."
+    by = {(d.get("symbol"), d.get("direction")): d for d in hl.get("decisions") or []}
+    lines = []
+    for s in new:
+        d = by.get((s["symbol"], s["direction"]))
+        if d is None:
+            r = next((x for x in hl.get("results") or [] if x.get("symbol") == s["symbol"]), None)
+            if r and not (r.get("ok") or r.get("entered")):
+                lines.append(f"• {s['symbol']} {s['direction']}: order failed "
+                             f"({r.get('reason') or r.get('error') or 'unknown'})")
+            continue
+        if d.get("decision") == "rejected":
+            lines.append(f"• {s['symbol']} {s['direction']}: {_sg.explain(d)}")
+        elif d.get("decision") == "failed":
+            lines.append(f"• {s['symbol']} {s['direction']}: the order did not go through "
+                         f"({d.get('reason') or 'unknown'})")
+    return ("🚦 Alerted but NOT traded:\n" + "\n".join(lines)) if lines else ""
+
+
 def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     """One 15m pass of the sweep -> FVG scalp book: find setups completed on
     the latest close with the 1H read agreeing, alert them privately, run the
@@ -7029,6 +7066,10 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     if new:
         _scalp_private(_sl.message(new, auto=_sl.auto_enabled()))
     hl = _scalp_hl(new, now_ms, reads=reads)
+    if new:
+        why_not = _scalp_why_not(new, hl)
+        if why_not:
+            _scalp_private(why_not)
     label = [f"{x['symbol']} {x['direction']} {x['strength']:g} R:R {x['rr']:g}"
              + (f" [{x['score_parts']} vs {_sl.min_strength():g}]" if x.get("score_parts") else "")
              if x.get("kind") == "engine" else f"{x['symbol']} {x['direction']} R:R {x['rr']:g}"
