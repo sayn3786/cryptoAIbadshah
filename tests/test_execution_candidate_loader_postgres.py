@@ -47,6 +47,24 @@ def test_exact_persisted_identity_and_scope(connection):
             assert not excluded['candidates'] and len(excluded['excluded'])==1
 
 
+@pytest.mark.parametrize('environment', ['local', 'staging', 'custom-env_1'])
+def test_stored_environment_slugs_and_isolation(connection, environment):
+    c = connection
+    args = seed(c)
+    with c.begin():
+        c.execute(text('UPDATE signals SET environment=:environment WHERE id=:sid'),
+                  {'environment': environment, 'sid': SID})
+    with c.begin():
+        c.exec_driver_sql('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        report = load_candidates(c, **{**args, 'environment': environment})
+        assert len(report['candidates']) == 1
+        assert report['candidates'][0]['environment'] == environment
+        assert not load_candidates(c, **args)['candidates']
+        for invalid in (None, 12, '', 'Staging', 'staging\n', 'a' * 33, 'bad space'):
+            with pytest.raises(EvidenceError, match='INVALID_ENVIRONMENT'):
+                load_candidates(c, **{**args, 'environment': invalid})
+
+
 def test_bad_provenance_is_not_a_candidate(connection):
     c=connection; args=seed(c,malformed=True)
     with c.begin():

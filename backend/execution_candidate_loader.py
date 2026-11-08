@@ -8,6 +8,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import text
+from deploy_context import SLUG_RE
 from execution_evidence import EvidenceError, digest
 
 
@@ -18,7 +19,7 @@ def load_candidates(connection, *, signal_ids, environment, network,
     if connection.execute(text('SHOW transaction_isolation')).scalar() not in (
             'repeatable read', 'serializable'):
         raise EvidenceError('CONSISTENT_SNAPSHOT_REQUIRED')
-    if environment not in ('research', 'production', 'preview', 'development'):
+    if not isinstance(environment, str) or not SLUG_RE.fullmatch(environment):
         raise EvidenceError('INVALID_ENVIRONMENT')
     if network not in ('testnet', 'mainnet') or not isinstance(account_hash, str) or not re.fullmatch(r'[a-f0-9]{64}', account_hash):
         raise EvidenceError('INVALID_ACCOUNT_SCOPE')
