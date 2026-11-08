@@ -1000,6 +1000,7 @@
   <span class="who" id="cm-who"></span>
   <button type="button" id="cm-users">Users</button>
   <button type="button" id="cm-hl-status">HL status</button>
+  <button type="button" id="cm-scalp" onclick="location.href='/dashboard/scalp.html'">Scalp terminal</button>
   <button type="button" class="run" id="cm-hl-run">Run auto-exec</button>
   <button type="button" id="cm-logout">Log out</button>
 </div>
@@ -1115,6 +1116,7 @@
     document.getElementById("cm-who").textContent = (user && user.username) || "";
     document.getElementById("cm-hl-status").style.display = isAdmin ? "" : "none";
     document.getElementById("cm-hl-run").style.display = isAdmin ? "" : "none";
+    document.getElementById("cm-scalp").style.display = isAdmin ? "" : "none";
     document.getElementById("cm-users").style.display = isUserAdmin ? "" : "none";
     // Dock the toolbar into the header's right cluster (top of the page) so it
     // sits inline with the other controls and never covers the notifications.

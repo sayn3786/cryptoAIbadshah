@@ -7077,6 +7077,7 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     details = [d for d in (_scalp_score_record(x) for x in found) if d]
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "setups": label,
+        "coins": len(syms),
         **({"score_details": details} if details else {}),
         **({"rejected": sorted(rejected)} if rejected else {}),
         **({"skipped": skipped} if skipped else {}),
@@ -7235,7 +7236,15 @@ def api_hl_scalp():
     if guard:
         return guard
     import scalp_live as _sl
+    import scalp_guard as _sg
     runs = _kv_json_list(f"scalp:runs:{_deploy_env()}")[-48:]
+    for run in runs:                  # the reason in words, for the terminal page
+        for d in (run.get("decisions") or []) if isinstance(run, dict) else []:
+            if isinstance(d, dict) and d.get("decision") == "rejected" and "why" not in d:
+                try:
+                    d["why"] = _sg.explain(d)
+                except Exception:
+                    pass
     return jsonify({"enabled": _sl.enabled(), "auto": _sl.auto_enabled(),
                     "mode": _sl.mode(), "min_strength": _sl.min_strength(),
                     "setup": ((f"score = 15m engine (0-100) + context capped at "

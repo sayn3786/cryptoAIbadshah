@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="robots" content="noindex" />
+  <title>Scalp Terminal</title>
+  <meta name="theme-color" content="#080d18" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #080d18; --bg2: #0f1624; --card: #111827; --card2: #1a2233; --border: #1e2d44;
+      --text: #e2e8f0; --muted: #64748b; --muted2: #94a3b8;
+      --good: #10b981; --bad: #ef4444; --warn: #f59e0b; --info: #6366f1; --line: #38bdf8;
+      --mono: 'JetBrains Mono', ui-monospace, monospace; --font: 'Inter', system-ui, sans-serif;
+      --r: 12px;
+    }
+    * { box-sizing: border-box; }
+    html { font-size: 14px; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font);
+           line-height: 1.45; overflow-x: hidden; }
+    a { color: var(--line); }
+    .wrap { max-width: 1240px; margin: 0 auto; padding: 16px; }
+    .mono { font-family: var(--mono); }
+    .muted { color: var(--muted2); }
+    .small { font-size: .82rem; }
+
+    /* header */
+    .top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px;
+           padding: 14px 16px; background: var(--card); border: 1px solid var(--border);
+           border-radius: var(--r); }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand h1 { margin: 0; font-size: 1.35rem; font-weight: 800; letter-spacing: -.01em; }
+    .brand .tag { font: 600 .7rem var(--mono); padding: 2px 7px; border-radius: 6px;
+                  border: 1px solid var(--border); color: var(--muted2); }
+    .pill { display: inline-flex; align-items: center; gap: 7px; font: 600 .8rem var(--mono);
+            padding: 5px 10px; border-radius: 999px; background: var(--bg2);
+            border: 1px solid var(--border); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+    .dot.ok { background: var(--good); box-shadow: 0 0 0 3px rgba(16,185,129,.18); }
+    .dot.warn { background: var(--warn); }
+    .dot.bad { background: var(--bad); }
+    .top .spacer { flex: 1 1 auto; }
+    .top .back { font-size: .85rem; }
+
+    /* grid */
+    .grid { display: grid; gap: 14px; margin-top: 14px; }
+    .g-kpi { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .g-2 { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+    @media (max-width: 900px) { .g-2 { grid-template-columns: minmax(0, 1fr); } }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r);
+            padding: 14px 16px; min-width: 0; }
+    .card h2 { margin: 0 0 10px; font: 700 .74rem var(--mono); letter-spacing: .08em;
+               text-transform: uppercase; color: var(--muted2); display: flex;
+               justify-content: space-between; gap: 8px; }
+    .card h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+    /* KPI tiles */
+    .kpi .label { font: 600 .7rem var(--mono); letter-spacing: .06em; text-transform: uppercase;
+                  color: var(--muted2); }
+    .kpi .val { font: 700 1.7rem var(--mono); margin-top: 4px; }
+    .kpi .note { font-size: .78rem; color: var(--muted2); margin-top: 2px; }
+    .tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 8px;
+            overflow: hidden; }
+    .tabs button { background: transparent; color: var(--muted2); border: 0; padding: 6px 12px;
+                   font: 600 .78rem var(--font); cursor: pointer; }
+    .tabs button[aria-pressed="true"] { background: var(--card2); color: var(--text); }
+    .pos { color: var(--good); } .neg { color: var(--bad); }
+
+    /* pipeline */
+    .flow { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding-bottom: 4px; }
+    .stage { flex: 1 0 128px; background: var(--bg2); border: 1px solid var(--border);
+             border-radius: 10px; padding: 10px 12px; min-width: 128px; }
+    .stage .name { font: 700 .7rem var(--mono); letter-spacing: .08em; color: var(--muted2); }
+    .stage .n { font: 700 1.5rem var(--mono); margin: 2px 0; }
+    .stage .d { font-size: .78rem; color: var(--muted2); }
+    .stage.pass { border-color: rgba(16,185,129,.55); }
+    .stage.stop { border-color: rgba(239,68,68,.55); }
+    .arrow { flex: 0 0 22px; display: flex; align-items: center; justify-content: center;
+             color: var(--muted); font-size: 1.1rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+    .chip { font: 600 .68rem var(--mono); padding: 2px 6px; border-radius: 6px;
+            background: var(--card2); border: 1px solid var(--border); color: var(--muted2); }
+    .runs-nav { display: flex; align-items: center; gap: 8px; }
+    .runs-nav button { background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+                       border-radius: 7px; padding: 3px 9px; cursor: pointer; font: 600 .8rem var(--mono); }
+    .runs-nav button:disabled { opacity: .35; cursor: default; }
+
+    /* bars */
+    .bar-row { display: grid; grid-template-columns: 104px minmax(0,1fr) 112px; gap: 10px;
+               align-items: center; margin: 7px 0; font-size: .85rem; }
+    .bar { height: 8px; background: var(--card2); border-radius: 4px; overflow: hidden; }
+    .bar > i { display: block; height: 100%; border-radius: 4px; background: var(--line); }
+    .bar > i.full { background: var(--warn); }
+    .bar-row .v { font-family: var(--mono); text-align: right; color: var(--muted2); }
+
+    /* tables / log */
+    table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+    th { text-align: left; font: 600 .68rem var(--mono); letter-spacing: .06em; color: var(--muted2);
+         text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    td { padding: 7px 8px; border-bottom: 1px solid rgba(30,45,68,.6); vertical-align: top; }
+    td.num { font-family: var(--mono); text-align: right; white-space: nowrap; }
+    th.num { text-align: right; }
+    .scroll { overflow-x: auto; }
+    .scroll > table { min-width: 520px; }
+    .scroll.tall { max-height: 460px; overflow-y: auto; }
+    .scroll.tall th { position: sticky; top: 0; background: var(--card); }
+    .log { max-height: 520px; overflow-y: auto; }
+    .ev { display: grid; grid-template-columns: 64px 62px minmax(0,1fr) auto; gap: 10px;
+          padding: 9px 4px; border-bottom: 1px solid rgba(30,45,68,.6); align-items: start; }
+    .ev .t { font: 600 .78rem var(--mono); color: var(--muted2); }
+    .ev .k { font: 700 .66rem var(--mono); text-align: center; padding: 3px 0; border-radius: 6px;
+             border: 1px solid var(--border); background: var(--bg2); }
+    .k.enter { color: var(--good); border-color: rgba(16,185,129,.5); }
+    .k.skip { color: var(--warn); border-color: rgba(245,158,11,.45); }
+    .k.exit { color: var(--line); border-color: rgba(56,189,248,.45); }
+    .k.fail { color: var(--bad); border-color: rgba(239,68,68,.5); }
+    .ev .what { font-weight: 600; }
+    .ev .why { color: var(--muted2); font-size: .82rem; margin-top: 2px; }
+    .ev .amt { font: 600 .82rem var(--mono); white-space: nowrap; }
+    @media (max-width: 560px) {
+      .ev { grid-template-columns: 52px 56px minmax(0,1fr); }
+      .ev .amt { grid-column: 3; }
+      .bar-row { grid-template-columns: 84px minmax(0,1fr) 104px; }
+    }
+    .empty { color: var(--muted2); font-size: .85rem; padding: 8px 2px; }
+
+    /* chart */
+    .chart { position: relative; }
+    .chart svg { display: block; width: 100%; height: 220px; }
+    .tip { position: absolute; pointer-events: none; background: var(--card2);
+           border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font-size: .8rem;
+           white-space: nowrap; display: none; z-index: 2; }
+    .tip b { font-family: var(--mono); }
+
+    /* sign-in */
+    .gate { margin: 60px auto; max-width: 460px; text-align: center; }
+    .foot { margin: 18px 0 8px; font-size: .78rem; color: var(--muted); text-align: center; }
+    .warnbox { margin-top: 14px; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(245,158,11,.45);
+               background: rgba(245,158,11,.08); font-size: .85rem; display: none; }
+  </style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header class="top">
+    <div class="brand">
+      <h1>⚡ Scalp Terminal</h1>
+      <span class="tag">15m · testnet</span>
+    </div>
+    <span class="pill" id="status"><span class="dot" id="statusDot"></span><span id="statusText">loading…</span></span>
+    <span class="pill" id="auto">—</span>
+    <span class="spacer"></span>
+    <span class="muted small" id="updated"></span>
+    <a class="back" href="/dashboard">← Dashboard</a>
+  </header>
+  <div class="warnbox" id="warn"></div>
+
+  <section class="grid g-kpi" id="kpis" aria-label="Results"></section>
+  <div style="margin-top:10px;display:flex;justify-content:flex-end">
+    <div class="tabs" role="group" aria-label="Period">
+      <button type="button" data-p="today" aria-pressed="true">Today</button>
+      <button type="button" data-p="week" aria-pressed="false">7 days</button>
+      <button type="button" data-p="all" aria-pressed="false">14 days</button>
+    </div>
+  </div>
+
+  <section class="card" style="margin-top:14px">
+    <h2><span>Live flow · scan → score → checks → execute</span>
+      <span class="runs-nav sub"><button type="button" id="prevRun" aria-label="Older pass">‹</button>
+        <span id="runLabel" class="mono"></span>
+        <button type="button" id="nextRun" aria-label="Newer pass">›</button></span></h2>
+    <div class="flow" id="flow"></div>
+    <div id="flowList" style="margin-top:10px"></div>
+  </section>
+
+  <section class="grid g-2">
+    <div class="card">
+      <h2><span>Decision log</span><span class="sub" id="logCount"></span></h2>
+      <div class="log" id="log"></div>
+    </div>
+    <div>
+      <div class="card">
+        <h2><span>The book now</span><span class="sub" id="bookSub"></span></h2>
+        <div id="limits"></div>
+        <div id="openPos" style="margin-top:10px"></div>
+        <div id="pauses" style="margin-top:10px"></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2><span>Realised P&amp;L · 14 days</span><span class="sub" id="eqSub"></span></h2>
+        <div class="chart" id="chart"><div class="tip" id="tip"></div></div>
+        <p class="muted small" style="margin:6px 0 0">Cumulative, closed trades with a recorded result. Hover for each trade.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:14px">
+    <h2><span>Closed trades</span><span class="sub">newest first · table view of the chart</span></h2>
+    <div class="scroll tall"><table id="trades"></table></div>
+  </section>
+
+  <p class="foot">Real testnet records, not illustrations · a testnet experiment, not a proven edge · refreshes every 30 s</p>
+</div>
+
+<div class="gate" id="gate" style="display:none">
+  <h1>⚡ Scalp Terminal</h1>
+  <p class="muted" id="gateMsg">Admin only. Sign in on the dashboard as an admin, then come back.</p>
+  <p><a href="/dashboard">Open the dashboard to sign in →</a></p>
+</div>
+
+<script src="/dashboard/js/scalp.js?v=1"></script>
+</body>
+</html>
