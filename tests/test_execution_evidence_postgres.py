@@ -183,6 +183,24 @@ def test_readonly_loader_replays_manifests_and_receipt(connection):
         assert report['loaded_runs']==3
         assert report['fills']==3 and report['funding_events']==1
         assert 'CROSS_CLOCK_ALIGNMENT_UNVERIFIED' in report['quarantine_reasons']
+        from execution_cohort_audit import audit_cohort
+        cohort_args=dict(boundaries=[{k:args[k] for k in
+                         ('signal_id','opening_run_id','closing_run_id')}],
+                         environment='research',network=batch['network'],
+                         account_hash=batch['account_hash'],
+                         observed_from=NOW-timedelta(seconds=1),
+                         observed_before=NOW+timedelta(seconds=1))
+        cohort=audit_cohort(c,**cohort_args)
+        assert len(cohort['reports'])==1 and not cohort['excluded']
+        assert cohort['reports'][0]['audit']['publication_timing']['recorded_publication_before_fill']
+        assert not cohort['training_eligible'] and not cohort['attribution_verified']
+        absent=audit_cohort(c,**{**cohort_args,'environment':'preview'})
+        assert not absent['reports']
+        assert absent['excluded'][0]['reason']=='NO_SCOPED_PERSISTED_ORDER_IDENTITY'
+        wrong_boundary={**cohort_args['boundaries'][0],'opening_run_id':str(uuid.uuid4())}
+        bad=audit_cohort(c,**{**cohort_args,'boundaries':[wrong_boundary]})
+        assert not bad['reports']
+        assert bad['excluded'][0]['reason']=='MISSING_OR_WRONG_SCOPE_BOUNDARY'
         with pytest.raises(e.EvidenceError,match='SIGNAL_ENVIRONMENT'):
             load_and_audit(c,**{**args,'environment':'preview'})
 

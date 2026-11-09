@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run selected tests against a new local socket-only PostgreSQL cluster.
 
-Requires pgserver (binary distribution), psycopg and pytest in the test venv.
+Requires pgserver (binary distribution), or TEST_POSTGRES_BIN pointing to a
+trusted local PostgreSQL bin directory, plus psycopg and pytest in the test venv.
 Never reads a configured production DSN. Stops the cluster even on test failure.
 """
 import os
@@ -10,11 +11,19 @@ import subprocess
 import sys
 import tempfile
 
-from pgserver._commands import POSTGRES_BIN_PATH
-
-
 def main():
-    bins = Path(POSTGRES_BIN_PATH)
+    configured = os.environ.get('TEST_POSTGRES_BIN')
+    if configured:
+        bins = Path(configured).resolve()
+    else:
+        try:
+            from pgserver._commands import POSTGRES_BIN_PATH
+        except ImportError:
+            raise SystemExit('Install pgserver or set TEST_POSTGRES_BIN to local PostgreSQL binaries')
+        bins = Path(POSTGRES_BIN_PATH)
+    for command in ('initdb', 'pg_ctl', 'postgres'):
+        if not (bins / command).is_file() or not os.access(bins / command, os.X_OK):
+            raise SystemExit(f'Missing executable PostgreSQL binary: {command}')
     with tempfile.TemporaryDirectory(prefix="cstars-pg-", dir="/private/tmp") as tmp:
         root = Path(tmp)
         data = root / "data"
