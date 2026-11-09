@@ -67,10 +67,18 @@ def _provider_identity(response):
 
 
 def observed_open(call, *, observer, signal, instrument, cloid, network):
+    return observed_order(call, observer=observer, signal=signal,
+                          instrument=instrument, cloid=cloid, network=network,
+                          intent='open')
+
+
+def observed_order(call, *, observer, signal, instrument, cloid, network, intent):
     """Preserve call count, return object and exceptions; observation is optional."""
     if observer is None or network != 'testnet':
         return call()
     try:
+        if intent not in ('open', 'sl', 'tp1', 'tp2'):
+            raise ValueError()
         raw_sid = signal['id']
         sid = str(UUID(str(raw_sid)))
         # Normalizing an ID would change the execution hash. Reject, don't guess.
@@ -78,11 +86,11 @@ def observed_open(call, *, observer, signal, instrument, cloid, network):
             raise ValueError()
         ts = candle_identity(signal['candle_ts'])
         import hashlib
-        expected = '0x' + hashlib.sha256(f'{raw_sid}|open|{ts}'.encode()).hexdigest()[:32]
+        expected = '0x' + hashlib.sha256(f'{raw_sid}|{intent}|{ts}'.encode()).hexdigest()[:32]
         if expected != cloid or not isinstance(instrument, str) or not 0 < len(instrument) <= 100:
             raise ValueError()
         context = {'correlation_id': str(uuid4()), 'signal_id': sid,
-                   'candle_ts': ts, 'intent': 'open', 'instrument': instrument,
+                   'candle_ts': ts, 'intent': intent, 'instrument': instrument,
                    'client_order_id': cloid, 'network': network}
     except (KeyError, ValueError, TypeError, AttributeError):
         return call()
@@ -105,6 +113,19 @@ def observed_open(call, *, observer, signal, instrument, cloid, network):
 
 def persist_event(event, session):
     """Caller-owned transaction; requires separately approved migration 025."""
+    if event.get('intent') != 'open':
+        raise EvidenceError('INVALID_CAPTURE_INTENT')
+    _persist_event(event, session, 'opening_order_observations')
+
+
+def persist_exit_event(event, session):
+    """Caller-owned transaction; requires separately approved migration 026."""
+    if event.get('intent') not in ('sl', 'tp1', 'tp2'):
+        raise EvidenceError('INVALID_CAPTURE_INTENT')
+    _persist_event(event, session, 'exit_order_observations')
+
+
+def _persist_event(event, session, table):
     from sqlalchemy import text
     if (event.get('network') != 'testnet' or event.get('training_eligible') is not False
             or event.get('attribution_verified') is not False):
@@ -113,7 +134,8 @@ def persist_event(event, session):
                             {'id': event['signal_id'], 'env': event['environment']}).scalar()
     if found is None:
         raise EvidenceError('SIGNAL_ENVIRONMENT_MISMATCH')
-    session.execute(text('''INSERT INTO opening_order_observations
+    # Table name is selected only by the two fixed internal callers above.
+    session.execute(text(f'''INSERT INTO {table}
         (id,correlation_id,signal_id,environment,network,account_hash,phase,
          observed_at,payload_sha256,payload)
         VALUES (:id,:correlation,:signal,:environment,:network,:account,:phase,

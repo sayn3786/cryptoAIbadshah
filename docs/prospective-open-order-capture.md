@@ -48,3 +48,30 @@ Reproduce database checks with `TEST_POSTGRES_BIN` pointing to that installation
 `bin` directory and `scripts/test_disposable_postgres.py`; run the existing six
 PostgreSQL test files listed by the CI workflow. Publication and CI review are
 still required before merge.
+
+## Initial exit capture — 2026-11-09
+
+`send_exit_orders` accepts optional `evidence_signal` and `evidence_observer`
+arguments. Neither is wired by existing callers. With an explicitly supplied
+scoped testnet observer, each actual SL, TP1 and TP2 send gets its own correlation
+ID and INTENT/RESPONSE or UNKNOWN pair. Missing legs generate no events. If a
+later send raises, earlier acknowledgements remain recorded; no retry or extra
+protective order is introduced. The existing exception propagation is unchanged.
+
+The shared observation code now takes an explicit intent; `observed_open` keeps
+its original interface and always uses `open`. `persist_event` accepts opening
+intents only; `persist_exit_event` accepts SL/TP1/TP2 only and writes to the
+separate append-only `exit_order_observations` table supplied by migration `026`.
+An eventual durable sink must route by intent explicitly. Migration `026`
+depends on `025`; neither has been applied to production in this work.
+
+Scope remains initial separate exit orders, not manager-created replacements,
+manual closes, bulk scalp orders or a complete lifecycle. Venue echo/account
+verification and a scoped caller are still required before activation. An SDK
+acknowledgement alone is not venue-verified evidence and does not create an
+`execution_order_links` row or make any record eligible for training.
+
+Verification: 101 focused synthetic tests and 32 disposable PostgreSQL tests
+passed, including the migration chain through `026`, journal immutability and
+opening/exit intent separation. No production data, orders or held-out outcomes
+were accessed.
