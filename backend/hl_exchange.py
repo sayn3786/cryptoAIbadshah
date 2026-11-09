@@ -319,7 +319,8 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
                   release_fn: Optional[Callable] = None,
                   mark_fn: Optional[Callable] = None,
                   cfg: Optional[Dict[str, Any]] = None,
-                  env: Optional[str] = None) -> Dict[str, Any]:
+                  env: Optional[str] = None,
+                  evidence_observer: Optional[Callable] = None) -> Dict[str, Any]:
     """Attempt one live OPEN for a signal, through every guard. Returns a result
     dict and NEVER raises for a business reject. `signal` needs: symbol, entry,
     direction (LONG/SHORT), id, candle_ts.
@@ -417,7 +418,14 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
     is_buy = str(signal.get("direction", "")).upper() == "LONG"
     send = send_fn or send_market_open
     try:
-        resp = send(coin, is_buy, plan["size"], cloid, env, plan["leverage"])
+        if evidence_observer is None or e != "testnet":
+            resp = send(coin, is_buy, plan["size"], cloid, env, plan["leverage"])
+        else:
+            from open_order_capture import observed_open
+            resp = observed_open(
+                lambda: send(coin, is_buy, plan["size"], cloid, env, plan["leverage"]),
+                observer=evidence_observer, signal=signal, instrument=coin,
+                cloid=cloid, network=e)
     except Exception as exc:                              # noqa: BLE001
         release(hl_execution.order_ledger_key(sig_id, "open", candle_ts))
         return {"ok": False, "reason": "SEND_FAILED", "coin": coin,
