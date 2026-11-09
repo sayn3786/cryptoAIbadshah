@@ -94,6 +94,41 @@ def test_prospective_open_capture_durable_and_immutable(connection):
         with pytest.raises(DBAPIError, match='append-only'):
             with c.begin(): c.execute(text(sql))
 
+
+def test_exit_capture_journal_and_intent_separation(connection):
+    from open_order_capture import persist_exit_event, persist_event
+    from test_open_order_capture import SID as capture_sid
+    from execution_evidence import digest
+    from datetime import datetime, timezone
+    c=connection
+    with c.begin():
+        c.exec_driver_sql("ALTER TABLE signals ADD COLUMN environment text DEFAULT 'research'")
+        c.execute(text('INSERT INTO signals(id) VALUES (:id)'),{'id':capture_sid})
+    c.execution_options(isolation_level='AUTOCOMMIT')
+    for filename in ('025_opening_order_observations.sql','026_exit_order_observations.sql'):
+        c.exec_driver_sql((Path(__file__).resolve().parents[1]/'database/migrations'/filename).read_text())
+    c.commit()
+    c.execution_options(isolation_level='READ COMMITTED')
+    event=dict(event_id=str(uuid.uuid4()),correlation_id=str(uuid.uuid4()),
+        signal_id=capture_sid,environment='research',network='testnet',account_hash='a'*64,
+        phase='INTENT',intent='sl',observed_at=datetime.now(timezone.utc).isoformat(),
+        training_eligible=False,attribution_verified=False)
+    with c.begin():persist_exit_event(event,c)
+    with c.begin():
+        row=c.execute(text('SELECT payload,payload_sha256 FROM exit_order_observations')).one()
+        assert row.payload==event and row.payload_sha256==digest(event)
+        assert c.execute(text('SELECT count(*) FROM opening_order_observations')).scalar()==0
+    with pytest.raises(e.EvidenceError,match='INVALID_CAPTURE_INTENT'):
+        with c.begin():persist_event(event,c)
+    with pytest.raises(e.EvidenceError,match='INVALID_CAPTURE_INTENT'):
+        with c.begin():persist_exit_event({**event,'intent':'open'},c)
+    with pytest.raises(IntegrityError):
+        with c.begin():persist_exit_event(event,c)
+    for sql in ('DELETE FROM exit_order_observations',
+                "UPDATE exit_order_observations SET payload='{}'::jsonb"):
+        with pytest.raises(DBAPIError,match='append-only'):
+            with c.begin():c.execute(text(sql))
+
 def test_order_link_fk_dedup_conflict_and_immutability(connection):
     c = connection
     with pytest.raises(IntegrityError):

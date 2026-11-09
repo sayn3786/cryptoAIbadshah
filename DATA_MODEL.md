@@ -1,5 +1,16 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Initial exit-order observations (migration `026`)
+
+`026_exit_order_observations.sql` adds `exit_order_observations`, an append-only
+testnet journal for separately submitted initial SL, TP1 and TP2 orders. It
+copies the scoped journal structure from `025`, adds its own signal foreign key
+and immutability trigger, and requires `025` first. Intent stays in the hashed
+payload. The persistence helper rejects opening-order intents in this table.
+The hook is explicitly injected and inactive by default. An acknowledgement
+is not a verified fill; manager replacements, scalp bulk orders, venue/account
+verification and training promotion are not enabled by this migration.
+
 ## Prospective opening-order observations (migration `025`)
 
 `025_opening_order_observations.sql` adds the append-only

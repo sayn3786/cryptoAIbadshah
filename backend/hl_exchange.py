@@ -227,7 +227,9 @@ def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
                      tp2_px: Optional[float] = None,
                      tp2_size: Optional[float] = None,
                      tp2_cloid: Optional[str] = None,
-                     tp_type: Optional[str] = None) -> Dict[str, Any]:
+                     tp_type: Optional[str] = None,
+                     evidence_signal: Optional[Dict[str, Any]] = None,
+                     evidence_observer: Optional[Callable] = None) -> Dict[str, Any]:
     """Place REDUCE-ONLY stop-loss + take-profit orders for an open position.
     `is_buy_exit` is the side that CLOSES the position — the opposite of the
     entry (a LONG exits by selling). The stop is a market trigger (isMarket
@@ -249,13 +251,21 @@ def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
             return _send_limit_tp(ex, coin, is_buy_exit, sz, px, cloid)
         return _send_trigger(ex, coin, is_buy_exit, sz, px, "tp", cloid)
 
+    def observed(call, intent, cloid):
+        if evidence_observer is None or hl_account._env(env) != 'testnet':
+            return call()
+        from open_order_capture import observed_order
+        return observed_order(call, observer=evidence_observer,
+            signal=evidence_signal, instrument=coin, cloid=cloid,
+            network='testnet', intent=intent)
+
     out: Dict[str, Any] = {}
     if sl_px and sl_px > 0:
-        out["sl"] = _send_trigger(ex, coin, is_buy_exit, size, sl_px, "sl", sl_cloid)
+        out["sl"] = observed(lambda: _send_trigger(ex, coin, is_buy_exit, size, sl_px, "sl", sl_cloid), 'sl', sl_cloid)
     if tp_px and tp_px > 0:
-        out["tp"] = _tp(tp_size or size, tp_px, tp_cloid)
+        out["tp"] = observed(lambda: _tp(tp_size or size, tp_px, tp_cloid), 'tp1', tp_cloid)
     if tp2_px and tp2_px > 0 and tp2_size:
-        out["tp2"] = _tp(tp2_size, tp2_px, tp2_cloid)
+        out["tp2"] = observed(lambda: _tp(tp2_size, tp2_px, tp2_cloid), 'tp2', tp2_cloid)
     return out
 
 
