@@ -1,5 +1,20 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Prospective opening-order observations (migration `025`)
+
+`025_opening_order_observations.sql` adds the append-only
+`opening_order_observations` journal for explicitly scoped testnet opening-order
+capture. Each event retains its signal UUID, environment, hashed account,
+correlation ID, phase, timestamp and hashed identity payload. The journal is
+separate from venue-verified order links: an acknowledgement does not prove a
+fill, attribution or training eligibility.
+
+The migration requires `signals` and the immutable-evidence trigger function
+from `020`. Apply it only after approval and before explicitly wiring a durable
+observer sink. Default and mainnet execution bypass this inactive hook; no
+automatic migration, scheduler, backfill or ML promotion is installed. Exit-order
+capture and independent venue verification remain separate activation gates.
+
 ## Scalp book history (migration `019`)
 
 `019_scalp_trades.sql` adds `scalp_trades`: one row per scalp the testnet 15m

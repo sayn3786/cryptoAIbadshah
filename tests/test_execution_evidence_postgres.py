@@ -61,6 +61,39 @@ def linked_batch():
                    'evidence':{'status':'order'}}]
     return b
 
+
+def test_prospective_open_capture_durable_and_immutable(connection):
+    from open_order_capture import persist_event, scoped_observer
+    from test_open_order_capture import run, ACK, SID as capture_sid
+    from datetime import datetime, timezone, timedelta
+    c = connection
+    with c.begin():
+        c.exec_driver_sql("ALTER TABLE signals ADD COLUMN environment text DEFAULT 'research'")
+        c.execute(text('INSERT INTO signals(id) VALUES (:id)'), {'id': capture_sid})
+    # Migration owns its transaction; run its original SQL outside a transaction.
+    c.execution_options(isolation_level='AUTOCOMMIT')
+    c.exec_driver_sql((Path(__file__).resolve().parents[1]/'database/migrations/025_opening_order_observations.sql').read_text())
+    c.commit()
+    c.execution_options(isolation_level='READ COMMITTED')
+    events = []
+    now = datetime.now(timezone.utc)
+    observer = scoped_observer(sink=events.append, signal_ids=[capture_sid],
+        account_hash='a'*64, environment='research', starts_at=now-timedelta(seconds=1),
+        ends_at=now+timedelta(hours=1))
+    run(lambda: ACK, observer)
+    with c.begin():
+        for event in events: persist_event(event, c)
+    with c.begin():
+        assert c.execute(text('SELECT count(*) FROM opening_order_observations')).scalar() == 2
+    with pytest.raises(IntegrityError):
+        with c.begin(): persist_event(events[0], c)
+    with pytest.raises(e.EvidenceError, match='SIGNAL_ENVIRONMENT_MISMATCH'):
+        with c.begin(): persist_event({**events[0], 'environment': 'production'}, c)
+    for sql in ('DELETE FROM opening_order_observations',
+                "UPDATE opening_order_observations SET payload='{}'::jsonb"):
+        with pytest.raises(DBAPIError, match='append-only'):
+            with c.begin(): c.execute(text(sql))
+
 def test_order_link_fk_dedup_conflict_and_immutability(connection):
     c = connection
     with pytest.raises(IntegrityError):
