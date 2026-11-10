@@ -229,6 +229,10 @@ name: Strategy backtests (private Telegram)
 #            engine signals beat a coin flip on direction, with 1.5 x ATR
 #            stop / target and $5 risk? never-read periods end_days_ago 700
 #            and 800 (backend/htf_vs_random.py; ~1-2 h, 60 days)
+#   htf-confirm  PRE-REGISTERED confirmation: the 4-hourly signal at strength
+#            >= 62, 1.5 x 4H ATR stop / target, $5 risk; pass = profit, PF >=
+#            1.15, beats random AND always-long on BOTH never-read periods
+#            end_days_ago 900 and 1000 (backend/htf_confirm.py; ~30-60 min)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -250,7 +254,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -259,7 +263,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m / sweep-fvg / scalp-struct / scalp-chop / scalp-trend / scalp-sma / scalp-entry / scalp-reversal / scalp-smc / scalp-score / scalp-flow / scalp-amd / confluence / scalp-portfolio / scalp-vs-random / scalp-fade / htf-vs-random: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m / sweep-fvg / scalp-struct / scalp-chop / scalp-trend / scalp-sma / scalp-entry / scalp-reversal / scalp-smc / scalp-score / scalp-flow / scalp-amd / confluence / scalp-portfolio / scalp-vs-random / scalp-fade / htf-vs-random / htf-confirm: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -384,6 +388,8 @@ jobs:
                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp-amd) MODULE=scalp_amd_compare
                        EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            htf-confirm) MODULE=htf_confirm
+                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             htf-vs-random) MODULE=htf_vs_random
                            EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp-fade) MODULE=scalp_fade_compare
