@@ -2959,6 +2959,150 @@ def _observed_patterns(analysis: dict) -> list:
 _passes_tf_gates = rec_policy.passes_tf_gates
 
 
+HTF_FWD_TTL = 120 * 86_400
+
+
+def _htf_fwd_key() -> str:
+    return f"htf_fwd:{_deploy_env()}"
+
+
+def _htf_fwd_load() -> list:
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(_htf_fwd_key()) or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _htf_fwd_save(trades) -> None:
+    try:
+        import kv as _kv
+        import htf_forward as _hf
+        _kv.set_value(_htf_fwd_key(), json.dumps(list(trades)[-_hf.KEEP:]),
+                      ttl_seconds=HTF_FWD_TTL)
+    except Exception:
+        pass
+
+
+def _htf_fwd_locked(fn):
+    """Run fn() under a short KV lock (the publish and the 15m pass both
+    read-modify-write the book). Waits up to ~3s; skips rather than racing."""
+    import kv as _kv
+    key = f"htf_fwd:lock:{_deploy_env()}"
+    for _ in range(6):
+        try:
+            got = _kv.claim(key, ttl_seconds=30)
+        except Exception:
+            got = False
+        if got:
+            try:
+                return fn()
+            finally:
+                try:
+                    _kv.release(key)
+                except Exception:
+                    pass
+        time.sleep(0.5)
+    return {"ran": False, "reason": "BUSY"}
+
+
+def _htf_fwd_record(candidates, raw, now) -> dict:
+    """Paper-open every screened candidate at strength >= 62 for this 4H slot
+    (one position per coin; the same slot twice records nothing new). Never
+    raises, never places an order."""
+    try:
+        import htf_forward as _hf
+        if not _hf.enabled():
+            return {"ran": False, "reason": "HTF_FORWARD_OFF"}
+        slot = int(now.timestamp() * 1000) // (4 * 3_600_000) * (4 * 3_600_000)
+
+        def work():
+            book = _htf_fwd_load()
+            ids = {t.get("id") for t in book}
+            busy = {t.get("symbol") for t in book if t.get("state") == "open"}
+            new = []
+            for c in candidates or []:
+                sym = c.get("symbol")
+                if sym in busy or f"{sym}:{slot}" in ids:
+                    continue
+                an = ((raw.get(sym) or {}).get("2H") or {}).get("analysis") or {}
+                atr = _hf.atr_4h(an.get("candles") or [])
+                entry = c.get("live_price") or c.get("signal_price") or c.get("current_price")
+                t = _hf.open_trade(c, slot_ms=slot, entry=entry, atr=atr) if atr else None
+                if t:
+                    new.append(t)
+                    busy.add(sym)
+            if new:
+                _htf_fwd_save(book + new)
+                try:
+                    _scalp_private(_hf.opened_note(new))
+                except Exception:
+                    pass
+            return {"ran": True, "opened": len(new)}
+        return _htf_fwd_locked(work)
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+def _htf_fwd_run(now_ms=None, *, fetch_fn=None) -> dict:
+    """Settle the open paper trades of the 4-hourly forward book on closed 1H
+    candles (every 15m pass; cheap when nothing is open). Never raises."""
+    try:
+        import htf_forward as _hf
+        if not _hf.enabled():
+            return {"ran": False, "reason": "HTF_FORWARD_OFF"}
+        import scalp_live as _sl
+        now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+        fetch_fn = fetch_fn or (lambda sym: _sl.fetch_closed(SYMBOLS[sym], now_ms,
+                                                             interval="1h", count=60))
+
+        def work():
+            book = _htf_fwd_load()
+            open_syms = sorted({t["symbol"] for t in book if t.get("state") == "open"})
+            if not open_syms:
+                return {"ran": True, "closed": 0, "open": 0}
+            bars = {}
+            for sym in open_syms:
+                try:
+                    bars[sym] = fetch_fn(sym) or []
+                except Exception:
+                    bars[sym] = []
+            closed, out = [], []
+            for t in book:
+                if t.get("state") == "open" and bars.get(t["symbol"]):
+                    done = _hf.settle(t, bars[t["symbol"]])
+                    if done:
+                        closed.append(done)
+                        out.append(done)
+                        continue
+                out.append(t)
+            if closed:
+                _htf_fwd_save(out)
+                tally = _hf.summary(out)
+                for t in closed:
+                    try:
+                        _scalp_private(_hf.closed_note(t, tally))
+                    except Exception:
+                        pass
+            return {"ran": True, "closed": len(closed),
+                    "open": sum(1 for t in out if t.get("state") == "open")}
+        return _htf_fwd_locked(work)
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+def _htf_fwd_view() -> dict:
+    import htf_forward as _hf
+    book = _htf_fwd_load()
+    return {"enabled": _hf.enabled(), "paper_only": True,
+            "rule": (f"live 4-hourly signal at strength >= {_hf.FLOOR:g}; stop and target "
+                     f"{_hf.ATR_STOP:g} x 4H ATR each, max {_hf.HOLD_H}h, ${_hf.RISK_USD:g} risk, "
+                     f"costs as live; verdict after {_hf.VERDICT_TRADES} trades: profit and "
+                     f"PF >= {_hf.MIN_PF:g}"),
+            "summary": _hf.summary(book), "recent": book[-40:]}
+
+
 def _compute_recommendations(dry_run: bool = False) -> dict:
     """
     ``dry_run=True`` runs the same scan but WRITES NOTHING — no signal rows, no
@@ -3262,6 +3406,10 @@ def _compute_recommendations(dry_run: bool = False) -> dict:
     # the same candidates in a different order and you measure a different
     # strategy while every individual trade looks right.
     candidates = rec_policy.rank_candidates(candidates)
+    if not dry_run:
+        # The 4-hourly FORWARD paper book (htf_forward): every screened
+        # candidate at strength >= 62, papered from this slot. No orders.
+        _htf_fwd_record(candidates, raw, now)
     top = rec_policy.select_publishable(candidates)
 
     # Option 1 (channel): only the top three's Confirmed-tier picks (strength
@@ -7127,6 +7275,7 @@ def api_cron_scalp():
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
     out = _scalp_run()
     out["amd"] = _amd_run()          # the AMD forward test: alerts + paper only
+    out["htf_forward"] = _htf_fwd_run()   # the 4-hourly forward paper book: settle only
     return jsonify(out)
 
 
@@ -7308,7 +7457,8 @@ def api_hl_scalp():
                     "score_details": _scalp_score_details(runs),
                     "portfolio": _scalp_portfolio_view(),
                     "trade_audit": _kv_json_list(f"scalp:audit:{_deploy_env()}")[-60:],
-                    "amd_forward": _amd_forward_view()})
+                    "amd_forward": _amd_forward_view(),
+                    "htf_forward": _htf_fwd_view()})
 
 
 def _scalp_portfolio_view() -> dict:
