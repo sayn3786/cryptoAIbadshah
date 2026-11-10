@@ -107,6 +107,48 @@
     renderBook();
     renderEquity();
     renderTrades();
+    renderForward();
+  }
+
+  // ── the 4-hourly forward paper book (htf_forward) ────────────────────────
+  function renderForward() {
+    var f = (S.data && S.data.htf_forward) || null;
+    var box = $("fwd");
+    clear(box);
+    if (!f) { box.appendChild(el("div", "empty", "Not available on this deploy yet.")); return; }
+    var sm = f.summary || {};
+    $("fwdSub").textContent = f.enabled ? String(sm.verdict || "") : "switched off (HTF_FORWARD)";
+    var tiles = el("div", "grid g-kpi");
+    tiles.style.marginTop = "0";
+    [["Closed", String(sm.closed || 0), (sm.open || 0) + " open"],
+     ["Net P&L", usd(sm.pnl_usd, true), "$5 risk a trade, after costs"],
+     ["Win rate", sm.win_rate_pct != null ? sm.win_rate_pct + "%" : "—", "1:1 stop / target"],
+     ["Profit factor", sm.pf != null ? String(sm.pf) : "—", "needs ≥ 1.15 at " + (sm.verdict_at || 100)],
+     ["Opposite side", usd(sm.opposite_pnl_usd, true), "same candles, other direction"]
+    ].forEach(function (x) {
+      var c = el("div", "kpi");
+      add(c, el("div", "label", x[0]), el("div", "val " + (x[0] === "Net P&L" ? signCls(sm.pnl_usd) : ""), x[1]),
+        el("div", "note", x[2]));
+      tiles.appendChild(c);
+    });
+    box.appendChild(tiles);
+    box.appendChild(el("p", "muted small", f.rule || ""));
+    var rows = (f.recent || []).slice().reverse().slice(0, 12);
+    if (!rows.length) { box.appendChild(el("div", "empty", "No trades yet: the first ones open at the next 4-hour publish.")); return; }
+    var t = el("table"), hd = el("tr");
+    ["Opened", "Coin", "Side", "Score", "Entry", "Exit", "P&L"].forEach(function (h, k) {
+      hd.appendChild(el("th", k >= 3 ? "num" : "", h));
+    });
+    t.appendChild(hd);
+    rows.forEach(function (r) {
+      var tr = el("tr");
+      add(tr, el("td", "", dayTime(ms(r.slot_ms))), el("td", "", r.symbol || ""), el("td", "", dirTxt(r.direction)),
+        el("td", "num", r.strength), el("td", "num", px(r.entry)),
+        el("td", "num", r.state === "open" ? "open" : (r.exit_reason || "") + " " + px(r.exit)),
+        el("td", "num " + signCls(r.pnl_usd), r.state === "open" ? "—" : usd(r.pnl_usd, true)));
+      t.appendChild(tr);
+    });
+    var sc = el("div", "scroll"); sc.appendChild(t); box.appendChild(sc);
   }
 
   function renderStatus() {
