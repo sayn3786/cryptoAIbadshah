@@ -38,3 +38,26 @@ timestamps. No production evidence or held-out outcomes were inspected.
 Next gate: review this checker, then add the bounded read-only journal loader and
 explicitly scoped read adapter. Account binding and intended side need independent
 evidence before a complete end-to-end attribution claim is possible.
+
+## Bounded journal loader — 2026-11-10
+
+`prospective_journal_loader.load_journals` now reads an explicitly selected
+opening or exit journal in a caller-owned read-only repeatable-read/serializable
+transaction. Inputs require at most ten correlation IDs and ten signal UUIDs,
+an exact environment/account scope and a window of at most 24 hours. It reads
+metadata first, requires exactly INTENT and RESPONSE in scope, rejects payloads
+over 64 KiB, and verifies payload hashes and agreement with stored row columns.
+Incomplete, out-of-scope and corrupt pairs produce explicit exclusions.
+
+`load_and_verify` accepts separately supplied observation envelopes keyed by
+correlation ID and runs the pure verifier. It does not obtain those observations
+or authenticate their source. Missing observations are exclusions, never inferred
+from acknowledgements. There is no connection creation, configured credential
+lookup, production caller, mutation or new migration. SQL/runtime failures remain
+errors rather than fabricated successful audit results.
+
+Local verification: 34 disposable PostgreSQL tests and 59 targeted synthetic
+tests passed. Loader tests cover opening/exit composition, missing observations,
+wrong account/environment, window exclusion, missing correlations, duplicate
+IDs, excessive windows and transaction requirements. All tests use synthetic
+data; production migrations and capture remain inactive.

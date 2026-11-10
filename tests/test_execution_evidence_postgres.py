@@ -62,6 +62,49 @@ def linked_batch():
     return b
 
 
+@pytest.mark.parametrize('kind',['open','sl'])
+def test_bounded_prospective_journal_loader(connection,kind):
+    from test_prospective_order_verification import fixture
+    from open_order_capture import persist_event,persist_exit_event
+    from prospective_journal_loader import load_journals,load_and_verify
+    from datetime import datetime,timezone,timedelta
+    c=connection;bundle=fixture(kind)
+    event=bundle['journal'][0]['payload'];cid=event['correlation_id']
+    with c.begin():
+        c.exec_driver_sql("ALTER TABLE signals ADD COLUMN environment text DEFAULT 'research'")
+        c.execute(text('INSERT INTO signals(id) VALUES (:id)'),{'id':event['signal_id']})
+    c.execution_options(isolation_level='AUTOCOMMIT')
+    for name in ('025_opening_order_observations.sql','026_exit_order_observations.sql'):
+        c.exec_driver_sql((Path(__file__).resolve().parents[1]/'database/migrations'/name).read_text())
+    c.commit();c.execution_options(isolation_level='READ COMMITTED')
+    persist_fn=persist_event if kind=='open' else persist_exit_event
+    with c.begin():
+        for row in bundle['journal']:persist_fn(row['payload'],c)
+    lo=datetime(2026,11,10,tzinfo=timezone.utc)
+    scope=dict(kind='open' if kind=='open' else 'exit',correlation_ids=[cid],
+        signal_ids=[event['signal_id']],environment='research',account_hash='a'*64,
+        observed_from=lo,observed_before=lo+timedelta(hours=1))
+    with pytest.raises(e.EvidenceError,match='READ_ONLY'):
+        with c.begin():load_journals(c,**scope)
+    with pytest.raises(e.EvidenceError,match='CONSISTENT_SNAPSHOT'):
+        with c.begin():
+            c.exec_driver_sql('SET TRANSACTION READ ONLY');load_journals(c,**scope)
+    with c.begin():
+        c.exec_driver_sql('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        result=load_and_verify(c,observations={cid:bundle['observation']},**scope)
+        assert not result['excluded'] and result['reports'][0]['audit']['consistent']
+        assert not result['training_eligible']
+        assert load_and_verify(c,observations={},**scope)['excluded'][0]['reason']=='MISSING_INDEPENDENT_OBSERVATION'
+        for override,reason in (({'account_hash':'b'*64},'JOURNAL_SCOPE_MISMATCH'),
+                ({'environment':'preview'},'JOURNAL_SCOPE_MISMATCH'),
+                ({'observed_before':lo+timedelta(seconds=1)},'JOURNAL_OUTSIDE_WINDOW'),
+                ({'correlation_ids':[str(uuid.uuid4())]},'INCOMPLETE_OR_UNKNOWN_JOURNAL')):
+            assert load_journals(c,**{**scope,**override})['excluded'][0]['reason']==reason
+        for override in ({'correlation_ids':[cid]*2},{'kind':'bad'},
+                         {'observed_before':lo+timedelta(days=2)}):
+            with pytest.raises(e.EvidenceError):load_journals(c,**{**scope,**override})
+
+
 def test_prospective_open_capture_durable_and_immutable(connection):
     from open_order_capture import persist_event, scoped_observer
     from test_open_order_capture import run, ACK, SID as capture_sid
