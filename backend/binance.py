@@ -1207,8 +1207,33 @@ class BinanceClient:
                 }
         except Exception:
             pass
+        # Fallback: OKX perpetual funding history (Binance futures is geo-
+        # blocked from some server regions; OKX serves the same perps).
+        try:
+            got = self._okx_funding(symbol, limit)
+            if got:
+                return got
+        except Exception:
+            pass
         from mock_data import mock_funding_rate
         return {**mock_funding_rate(symbol, limit), "source": "mock"}
+
+    def _okx_funding(self, symbol: str, limit: int = 10) -> Optional[Dict]:
+        base = symbol[:-4] if symbol.endswith("USDT") else symbol
+        d = self._get(f"{OKX_BASE}/api/v5/public/funding-rate-history",
+                      {"instId": f"{base}-USDT-SWAP", "limit": limit})
+        rows = sorted(((d or {}).get("data") or []), key=lambda r: int(r["fundingTime"]))
+        if not rows:
+            return None
+        rates = [float(r.get("realizedRate") or r["fundingRate"]) * 100 for r in rows]
+        interval_hours = infer_funding_interval_hours(int(r["fundingTime"]) for r in rows)
+        cur = round(rates[-1], 4)
+        return {"current": cur, "current_8h": normalize_funding_8h(cur, interval_hours),
+                "interval_hours": interval_hours,
+                "average": round(sum(rates) / len(rates), 4),
+                "history": [{"timestamp": int(r["fundingTime"]), "rate": round(x, 4)}
+                            for r, x in zip(rows, rates)],
+                "source": "okx"}
 
     # OI history granularity per request timeframe: intraday TFs get HOURLY
     # OI bars (so "OI rising while price falls" is visible on the TF you

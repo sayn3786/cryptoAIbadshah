@@ -22,7 +22,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      # The compute runs close to Vercel's 60s maxDuration and has started
+      # Since the Pro plan (Nov 2026) vercel.json allows 300s, so the timeouts
+      # below should stop; the retries stay as a cheap safety net.
+      # History: the compute ran close to Vercel's 60s maxDuration and started
       # tipping over it (a 504 FUNCTION_INVOCATION_TIMEOUT on /api/cron/daily,
       # killed at 61s). Retrying is worth it because the per-symbol analysis
       # cache is warmed by the attempt that died, so a follow-up usually

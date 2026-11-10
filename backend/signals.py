@@ -590,6 +590,8 @@ def _funding_8h(funding: Optional[Dict]):
     None when funding data is absent, preserving the existing 'no data' paths."""
     if not funding:
         return None
+    if funding.get("source") == "mock":
+        return None      # every live source failed: shown as an estimate, never scored
     if funding.get("current_8h") is not None:
         return funding.get("current_8h")
     cur = funding.get("current")

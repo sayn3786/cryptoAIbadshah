@@ -168,15 +168,16 @@ def test_btc_never_needs_a_4h_analysis(counted):
     assert "BTC" not in fetched_4h
 
 
-# ── maxDuration must not be raised on a plan that forbids it ───────────────
+# ── maxDuration must not be raised above what the plan allows ───────────────
 
-def test_max_duration_stays_within_the_hobby_ceiling():
+def test_max_duration_stays_within_the_pro_ceiling():
     # Setting it above the plan limit fails the DEPLOYMENT, not just the
-    # request — a worse outcome than the timeout it would be fixing.
+    # request - a worse outcome than the timeout it would be fixing. The
+    # project moved from Hobby (60s) to Pro (300s) in Nov 2026.
     import json
     with open(os.path.join(os.path.dirname(__file__), "..", "vercel.json")) as fh:
         cfg = json.load(fh)
     for entry in (cfg.get("functions") or {}).values():
         if "maxDuration" in entry:
-            assert entry["maxDuration"] <= 60, \
-                "Hobby caps serverless functions at 60s"
+            assert 60 <= entry["maxDuration"] <= 300, \
+                "Pro caps serverless functions at 300s"

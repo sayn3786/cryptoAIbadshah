@@ -145,10 +145,10 @@ SYMBOLS = {
     # ── Browsable only — see SCAN_SYMBOLS ────────────────────────────────────
     # Analysable, chartable and available as asset tabs, but deliberately NOT
     # scanned for recommendations or alerts. Adding them to the scan would take
-    # the publish path from 62 parallel fetches to 100, and it already runs at
-    # 52-54s against a 60s ceiling that cannot be raised on this plan. A
-    # timed-out publish records nothing, which is a worse outcome than a
-    # shorter candidate list.
+    # the publish path from 62 parallel fetches to 100 (it ran at 52-54s
+    # against the old 60s ceiling; Pro raised maxDuration to 300s). Kept out
+    # for now anyway: the 4-hourly forward test (htf_forward, from Nov 10)
+    # measures the signal on THIS universe - widen it after its verdict.
     "LTC":  "LTCUSDT",
     "BCH":  "BCHUSDT",
     "ETC":  "ETCUSDT",
@@ -1544,7 +1544,8 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         _px0 = spot[-6]["close"]
         _px_chg = (spot[-1]["close"] - _px0) / _px0 * 100 if _px0 else 0.0
         _oic = oi.get("change_pct", 0.0) or 0.0
-        _fr  = (funding or {}).get("current", 0.0) or 0.0
+        _fr  = 0.0 if (funding or {}).get("source") == "mock" else \
+            ((funding or {}).get("current", 0.0) or 0.0)
         # Thresholds scale with the timeframe — the OI change is measured over
         # ~5 candles of THIS TF, so ±5% (a fine bar for a multi-day window) is
         # nearly unreachable in 5 hours. (quad_min, strong_min) in %:
@@ -8092,6 +8093,55 @@ def _execution_pilot_token_ok():
             and request.path in {'/api/research/execution-pilot/tick',
                                  '/api/research/execution-pilot/alert'}
             and _token_ok('EXECUTION_PILOT_TOKEN', 'x-execution-pilot-token'))
+
+
+def _runtime_probe(fn) -> dict:
+    t0 = time.time()
+    try:
+        fn()
+        return {"ok": True, "ms": int((time.time() - t0) * 1000)}
+    except Exception as exc:                             # noqa: BLE001
+        return {"ok": False, "ms": int((time.time() - t0) * 1000), "error": type(exc).__name__}
+
+
+@app.get("/api/hl/runtime")
+def api_hl_runtime():
+    """Where the server runs and which data sources answer from there (admin
+    only). Binance futures geo-blocks some regions; when it fails, funding
+    falls back to OKX and the OI / liquidation reads degrade - this says so.
+    Read only: a few public pings and one KV read."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    import kv as _kv
+    import hl_account as _ha
+    s = _requests.Session()
+
+    def get(url, **params):
+        r = s.get(url, params=params or None, timeout=6)
+        r.raise_for_status()
+        return r
+    probes = {
+        "binance_spot": lambda: get("https://api.binance.com/api/v3/ping"),
+        "binance_futures": lambda: get("https://fapi.binance.com/fapi/v1/premiumIndex",
+                                       symbol="BTCUSDT"),
+        "okx": lambda: get("https://www.okx.com/api/v5/public/funding-rate",
+                           instId="BTC-USDT-SWAP"),
+        "hyperliquid": lambda: _ha._post_info({"type": "meta"}),
+        "kv": lambda: _kv.get_value(f"scalp:runs:{_deploy_env()}"),
+    }
+    with ThreadPoolExecutor(max_workers=len(probes)) as ex:
+        futs = {k: ex.submit(_runtime_probe, fn) for k, fn in probes.items()}
+        res = {k: f.result() for k, f in futs.items()}
+    notes = []
+    if not res["binance_futures"]["ok"]:
+        notes.append("Binance futures is unreachable from this region: funding uses OKX, "
+                     "liquidations and the Binance OI fallback are estimates (shown, not scored). "
+                     "A non-US region (e.g. Frankfurt) would fix it - check the KV database's "
+                     "region first, since every KV call crosses to it.")
+    return jsonify({"region": os.getenv("VERCEL_REGION") or os.getenv("AWS_REGION") or "unknown",
+                    "env": _deploy_env(), "probes": res, "notes": notes,
+                    "kv_configured": _kv.kv_enabled()})
 
 
 def _require_hl_admin():
