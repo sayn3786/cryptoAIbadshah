@@ -1402,6 +1402,28 @@ def _collect_htf_levels(symbol: str, timeframe: str) -> list:
     return out
 
 
+def _mark_oi_scored(oi) -> None:
+    """Mark the OI dict scored (True / False, with a reason). Only an OI change
+    over ~5 candles of THIS timeframe is scored - the quadrant, the squeeze
+    read and signals' OI points all assume that window. OKX is the one source
+    that measures it; CoinGlass (14 x 8h bars) and the Binance fallback (14
+    daily bars) measure something else, and a mock estimate is not data."""
+    if not oi:
+        return
+    src = oi.get("source")
+    oi["scored"] = src == "okx" and bool(oi.get("window_bars"))
+    if not oi["scored"]:
+        oi["not_scored"] = ("estimate only - no live open-interest source" if src == "mock"
+                            else f"{src or 'this source'} does not measure ~5 candles of "
+                                 "this timeframe")
+
+
+def _liq_for_bias(liq: dict) -> dict:
+    """A mock liquidation estimate never leans the max-pain bias (the OI
+    squeeze half still counts when the OI itself is scored)."""
+    return {} if (liq or {}).get("source") == "mock" else (liq or {})
+
+
 def _liquidation_bias(liq: dict, oi: dict) -> dict:
     """
     The "max pain" DIRECTION from realized liquidations + the OI squeeze read.
@@ -1512,7 +1534,13 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     #   price ↓ + OI ↑  → new SHORTS piling in → short-squeeze fuel (bullish
     #                     reversal potential, esp. when funding isn't positive)
     #   price ↑ + OI ↑ + hot funding → crowded LONGS → long-squeeze risk
-    if oi and len(spot) >= 6:
+    # Only an OI change measured over ~5 candles of THIS timeframe is scored
+    # (the quadrant, the squeeze read and signals' OI points all assume it).
+    # OKX is the one source that measures that window; CoinGlass (14 x 8h
+    # bars) and the Binance fallback (14 daily bars) measure something else,
+    # and a mock estimate is not data at all - those are shown, not scored.
+    _mark_oi_scored(oi)
+    if oi and oi.get("scored") and len(spot) >= 6:
         _px0 = spot[-6]["close"]
         _px_chg = (spot[-1]["close"] - _px0) / _px0 * 100 if _px0 else 0.0
         _oic = oi.get("change_pct", 0.0) or 0.0
@@ -1549,7 +1577,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Liquidation / squeeze "max pain" direction from realized liquidations + the
     # OI squeeze read (not a resting-leverage map — that needs a paid tier).
     if liq:
-        liq["bias"] = _liquidation_bias(liq, oi or {})
+        # A mock liquidation estimate never leans the bias; the OI squeeze half
+        # still counts when the OI is real (scored).
+        liq["bias"] = _liquidation_bias(_liq_for_bias(liq), oi or {})
 
     # ── External fetches — the half that cannot be replayed ──────────────────
     long_short   = client.get_long_short_ratio(bs)

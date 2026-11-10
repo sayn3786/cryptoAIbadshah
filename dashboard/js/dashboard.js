@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '259';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '260';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -807,9 +807,14 @@ function renderFunding(f) {
   const el = document.getElementById('fundingValue');
   el.textContent = `${cur >= 0 ? '+' : ''}${cur.toFixed(4)}%`;
   el.style.color = cur >= 0 ? 'var(--bear)' : 'var(--bull)';
+  // Same basis and thresholds as the score: the 8h-equivalent rate.
+  const iv  = Number(f.interval_hours) || 8;
+  const r8  = f.current_8h != null ? Number(f.current_8h) : cur * 8 / iv;
   document.getElementById('fundingLabel').textContent =
-    cur > 0.02 ? 'Longs paying — bearish signal' :
-    cur < -0.01 ? 'Shorts paying — bullish signal' :
+    r8 > 0.04 ? 'Longs paying a lot — bearish (extreme)' :
+    r8 > 0.015 ? 'Longs paying — bearish signal' :
+    r8 < -0.02 ? 'Shorts paying a lot — bullish (extreme)' :
+    r8 < -0.005 ? 'Shorts paying — bullish signal' :
     'Neutral funding';
 
   const hist = f.history || [];
@@ -859,6 +864,12 @@ function renderOI(oi) {
   badge.textContent = pct(chg);
   badge.className = `metric-badge ${chg >= 0 ? 'up' : 'dn'}`;
   badge.title = oi.window_bars ? `OI change over ~5 candles of this timeframe (${oi.window_bars}×${oi.period} bars)` : '';
+  if (oi.scored === false) {
+    badge.title = `Not scored: ${oi.not_scored || 'different window'}`;
+    badge.style.opacity = '0.55';
+  } else {
+    badge.style.opacity = '';
+  }
 
   // OI-price quadrant + squeeze read — who is entering the market right now
   const qEl = document.getElementById('oiQuadrant');
@@ -1453,7 +1464,7 @@ function renderEMACard(ema) {
   const fmt   = n => n != null ? `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 6 })}` : 'N/A';
   const rows  = [{ p: 20, v: ema.ema20 }, { p: 50, v: ema.ema50 }, { p: 200, v: ema.ema200 }].filter(r => r.v != null);
   let rowsHtml = rows.map(r => {
-    const up  = above.includes(r.p);
+    const up  = (ema.price != null && r.v != null) ? Number(ema.price) > Number(r.v) : above.includes(r.p);
     const cls = up ? 'bull' : 'bear';
     return `<div class="ema-row"><span class="ema-label">EMA${r.p}</span><span class="${cls}">${up ? '▲' : '▼'} ${fmt(r.v)}</span></div>`;
   }).join('');
@@ -1639,10 +1650,13 @@ function renderBollingerCard(bb) {
   const fmt = v => v != null ? `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '—';
 
   const bo = bb.breakout;
-  if (bb.squeeze && bo === 'bullish') {
+  // A squeeze breakout is judged like the score: a break of the PREVIOUS
+  // window's band after it was squeezed (breakout_after_squeeze).
+  const bas = bb.breakout_after_squeeze;
+  if (bas === 'bullish') {
     statusEl.textContent = '💥 Squeeze Breakout ↑';
     statusEl.style.color = 'var(--bull)';
-  } else if (bb.squeeze && bo === 'bearish') {
+  } else if (bas === 'bearish') {
     statusEl.textContent = '💥 Squeeze Breakdown ↓';
     statusEl.style.color = 'var(--bear)';
   } else if (bb.squeeze) {
@@ -2210,6 +2224,8 @@ function renderStochRsiCard(srsi) {
     bear_cross_overbought:['🔽 Bear Cross (Overbought)','var(--bear)'],
     overbought:           ['⬆ Overbought',              'var(--bear)'],
     near_overbought:      ['↑ Near Overbought',         'var(--bear)'],
+    bull_surge:           ['🚀 Momentum Surge (into overbought)', 'var(--bull)'],
+    bear_collapse:        ['💥 Momentum Collapse (into oversold)', 'var(--bear)'],
     neutral:              ['◆ Neutral',                 'var(--muted)'],
   };
   const [label, color] = SIG_LABELS[srsi.signal] || ['—', 'var(--muted)'];
@@ -3284,7 +3300,10 @@ function renderArkhamPanel(ws) {
   tbody.innerHTML = [...history].reverse().map(h => {
     const nf  = h.netflow || 0;
     const cls = nf > 0 ? 'arkham-usd' : nf < 0 ? 'arkham-to' : '';
-    const lbl = nf > 500 ? '🔴 sell' : nf > 0 ? '⚠ mild sell' : nf < -500 ? '💚 accumulate' : nf < 0 ? '🟢 withdraw' : '⚪ neutral';
+    // Same thresholds as the score (coinglass.py): BTC 1k / 300 coins, ETH 10k / 3k.
+    const bigT = sym === 'BTC' ? 1000 : 10000, midT = sym === 'BTC' ? 300 : 3000;
+    const lbl = nf > bigT ? '🔴 heavy sell' : nf > midT ? '🟠 sell' : nf > 0 ? '⚠ mild sell'
+              : nf < -bigT ? '💚 accumulate' : nf < -midT ? '🟢 withdraw' : nf < 0 ? '◽ mild withdraw' : '⚪ neutral';
     const dt  = h.timestamp ? new Date(h.timestamp * 1000).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
     return `<tr>
       <td class="arkham-ago">${dt}</td>
