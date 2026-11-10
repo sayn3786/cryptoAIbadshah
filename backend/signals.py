@@ -1375,8 +1375,8 @@ def rsi_reversal_delta(direction: str, rsi_markers) -> int:
     if direction not in ("LONG", "SHORT"):
         return 0
     latest = _latest_reversal_marker(rsi_markers)
-    if not latest:
-        return 0
+    if not latest or latest.get("status") == "invalidated":
+        return 0                         # the dashboard shows an invalidated one as void
     kind = latest.get("kind")
     against = ((direction == "LONG"  and kind == "overbought_top") or
                (direction == "SHORT" and kind == "oversold_bottom"))
@@ -1772,7 +1772,9 @@ def generate_signal(analysis: Dict) -> Dict:
     oi_change = oi.get("change_pct", 0.0) or 0.0
     _oi_strong = oi.get("thr_strong") or 5.0
     _oi_quad_t = oi.get("thr_quad") or 2.0
-    if len(candles) >= 5:
+    # app.build_analysis marks OI it cannot score (a mock estimate, or a source
+    # that does not measure ~5 candles of this timeframe) scored=False.
+    if len(candles) >= 5 and oi.get("scored") is not False:
         prev_price = candles[-5]["close"]
         price_up = current_price > prev_price
         if oi_change > _oi_strong:
@@ -3417,9 +3419,10 @@ def generate_signal(analysis: Dict) -> Dict:
         g['momentum'] += rev_adj
 
     # OBV divergence against the trade, only when CVD stayed silent (no double-count).
-    _scvd = (analysis.get("spot_cvd") or {}).get("divergence")
-    _fcvd = (analysis.get("futures_cvd") or {}).get("divergence")
-    _cvd_active = bool(_scvd) or bool(_fcvd)
+    # The CVD read lives in analysis["cvd_divergence"] (its signal is bullish /
+    # bearish / neutral); the per-source CVD dicts never carry a divergence
+    # key, so reading those made CVD always look silent and double-counted.
+    _cvd_active = (analysis.get("cvd_divergence") or {}).get("signal") in ("bullish", "bearish")
     obv_adj = obv_guard_delta(direction, analysis.get("obv"), _cvd_active)
     if obv_adj:
         strength = max(0, min(100, strength + obv_adj))
