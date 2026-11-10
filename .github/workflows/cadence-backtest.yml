@@ -217,6 +217,18 @@ name: Strategy backtests (private Telegram)
 #            entry quality), baseline vs each change vs all; end_days_ago 0, 65,
 #            135 and the UNTOUCHED 200 (backend/scalp_portfolio_compare.py;
 #            ~30-45 min, one engine pass)
+#   scalp-vs-random  does the live 15m scalp score pick the right DIRECTION
+#            more often than a coin flip on the same entries? (score floors,
+#            entry quality, reversed); end_days_ago 0, 135, 270 and the
+#            never-read 480 (backend/scalp_score_vs_random.py; ~30-45 min)
+#   scalp-fade  PRE-REGISTERED: trade AGAINST the live 15m score >= 100 with
+#            1.5 x ATR stop / target, $5 risk; pass = profit, PF >= 1.15 and
+#            beats random on BOTH never-read periods end_days_ago 550 and 620
+#            (backend/scalp_fade_compare.py; ~30-45 min)
+#   htf-vs-random  PRE-REGISTERED: do the 1H (hourly) and the live 4-hourly
+#            engine signals beat a coin flip on direction, with 1.5 x ATR
+#            stop / target and $5 risk? never-read periods end_days_ago 700
+#            and 800 (backend/htf_vs_random.py; ~1-2 h, 60 days)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -238,7 +250,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -247,7 +259,7 @@ on:
         description: "HL auto-exec threshold (HL_AUTO_MIN_STRENGTH)"
         default: "62"
       end_days_ago:
-        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m / sweep-fvg / scalp-struct / scalp-chop / scalp-trend / scalp-sma / scalp-entry / scalp-reversal / scalp-smc / scalp-score / scalp-flow / scalp-amd / confluence / scalp-portfolio: end the history this many days ago (0 = now)"
+        description: "v54-oos / universe / rr / read-filters / strength / calibration / oneh / hourly / prejump / indicators / reweight / weekly-trend / recency / channel-exits / divergence / ema-flat / breakout-volume / vwap-whipsaw / daily-setups / setup-exits / scalp / entry-15m / sweep-fvg / scalp-struct / scalp-chop / scalp-trend / scalp-sma / scalp-entry / scalp-reversal / scalp-smc / scalp-score / scalp-flow / scalp-amd / confluence / scalp-portfolio / scalp-vs-random / scalp-fade / htf-vs-random: end the history this many days ago (0 = now)"
         default: "135"
 
 jobs:
@@ -372,6 +384,12 @@ jobs:
                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp-amd) MODULE=scalp_amd_compare
                        EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            htf-vs-random) MODULE=htf_vs_random
+                           EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            scalp-fade) MODULE=scalp_fade_compare
+                        EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            scalp-vs-random) MODULE=scalp_score_vs_random
+                             EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp-portfolio) MODULE=scalp_portfolio_compare
                              EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             confluence) MODULE=confluence_study
