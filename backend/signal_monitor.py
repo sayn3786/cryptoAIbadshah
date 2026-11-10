@@ -53,14 +53,14 @@ DEFAULT_FILL_WINDOW_HOURS = 24
 BREAKEVEN_AFTER_PARTIAL = True
 
 # Wall-clock budget for one run, comfortably inside the serverless function's
-# 60-second ceiling. The first real run timed out at exactly 60s
+# ceiling (vercel.json maxDuration: 300 since the Pro plan, was 60). The first real run timed out at exactly 60s
 # (FUNCTION_INVOCATION_TIMEOUT) with two dozen signals: market data was fetched
 # one symbol at a time, and the whole run died with NOTHING recorded.
 #
 # Stopping cleanly beats being killed. Every decision is keyed on the candle
 # that caused it, so a partial run commits what it got and the next hourly tick
 # resumes from there — a monitor that times out records nothing, forever.
-DEFAULT_BUDGET_SECONDS = 45.0
+DEFAULT_BUDGET_SECONDS = 200.0
 
 # How many symbols to fetch market data for at once. The fetches are IO-bound
 # and independent; serially, wall-clock was the sum of every symbol.

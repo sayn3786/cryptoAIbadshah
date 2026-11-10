@@ -544,6 +544,33 @@
     if (S.runIdx < n - 1) { S.runIdx++; S.picked = S.runIdx !== n - 1; renderFlow(); }
   });
 
+  // ── server region and which data sources answer (every 5 min) ───────────
+  var RT_NAMES = { binance_spot: "Binance spot", binance_futures: "Binance futures",
+                   okx: "OKX", hyperliquid: "Hyperliquid", kv: "KV database" };
+  function loadRuntime() {
+    fetch("/api/hl/runtime", { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        var box = $("rt");
+        clear(box);
+        if (!j) { box.appendChild(el("div", "empty", "Not available on this deploy yet.")); return; }
+        $("rtSub").textContent = "region " + (j.region || "unknown");
+        var list = el("div", "chips");
+        Object.keys(RT_NAMES).forEach(function (k) {
+          var p = (j.probes || {})[k];
+          if (!p) return;
+          var c = el("span", "chip", (p.ok ? "✓ " : "✕ ") + RT_NAMES[k] + " · " + p.ms + " ms");
+          c.style.color = p.ok ? "var(--good)" : "var(--bad)";
+          list.appendChild(c);
+        });
+        box.appendChild(list);
+        (j.notes || []).forEach(function (n) { box.appendChild(el("p", "muted", n)); });
+      })
+      .catch(function () {});
+  }
+
   load();
+  loadRuntime();
   S.timer = setInterval(load, REFRESH_MS);
+  setInterval(loadRuntime, 5 * 60 * 1000);
 })();

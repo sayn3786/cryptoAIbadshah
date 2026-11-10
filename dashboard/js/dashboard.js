@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '260';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '261';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -806,11 +806,15 @@ function renderFunding(f) {
   const cur = f.current ?? 0;
   const el = document.getElementById('fundingValue');
   el.textContent = `${cur >= 0 ? '+' : ''}${cur.toFixed(4)}%`;
+  const fMock = f.source === 'mock';         // every live source failed: a placeholder
+  el.style.opacity = fMock ? '0.55' : '';
+  el.title = fMock ? 'Estimated — no live funding source reachable; not scored'
+                   : (f.source ? `Live funding via ${String(f.source).toUpperCase()}` : '');
   el.style.color = cur >= 0 ? 'var(--bear)' : 'var(--bull)';
   // Same basis and thresholds as the score: the 8h-equivalent rate.
   const iv  = Number(f.interval_hours) || 8;
   const r8  = f.current_8h != null ? Number(f.current_8h) : cur * 8 / iv;
-  document.getElementById('fundingLabel').textContent =
+  document.getElementById('fundingLabel').textContent = fMock ? 'Estimated — no live data, not scored' :
     r8 > 0.04 ? 'Longs paying a lot — bearish (extreme)' :
     r8 > 0.015 ? 'Longs paying — bearish signal' :
     r8 < -0.02 ? 'Shorts paying a lot — bullish (extreme)' :
@@ -915,7 +919,13 @@ function renderLiquidations(l) {
   if (!l) return;
   document.getElementById('liqLongs').textContent  = fmtK(l.longs_liquidated);
   document.getElementById('liqShorts').textContent = fmtK(l.shorts_liquidated);
-  document.getElementById('liqTotal').textContent  = `Total: ${fmtK(l.total)}`;
+  const liqMock = l.source === 'mock';      // every live source failed: a placeholder
+  document.getElementById('liqTotal').textContent  =
+    `Total: ${fmtK(l.total)}${liqMock ? ' · estimated (no live data), not scored' : ''}`;
+  ['liqLongs', 'liqShorts'].forEach(id => {
+    const e = document.getElementById(id);
+    if (e) e.style.opacity = liqMock ? '0.55' : '';
+  });
 
   // Max-pain / squeeze bias — which way forced-position pain leans.
   const bEl = document.getElementById('liqBias');
@@ -6060,7 +6070,8 @@ function buildSignalPost(a) {
   const etf = a.etf_flows || {};
   const opts = a.options_expiry || {};
   const oNext = opts.next_expiry || {}, oBias = opts.bias || {};
-  const liq = a.liquidations || {};
+  // A mock liquidation estimate is not evidence: leave it out of the story.
+  const liq = (a.liquidations && a.liquidations.source !== 'mock') ? a.liquidations : {};
   const lLong = _pNum(liq.longs_liquidated), lShort = _pNum(liq.shorts_liquidated);
   const nws = a.news || {};
 
