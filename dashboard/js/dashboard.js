@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '258';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '259';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -466,7 +466,9 @@ function renderAll(a) {
   renderStructureChart(a);
   renderReversals(a.reversal_patterns, a.candles);
   renderTriangles(a.triangle_patterns, a.candles);
-  renderEngulfing(a.engulfing, a.timeframe);
+  // The card lists the last 4 closed candles (engulfing_recent); the score
+  // itself reads only the newest one (a.engulfing).
+  renderEngulfing(a.engulfing_recent || a.engulfing, a.timeframe, a.engulfing_near_miss);
   renderTradeManagement(a);
   renderElliottWave(a.elliott_wave);
   renderConfluence(a.signal);
@@ -5607,14 +5609,25 @@ function renderMyTrades() {
 }
 
 /* ─── Engulfing Patterns ──────────────────────────────────────────────────── */
-function renderEngulfing(patterns, timeframe) {
+function engulfNearMissHtml(nm) {
+  // Why the newest closed candle was NOT an engulfing (when it nearly was).
+  if (!nm || !Array.isArray(nm.misses) || !nm.misses.length) return '';
+  const e = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  const kind = nm.direction === 'bullish' ? 'bullish' : 'bearish';
+  return `<p class="empty" style="margin-top:6px">Newest candle: not a ${kind} engulfing — ` +
+    `${nm.misses.map(e).join('; ')} (prev ${e(fmtPrice(nm.prev_open))} → ${e(fmtPrice(nm.prev_close))}, ` +
+    `this ${e(fmtPrice(nm.open))} → ${e(fmtPrice(nm.close))}).</p>`;
+}
+
+function renderEngulfing(patterns, timeframe, nearMiss) {
   const section = document.getElementById('engulfingSection');
   const el      = document.getElementById('engulfList');
   const badge   = document.getElementById('engulfCount');
   section.style.display = '';
 
   if (!patterns?.length) {
-    el.innerHTML = '<p class="empty">No confirmed engulfing patterns in the last 4 candles</p>';
+    el.innerHTML = '<p class="empty">No confirmed engulfing patterns in the last 4 closed candles</p>' +
+      engulfNearMissHtml(nearMiss);
     badge.textContent = '0';
     return;
   }
@@ -5645,9 +5658,10 @@ function renderEngulfing(patterns, timeframe) {
         ${isBull
           ? `Bearish candle fully engulfed — potential reversal to the upside`
           : `Bullish candle fully engulfed — potential reversal to the downside`}
+        ${p.candles_ago > 1 ? ' · shown for context; the score counts only the newest candle' : ''}
       </div>
     </div>`;
-  }).join('');
+  }).join('') + (patterns.some(p => p.candles_ago === 1) ? '' : engulfNearMissHtml(nearMiss));
 }
 
 /* ─── Elliott Wave ────────────────────────────────────────────────────────── */

@@ -40,6 +40,7 @@ from indicators import (
     calculate_ichimoku, calculate_macd, calculate_obv, calculate_rsi_series,
     calculate_stoch_rsi, calculate_supertrend, calculate_volume_signal,
     calculate_vwap, candle_direction, detect_cvd_divergence, detect_engulfing,
+    engulfing_near_miss,
     detect_fvg, detect_rsi_divergence, detect_whale_activity, fibonacci_retracement,
     find_pivots, find_volume_spikes, flip_close_ts,
 )
@@ -529,7 +530,12 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
         "cvd_divergence": detect_cvd_divergence(_spot_cvd, futures_cvd, candles),
 
         "fvgs": fvgs[:15],
-        "engulfing": engulfing,
+        "engulfing": engulfing,             # the score reads this: newest candle only
+        # The dashboard card: every confirmed engulfing in the last 4 closed
+        # candles, and why the newest candle missed if it nearly was one.
+        # Display only - the score never reads these.
+        "engulfing_recent": detect_engulfing(candles, lookback=4, keep_all=True),
+        "engulfing_near_miss": engulfing_near_miss(candles),
         "rsi_divergence": detect_rsi_divergence(
             candles, rsi_raw,
             pivot_window=2 if timeframe in WEEKLY_TFS else 3),

@@ -673,7 +673,8 @@ def find_volume_spikes(candles: List[Dict]) -> Dict:
     }
 
 
-def detect_engulfing(candles: List[Dict], lookback: int = 1) -> List[Dict]:
+def detect_engulfing(candles: List[Dict], lookback: int = 1,
+                     keep_all: bool = False) -> List[Dict]:
     """Detect confirmed bullish/bearish engulfing patterns.
 
     CLOSED-CANDLE CONTRACT (same as detect_flags): `candles` MUST already
@@ -745,6 +746,9 @@ def detect_engulfing(candles: List[Dict], lookback: int = 1) -> List[Dict]:
                 and curr_body > prev_body):
             patterns.append({**base, "type": "bearish_engulfing", "direction": "bearish"})
 
+    if keep_all:          # the dashboard's list: every one, newest first
+        return sorted(patterns, key=lambda p: p["candles_ago"])
+
     # Keep only the strongest per direction (highest body_ratio, tie-broken by recency).
     # Two bearish engulfings in the same lookback window is noise — only the best matters.
     best: Dict[str, dict] = {}
@@ -761,6 +765,40 @@ def detect_engulfing(candles: List[Dict], lookback: int = 1) -> List[Dict]:
                 best[d] = p
 
     return list(best.values())
+
+
+def engulfing_near_miss(candles: List[Dict]) -> Optional[Dict]:
+    """Why the NEWEST closed candle is not an engulfing, when it is the
+    opposite colour of the candle before it (the only case that could have
+    been one). None when it is an engulfing or the colours do not oppose.
+    Display only: the score never reads this."""
+    if len(candles) < 2:
+        return None
+    prev, curr = candles[-2], candles[-1]
+    pb, cb = abs(prev["close"] - prev["open"]), abs(curr["close"] - curr["open"])
+    bull = prev["close"] < prev["open"] and curr["close"] > curr["open"]
+    bear = prev["close"] > prev["open"] and curr["close"] < curr["open"]
+    if not (bull or bear) or pb < 1e-12 or cb < 1e-12:
+        return None
+    misses = []
+    if bull:
+        if curr["open"] > prev["close"]:
+            misses.append("opened above the red candle's close")
+        if curr["close"] < prev["open"]:
+            misses.append("closed below the red candle's open")
+    else:
+        if curr["open"] < prev["close"]:
+            misses.append("opened below the green candle's close")
+        if curr["close"] > prev["open"]:
+            misses.append("closed above the green candle's open")
+    if cb <= pb:
+        misses.append(f"body {cb / pb:.2f}x the previous one (needs more than 1x)")
+    if not misses:
+        return None
+    return {"direction": "bullish" if bull else "bearish", "timestamp": curr["timestamp"],
+            "prev_open": round(prev["open"], 8), "prev_close": round(prev["close"], 8),
+            "open": round(curr["open"], 8), "close": round(curr["close"], 8),
+            "body_ratio": round(cb / pb, 2), "misses": misses}
 
 
 def find_pivots(
