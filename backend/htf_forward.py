@@ -42,6 +42,13 @@ HOLD_H = 48
 RISK_USD = 5.0
 COST_BPS = {"entry": 6.5, "stop": 6.5, "target": 1.5, "timeout": 6.5}
 VERDICT_TRADES = 100
+# The coins the forward test started on (the scan of Nov 10 2026). The scan
+# grew on Nov 11; the forward book keeps to these so it keeps measuring the
+# same thing until its verdict.
+UNIVERSE = frozenset((
+    "BTC", "ETH", "LINK", "SUI", "TAO", "HYPE", "KAS", "ALGO", "XMR", "XRP",
+    "GRAM", "SOL", "ONDO", "AAVE", "RENDER", "BNB", "BLUR", "ZEC", "TRX",
+    "ADA", "XLM", "AVAX", "HBAR", "QNT", "INJ", "FET", "ICP", "ENJ", "TNSR", "PAXG"))
 MIN_PF = 1.15
 KEEP = 600
 

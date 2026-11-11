@@ -108,6 +108,30 @@
     renderEquity();
     renderTrades();
     renderForward();
+    renderTimings();
+  }
+
+  // ── how long the jobs take, against the function limit ───────────────────
+  function renderTimings() {
+    var t = (S.data && S.data.timings) || null;
+    var box = $("timings");
+    clear(box);
+    if (!t) return;
+    var lim = Number(t.limit_s) || null;
+    function secs(v) { return v == null ? "—" : (v / 1000).toFixed(1) + " s"; }
+    [["15m scalp pass", t.scalp], ["4H publish", t.publish]].forEach(function (x) {
+      var st = x[1];
+      if (!st) { box.appendChild(el("div", "muted", x[0] + ": no timings yet")); return; }
+      var row = bar(x[0], st.max_ms / 1000, lim || 300,
+        secs(st.last_ms) + " · max " + secs(st.max_ms));
+      row.style.gridTemplateColumns = "104px minmax(0,1fr) 150px";
+      row.title = "average " + secs(st.avg_ms) + " over the last " + st.n + " runs; limit " + (lim || "?") + " s";
+      box.appendChild(row);
+    });
+    if (t.publish_last && t.publish_last.coins) {
+      box.appendChild(el("div", "muted", "Publish scans " + t.publish_last.coins +
+        " coins · bars show the slowest recent run against the " + (lim || "?") + " s limit"));
+    }
   }
 
   // ── the 4-hourly forward paper book (htf_forward) ────────────────────────
