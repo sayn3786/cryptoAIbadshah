@@ -4930,6 +4930,49 @@ def _close_set_key(day: str, tf: str) -> str:
     return f"close:set:{_deploy_env()}:{day}:{tf}"
 
 
+CLOSE_LAST_TTL_S = 45 * 86_400      # outlives a month: the monthly set is repeated ~31 days
+CLOSE_CARRY_MAX_DAYS = {"1W": 7, "BW": 7, "1M": 31}
+
+
+def _close_last_key(tf: str) -> str:
+    return f"close:last:{_deploy_env()}:{tf}"
+
+
+def _close_carried(now: datetime, due: list) -> dict:
+    """The sets of the closes NOT due today, as picked at their last close:
+    {tf: recs, ..., close_publish.CARRIED: {tf: day}}. A set older than its
+    period (a missed close) is left out rather than shown as current."""
+    out, days = {}, {}
+    today = close_publish.close_day(now)
+    for tf in close_publish.POST_ORDER:
+        if tf in due or tf == close_publish.DAILY:
+            continue
+        try:
+            raw = _kv_get(_close_last_key(tf))
+            got = json.loads(raw) if raw else None
+        except Exception:
+            got = None
+        if not isinstance(got, dict) or not got.get("day"):
+            # Before the first remembered close: that close's own day record,
+            # while it still exists (3 days).
+            d = close_publish.last_close(tf, now).strftime("%Y-%m-%d")
+            rec = _close_load(d, tf)
+            got = {"day": d, "recs": rec.get("recs") or []} if rec else None
+            if not got:
+                continue
+        try:
+            closed = datetime.strptime(got["day"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if (today - closed).days > CLOSE_CARRY_MAX_DAYS.get(tf, 7):
+            continue
+        out[tf] = got.get("recs") or []
+        days[tf] = got["day"]
+    if days:
+        out[close_publish.CARRIED] = days
+    return out
+
+
 def _close_load(day: str, tf: str):
     try:
         raw = _kv_get(_close_set_key(day, tf))
@@ -4971,10 +5014,11 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
     htf = close_publish.HIGHER_TF[tf]
     wanted = [sym for sym in current if reads[sym]["direction"] in ("LONG", "SHORT")]
     hreads: dict = {}
-    with ThreadPoolExecutor(max_workers=20) as ex:
-        for sym, data in ex.map(lambda x: _get(higher, x, htf), wanted):
-            if data:
-                hreads[sym] = _close_read(data)
+    if htf:                       # the month has no higher timeframe to nudge it
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            for sym, data in ex.map(lambda x: _get(higher, x, htf), wanted):
+                if data:
+                    hreads[sym] = _close_read(data)
 
     btc = reads.get("BTC") or {}
     try:
@@ -5039,7 +5083,7 @@ def _close_run(now: datetime, *, compute=None, send=None) -> dict:
     if now - day_start > timedelta(hours=CLOSE_RUN_WINDOW_H):
         return {"ok": True, "ran": False, "reason": "PAST_CLOSE_WINDOW"}
     day = close_publish.close_key(now)
-    tfs = close_publish.due(now)
+    tfs = close_publish.due(now, monthly=True)
     sets: dict = {}
     computed = None
     for tf in tfs:
@@ -5056,10 +5100,16 @@ def _close_run(now: datetime, *, compute=None, send=None) -> dict:
             got = {"recs": res["recs"], "rejected": res.get("rejected") or {}}
             _kv_set(_close_set_key(day, tf), json.dumps(got, default=str),
                     ttl_seconds=3 * 86_400)
+            # Remembered as this timeframe's latest close: the mornings until
+            # its next close repeat it (_close_carried).
+            _kv_set(_close_last_key(tf), json.dumps({"day": day, "recs": res["recs"]},
+                                                    default=str),
+                    ttl_seconds=CLOSE_LAST_TTL_S)
             computed = {"tf": tf, "picks": len(res["recs"]),
                         "candidates": res.get("candidates")}
         sets[tf] = got.get("recs") or []
-    result = _dispatch_once("tg:close", day, lambda: send(sets, now))
+    post = {**sets, **_close_carried(now, tfs)}
+    result = _dispatch_once("tg:close", day, lambda: send(post, now))
 
     def _twitter():
         return _post_twitter_signals(get_analysis("BTC", "1D"), get_analysis("ETH", "1D"))
@@ -5074,8 +5124,10 @@ def _close_run(now: datetime, *, compute=None, send=None) -> dict:
 
 @app.post("/api/cron/close")
 def api_cron_close():
-    """The close trades: 1D every day at 00:00 UTC (8 AM SGT), plus the business
-    week on Saturday and the crypto week on Monday. Call it every few minutes
+    """The close trades: 1D every day at 00:00 UTC (8 AM SGT), plus the USA
+    (business) week on Saturday, the crypto week on Monday and the month on
+    the 1st; every post also repeats the week / month picks from their last
+    close until their next one. Call it every few minutes
     after the close: each call scans one due timeframe, and the call that finds
     them all done sends the post (once per day)."""
     if not (_scheduler_token_ok() or (os.getenv("CRON_SECRET") and _cron_authorized())):
@@ -5089,9 +5141,10 @@ def api_closes():
     """Today's close sets as recorded (what the post was built from)."""
     now = datetime.now(timezone.utc)
     day = close_publish.close_key(now)
-    return jsonify({"day": day, "due": close_publish.due(now),
-                    "sets": {tf: (_close_load(day, tf) or {}).get("recs")
-                             for tf in close_publish.due(now)}})
+    due = close_publish.due(now, monthly=True)
+    return jsonify({"day": day, "due": due,
+                    "sets": {tf: (_close_load(day, tf) or {}).get("recs") for tf in due},
+                    "carried": _close_carried(now, due)})
 
 
 @app.get("/api/cron/tao-snapshot")
