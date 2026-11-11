@@ -32,10 +32,25 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-TF_WEIGHT = {"1W": 4, "1D": 3, "4H": 2, "2H": 1.5, "1H": 1}
-TF_ORDER = ["1W", "1D", "4H", "2H", "1H"]
-TF_MS = {"1W": 7 * 86_400_000, "1D": 86_400_000, "4H": 4 * 3_600_000,
-         "2H": 2 * 3_600_000, "1H": 3_600_000}
+TF_WEIGHT = {"1M": 5, "1W": 4, "BW": 4, "1D": 3, "4H": 2, "2H": 1.5, "1H": 1}
+TF_ORDER = ["1M", "1W", "BW", "1D", "4H", "2H", "1H"]
+# Candle SPACING (open to next open). The USA week opens every 7 days but
+# closes 5 days after its Monday; the month is a nominal 30.44 days.
+TF_MS = {"1M": 2_629_800_000, "1W": 7 * 86_400_000, "BW": 7 * 86_400_000,
+         "1D": 86_400_000, "4H": 4 * 3_600_000, "2H": 2 * 3_600_000, "1H": 3_600_000}
+
+
+def _close_after(ts: int, tf: str, n: int):
+    """When the candle `n` candles after the one opening at `ts` closes."""
+    if tf == "BW":
+        return int(ts) + n * 7 * 86_400_000 + 5 * 86_400_000
+    if tf == "1M":
+        from datetime import datetime, timezone
+        d = datetime.fromtimestamp(int(ts) / 1000, timezone.utc)
+        k = d.month - 1 + n + 1
+        return int(datetime(d.year + k // 12, k % 12 + 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    tf_ms = TF_MS.get(tf)
+    return int(ts) + (n + 1) * tf_ms if tf_ms else None
 
 
 def _dot(direction: Optional[str]) -> str:
@@ -207,7 +222,7 @@ def _age(a: Dict[str, Any]) -> str:
         when = when_sgt(int(ts) + tf_ms) if ts is not None and tf_ms else ""
         return f" · pivot {when}" if when else ""
     conf = max(age - PIVOT_CONFIRM_BARS, 0)
-    day = (date_sgt(int(ts) + (PIVOT_CONFIRM_BARS + 1) * tf_ms)
+    day = (date_sgt(_close_after(int(ts), str(a.get("timeframe")), PIVOT_CONFIRM_BARS))
            if ts is not None and tf_ms else "")
     return f" · confirmed {_ago(conf)}" + (f" ({day} close)" if day else "")
 
@@ -262,6 +277,25 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
     `coins` (how many coins were scanned) adds the market-lean block first."""
     active = {str(k).upper(): v for k, v in (active or {}).items()}
     coins_scanned = coins
+    coin_blocks, forming_block, any_fresh, loud = _coin_blocks(alerts, active)
+    blocks = []
+    if coins_scanned:
+        import market_lean
+        blocks.append(market_lean.render(alerts, coins_scanned))
+    if any_fresh:
+        blocks.append(FRESH_NOTE)
+    blocks += coin_blocks + ([forming_block] if forming_block else [])
+    title = "🔔 CryptoMonk — Daily Market Update (1D / 1W)" + (f" · {date_label}" if date_label else "")
+    return _pack(title, blocks, alerts, max_chars), loud
+
+
+FRESH_NOTE = (f"{FRESH_MARK} = fired on the latest closed candle · those coins are "
+              "listed first, newest to oldest")
+
+
+def _coin_blocks(alerts: List[Dict[str, Any]], active: Dict[str, str]):
+    """(coin blocks, forming block or None, any fresh coin, loud) for a set of
+    reads: grouped by coin, ranked newest first, forming reads apart."""
     confirmed = [a for a in alerts if not _forming(a)]
     forming = [a for a in alerts if _forming(a)]
 
@@ -311,26 +345,61 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
     rows.sort(key=lambda r: (r[5], -r[0], r[1]))
 
     blocks = []
-    if coins_scanned:
-        import market_lean
-        blocks.append(market_lean.render(alerts, coins_scanned))
-    if any(r[5][0] == 0 for r in rows):
-        blocks.append(f"{FRESH_MARK} = fired on the latest closed candle · those coins are "
-                      "listed first, newest to oldest")
     for _score, sym, flag, tags, items, _fresh in rows:
         blocks.append("\n".join([f"{flag}{sym}" + (f"  ({' · '.join(tags)})" if tags else "")]
                                 + [f"  {_fresh_prefix(a)}{describe(a)}" for a in items]))
+    forming_block = None
     if forming:
         forming.sort(key=lambda a: -TF_WEIGHT.get(a.get("timeframe"), 1))
-        blocks.append("\n".join(["⏳ Forming (not confirmed yet):"]
-                                + [f"  {str(a.get('symbol')).upper()} {describe(a)}"
-                                   for a in forming]))
+        forming_block = "\n".join(["⏳ Forming (not confirmed yet):"]
+                                  + [f"  {str(a.get('symbol')).upper()} {describe(a)}"
+                                     for a in forming])
+    return blocks, forming_block, any(r[5][0] == 0 for r in rows), loud
 
-    title = "🔔 CryptoMonk — Daily Market Update (1D / 1W)" + (f" · {date_label}" if date_label else "")
+
+def build_market_digest_sections(sections: List[Tuple[str, List[Dict[str, Any]]]], *,
+                                 active: Optional[Dict[str, str]] = None,
+                                 date_label: str = "",
+                                 max_chars: Optional[int] = MAX_MESSAGE_CHARS,
+                                 coins: Optional[int] = None,
+                                 lean_alerts: Optional[List[Dict[str, Any]]] = None
+                                 ) -> Tuple[List[str], bool]:
+    """([message texts], loud) for the morning Market Update grouped by
+    timeframe: `sections` = [(header line, that timeframe's reads)] in order
+    (market_sections). Each section lists its coins as the single-list update
+    does; an empty section says so. `lean_alerts` (default: every read) feed
+    the market-lean block on top."""
+    active = {str(k).upper(): v for k, v in (active or {}).items()}
+    every = [a for _h, items in sections for a in items]
+    blocks: List[str] = []
+    if coins:
+        import market_lean
+        blocks.append(market_lean.render(lean_alerts if lean_alerts is not None else every,
+                                         coins))
+    loud_any, fresh_any, body = False, False, []
+    for head, items in sections:
+        cb, fb, fresh, loud = _coin_blocks(items, active)
+        loud_any, fresh_any = loud_any or loud, fresh_any or fresh
+        if not cb and not fb:
+            body.append(head + "\nNothing on this close.")
+            continue
+        body.append(head + "\n" + (cb[0] if cb else fb))
+        body += (cb[1:] if cb else []) + ([fb] if (fb and cb) else [])
+    if fresh_any:
+        blocks.append(FRESH_NOTE)
+    blocks += body
+    title = "🔔 CryptoMonk — Market Update (1D · 1W · USA week · 1M)" + \
+        (f" · {date_label}" if date_label else "")
+    return _pack(title, blocks, every, max_chars), loud_any
+
+
+def _pack(title: str, blocks: List[str], alerts: List[Dict[str, Any]],
+          max_chars: Optional[int]) -> List[str]:
+    """Title + blocks + footer, split between blocks into Telegram-sized parts."""
     notes_shown = any(evidence(a) or _forming_bull_caution(a) for a in alerts)
     footer = "\n".join(([EVIDENCE_FOOTER] if notes_shown else []) + FOOTER)
     if max_chars is None:
-        return ["\n\n".join([title] + blocks + [footer])], loud
+        return ["\n\n".join([title] + blocks + [footer])]
 
     # Pack blocks into messages; reserve room for the "(n/N)" title and footer.
     budget = max_chars - len(title) - len(footer) - 16
@@ -348,7 +417,7 @@ def build_market_digest_parts(alerts: List[Dict[str, Any]], *,
         head = title + (f" ({i}/{n})" if n > 1 else "")
         body = [head] + g + ([footer] if i == n else [])
         parts.append("\n\n".join(body))
-    return parts, loud
+    return parts
 
 
 # ── signal posts: what's new, still valid, passed, closed ────────────────────
