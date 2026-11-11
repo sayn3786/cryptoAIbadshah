@@ -128,3 +128,28 @@ def test_it_can_be_switched_off(app_mod, monkeypatch):
     monkeypatch.setenv("HTF_FORWARD", "off")
     assert app_mod._htf_fwd_run()["reason"] == "HTF_FORWARD_OFF"
     assert app_mod._htf_fwd_record([], {}, None)["reason"] == "HTF_FORWARD_OFF"
+
+
+def test_the_forward_book_keeps_to_its_original_coins(app_mod):
+    from datetime import datetime, timezone
+    now = datetime.fromtimestamp((SLOT + 120_000) / 1000, timezone.utc)
+    raw = {s: {"2H": {"analysis": {"candles": two_h()}}} for s in ("ETH", "LTC")}
+    cands = [{"symbol": "LTC", "direction": "LONG", "strength": 80, "live_price": 70.0},
+             {"symbol": "ETH", "direction": "LONG", "strength": 70, "live_price": 100.0}]
+    assert app_mod._htf_fwd_record(cands, raw, now)["opened"] == 1
+    assert [t["symbol"] for t in app_mod._htf_fwd_load()] == ["ETH"]   # LTC: added later, not tested
+
+
+def test_run_times_are_logged_and_served(app_mod, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(app_mod, "_compute_recommendations", app_mod._timed_publish(
+        lambda dry_run=False: {"ok": True}))
+    app_mod._compute_recommendations()
+    app_mod._compute_recommendations(True)                              # dry run: not logged
+    pub = _json.loads(app_mod._mem[f"timings:publish:{app_mod._deploy_env()}"])
+    assert len(pub) == 1 and pub[0]["coins"] == len(app_mod.SCAN_SYMBOLS) and pub[0]["ms"] >= 0
+    v = app_mod._timings_view([{"ms": 1200}, {"ms": 2400}, "junk", {"at": "x"}])
+    assert v["scalp"] == {"last_ms": 2400, "avg_ms": 1800, "max_ms": 2400, "n": 2}
+    assert v["publish"]["n"] == 1 and v["limit_s"] == app_mod.FUNCTION_LIMIT_S
+    cfg = _json.load(open(os.path.join(os.path.dirname(__file__), "..", "vercel.json")))
+    assert cfg["functions"]["api/index.py"]["maxDuration"] == app_mod.FUNCTION_LIMIT_S

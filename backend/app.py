@@ -142,13 +142,12 @@ SYMBOLS = {
     "PAXG":   "PAXGUSDT",   # PAX Gold      (1 troy oz)
     "GOMINING": "GOMININGUSDT",  # GoMining platform token — KuCoin platform, CoinGecko fallback
 
-    # ── Browsable only — see SCAN_SYMBOLS ────────────────────────────────────
-    # Analysable, chartable and available as asset tabs, but deliberately NOT
-    # scanned for recommendations or alerts. Adding them to the scan would take
-    # the publish path from 62 parallel fetches to 100 (it ran at 52-54s
-    # against the old 60s ceiling; Pro raised maxDuration to 300s). Kept out
-    # for now anyway: the 4-hourly forward test (htf_forward, from Nov 10)
-    # measures the signal on THIS universe - widen it after its verdict.
+    # ── Added to the scan Nov 11 2026 (Vercel Pro) ──────────────────────────
+    # Browsable-only until then: scanning them took the publish path from 62
+    # parallel fetches to 100, and it already ran at 52-54s of the old 60s
+    # ceiling. Pro raised maxDuration to 300s; the publish duration is logged
+    # (timings:publish) and shown on the Scalp Terminal. The 4-hourly forward
+    # test keeps trading only the original 30 (htf_forward.UNIVERSE).
     "LTC":  "LTCUSDT",
     "BCH":  "BCHUSDT",
     "ETC":  "ETCUSDT",
@@ -186,6 +185,9 @@ SCAN_SYMBOLS = (
     "GRAM", "SOL", "ONDO", "AAVE", "RENDER", "BNB", "BLUR", "ZEC", "TRX",
     "ADA", "XLM", "AVAX", "HBAR", "QNT", "INJ", "FET", "ICP", "ENJ", "TNSR",
     "PAXG",
+    # Nov 11 2026 (Vercel Pro, 300s functions): the browsable-only 19
+    "LTC", "BCH", "ETC", "UNI", "NEAR", "FIL", "OP", "STX", "GRT", "CRV",
+    "LDO", "APE", "MANA", "AXS", "BAT", "MINA", "HNT", "ZEN", "WLFI",
 )
 # Removed from trading 2026-08-14: GOMINING went 0-for-6 in the v45 postmortem
 # (every closed trade a loss, -4.0% total) with no discriminator explaining it —
@@ -3025,6 +3027,8 @@ def _htf_fwd_record(candidates, raw, now) -> dict:
             new = []
             for c in candidates or []:
                 sym = c.get("symbol")
+                if sym not in _hf.UNIVERSE:          # frozen: the coins it started on
+                    continue
                 if sym in busy or f"{sym}:{slot}" in ids:
                     continue
                 an = ((raw.get(sym) or {}).get("2H") or {}).get("analysis") or {}
@@ -3093,6 +3097,25 @@ def _htf_fwd_run(now_ms=None, *, fetch_fn=None) -> dict:
         return {"ran": False, "error": type(exc).__name__}
 
 
+FUNCTION_LIMIT_S = 300      # = vercel.json maxDuration (tested to match)
+
+
+def _timings_view(runs) -> dict:
+    """How long the scalp passes and the 4H publish take, against the
+    function limit (vercel.json maxDuration). Read only."""
+    def stats(xs):
+        xs = [int(x) for x in xs if isinstance(x, (int, float))]
+        if not xs:
+            return None
+        return {"last_ms": xs[-1], "avg_ms": int(sum(xs) / len(xs)), "max_ms": max(xs), "n": len(xs)}
+    pub = [r for r in _kv_json_list(f"timings:publish:{_deploy_env()}") if isinstance(r, dict)]
+    return {"limit_s": FUNCTION_LIMIT_S,
+            "scalp": stats(r.get("ms") for r in runs or [] if isinstance(r, dict)),
+            "publish": stats(r.get("ms") for r in pub),
+            "publish_last": pub[-1] if pub else None,
+            "publish_recent": pub[-12:]}
+
+
 def _htf_fwd_view() -> dict:
     import htf_forward as _hf
     book = _htf_fwd_load()
@@ -3104,6 +3127,30 @@ def _htf_fwd_view() -> dict:
             "summary": _hf.summary(book), "recent": book[-40:]}
 
 
+def _timed_publish(fn):
+    """The 4H publish compute, timed: every real (non dry-run) pass logs how
+    long it took and how many coins it scanned (KV timings:publish:{env}, last
+    48), so the Scalp Terminal shows it against the function limit."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(dry_run: bool = False, *a, **kw):
+        t0 = time.time()
+        try:
+            return fn(dry_run, *a, **kw)
+        finally:
+            if not dry_run:
+                try:
+                    _kv_append_json(f"timings:publish:{_deploy_env()}", {
+                        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "ms": int((time.time() - t0) * 1000), "coins": len(SCAN_SYMBOLS)},
+                        cap=48)
+                except Exception:
+                    pass
+    return run
+
+
+@_timed_publish
 def _compute_recommendations(dry_run: bool = False) -> dict:
     """
     ``dry_run=True`` runs the same scan but WRITES NOTHING — no signal rows, no
@@ -7172,6 +7219,7 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     import scalp_live as _sl
     if not _sl.enabled():
         return {"ok": True, "ran": False, "reason": "SCALP_DISABLED"}
+    _t0 = time.time()
     now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
     fetch_fn = fetch_fn or (lambda sym, iv: _sl.fetch_closed(SYMBOLS[sym], now_ms, interval=iv,
                                                             count=245 if iv == "15m" else 241))
@@ -7256,7 +7304,7 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     details = [d for d in (_scalp_score_record(x) for x in found) if d]
     _kv_append_json(f"scalp:runs:{_deploy_env()}", {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "setups": label,
-        "coins": len(syms),
+        "coins": len(syms), "ms": int((time.time() - _t0) * 1000),
         **({"score_details": details} if details else {}),
         **({"rejected": sorted(rejected)} if rejected else {}),
         **({"skipped": skipped} if skipped else {}),
@@ -7459,7 +7507,8 @@ def api_hl_scalp():
                     "portfolio": _scalp_portfolio_view(),
                     "trade_audit": _kv_json_list(f"scalp:audit:{_deploy_env()}")[-60:],
                     "amd_forward": _amd_forward_view(),
-                    "htf_forward": _htf_fwd_view()})
+                    "htf_forward": _htf_fwd_view(),
+                    "timings": _timings_view(runs)})
 
 
 def _scalp_portfolio_view() -> dict:

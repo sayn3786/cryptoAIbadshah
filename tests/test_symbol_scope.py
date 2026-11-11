@@ -59,9 +59,12 @@ def test_the_publish_budget_is_not_quietly_widened():
     publish duration afterwards — which is why the assertion is exact rather
     than an upper bound.
     """
-    assert len(appmod.SCAN_SYMBOLS) == 30, (
+    # Nov 11 2026: 30 -> 49 on the Pro plan (300s functions). The publish now
+    # logs its own duration (timings:publish) and the Scalp Terminal shows it
+    # against the limit - check it after the first few slots.
+    assert len(appmod.SCAN_SYMBOLS) == 49, (
         "the recommendation scan changed size — measure publish duration "
-        "against the 60s ceiling before accepting this")
+        "against the function limit (timings on the Scalp Terminal) before accepting this")
 
 
 def test_gomining_is_dropped_from_trading_but_still_browsable():
@@ -88,10 +91,14 @@ def test_the_requested_tokens_are_browsable():
         assert sym in appmod.SYMBOLS, f"{sym} is not browsable"
 
 
-def test_none_of_them_reached_the_recommendation_scan():
-    """Browsable only was the decision; this is what holds it."""
-    leaked = [s for s in NEWLY_BROWSABLE if s in appmod.SCAN_SYMBOLS]
-    assert leaked == [], f"{leaked} would be published without the budget for it"
+def test_they_joined_the_scan_but_not_the_forward_test():
+    """Browsable-only until Nov 11 2026; scanned since the Pro plan. The
+    4-hourly forward test keeps to the 30 coins it started on."""
+    import htf_forward
+    missing = [s for s in NEWLY_BROWSABLE if s not in appmod.SCAN_SYMBOLS]
+    assert missing == [], f"{missing} are not in the scan"
+    assert not set(NEWLY_BROWSABLE) & htf_forward.UNIVERSE
+    assert len(htf_forward.UNIVERSE) == 30 and htf_forward.UNIVERSE < set(appmod.SCAN_SYMBOLS)
 
 
 def test_the_quote_asset_is_not_a_tradeable_symbol():
