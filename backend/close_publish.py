@@ -7,8 +7,11 @@ Replaces the 4H channel publication. Every close is 00:00 UTC (8 AM SGT):
   * business week  Monday-Friday (UTC days) as one candle, closing Saturday
   * crypto week    the ordinary 1W candle, closing Monday
 
-So Saturday posts 1D + business week, Monday posts 1D + crypto week, every
-other day 1D only. Each close is read on its OWN closed candle and the candles
+Since Nov 2026 there is also the MONTH (closing on the 1st), and every
+morning's post carries all four: the daily picks fresh, and the USA week,
+crypto week and month as picked at their LAST close, unchanged until their
+next close (each labelled with its close date and the next one). Only a
+close that is due is scanned and recorded; the others are repeated. Each close is read on its OWN closed candle and the candles
 before it, gated by the same rules the 4H book used (strength floor, R:R,
 geometry, price divergence, TP1 not already behind live), and the best five
 are published. The next timeframe up is a small nudge (+/- HTF_POINTS), never
@@ -26,14 +29,21 @@ import rec_policy
 DAY_MS = 86_400_000
 
 # The close timeframes, in the order a combined post lists them.
-DAILY, BUSINESS, CRYPTO = "1D", "BW", "1W"
+DAILY, BUSINESS, CRYPTO, MONTHLY = "1D", "BW", "1W", "1M"
+# The closes the studies and the live record replay (unchanged), and the
+# order the morning post lists them in (with the month, added Nov 2026).
 ORDER = (DAILY, BUSINESS, CRYPTO)
-LABELS = {DAILY: "Daily (1D)", BUSINESS: "Business week (Mon-Fri)",
-          CRYPTO: "Crypto week (1W)"}
-SHORT = {DAILY: "1D", BUSINESS: "BW", CRYPTO: "1W"}
+POST_ORDER = (DAILY, CRYPTO, BUSINESS, MONTHLY)
+LABELS = {DAILY: "Daily (1D)", BUSINESS: "USA week (Mon-Fri)",
+          CRYPTO: "Crypto week (1W)", MONTHLY: "Monthly (1M)"}
+SHORT = {DAILY: "1D", BUSINESS: "USA wk", CRYPTO: "1W", MONTHLY: "1M"}
+ICONS = {DAILY: "📅", CRYPTO: "🗓", BUSINESS: "🇺🇸", MONTHLY: "📆"}
+# The key of the post dict that marks repeated (not freshly closed) sets:
+# {tf: "YYYY-MM-DD" of the close they were picked at}.
+CARRIED = "_carried"
 
-# The next timeframe up, read as a nudge only.
-HIGHER_TF = {DAILY: "1W", BUSINESS: "1M", CRYPTO: "1M"}
+# The next timeframe up, read as a nudge only (the month has none).
+HIGHER_TF = {DAILY: "1W", BUSINESS: "1M", CRYPTO: "1M", MONTHLY: None}
 HTF_POINTS = 5
 
 TOP_N = 5
@@ -43,10 +53,11 @@ STRATEGY_VERSION = "v60_close_top5"
 # How long a published close trade may wait for its entry, and how long it may
 # run, before the monitor withdraws / expires it: (fill window h, max age h).
 # The 4H book's 24 h / 72 h would expire a weekly trade before it had begun.
-WINDOWS = {DAILY: (24, 7 * 24), BUSINESS: (72, 28 * 24), CRYPTO: (72, 28 * 24)}
+WINDOWS = {DAILY: (24, 7 * 24), BUSINESS: (72, 28 * 24), CRYPTO: (72, 28 * 24),
+           MONTHLY: (7 * 24, 92 * 24)}
 # Candles the monitor walks for a close trade: fine enough that one candle
 # rarely touches both a target and the stop.
-MONITOR_TF = {DAILY: "1H", BUSINESS: "4H", CRYPTO: "4H"}
+MONITOR_TF = {DAILY: "1H", BUSINESS: "4H", CRYPTO: "4H", MONTHLY: "1D"}
 
 BUSINESS_DAYS = 5
 
@@ -59,15 +70,43 @@ def close_day(now: datetime) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def due(now: datetime) -> List[str]:
-    """The timeframes that closed at the most recent 00:00 UTC."""
+def due(now: datetime, *, monthly: bool = False) -> List[str]:
+    """The timeframes that closed at the most recent 00:00 UTC. The month is
+    opt-in (the live post): the studies replay the original three."""
     day = close_day(now)
     out = [DAILY]
     if day.weekday() == 5:          # Saturday: Monday-Friday just closed
         out.append(BUSINESS)
     if day.weekday() == 0:          # Monday: the crypto week just closed
         out.append(CRYPTO)
+    if monthly and day.day == 1:    # the 1st: the month just closed
+        out.append(MONTHLY)
     return out
+
+
+def last_close(tf: str, now: datetime) -> datetime:
+    """00:00 UTC of `tf`'s most recent close at or before `now`."""
+    day = close_day(now)
+    if tf == DAILY:
+        return day
+    if tf == BUSINESS:                                   # the last Saturday
+        return day - timedelta(days=(day.weekday() - 5) % 7)
+    if tf == CRYPTO:                                     # the last Monday
+        return day - timedelta(days=day.weekday())
+    return day.replace(day=1)
+
+
+def next_close(tf: str, day: datetime) -> datetime:
+    """00:00 UTC of `tf`'s next close after the close at `day`."""
+    day = close_day(day)
+    if tf == DAILY:
+        return day + timedelta(days=1)
+    if tf == BUSINESS:                                   # the next Saturday
+        return day + timedelta(days=(5 - day.weekday()) % 7 or 7)
+    if tf == CRYPTO:                                     # the next Monday
+        return day + timedelta(days=(0 - day.weekday()) % 7 or 7)
+    y, m = (day.year + 1, 1) if day.month == 12 else (day.year, day.month + 1)
+    return day.replace(year=y, month=m, day=1)
 
 
 def close_key(now: datetime) -> str:
@@ -260,29 +299,46 @@ def _levels(r: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def build_message(sets: Dict[str, List[Dict[str, Any]]], *, day: datetime) -> str:
-    """Plain text (coin tickers and labels stay intact without Markdown)."""
-    tfs = [tf for tf in ORDER if tf in sets]
-    title = " + ".join(LABELS[tf] for tf in tfs)
-    sgt = day.astimezone(timezone(timedelta(hours=8)))
-    lines = [f"🌟 CryptoStars close trades — {sgt:%a %d %b}, 8:00 AM SGT", title, ""]
-    entries = group(sets)
-    if not entries:
-        lines.append("No setup cleared the bar on this close. Waiting for the next one.")
-    for i, e in enumerate(entries, 1):
-        icon = "🟢" if e["direction"] == "LONG" else "🔴"
-        tags = " + ".join(SHORT[tf] for tf in e["tfs"])
-        best = max(e["recs"].values(), key=lambda r: r["strength"])
-        both = " · closes agree" if len(e["tfs"]) > 1 else ""
-        lines.append(f"#{i} {icon} {e['symbol']} {e['direction']} [{tags}] "
-                     f"{best['strength']:.0f}/100{both}")
-        for tf in e["tfs"]:
-            r = e["recs"][tf]
-            if len(e["tfs"]) > 1:
-                lines.append(f"  {SHORT[tf]} ({r['strength']:.0f}):")
+def _sgt(d: datetime) -> datetime:
+    return d.astimezone(timezone(timedelta(hours=8)))
+
+
+def build_message(sets: Dict[str, Any], *, day: datetime) -> str:
+    """Plain text (coin tickers and labels stay intact without Markdown). One
+    section per timeframe in ORDER: today's fresh closes, then the ones carried
+    from their last close (sets[CARRIED] = {tf: close day}), each with when it
+    closed and when it closes next. A coin picked the same way on another
+    timeframe in the post says so."""
+    carried = dict(sets.get(CARRIED) or {})
+    tfs = [tf for tf in POST_ORDER if tf in sets and tf != CARRIED]
+    fresh = [tf for tf in tfs if tf not in carried]
+    lines = [f"🌟 CryptoStars close trades — {_sgt(day):%a %d %b}, 8:00 AM SGT",
+             "Fresh today: " + (" + ".join(LABELS[tf] for tf in fresh) or "none"), ""]
+    ways: Dict[tuple, List[str]] = {}
+    for tf in tfs:
+        for r in sets.get(tf) or []:
+            ways.setdefault((r["symbol"], r["direction"]), []).append(tf)
+    for tf in tfs:
+        recs = sets.get(tf) or []
+        if tf in carried:
+            closed = datetime.strptime(carried[tf], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            when = (f"from the {closed:%a %d %b} close · unchanged until "
+                    f"{next_close(tf, closed):%a %d %b}")
+        else:
+            when = f"today's close · next {next_close(tf, day):%a %d %b}"
+        lines.append(f"━━ {ICONS[tf]} {LABELS[tf]} · {when}")
+        if not recs:
+            lines.append("No setup cleared the bar on this close.")
+        for i, r in enumerate(recs, 1):
+            icon = "🟢" if r["direction"] == "LONG" else "🔴"
+            also = [SHORT[t] for t in ways.get((r["symbol"], r["direction"]), []) if t != tf]
+            lines.append(f"#{i} {icon} {r['symbol']} {r['direction']} {r['strength']:.0f}/100"
+                         + (f" · also {' + '.join(also)}" if also else ""))
             lines.extend(_levels(r))
         lines.append("")
     counts = ", ".join(f"{SHORT[tf]} {len(sets.get(tf) or [])}/{TOP_N}" for tf in tfs)
     lines += [f"Picks: {counts}",
+              "Weekly and monthly levels are as published at their close; a trade may "
+              "already have hit its target or stop.",
               "⚠️ Not financial advice. Risk 1-2% per trade at most."]
     return "\n".join(lines).rstrip()

@@ -109,14 +109,17 @@ def test_a_coin_two_closes_pick_the_same_way_is_grouped_first():
     assert [(e["symbol"], e["direction"]) for e in g[1:]] == [
         ("ETH", "LONG"), ("XRP", "SHORT"), ("XRP", "LONG")]       # opposite ways stay apart
     text = cp.build_message(sets, day=MON)
-    assert "SOL LONG [1D + 1W]" in text and "closes agree" in text
-    assert "Daily (1D) + Crypto week (1W)" in text and "Mon 26 Oct, 8:00 AM SGT" in text
-    assert "Picks: 1D 3/5, 1W 2/5" in text
+    assert "SOL LONG 80/100 · also 1W" in text and "SOL LONG 66/100 · also 1D" in text
+    assert "XRP SHORT" in text and "XRP LONG 70/100\n" in text    # opposite ways: no "also"
+    assert "Fresh today: Daily (1D) + Crypto week (1W)" in text
+    assert "Mon 26 Oct, 8:00 AM SGT" in text and "Picks: 1D 3/5, 1W 2/5" in text
+    assert text.index("📅 Daily (1D) · today's close · next Tue 27 Oct") < \
+        text.index("🗓 Crypto week (1W) · today's close · next Mon 02 Nov")
 
 
 def test_an_empty_close_still_says_so():
     text = cp.build_message({"1D": [], "BW": []}, day=SAT)
-    assert "No setup cleared the bar" in text and "Business week (Mon-Fri)" in text
+    assert "No setup cleared the bar" in text and "USA week (Mon-Fri)" in text
 
 
 # ── the app side ─────────────────────────────────────────────────────────────
@@ -252,4 +255,80 @@ def test_the_monitor_gives_close_trades_their_own_clock(monkeypatch):
                    windows=cp.WINDOWS)
     assert seen["1W"] == (72, 28 * 24)
     assert seen["2H"] == (sm.DEFAULT_FILL_WINDOW_HOURS, sm.DEFAULT_MAX_AGE_HOURS)
-    assert cp.MONITOR_TF == {"1D": "1H", "BW": "4H", "1W": "4H"}
+    assert cp.MONITOR_TF == {"1D": "1H", "BW": "4H", "1W": "4H", "1M": "1D"}
+    assert cp.WINDOWS["1M"] == (7 * 24, 92 * 24)
+
+
+
+# ── Nov 2026: the month, and the weeks / month repeated until their next close ─
+
+def test_the_month_closes_on_the_first_for_the_live_post_only():
+    first = datetime(2026, 12, 1, 0, 5, tzinfo=timezone.utc)            # a Tuesday
+    assert cp.due(first) == ["1D"]                                      # the studies: unchanged
+    assert cp.due(first, monthly=True) == ["1D", "1M"]
+    assert cp.due(datetime(2026, 6, 1, 0, 5, tzinfo=timezone.utc), monthly=True) == ["1D", "1W", "1M"]
+    assert cp.HIGHER_TF["1M"] is None and cp.ORDER == ("1D", "BW", "1W")
+
+
+def test_last_and_next_closes():
+    thu = datetime(2026, 11, 12, 0, 5, tzinfo=timezone.utc)
+    last = {tf: cp.last_close(tf, thu).strftime("%a %d") for tf in cp.POST_ORDER}
+    assert last == {"1D": "Thu 12", "1W": "Mon 09", "BW": "Sat 07", "1M": "Sun 01"}
+    nxt = {tf: cp.next_close(tf, thu).strftime("%a %d %b") for tf in cp.POST_ORDER}
+    assert nxt == {"1D": "Fri 13 Nov", "1W": "Mon 16 Nov", "BW": "Sat 14 Nov", "1M": "Tue 01 Dec"}
+    assert cp.next_close("1W", MON) == MON + timedelta(days=7)          # on the close day itself
+    assert cp.next_close("BW", SAT) == SAT + timedelta(days=7)
+    assert cp.next_close("1M", datetime(2026, 12, 1, tzinfo=timezone.utc)).year == 2027
+
+
+def test_carried_sections_say_when_they_closed_and_close_next():
+    thu = datetime(2026, 11, 12, tzinfo=timezone.utc)
+    post = {"1D": [rec("ETH", s=72)], "1W": [rec("ETH", s=68, tf="1W"), rec("SOL", tf="1W")],
+            "1M": [], cp.CARRIED: {"1W": "2026-11-09", "1M": "2026-11-01"}}
+    text = cp.build_message(post, day=thu)
+    assert "Fresh today: Daily (1D)" in text
+    assert "🗓 Crypto week (1W) · from the Mon 09 Nov close · unchanged until Mon 16 Nov" in text
+    assert "📆 Monthly (1M) · from the Sun 01 Nov close · unchanged until Tue 01 Dec" in text
+    assert "ETH LONG 72/100 · also 1W" in text
+    assert "a trade may already have hit its target or stop" in text
+    assert "USA week" not in text                                       # none on record: omitted
+
+
+def test_every_morning_repeats_the_week_until_its_next_close(app_mod):
+    posts = []
+
+    def compute(tf, now):
+        return {"ready": True, "recs": [rec("SOL", tf=tf, s=75)], "rejected": {}, "candidates": 3}
+
+    def send(sets, now):
+        posts.append(sets)
+        return True
+    mon = MON + timedelta(minutes=3)
+    app_mod._close_run(mon, compute=compute, send=send)
+    app_mod._close_run(mon, compute=compute, send=send)                # 1D then 1W
+    tue = mon + timedelta(days=1)
+    app_mod._close_run(tue, compute=compute, send=send)
+    post = posts[-1]
+    assert post[cp.CARRIED] == {"1W": "2026-10-26"} and post["1W"][0]["symbol"] == "SOL"
+    later = MON + timedelta(days=8, minutes=3)                         # past its next close
+    assert "1W" not in app_mod._close_carried(later, ["1D"])
+
+
+def test_the_carry_starts_from_the_days_record_before_any_is_remembered(app_mod):
+    thu = datetime(2026, 11, 12, 0, 5, tzinfo=timezone.utc)
+    app_mod._mem[app_mod._close_set_key("2026-11-09", "1W")] = json.dumps(
+        {"recs": [rec("BTC", tf="1W")], "rejected": {}})
+    got = app_mod._close_carried(thu, ["1D"])
+    assert got["1W"][0]["symbol"] == "BTC" and got[cp.CARRIED] == {"1W": "2026-11-09"}
+
+
+def test_the_monthly_scan_reads_no_higher_timeframe(app_mod, monkeypatch):
+    asked = []
+    monkeypatch.setattr(app_mod, "get_analysis", lambda sym, tf: asked.append(tf) or {})
+    monkeypatch.setattr(app_mod, "SCAN_SYMBOLS", ("BTC",))
+    first = datetime(2026, 12, 1, 0, 5, tzinfo=timezone.utc)
+    exp = cp.expected_close_ms("1M", first)
+    monkeypatch.setattr(app_mod, "_close_read", lambda a: {"direction": "LONG", "strength": 80,
+                                                            "closed_at": exp})
+    out = app_mod._close_compute("1M", first, build=lambda s, t: {"x": 1})
+    assert out["ready"] and "1M" not in asked and None not in asked
