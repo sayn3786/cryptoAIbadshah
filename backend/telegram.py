@@ -338,7 +338,9 @@ _DEDICATED = [
 
 def send_pattern_alerts(alerts: List[Dict], date_label: str = "",
                         active: Optional[Dict[str, str]] = None,
-                        coins: Optional[int] = None) -> bool:
+                        coins: Optional[int] = None,
+                        sections: Optional[List] = None,
+                        lean_alerts: Optional[List[Dict]] = None) -> bool:
     """Send freshly-confirmed alerts to the configured Telegram channel as ONE
     coin-grouped, ranked "Market Update" (see telegram_digest), instead of a
     separate message per alert type. Every read is included; a long update is
@@ -356,9 +358,16 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "",
     if not token or not chat_id:
         print("[telegram] BOT_TOKEN or CHAT_ID not set — skipping pattern alerts")
         return False
-    from telegram_digest import build_market_digest_parts
-    parts, loud = build_market_digest_parts(alerts, active=active, date_label=date_label,
-                                            coins=coins)
+    if sections is not None:
+        # The morning update grouped by timeframe (market_sections).
+        from telegram_digest import build_market_digest_sections
+        parts, loud = build_market_digest_sections(sections, active=active,
+                                                   date_label=date_label, coins=coins,
+                                                   lean_alerts=lean_alerts)
+    else:
+        from telegram_digest import build_market_digest_parts
+        parts, loud = build_market_digest_parts(alerts, active=active, date_label=date_label,
+                                                coins=coins)
     sent = False
     for i, text in enumerate(parts):
         try:

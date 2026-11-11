@@ -197,14 +197,14 @@ def test_daily_reads_are_stored_and_read_back_fresh_only(app_mod, monkeypatch):
 
 def test_the_daily_job_stores_the_full_scan_only(app_mod, monkeypatch):
     calls = []
-    monkeypatch.setattr(app_mod, "_daily_market_reads", lambda syms: [{"symbol": "ADA"}])
+    monkeypatch.setattr(app_mod, "_daily_market_reads", lambda syms, tfs=None: [{"symbol": "ADA", "timeframe": "1D"}])
     monkeypatch.setattr(app_mod, "_store_daily_reads", lambda reads: calls.append(reads))
     monkeypatch.delenv("CRON_SECRET", raising=False)
     c = app_mod.app.test_client()
     c.get("/api/patterns/alert?dry=1&symbols=BTC")
     assert calls == []
     c.get("/api/patterns/alert?dry=1")
-    assert calls == [[{"symbol": "ADA"}]]
+    assert calls == [[{"symbol": "ADA", "timeframe": "1D"}]]
 
 
 def test_the_publish_path_passes_the_stored_reads():

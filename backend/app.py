@@ -699,18 +699,36 @@ def _fetch_alert_candles(sym: str, tf: str, limit=None):
     bs = _exchange_pair(sym)
     if not bs:
         return [], "no_pair"
-    interval = TF_INTERVAL.get(tf, "1w")
-    limit = limit or TF_LIMIT.get(tf, 120)
-    spot, source = client.get_spot_klines_sourced(bs, interval, limit)
-    if source == "demo":
-        return [], "demo"
-    if tf in TF_AGG:
-        spot = client.aggregate_candles(spot, TF_AGG[tf])
+    if tf == "BW":
+        # The USA (business) week: Monday-Friday days folded into one candle,
+        # closing Saturday 00:00 UTC (close_publish.business_weeks).
+        spot, source = client.get_spot_klines_sourced(bs, "1d", limit or BUSINESS_WEEK_DAYS)
+        if source == "demo":
+            return [], "demo"
+        spot = close_publish.business_weeks(spot)
+    else:
+        interval = TF_INTERVAL.get(tf, "1w")
+        limit = limit or TF_LIMIT.get(tf, 120)
+        spot, source = client.get_spot_klines_sourced(bs, interval, limit)
+        if source == "demo":
+            return [], "demo"
+        if tf in TF_AGG:
+            spot = client.aggregate_candles(spot, TF_AGG[tf])
     tf_s = TF_SECONDS.get(tf, 3600)
-    closed, _live = _split_closed(spot, tf_s)
+    if tf == "1M":
+        # Calendar months, not a nominal 30.44 days (which would still call
+        # November open on Dec 1 00:15).
+        import market_sections as _ms
+        now_ms = time.time() * 1000
+        closed = [c for c in spot or [] if _ms.month_end_ms(c["timestamp"]) <= now_ms]
+    else:
+        closed, _live = _split_closed(spot, tf_s)
     if not closed:
         return [], "empty"
     last_close_ms = int(closed[-1].get("timestamp") or 0) + tf_s * 1000
+    if tf == "1M":
+        import market_sections as _ms
+        last_close_ms = _ms.month_end_ms(closed[-1]["timestamp"])
     if time.time() * 1000 - last_close_ms > ALERT_MAX_STALENESS_INTERVALS * tf_s * 1000:
         return [], "stale"
     return closed, None
@@ -1124,10 +1142,12 @@ def _daily_reads_for(closed: list, tf: str) -> list:
     return out
 
 
-def _daily_market_reads(symbols=None) -> list:
-    """The daily list across coins × (1D, 1W), in parallel. Coins with
+def _daily_market_reads(symbols=None, tfs=None) -> list:
+    """The daily list across coins × timeframes (default 1D, 1W; the morning
+    Market Update adds the USA week and the month), in parallel. Coins with
     demo/stale data are skipped (and logged), like the alert scan."""
     symbols = symbols or list(SCAN_SYMBOLS)
+    tfs = tuple(tfs or DAILY_READ_TFS)
     skipped: dict = {}
 
     def _one(pair):
@@ -1141,7 +1161,7 @@ def _daily_market_reads(symbols=None) -> list:
             return []
         return [{"symbol": sym, "timeframe": tf, **r} for r in _daily_reads_for(closed, tf)]
 
-    pairs = [(sym, tf) for sym in symbols for tf in DAILY_READ_TFS]
+    pairs = [(sym, tf) for sym in symbols for tf in tfs]
     found: list = []
     with ThreadPoolExecutor(max_workers=12) as ex:
         for res in ex.map(_one, pairs):
@@ -3981,8 +4001,9 @@ def api_telegram_send():
 @app.get("/api/patterns/alert")
 @app.post("/api/patterns/alert")
 def api_patterns_alert():
-    """Send the DAILY 1D/1W Market Update to Telegram (RSI divergences, forming
-    divergences, RSI reversals, indicator flips; see _daily_reads_for).
+    """Send the morning Market Update to Telegram (RSI divergences, forming
+    divergences, RSI reversals, indicator flips; see _daily_reads_for), grouped
+    by timeframe: 1D, crypto week, USA week, month (market_sections).
     Called once a day after the 1D close; also usable on demand. Optional query
     params: symbols=BTC,ETH  dry=1 (build the list, don't send)."""
     import os as _os
@@ -4000,11 +4021,16 @@ def api_patterns_alert():
     # The DAILY 1D/1W list (see _daily_reads_for): every read from its last 3
     # candles, played-out ones for 2 more candles. Sent at most once per UTC
     # day, so a scheduler retry never double-posts; nothing is sent when empty.
-    reads = _daily_market_reads(syms)
+    # Nov 2026: one morning update grouped by timeframe - 1D, the crypto week,
+    # the USA week and the month (market_sections), each read on closed
+    # candles, so a week / month section stays the same until its close.
+    import market_sections as _msec
+    reads = _daily_market_reads(syms, tfs=_msec.TFS)
+    core = [r for r in reads if r.get("timeframe") in DAILY_READ_TFS]   # 1D + 1W, as before
     if syms is None:
         # The full scan: kept for the 4H publish's HL bottom-read boost (v55)
-        # and daily-momentum boost (v59).
-        _store_daily_reads(reads)
+        # and daily-momentum boost (v59) - 1D / 1W only, exactly as before.
+        _store_daily_reads(core)
         if _daily_momentum_boost() > 0 and not dry:
             _store_daily_momentum(_daily_momentum_scan())
     if dry:
@@ -4014,11 +4040,15 @@ def api_patterns_alert():
     now_sgt = datetime.now(_SGT)
     day_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     active = _active_signal_directions()
+    now_utc = datetime.now(timezone.utc)
+    sections = [(_msec.header(tf, now_utc), [r for r in reads if r.get("timeframe") == tf])
+                for tf in _msec.TFS]
     result = _dispatch_once(
         "tg:daily-list", day_key,
         lambda: _send_pattern_alerts(reads, active=active,
                                      date_label=now_sgt.strftime("%b %d"),
-                                     coins=len(syms or SCAN_SYMBOLS)))
+                                     coins=len(syms or SCAN_SYMBOLS),
+                                     sections=sections, lean_alerts=core))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 

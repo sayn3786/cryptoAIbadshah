@@ -134,7 +134,7 @@ READ = {"symbol": "BTC", "timeframe": "1D", "kind": "divergence", "status": "act
 
 
 def test_sent_once_per_day(client, monkeypatch):
-    monkeypatch.setattr(app, "_daily_market_reads", lambda syms=None: [READ])
+    monkeypatch.setattr(app, "_daily_market_reads", lambda syms=None, tfs=None: [READ])
     keys = []
     monkeypatch.setattr(app, "_dispatch_once", lambda ch, key, send: keys.append((ch, key)) or "sent")
     body = client.post("/api/patterns/alert", headers=H).get_json()
@@ -142,13 +142,13 @@ def test_sent_once_per_day(client, monkeypatch):
 
 
 def test_nothing_sent_when_the_list_is_empty(client, monkeypatch):
-    monkeypatch.setattr(app, "_daily_market_reads", lambda syms=None: [])
+    monkeypatch.setattr(app, "_daily_market_reads", lambda syms=None, tfs=None: [])
     monkeypatch.setattr(app, "_dispatch_once", lambda *a: pytest.fail("must not send"))
     assert client.post("/api/patterns/alert", headers=H).get_json()["result"] == "empty"
 
 
 def test_dry_run_lists_without_sending(client, monkeypatch):
-    monkeypatch.setattr(app, "_daily_market_reads", lambda syms=None: [READ])
+    monkeypatch.setattr(app, "_daily_market_reads", lambda syms=None, tfs=None: [READ])
     monkeypatch.setattr(app, "_dispatch_once", lambda *a: pytest.fail("must not send"))
     body = client.post("/api/patterns/alert?dry=1", headers=H).get_json()
     assert body["dry"] is True and body["reads"] == [READ]
