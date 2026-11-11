@@ -60,6 +60,21 @@ def _open(monkeypatch, sig=SIG, account=FUNDED, **kw):
 
 # ── the gate ─────────────────────────────────────────────────────────────────
 
+@pytest.mark.parametrize('direction,side', [('LONG', True), ('SHORT', False)])
+def test_open_capture_matches_actual_send_side(monkeypatch, direction, side):
+    _arm(monkeypatch)
+    signal = {**SIG, 'id': '00000000-0000-0000-0000-000000000001',
+              'direction': direction}
+    sender, events = _Sender(), []
+    result = _open(monkeypatch, sig=signal, send_fn=sender,
+                   evidence_observer=events.append)
+    assert result['ok'] is True
+    assert len(sender.calls) == 1
+    assert sender.calls[0][1] is side
+    assert [event['phase'] for event in events] == ['INTENT', 'RESPONSE']
+    assert all(event['intended_is_buy'] is side for event in events)
+
+
 def test_disarmed_refuses(monkeypatch):
     for n in ("LIVE_TRADING_ENABLED", "HYPERLIQUID_AGENT_KEY"):
         monkeypatch.delenv(n, raising=False)

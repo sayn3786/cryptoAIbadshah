@@ -15,7 +15,34 @@ ACK = {'status': 'ok', 'response': {'data': {'statuses': [{'filled': {'oid': 12,
 def run(call, observer, **kw):
     return observed_open(call, observer=observer, signal=SIGNAL, instrument='BTC',
                          cloid=client_order_id(SID, 'open', SIGNAL['candle_ts']),
-                         network=kw.get('network', 'testnet'))
+                         network=kw.get('network', 'testnet'),
+                         is_buy=kw.get('is_buy'))
+
+
+@pytest.mark.parametrize('side', [True, False])
+@pytest.mark.parametrize('raises', [True, False])
+def test_exact_boolean_side_in_all_phases(side, raises):
+    events, calls = [], []
+    def call():
+        calls.append(side)
+        if raises:
+            raise RuntimeError('send failed')
+        return ACK
+    if raises:
+        with pytest.raises(RuntimeError, match='send failed'):
+            run(call, events.append, is_buy=side)
+    else:
+        assert run(call, events.append, is_buy=side) is ACK
+    assert calls == [side]
+    assert len(events) == 2
+    assert all(e['intended_is_buy'] is side for e in events)
+
+
+@pytest.mark.parametrize('side', [None, 0, 1, 'buy', 'false'])
+def test_missing_or_invalid_side_is_not_guessed(side):
+    events = []
+    assert run(lambda: ACK, events.append, is_buy=side) is ACK
+    assert all('intended_is_buy' not in e for e in events)
 
 
 def test_original_identity_and_response_preserved():

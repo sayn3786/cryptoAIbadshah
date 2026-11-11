@@ -257,7 +257,7 @@ def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
         from open_order_capture import observed_order
         return observed_order(call, observer=evidence_observer,
             signal=evidence_signal, instrument=coin, cloid=cloid,
-            network='testnet', intent=intent)
+            network='testnet', intent=intent, is_buy=is_buy_exit)
 
     out: Dict[str, Any] = {}
     if sl_px and sl_px > 0:
@@ -435,7 +435,7 @@ def open_position(signal: Dict[str, Any], *, account_state: Dict[str, Any],
             resp = observed_open(
                 lambda: send(coin, is_buy, plan["size"], cloid, env, plan["leverage"]),
                 observer=evidence_observer, signal=signal, instrument=coin,
-                cloid=cloid, network=e)
+                cloid=cloid, network=e, is_buy=is_buy)
     except Exception as exc:                              # noqa: BLE001
         release(hl_execution.order_ledger_key(sig_id, "open", candle_ts))
         return {"ok": False, "reason": "SEND_FAILED", "coin": coin,
