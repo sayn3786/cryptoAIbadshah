@@ -61,3 +61,30 @@ tests passed. Loader tests cover opening/exit composition, missing observations,
 wrong account/environment, window exclusion, missing correlations, duplicate
 IDs, excessive windows and transaction requirements. All tests use synthetic
 data; production migrations and capture remain inactive.
+
+## Explicit testnet read adapter — 2026-11-10
+
+`testnet_order_reader.observe_testnet_orders` accepts the actual account address,
+its independently selected expected SHA-256 hash, and 1–10 unique canonical
+client order IDs. It validates the whole selection before network access, then
+queries only `https://api.hyperliquid-testnet.xyz/info` with `type=orderStatus`.
+There is no endpoint override, mainnet fallback, automatic retry, redirect,
+credential loading, wallet signing, database write, or production caller.
+TLS certificate and hostname verification remain enabled. Each request has a
+10-second socket timeout and a 64-KiB response bound (not a whole-batch deadline).
+Malformed JSON, duplicate keys, nonfinite numbers, non-200 responses and network
+errors fail closed with sanitized errors. A batch error discards its partial
+return; it does not claim that earlier reads never happened.
+
+The returned envelopes use the existing verifier format, keyed by client order
+ID. An explicitly approved caller can map those IDs from loaded journals to
+correlations for `load_and_verify`. No such caller is enabled here. Do not use an
+agent wallet instead of the actual trading account. The address hash binds the
+request configuration, not account ownership or cryptographic venue attestation.
+Existing journals still lack independently persisted intended side; all side,
+clock, history, publication and fill-lifecycle gates remain in place. A passing
+identity check is not permission to train or trade.
+
+Protocol reference: [Hyperliquid Info endpoint](https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/info-endpoint).
+Tests mock HTTPS entirely and compose all four intents with the pure verifier;
+no real account reads or held-out outcomes are needed.
