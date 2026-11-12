@@ -2,6 +2,12 @@
 
 No environment lookup, connection creation, automatic activation or backfill.
 An acknowledgement is not a fill or verified signal-to-trade attribution.
+
+New injected callers record intended_is_buy from the exact boolean send argument
+in every phase. Missing/nonboolean values remain absent (unknown), never inferred
+or backfilled. This JSONB metadata needs no additional migration and does not
+activate collection. It is intent evidence, not provider-side verification;
+ORDER_SIDE_VERIFICATION_REQUIRED remains a separate verification gate.
 """
 import re
 from datetime import datetime, timezone
@@ -66,13 +72,14 @@ def _provider_identity(response):
     return {'status': 'UNVERIFIED'}
 
 
-def observed_open(call, *, observer, signal, instrument, cloid, network):
+def observed_open(call, *, observer, signal, instrument, cloid, network, is_buy=None):
     return observed_order(call, observer=observer, signal=signal,
                           instrument=instrument, cloid=cloid, network=network,
-                          intent='open')
+                          intent='open', is_buy=is_buy)
 
 
-def observed_order(call, *, observer, signal, instrument, cloid, network, intent):
+def observed_order(call, *, observer, signal, instrument, cloid, network, intent,
+                   is_buy=None):
     """Preserve call count, return object and exceptions; observation is optional."""
     if observer is None or network != 'testnet':
         return call()
@@ -92,6 +99,10 @@ def observed_order(call, *, observer, signal, instrument, cloid, network, intent
         context = {'correlation_id': str(uuid4()), 'signal_id': sid,
                    'candle_ts': ts, 'intent': intent, 'instrument': instrument,
                    'client_order_id': cloid, 'network': network}
+        # Record the actual send argument, never infer it from signal direction.
+        # Legacy callers without a bool retain unknown direction.
+        if type(is_buy) is bool:
+            context['intended_is_buy'] = is_buy
     except (KeyError, ValueError, TypeError, AttributeError):
         return call()
 

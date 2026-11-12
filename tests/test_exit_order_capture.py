@@ -22,12 +22,15 @@ def exits(monkeypatch, events, *, fail=None, observer=None, env='testnet'):
     return calls, kwargs
 
 
-def test_each_submitted_exit_has_own_identity(monkeypatch):
+@pytest.mark.parametrize('side', [True, False])
+def test_each_submitted_exit_has_own_identity(monkeypatch, side):
     events=[]
     calls, kwargs=exits(monkeypatch,events)
-    result=hx.send_exit_orders('BTC',False,1,90,110,**kwargs)
+    result=hx.send_exit_orders('BTC',side,1,90,110,**kwargs)
     assert result == {'sl':ACK,'tp':ACK,'tp2':ACK}
     assert len(calls)==3
+    assert all(call[1] is side for call in calls)
+    assert all(e['intended_is_buy'] is side for e in events)
     assert [e['intent'] for e in events] == ['sl','sl','tp1','tp1','tp2','tp2']
     assert len({e['correlation_id'] for e in events})==3
     for e in events:
