@@ -26,8 +26,9 @@ snapshot, not an arbitrary reconstructed dictionary.
 
 Passing returns a candidate identity only. It always leaves attribution_verified
 and training_eligible false, with gates for independent clock bounds, history
-coverage, publication timing, order side and fill lifecycle. Existing journals
-do not retain intended side, so this checker must not claim side verification.
+coverage, publication timing and fill lifecycle. Legacy journals without intended
+side also retain the order-side gate. Version 2 can clear only that gate when the
+exact persisted direction matches the venue order and all consistency checks pass.
 No result is inserted into execution_order_links automatically.
 
 Verification on 2026-11-10: 59 targeted tests passed, including all four intents,
@@ -81,10 +82,29 @@ ID. An explicitly approved caller can map those IDs from loaded journals to
 correlations for `load_and_verify`. No such caller is enabled here. Do not use an
 agent wallet instead of the actual trading account. The address hash binds the
 request configuration, not account ownership or cryptographic venue attestation.
-Existing journals still lack independently persisted intended side; all side,
+Legacy journals lack independently persisted intended side; their side,
 clock, history, publication and fill-lifecycle gates remain in place. A passing
 identity check is not permission to train or trade.
 
 Protocol reference: [Hyperliquid Info endpoint](https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/info-endpoint).
 Tests mock HTTPS entirely and compose all four intents with the pure verifier;
 no real account reads or held-out outcomes are needed.
+
+## Intended direction verification — 2026-11-12
+
+PR406 captures `intended_is_buy` from the actual send argument. Verifier version
+`prospective_order_verification_v2` requires identical strict booleans in both
+INTENT and RESPONSE, then compares against venue `side` (`B` buy, `A` sell).
+One-sided metadata, invalid types, conflicting journal values, or a missing/wrong
+venue side exclude the candidate. No signal direction or other order is used to
+guess direction. Both legacy phases lacking side remain consistent only as an
+identity candidate, with `order_side_verified=false` and the side gate retained.
+
+`order_side_verified=true` requires every consistency check to pass, not merely
+matching direction. It clears only `ORDER_SIDE_VERIFICATION_REQUIRED`; independent
+clock/history, publication timing, and fill lifecycle remain quarantined. Both
+training and attribution flags remain false. No persistence, migration, capture
+activation, external read or order submission is added.
+
+Validation: 154 synthetic tests passed, including both sides for all four intents,
+legacy compatibility, mismatches, malformed values and gate isolation.

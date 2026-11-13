@@ -33,12 +33,18 @@ def verify_order(*, journal, observation, environment, account_hash):
     """
     issues = set()
     candidate = None
+    side_matches = False
     def result():
-        return {'version': 'prospective_order_verification_v1',
+        gates = GATES.copy()
+        side_verified = side_matches and not issues
+        if side_verified:
+            gates.discard('ORDER_SIDE_VERIFICATION_REQUIRED')
+        return {'version': 'prospective_order_verification_v2',
                 'consistent': not issues, 'issues': sorted(issues),
+                'order_side_verified': side_verified,
                 'candidate': candidate if not issues else None,
                 'training_eligible': False, 'attribution_verified': False,
-                'quarantine_reasons': sorted(issues | GATES)}
+                'quarantine_reasons': sorted(issues | gates)}
     def payload(envelope):
         p = envelope['payload']
         if not isinstance(p, dict) or digest(p) != envelope['payload_sha256']:
@@ -63,6 +69,17 @@ def verify_order(*, journal, observation, environment, account_hash):
                 'client_order_id', 'network', 'environment', 'account_hash')
         if any(intent[k] != response[k] or type(intent[k]) is not type(response[k]) for k in keys):
             issues.add('JOURNAL_IDENTITY_MISMATCH')
+        side_present = ['intended_is_buy' in row for row in (intent, response)]
+        valid_side = False
+        if any(side_present):
+            if not all(side_present):
+                issues.add('JOURNAL_SIDE_MISMATCH')
+            elif any(type(row['intended_is_buy']) is not bool for row in (intent, response)):
+                issues.add('INVALID_JOURNAL_SIDE')
+            elif intent['intended_is_buy'] is not response['intended_is_buy']:
+                issues.add('JOURNAL_SIDE_MISMATCH')
+            else:
+                valid_side = True
         for row in rows:
             for field in ('event_id', 'correlation_id', 'signal_id'):
                 if str(UUID(row[field])) != row[field]: raise ValueError('noncanonical UUID')
@@ -109,6 +126,14 @@ def verify_order(*, journal, observation, environment, account_hash):
             issues.add('VENUE_IDENTITY_MISMATCH')
         if order.get('reduceOnly') is not (kind != 'open'):
             issues.add('VENUE_REDUCE_ONLY_MISMATCH')
+        if valid_side:
+            # Venue B=bid/buy, A=ask/sell. Compare actual send intent, not a
+            # reconstructed signal direction or the opposite of another order.
+            expected_side = 'B' if intent['intended_is_buy'] else 'A'
+            if order.get('side') != expected_side:
+                issues.add('VENUE_SIDE_MISMATCH')
+            else:
+                side_matches = True
         stamp = order.get('timestamp')
         if type(stamp) is not int or stamp < 0: raise ValueError('timestamp')
         placed = datetime(1970, 1, 1, tzinfo=timezone.utc)+timedelta(milliseconds=stamp)
