@@ -84,3 +84,73 @@ def test_malformed_inputs_fail_closed():
     args=fixture()
     for malformed in (None, {}, [], {'payload':None}):
         assert not verify_order(**{**args,'observation':malformed})['consistent']
+
+
+def with_side(kind='open', side=True):
+    args = fixture(kind)
+    for index, row in enumerate(args['journal']):
+        row['payload']['intended_is_buy'] = side
+        args['journal'][index] = wrap(row['payload'])
+    p = args['observation']['payload']
+    p['response']['order']['order']['side'] = 'B' if side else 'A'
+    args['observation'] = wrap(p)
+    return args
+
+
+@pytest.mark.parametrize('kind', ['open', 'sl', 'tp1', 'tp2'])
+@pytest.mark.parametrize('side', [True, False])
+def test_exact_side_match_only_clears_side_gate(kind, side):
+    from prospective_order_verification import GATES
+    report = verify_order(**with_side(kind, side))
+    assert report['consistent'] and report['order_side_verified']
+    assert set(report['quarantine_reasons']) == GATES - {'ORDER_SIDE_VERIFICATION_REQUIRED'}
+    assert report['training_eligible'] is False
+    assert report['attribution_verified'] is False
+
+
+@pytest.mark.parametrize('side', ['A', None, True, 1, 'buy', 'b'])
+def test_wrong_or_missing_venue_side_excluded(side):
+    args = with_side()
+    p = args['observation']['payload']
+    p['response']['order']['order']['side'] = side
+    args['observation'] = wrap(p)
+    report = verify_order(**args)
+    assert 'VENUE_SIDE_MISMATCH' in report['issues']
+    assert not report['order_side_verified'] and report['candidate'] is None
+
+
+@pytest.mark.parametrize('value', [None, 1, 0, 'true', False])
+def test_invalid_or_conflicting_journal_side_excluded(value):
+    args = with_side()
+    p = args['journal'][1]['payload']
+    p['intended_is_buy'] = value
+    args['journal'][1] = wrap(p)
+    report = verify_order(**args)
+    assert not report['consistent'] and not report['order_side_verified']
+    assert report['candidate'] is None
+
+
+@pytest.mark.parametrize('index', [0, 1])
+def test_side_present_on_only_one_phase_excluded(index):
+    args = with_side()
+    p = args['journal'][index]['payload']
+    del p['intended_is_buy']
+    args['journal'][index] = wrap(p)
+    assert 'JOURNAL_SIDE_MISMATCH' in verify_order(**args)['issues']
+
+
+def test_legacy_side_remains_unknown_and_gates_do_not_leak_between_calls():
+    verify_order(**with_side())
+    report = verify_order(**fixture())
+    assert report['consistent'] and not report['order_side_verified']
+    assert 'ORDER_SIDE_VERIFICATION_REQUIRED' in report['quarantine_reasons']
+
+
+def test_matching_side_cannot_override_wrong_identity():
+    args = with_side()
+    p = args['observation']['payload']
+    p['response']['order']['order']['oid'] = 456
+    args['observation'] = wrap(p)
+    report = verify_order(**args)
+    assert not report['order_side_verified'] and report['candidate'] is None
+    assert 'ORDER_SIDE_VERIFICATION_REQUIRED' in report['quarantine_reasons']
