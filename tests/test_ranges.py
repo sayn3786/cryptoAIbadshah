@@ -77,3 +77,22 @@ def test_the_dashboard_draws_and_explains_them():
     for term in ("Range box", "Deviation ✓", "Liquidity pools", "Structure High / Low",
                  "Support trendline", "SuperTrend", "CHoCH / BOS"):
         assert term in html, term
+
+
+def test_boxes_markers_and_notes_are_numbered():
+    js = open(os.path.join(os.path.dirname(__file__), "..", "dashboard", "js", "dashboard.js")).read()
+    html = open(os.path.join(os.path.dirname(__file__), "..", "dashboard", "index.html")).read()
+    assert "RANGE_NUMS = ['①', '②', '③'" in js and "labelRight: n" in js
+    assert "text: `${_rangeNum(i)} ${label}`" in js and "_rangeNum(i) + ' '" in js
+    assert "Range boxes ①②③" in html and '"② Deviation ✓"' in html
+
+
+def test_a_range_candle_inside_the_tolerance_does_not_hide_the_break():
+    # the last range candle closes at 201.5 (just under 202, within 0.25 ATR),
+    # then a close well below: that close is the break.
+    bars = trend_then_range([])
+    bars[-1]["close"] = 201.5
+    bars.append(bar(50, 201.5, 190))
+    b = rg.boxes(bars)[-1]
+    assert b["event"] == "broke_below" and b["event_ago"] == 0
+    assert "below it" in b["text"] and "-" not in b["text"].split("Price is now")[1][:3]

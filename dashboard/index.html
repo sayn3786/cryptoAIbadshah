@@ -590,7 +590,7 @@
         <span><i class="sc-dot" style="background:rgba(34,197,94,.35)"></i>Bull fade above line</span>
         <span><i class="sc-dot" style="background:rgba(239,68,68,.35)"></i>Bear fade below line</span>
         <span>▲ BUY / ▼ SELL on trend flip</span>
-        <span><i class="sc-dot" style="background:rgba(245,158,11,.55)"></i>Range box <em style="opacity:.7;font-style:italic">(faint = extended)</em></span>
+        <span><i class="sc-dot" style="background:rgba(245,158,11,.55)"></i>Range boxes ①②③ <em style="opacity:.7;font-style:italic">(dashed = after it ended)</em></span>
       </div>
       <div id="structureChart" class="struct-chart"></div>
       <div id="rangeNotes" class="range-notes" style="display:none"></div>
@@ -598,7 +598,7 @@
         <summary>❓ What do these lines and boxes mean?</summary>
         <dl>
           <dt>🟧 Range box</dt>
-          <dd>A stretch where price went sideways: for at least 12 candles the candle bodies stayed inside a narrow band. Traders draw these by hand as "the box". Old ranges act as support or resistance when price comes back. A finished range is extended faintly to the right so you can see price returning to it.</dd>
+          <dd>A stretch where price went sideways: for at least 12 candles the candle bodies stayed inside a narrow band. Traders draw these by hand as "the box". Old ranges act as support or resistance when price comes back. A finished range is extended to the right as a dashed box so you can see price returning to it. Boxes are numbered ① ② ③ from oldest to newest, each in its own colour; a marker such as "② Deviation ✓" and the note under the chart with the same number belong to that box.</dd>
           <dt>Deviation ✓</dt>
           <dd>Price closed outside a range for a few candles (up to 6), then closed back inside. The break failed, which traps the traders who chased it. The textbook says a deviation <b>below</b> comes before a move up and one <b>above</b> before a move down. It is only confirmed on a close back inside, never on a wick.</dd>
           <dt>Range break ↑ / ↓</dt>
@@ -1113,7 +1113,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=262";
+  var DJS = "/dashboard/js/dashboard.js?v=263";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;

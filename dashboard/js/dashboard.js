@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '262';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '263';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4324,6 +4324,9 @@ function renderStructureChart(a) {
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
     handleScale:  { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
     rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true, scaleMargins: { top: 0.1, bottom: 0.1 } },
+    // Room right of the last candle so its marker text ("② Deviation ✓")
+    // is not cut off by the price axis.
+    timeScale: { ...CHART_OPTS.timeScale, rightOffset: 8 },
   });
   const cs = chart.addCandlestickSeries({
     upColor: '#10b981', downColor: '#ef4444', borderUpColor: '#10b981',
@@ -4357,17 +4360,19 @@ function renderStructureChart(a) {
   };
   if (rbx.length) {
     const lastT = rows[rows.length - 1].time;
-    const RC = '#f59e0b';
     const fmtP = v => (+v).toLocaleString('en-US', { maximumSignificantDigits: 6 });
     const data = [];
-    rbx.forEach(b => {
+    rbx.forEach((b, i) => {
       const t0 = _snap(b.start_ts), t1 = _snap(b.end_ts - 1);
       if (!(t1 >= t0)) return;
+      const RC = _rangeColor(i), n = _rangeNum(i);
       data.push({ t0, t1, high: +b.top, low: +b.bottom,
-                  label: `Range ${fmtP(b.bottom)}–${fmtP(b.top)}`, fill: RC + '1f', stroke: RC });
+                  label: `${n} Range ${fmtP(b.bottom)}–${fmtP(b.top)}`, fill: RC + '1f', stroke: RC });
       if (!b.current && lastT > t1) {
+        // After it ended: dashed, named again at its right end so a range
+        // that started off-screen can still be told apart.
         data.push({ t0: t1, t1: lastT, high: +b.top, low: +b.bottom, label: '',
-                    fill: RC + '0a', stroke: RC + '88', dash: [4, 3] });
+                    labelRight: n, fill: RC + '0a', stroke: RC + '88', dash: [4, 3] });
       }
     });
     const rshade = new SessionShade(chart, cs, { top: true, width: 1.5 });
@@ -4516,15 +4521,17 @@ function renderStructureChart(a) {
   }
   // Range events: a confirmed deviation (failed break) or a range break,
   // marked on the candle where it happened.
-  rbx.forEach(b => {
+  rbx.forEach((b, i) => {
     if (!b.event || !b.event_ts) return;
     const et = _snap(b.event_ts + 1);
     const dev = b.event.startsWith('deviation');
     const up = b.event === 'deviation_below' || b.event === 'broke_above';
     const label = dev ? 'Deviation ✓' : (b.event === 'back_inside' ? 'Back in range'
                   : (up ? 'Range break ↑' : 'Range break ↓'));
+    // Numbered like its box: which range the event belongs to.
     markers.push({ time: et, position: up ? 'belowBar' : 'aboveBar',
-                   color: '#f59e0b', shape: up ? 'arrowUp' : 'arrowDown', text: label });
+                   color: _rangeColor(i), shape: up ? 'arrowUp' : 'arrowDown',
+                   text: `${_rangeNum(i)} ${label}` });
   });
   if (markers.length) cs.setMarkers(markers.sort((x, y) => x.time - y.time));
   if (chips.length) {
@@ -5167,11 +5174,17 @@ class SessionShade {
               ctx.setLineDash(b.dash || []);
               ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
               ctx.setLineDash([]);
-              if (!b.label) return;
               ctx.fillStyle = b.stroke;
               ctx.font = top ? 'bold 10px sans-serif' : '9px sans-serif';
-              // Range labels sit just above the box, clear of the candles.
-              ctx.fillText(b.label, Math.min(x0, x1) + 3, top ? Math.min(y0, y1) - 4 : Math.min(y0, y1) + 10);
+              const ly = top ? Math.min(y0, y1) - 4 : Math.min(y0, y1) + 10;
+              if (b.labelRight) {
+                const tw = ctx.measureText(b.labelRight).width;
+                ctx.fillText(b.labelRight, Math.max(x0, x1) - tw - 3, ly);
+              }
+              if (!b.label) return;
+              // Range labels sit just above the box, clear of the candles,
+              // and stay on screen when the box starts left of the view.
+              ctx.fillText(b.label, Math.max(Math.min(x0, x1), 0) + 3, ly);
             });
           });
         },
@@ -8881,6 +8894,13 @@ async function loadTracker(force) {
 }
 
 
+// Range boxes are numbered oldest first, each with its own colour, so a
+// marker or a note can be matched to its box when boxes overlap.
+const RANGE_COLORS = ['#f59e0b', '#f472b6', '#60a5fa'];
+const RANGE_NUMS = ['①', '②', '③', '④', '⑤'];
+function _rangeColor(i) { return RANGE_COLORS[i % RANGE_COLORS.length]; }
+function _rangeNum(i) { return RANGE_NUMS[i] || `#${i + 1}`; }
+
 // The plain-language line under the structure chart for each range box.
 function _renderRangeNotes(boxes) {
   const el = document.getElementById('rangeNotes');
@@ -8892,10 +8912,15 @@ function _renderRangeNotes(boxes) {
   h.className = 'range-notes-title';
   h.textContent = '🟧 Ranges on this chart';
   el.appendChild(h);
-  boxes.forEach(b => {
+  boxes.forEach((b, i) => {
     const p = document.createElement('p');
     p.className = 'range-note';
-    p.textContent = '• ' + (b.text || '');
+    const n = document.createElement('b');
+    n.className = 'range-num';
+    n.style.color = _rangeColor(i);
+    n.textContent = _rangeNum(i) + ' ';
+    p.appendChild(n);
+    p.appendChild(document.createTextNode(b.text || ''));
     el.appendChild(p);
   });
 }
