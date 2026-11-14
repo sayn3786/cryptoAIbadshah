@@ -62,7 +62,8 @@ def event_age(r: Dict[str, Any]) -> Optional[int]:
     """How many closed candles ago the read fired (0 = on the latest closed
     candle): a flip's bars_ago, a divergence / RSI top-bottom's confirming
     candle. None when unknown."""
-    if r.get("kind") in ("indicator_flip", "streak", "lost_level"):
+    if r.get("kind") in ("indicator_flip", "streak", "lost_level", "record_close",
+                         "volume_spike", "big_candle"):
         v = r.get("bars_ago")
     else:
         a = r.get("age_candles")
