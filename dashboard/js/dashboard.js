@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '263';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '264';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4647,6 +4647,65 @@ function _targetWhen(t) {
   return '';
 }
 
+// Live warning: the still-open candle is already past the level that would
+// kill a pattern. Nothing changes until that candle CLOSES (the detectors
+// read closed candles only) - this only says so early.
+//   kind 'flag' | 'rev' | 'tri'; returns null when there is nothing to warn.
+function _liveRisk(pat, kind) {
+  const lc = S.analysis && S.analysis.live_candle;
+  if (!pat || !lc || lc.close == null || pat.status === 'failed'
+      || pat.status === 'invalidated' || pat.status === 'conflicted') return null;
+  if (pat.direction !== 'bullish' && pat.direction !== 'bearish') return null;
+  const px = +lc.close, bull = pat.direction === 'bullish';
+  let lvl = null, what = '', verb = '';
+  if (kind === 'flag') {
+    if (pat.confirmed) {
+      lvl = bull ? pat.flag_low : pat.flag_high;
+      what = bull ? 'the flag low' : 'the flag high'; verb = 'fail';
+    } else {
+      lvl = bull ? (pat.break_low ?? pat.flag_low) : (pat.break_high ?? pat.flag_high);
+      what = bull ? "the flag's lower rail" : "the flag's upper rail"; verb = 'be invalidated';
+    }
+  } else if (kind === 'rev') {
+    if (pat.confirmed) {
+      lvl = pat.neckline; what = 'the neckline'; verb = 'fail';
+    } else {
+      lvl = pat.head_level != null ? pat.head_level : pat.peak_level;
+      what = pat.head_level != null ? 'the head' : (bull ? 'the bottoms' : 'the tops');
+      verb = 'be invalidated';
+    }
+  } else if (kind === 'tri' && !pat.confirmed) {
+    lvl = bull ? pat.lower_now : pat.upper_now;
+    what = bull ? 'the lower rail' : 'the upper rail'; verb = 'be invalidated';
+  }
+  if (lvl == null || !isFinite(+lvl) || +lvl <= 0) return null;
+  const beyond = bull ? px < +lvl : px > +lvl;
+  if (!beyond) return null;
+  return { px, lvl: +lvl, what, verb, side: bull ? 'below' : 'above',
+           pct: Math.abs(px - lvl) / lvl * 100 };
+}
+
+function _liveWarn(pat, kind, barMs) {
+  const r = _liveRisk(pat, kind);
+  if (!r) return '';
+  const lc = S.analysis.live_candle;
+  const p = v => Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 });
+  let when = '';
+  if (lc.timestamp && barMs) {
+    const d = new Date(+lc.timestamp + barMs);
+    if (!isNaN(d)) when = ` (this candle closes ${d.toLocaleString('en-US',
+      { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`;
+  }
+  return `<div class="pattern-live-warn">⚠️ <b>Live price $${p(r.px)} is ${r.side} ${r.what}</b>
+    ($${p(r.lvl)}, ${r.pct.toFixed(1)}% past it). This pattern will <b>${r.verb}</b> if the
+    candle closes here${when}. Until then it still shows as ${pat.confirmed ? 'confirmed' : 'forming'}.</div>`;
+}
+
+function _barMs(candles) {
+  const ts = (candles || []).map(c => +c.timestamp).filter(Boolean).sort((a, b) => a - b);
+  return ts.length > 1 ? ts[ts.length - 1] - ts[ts.length - 2] : 0;
+}
+
 function renderFlags(flags, candles, signal, diagnostics) {
   const el    = document.getElementById('flagList');
   const badge = document.getElementById('flagCount');
@@ -4767,6 +4826,7 @@ function renderFlags(flags, candles, signal, diagnostics) {
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
         ${f.rail_break ? `&nbsp;·&nbsp; Break ${isBull ? 'above' : 'below'} <span>$${p(brkLvl(f))}</span> <span class="flag-rail-tag">rail</span>` : ''}
       </div>
+      ${_liveWarn(f, 'flag', _barMs(candles))}
       ${idx === bestIdx ? `<div class="flag-chart-cap">📊 ${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag · ${bestNote}</div>
       ${conflictNote}
       <div class="flag-chart" id="flagChart_${idx}"></div>` : ''}
@@ -4824,6 +4884,7 @@ function renderReversals(patterns, candles) {
       <div class="flag-target">Target: <span>$${p(r.target)}</span>
         &nbsp;·&nbsp; ${statusTxt}
       </div>
+      ${_liveWarn(r, 'rev', _barMs(candles))}
       <div class="pattern-chart" id="revChart_${idx}"></div>
     </div>`;
   }).join('');
@@ -4900,6 +4961,7 @@ function renderTriangles(patterns, candles) {
         <span class="flag-stat">Converged <span>${t.converge_pct}%</span></span>
       </div>
       <div class="flag-target">${tgt}${statusTxt}</div>
+      ${_liveWarn(t, 'tri', _barMs(candles))}
       <div class="pattern-chart" id="triChart_${idx}"></div>
     </div>`;
   }).join('');

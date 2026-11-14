@@ -62,7 +62,7 @@ def test_the_fixed_rule_and_the_workflow():
     assert rv.WINDOW == candle_analysis.STRUCTURE_CHART_BARS
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
-    assert "range-vs-random]" in wf and "python -m range_vs_random --telegram" in wf
+    assert ", range-vs-random" in wf and "python -m range_vs_random --telegram" in wf
 
 
 def test_render():

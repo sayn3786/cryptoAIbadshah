@@ -2473,3 +2473,10 @@ html { overflow-x: hidden; }
 .chart-help dt { color: var(--text); font-weight: 600; margin-top: 8px; }
 .chart-help dd { margin: 2px 0 0 0; line-height: 1.45; }
 .chart-help-note { margin-top: 10px; font-style: italic; opacity: .8; }
+
+/* Live warning: the open candle is past a pattern's invalidation level. */
+.pattern-live-warn {
+  margin: 6px 0 4px; padding: 7px 10px; border-radius: 6px; font-size: .78rem; line-height: 1.45;
+  background: rgba(239, 68, 68, .10); border: 1px solid rgba(239, 68, 68, .45); color: var(--muted2, #94a3b8);
+}
+.pattern-live-warn b { color: #fca5a5; }
