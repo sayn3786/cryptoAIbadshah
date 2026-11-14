@@ -91,4 +91,4 @@ def test_fixed_rule_and_workflow():
     assert (po.Z_DISC, po.Z_HOLD) == (2.0, 1.65)
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
-    assert "pattern-outcomes]" in wf and "python -m pattern_outcome_study --telegram" in wf
+    assert ", pattern-outcomes" in wf and "python -m pattern_outcome_study --telegram" in wf
