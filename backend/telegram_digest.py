@@ -77,6 +77,8 @@ def _weight(a: Dict[str, Any]) -> float:
         return w * 0.3
     if _forming(a):
         return w * 0.4
+    if a.get("context"):
+        return w * 0.5            # a streak / lost level: context, ranks lower
     if a.get("kind") == "indicator_flip":
         return w * 0.6            # MACD / EMA often flip together: count less
     if a.get("event") == "failed":
@@ -160,6 +162,9 @@ def _describe(a: Dict[str, Any]) -> str:
             return f"{head} {a.get('label')} · {_ago(ago)}" + (f" ({day} close)" if day else "")
         when = when_sgt(a.get("break_ts"))
         return f"{head} {a.get('label')}" + (f" · {when}" if when else "")
+    if kind in ("streak", "lost_level"):
+        note = a.get("history_note")
+        return f"{head} {a.get('label')}" + (f" · {note}" if note else "")
     if kind == "rsi_swing":
         rsi = a.get("rsi")
         rsi_s = f" (RSI {rsi:g})" if isinstance(rsi, (int, float)) else ""
@@ -310,7 +315,8 @@ def _coin_blocks(alerts: List[Dict[str, Any]], active: Dict[str, str]):
                                   if a.get("timeframe") in TF_ORDER else 9))
         score = sum(_weight(a) for a in items)
         live = [a for a in items if a.get("event") != "failed"
-                and a.get("status") not in ("played_out", "invalidated")]
+                and a.get("status") not in ("played_out", "invalidated")
+                and not a.get("context")]          # anomalies never tip the lean / star
         bulls = [a for a in live if a.get("direction") == "bullish"]
         bears = [a for a in live if a.get("direction") == "bearish"]
         lean = "bullish" if len(bulls) > len(bears) else "bearish" if len(bears) > len(bulls) else None

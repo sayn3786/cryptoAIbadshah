@@ -43,6 +43,7 @@ from patterns import detect_bos_streak, detect_liquidity_pools, session_ranges, 
 from signals import generate_signal, _swing_levels
 import rec_policy
 import close_publish
+import anomalies
 import portfolio_backtest
 import candle_analysis
 from journal import generate_journal
@@ -1139,6 +1140,11 @@ def _daily_reads_for(closed: list, tf: str) -> list:
     # out": if it flips back, the new flip is what's listed).
     for f in _indicator_flips_for(closed, tf, fresh_bars=DAILY_READ_WINDOW - 1):
         out.append({**f, "status": "active"})
+
+    # Unusual candles (anomalies): a long same-colour run, a failed breakout /
+    # breakdown. Context reads: listed, never scored or stored for the publish.
+    if tf in anomalies.MIN_STREAK:
+        out.extend(anomalies.reads(closed, tf))
     return out
 
 
@@ -4026,7 +4032,8 @@ def api_patterns_alert():
     # candles, so a week / month section stays the same until its close.
     import market_sections as _msec
     reads = _daily_market_reads(syms, tfs=_msec.TFS)
-    core = [r for r in reads if r.get("timeframe") in DAILY_READ_TFS]   # 1D + 1W, as before
+    core = [r for r in reads if r.get("timeframe") in DAILY_READ_TFS   # 1D + 1W, as before
+            and not r.get("context")]                                  # (anomalies: shown only)
     if syms is None:
         # The full scan: kept for the 4H publish's HL bottom-read boost (v55)
         # and daily-momentum boost (v59) - 1D / 1W only, exactly as before.
