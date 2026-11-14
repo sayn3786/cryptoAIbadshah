@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '261';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '262';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4345,6 +4345,37 @@ function renderStructureChart(a) {
     try { cs.attachPrimitive(shade); } catch (_) {}
   }
 
+  // Range boxes (ranges.py): where price went sideways - "the box" traders
+  // draw by hand. The range itself is shaded amber; a finished range is
+  // extended faintly to the right so you can see price coming back to it.
+  // The box helper draws only at real candle times, so ends snap to candles.
+  const rbx = (a.range_boxes || []);
+  const _snap = ts => {
+    const s = t(ts); let best = rows[0].time;
+    for (const r of rows) { if (r.time <= s) best = r.time; else break; }
+    return best;
+  };
+  if (rbx.length) {
+    const lastT = rows[rows.length - 1].time;
+    const RC = '#f59e0b';
+    const fmtP = v => (+v).toLocaleString('en-US', { maximumSignificantDigits: 6 });
+    const data = [];
+    rbx.forEach(b => {
+      const t0 = _snap(b.start_ts), t1 = _snap(b.end_ts - 1);
+      if (!(t1 >= t0)) return;
+      data.push({ t0, t1, high: +b.top, low: +b.bottom,
+                  label: `Range ${fmtP(b.bottom)}–${fmtP(b.top)}`, fill: RC + '1f', stroke: RC });
+      if (!b.current && lastT > t1) {
+        data.push({ t0: t1, t1: lastT, high: +b.top, low: +b.bottom, label: '',
+                    fill: RC + '0a', stroke: RC + '88', dash: [4, 3] });
+      }
+    });
+    const rshade = new SessionShade(chart, cs, { top: true, width: 1.5 });
+    rshade.setData(data);
+    try { cs.attachPrimitive(rshade); } catch (_) {}
+  }
+  _renderRangeNotes(rbx);
+
   // Liquidity pools (equal highs/lows = resting stops) — the yellow levels.
   const pools = (a.liquidity_pools || []);
   if (pools.length) {
@@ -4483,6 +4514,18 @@ function renderStructureChart(a) {
                      text: `BOS ×${bos.count || 1}` });
     }
   }
+  // Range events: a confirmed deviation (failed break) or a range break,
+  // marked on the candle where it happened.
+  rbx.forEach(b => {
+    if (!b.event || !b.event_ts) return;
+    const et = _snap(b.event_ts + 1);
+    const dev = b.event.startsWith('deviation');
+    const up = b.event === 'deviation_below' || b.event === 'broke_above';
+    const label = dev ? 'Deviation ✓' : (b.event === 'back_inside' ? 'Back in range'
+                  : (up ? 'Range break ↑' : 'Range break ↓'));
+    markers.push({ time: et, position: up ? 'belowBar' : 'aboveBar',
+                   color: '#f59e0b', shape: up ? 'arrowUp' : 'arrowDown', text: label });
+  });
   if (markers.length) cs.setMarkers(markers.sort((x, y) => x.time - y.time));
   if (chips.length) {
     const cl = new ChipLabels(chart, cs);
@@ -5094,19 +5137,24 @@ class ChipLabels {
 }
 
 class SessionShade {
-  constructor(chart, series) { this._chart = chart; this._series = series; this._boxes = []; }
+  // opts.top: draw over the candles (range boxes, which cover the bodies
+  // and would be hidden underneath); opts.width: border width.
+  constructor(chart, series, opts) {
+    this._chart = chart; this._series = series; this._boxes = []; this._opts = opts || {};
+  }
   setData(boxes) { this._boxes = boxes || []; }
   updateAllViews() {}
   paneViews() {
     const self = this;
     return [{
-      zOrder: () => 'bottom',
+      zOrder: () => (self._opts.top ? 'top' : 'bottom'),
       renderer: () => ({
         draw: (target) => {
           target.useMediaCoordinateSpace((scope) => {
             const ctx = scope.context;
             const px = p => self._series.priceToCoordinate(p);
             const tx = t => self._chart.timeScale().timeToCoordinate(t);
+            const top = !!self._opts.top;
             self._boxes.forEach(b => {
               const x0 = tx(b.t0), x1 = tx(b.t1);
               const y0 = px(b.high), y1 = px(b.low);
@@ -5115,11 +5163,15 @@ class SessionShade {
               ctx.fillStyle = b.fill;
               ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
               ctx.strokeStyle = b.stroke;
-              ctx.lineWidth = 1;
+              ctx.lineWidth = self._opts.width || 1;
+              ctx.setLineDash(b.dash || []);
               ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
+              ctx.setLineDash([]);
+              if (!b.label) return;
               ctx.fillStyle = b.stroke;
-              ctx.font = '9px sans-serif';
-              ctx.fillText(b.label, Math.min(x0, x1) + 3, Math.min(y0, y1) + 10);
+              ctx.font = top ? 'bold 10px sans-serif' : '9px sans-serif';
+              // Range labels sit just above the box, clear of the candles.
+              ctx.fillText(b.label, Math.min(x0, x1) + 3, top ? Math.min(y0, y1) - 4 : Math.min(y0, y1) + 10);
             });
           });
         },
@@ -8826,4 +8878,24 @@ async function loadTracker(force) {
     // a table someone is reading.
     if (!body.innerHTML) section.classList.add('hidden');
   }
+}
+
+
+// The plain-language line under the structure chart for each range box.
+function _renderRangeNotes(boxes) {
+  const el = document.getElementById('rangeNotes');
+  if (!el) return;
+  while (el.firstChild) el.removeChild(el.firstChild);
+  if (!boxes || !boxes.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const h = document.createElement('div');
+  h.className = 'range-notes-title';
+  h.textContent = '🟧 Ranges on this chart';
+  el.appendChild(h);
+  boxes.forEach(b => {
+    const p = document.createElement('p');
+    p.className = 'range-note';
+    p.textContent = '• ' + (b.text || '');
+    el.appendChild(p);
+  });
 }
