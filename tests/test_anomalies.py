@@ -91,3 +91,44 @@ def test_the_daily_reads_include_them_for_the_four_timeframes():
     kinds = {r["kind"] for r in app._daily_reads_for(bars, "1W")}
     assert "streak" in kinds
     assert not any(r.get("kind") == "streak" for r in app._daily_reads_for(bars, "4H"))
+
+
+# ── record closes, volume spikes, big candles ──────────────────────────────
+
+def with_vol(bars, vols):
+    return [{**b, "volume": v} for b, v in zip(bars, vols)]
+
+
+def test_lowest_weekly_close_since():
+    moves = [1] * 10 + [-0.5] * 5 + [0.2, -0.2] * 15 + [-4]
+    bars = from_moves(moves)
+    r = an.record_close(bars, "1W")
+    assert r and r["direction"] == "bearish" and r["label"].startswith("Lowest weekly close since")
+    assert r["span"] >= 26
+    up = an.record_close(from_moves([0.1] * 40), "1W")
+    assert up["label"] == "Highest weekly close in the 40 weeks of data"
+    assert an.record_close(from_moves([1, -1] * 20), "1W") is None
+
+
+def test_volume_spike_on_a_red_week_with_history():
+    moves = [1, -1] * 20 + [-1]
+    vols = [100.0] * 41
+    vols[10], vols[25], vols[40] = 400.0, 350.0, 380.0       # 10 and 40 red? check colours
+    bars = with_vol(from_moves(moves), vols)
+    r = an.volume_spike(bars, "1W")
+    assert r and r["ratio"] == 3.8 and "on a red week" in r["label"]
+    assert r["history_note"].startswith("1 time before")        # 25 is red (odd index), 10 green
+    assert an.volume_spike(with_vol(from_moves(moves), [100.0] * 41), "1W") is None
+    assert an.volume_spike(from_moves(moves), "1W") is None    # no volume data: nothing
+
+
+def test_big_red_week_since_and_history():
+    moves = [0.5, -0.5] * 20
+    bars = from_moves(moves)
+    bars[15] = c(15, bars[15]["open"], bars[15]["open"] - 3)   # an earlier big red week
+    bars.append(c(40, 100, 96))                                # today's big red week (range 5)
+    r = an.big_candle(bars, "1W")
+    assert r and r["direction"] == "bearish" and r["ratio"] >= 2.5
+    assert r["label"].startswith("Range") and "biggest red week" in r["label"]
+    calm = from_moves(moves) + [c(40, 100, 99.5)]
+    assert an.big_candle(calm, "1W") is None

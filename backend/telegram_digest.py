@@ -162,7 +162,7 @@ def _describe(a: Dict[str, Any]) -> str:
             return f"{head} {a.get('label')} · {_ago(ago)}" + (f" ({day} close)" if day else "")
         when = when_sgt(a.get("break_ts"))
         return f"{head} {a.get('label')}" + (f" · {when}" if when else "")
-    if kind in ("streak", "lost_level"):
+    if kind in ("streak", "lost_level", "record_close", "volume_spike", "big_candle"):
         note = a.get("history_note")
         return f"{head} {a.get('label')}" + (f" · {note}" if note else "")
     if kind == "rsi_swing":
