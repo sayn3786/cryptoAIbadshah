@@ -32,4 +32,6 @@ def test_styled_and_cache_busted():
     css = open(os.path.join(ROOT, "dashboard", "css", "dashboard.css")).read()
     html = open(os.path.join(ROOT, "dashboard", "index.html")).read()
     assert ".pattern-live-warn" in css
-    assert "dashboard.css?v=146" in html and "dashboard.js?v=264" in html
+    import re
+    build = re.search(r"const CODE_BUILD = '(\d+)'", _js()).group(1)
+    assert f"dashboard.js?v={build}" in html and re.search(r"dashboard\.css\?v=\d+", html)
