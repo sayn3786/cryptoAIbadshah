@@ -41,7 +41,7 @@ def test_a_deviation_below_is_confirmed_on_the_close_back_inside():
     assert b["event"] == "deviation_below" and b["event_ago"] == 0 and b["outside_candles"] == 3
     assert b["position"] == "inside" and "deviation confirmed" in b["text"]
     r = rg.reads(trend_then_range([200, 196, 195, 204]), "1D")
-    assert r and r[0]["direction"] == "bullish" and r[0]["context"]
+    assert r and r[0]["direction"] == "neutral" and r[0]["textbook"] == "bullish" and r[0]["context"]
     assert r[0]["label"].startswith("Deviation below the 202–208 range confirmed")
 
 
@@ -52,7 +52,7 @@ def test_a_break_and_a_long_absence_are_not_deviations():
     assert away["event"] == "back_inside" and away["outside_candles"] == 8
     up = rg.boxes(trend_then_range([214, 205]))[-1]
     assert up["event"] == "deviation_above"
-    assert rg.reads(trend_then_range([214, 205]), "1W")[0]["direction"] == "bearish"
+    assert rg.reads(trend_then_range([214, 205]), "1W")[0]["textbook"] == "bearish"
     assert rg.reads(trend_then_range([215]), "1D") == []            # a plain break: chart only
 
 

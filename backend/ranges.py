@@ -180,9 +180,16 @@ def boxes(candles: Sequence[Dict[str, Any]], *, tf_ms: int = 0) -> List[Dict[str
 TELEGRAM_EVENTS = ("deviation_below", "deviation_above")
 
 
+# Tested Nov 2026 (range_vs_random, pre-registered, 4H and 1D, two years):
+# neither "deviation -> opposite edge" nor "held break -> continue" beat a
+# coin flip in both years; the 1D readings even flipped between them. So a
+# range event is shown with NO direction (neutral), as information only.
+TESTED_NOTE = "tested over 2 years: not a reliable up/down signal"
+
+
 def reads(candles: Sequence[Dict[str, Any]], tf: str) -> List[Dict[str, Any]]:
     """Market Update context reads: a deviation confirmed on the LATEST
-    closed candle."""
+    closed candle. Always neutral (see TESTED_NOTE)."""
     out = []
     for b in boxes(candles):
         if b["event_ago"] != 0 or b["event"] not in TELEGRAM_EVENTS:
@@ -205,7 +212,8 @@ def reads(candles: Sequence[Dict[str, Any]], tf: str) -> List[Dict[str, Any]]:
             label = f"Back inside the {lo}–{hi} range (an old range, retested)"
             d = "neutral"
         out.append({"kind": "range_event", "context": True, "status": "active",
-                    "label": label, "direction": d, "event": ev, "bars_ago": 0,
+                    "label": label, "direction": "neutral", "textbook": d,
+                    "history_note": TESTED_NOTE, "event": ev, "bars_ago": 0,
                     "level": None, "break_ts": candles[-1]["timestamp"],
                     "range": [b["bottom"], b["top"]]})
     return out
