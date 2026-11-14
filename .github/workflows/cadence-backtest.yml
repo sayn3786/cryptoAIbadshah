@@ -238,6 +238,12 @@ name: Strategy backtests (private Telegram)
 #            on the 4H and 1D charts? 365 days, never-read periods
 #            end_days_ago 0 and 400 (backend/range_vs_random.py; ~30-60 min,
 #            the days input is ignored)
+#   pattern-outcomes  every CONFIRMED chart-pattern breakout (flags, double
+#            tops/bottoms, H&S, triangles, wedges) replayed with the live
+#            detectors on 4H (720d) and 1D/1W (2000d): target hit vs stop vs
+#            open, against each pattern's random-walk chance; slices learned on
+#            discovery and checked on the last 365 days
+#            (backend/pattern_outcome_study.py; ~40-90 min, days input ignored)
 #   close-record  the published close picks' LIVE record (read with APP_URL +
 #            CRON_SECRET) vs a random-direction baseline; also every Monday
 #            from close-record.yml (backend/close_record.py; ~2 min)
@@ -259,7 +265,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -439,6 +445,8 @@ jobs:
             python -m rsi_retest_study --telegram --days 1500
           elif [ "$STUDY" = "close-record" ]; then
             python -m close_record --telegram
+          elif [ "$STUDY" = "pattern-outcomes" ]; then
+            python -m pattern_outcome_study --telegram --days 2000 --h4-days 720
           elif [ "$STUDY" = "range-vs-random" ]; then
             python -m range_vs_random --telegram --fetch-days 365 --end-days-ago "$END_DAYS_AGO"
           elif [ "$STUDY" = "factors" ]; then
