@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '264';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '265';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4701,6 +4701,89 @@ function _liveWarn(pat, kind, barMs) {
     candle closes here${when}. Until then it still shows as ${pat.confirmed ? 'confirmed' : 'forming'}.</div>`;
 }
 
+// ── Pattern track record ─────────────────────────────────────────────────────
+// From the pattern-outcomes study (backend/pattern_outcome_study.py, run
+// Nov 15 2026): every CONFIRMED breakout the live detectors found on 48 coins
+// (4H over 720 days, 1D / 1W over 2000 days), entry at the breakout close,
+// stop where the pattern is wrong, at most 50 candles. "Chance" = how often a
+// random price path would reach the target before the stop, given where the
+// target and stop sit - a pattern only has an edge above that.
+// key 'type|tf' -> [breakouts, hit %, chance %, avg R, z]
+const PATTERN_RECORD = {
+  'bear_flag|4H': [5944, 40.6, 36.4, 0.07, 7.51],
+  'bull_flag|4H': [5420, 34.6, 35.7, -0.08, -1.76],
+  'bear_flag|1D': [2715, 30.7, 28.4, 0.16, 2.66],
+  'bull_flag|1D': [2139, 26.3, 26.1, -0.03, 0.23],
+  'triple_top|4H': [1534, 64.7, 59.7, 0.06, 3.98],
+  'falling_wedge|4H': [1440, 17.7, 24.1, -0.16, -5.27],
+  'triple_bottom|4H': [1358, 59.9, 60.3, -0.03, -0.29],
+  'symmetrical_triangle|4H': [1332, 10.8, 17.4, -0.03, -5.47],
+  'symmetrical_triangle|1D': [1002, 14.6, 20.2, 0.13, -3.84],
+  'double_top|4H': [895, 62.3, 59.5, 0.02, 1.64],
+  'rising_wedge|4H': [849, 25.8, 27.7, 0.17, -1.07],
+  'falling_wedge|1D': [847, 21.7, 22.5, 0.14, -0.5],
+  'double_bottom|4H': [701, 57.1, 60.5, -0.09, -1.82],
+  'descending_triangle|4H': [669, 25.6, 31.4, 0.04, -2.71],
+  'ascending_triangle|4H': [432, 26.4, 32.9, -0.19, -2.69],
+  'double_top|1D': [355, 70.1, 60.7, 0.14, 3.59],
+  'rising_wedge|1D': [317, 28.8, 29.2, 0.25, -0.14],
+  'bear_flag|1W': [314, 19.9, 33.5, -0.47, -5.28],
+  'double_bottom|1D': [301, 61.1, 61.1, -0.01, 0.03],
+  'triple_top|1D': [229, 65.0, 60.7, 0.06, 1.32],
+  'triple_bottom|1D': [202, 66.7, 61.6, 0.06, 1.5],
+  'head_shoulders|4H': [197, 64.8, 55.3, 0.13, 2.18],
+  'bull_flag|1W': [171, 28.8, 23.9, 0.36, 1.61],
+  'descending_triangle|1D': [143, 29.7, 34.1, 0.07, -0.96],
+  'symmetrical_triangle|1W': [132, 22.7, 28.6, 0.21, -1.54],
+  'head_shoulders|1D': [119, 50.5, 55.5, -0.09, -0.95],
+  'inverse_head_shoulders|4H': [117, 61.8, 59.1, 0.0, 0.54],
+  'falling_wedge|1W': [105, 32.6, 16.7, 1.30, 4.27],
+  'ascending_triangle|1D': [93, 30.7, 35.8, -0.15, -1.03],
+  'inverse_head_shoulders|1D': [79, 50.8, 56.5, -0.12, -0.93],
+  'double_bottom|1W': [18, 61.1, 62.6, -0.02, -0.13],
+  'rising_wedge|1W': [16, 14.3, 36.8, -0.40, -1.81],
+  'double_top|1W': [16, 33.3, 60.0, -0.39, -2.16],
+  'inverse_head_shoulders|1W': [7, 83.3, 59.9, 0.37, 1.19],
+  'descending_triangle|1W': [5, 0.0, 41.3, -0.78, -1.72],
+};
+const PATTERN_RECORD_NOTE = 'pattern-outcomes study, Nov 2026 · 48 coins';
+
+// 'worse' = clearly below chance (edge <= -3 pts and z <= -2),
+// 'better' = clearly above (edge >= +3, z >= 2), 'few' = under 30 breakouts.
+function _patternRecord(type, tf) {
+  const r = PATTERN_RECORD[`${type}|${tf}`];
+  if (!r) return null;
+  const [n, hit, chance, avgR, z] = r;
+  const edge = hit - chance;
+  const verdict = n < 30 ? 'few'
+    : (edge <= -3 && z <= -2) ? 'worse'
+    : (edge >= 3 && z >= 2) ? 'better' : 'chance';
+  return { n, hit, chance, avgR, z, edge, verdict };
+}
+
+function _recordKey(pat, kind) {
+  if (kind === 'flag') return pat.direction === 'bullish' ? 'bull_flag' : 'bear_flag';
+  return pat.type || '';
+}
+
+function _recordLine(pat, kind) {
+  const r = _patternRecord(_recordKey(pat, kind), pat.timeframe);
+  if (!r) return '';
+  const tag = {
+    worse:  '<span class="rec-tag rec-worse">⚠ Worse than random</span>',
+    better: '<span class="rec-tag rec-better">▲ Beat chance</span>',
+    chance: '<span class="rec-tag rec-chance">≈ About chance</span>',
+    few:    '<span class="rec-tag rec-chance">Too few cases</span>',
+  }[r.verdict];
+  const tip = 'Every confirmed breakout of this pattern on this chart, 48 coins, replayed: ' +
+    'entry at the breakout close, stop where the pattern is wrong. "Chance" is how often ' +
+    'random price moves would reach the target first, given where target and stop sit. ' +
+    'Coins move together and the last year was a falling market, so treat small edges with care.';
+  return `<div class="pattern-record" title="${tip}">📊 Track record (${pat.timeframe}, ` +
+    `${r.n.toLocaleString('en-US')} breakouts): hit target <b>${r.hit}%</b> vs ` +
+    `${r.chance}% by chance · avg ${r.avgR >= 0 ? '+' : ''}${r.avgR.toFixed(2)}R per trade ${tag}</div>`;
+}
+
 function _barMs(candles) {
   const ts = (candles || []).map(c => +c.timestamp).filter(Boolean).sort((a, b) => a - b);
   return ts.length > 1 ? ts[ts.length - 1] - ts[ts.length - 2] : 0;
@@ -4827,6 +4910,7 @@ function renderFlags(flags, candles, signal, diagnostics) {
         ${f.rail_break ? `&nbsp;·&nbsp; Break ${isBull ? 'above' : 'below'} <span>$${p(brkLvl(f))}</span> <span class="flag-rail-tag">rail</span>` : ''}
       </div>
       ${_liveWarn(f, 'flag', _barMs(candles))}
+      ${_recordLine(f, 'flag')}
       ${idx === bestIdx ? `<div class="flag-chart-cap">📊 ${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag · ${bestNote}</div>
       ${conflictNote}
       <div class="flag-chart" id="flagChart_${idx}"></div>` : ''}
@@ -4885,6 +4969,7 @@ function renderReversals(patterns, candles) {
         &nbsp;·&nbsp; ${statusTxt}
       </div>
       ${_liveWarn(r, 'rev', _barMs(candles))}
+      ${_recordLine(r, 'rev')}
       <div class="pattern-chart" id="revChart_${idx}"></div>
     </div>`;
   }).join('');
@@ -4962,6 +5047,7 @@ function renderTriangles(patterns, candles) {
       </div>
       <div class="flag-target">${tgt}${statusTxt}</div>
       ${_liveWarn(t, 'tri', _barMs(candles))}
+      ${_recordLine(t, 'tri')}
       <div class="pattern-chart" id="triChart_${idx}"></div>
     </div>`;
   }).join('');

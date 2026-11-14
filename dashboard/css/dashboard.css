@@ -2480,3 +2480,11 @@ html { overflow-x: hidden; }
   background: rgba(239, 68, 68, .10); border: 1px solid rgba(239, 68, 68, .45); color: var(--muted2, #94a3b8);
 }
 .pattern-live-warn b { color: #fca5a5; }
+
+/* Pattern track record line (pattern-outcomes study). */
+.pattern-record { margin: 4px 0 2px; font-size: .76rem; color: var(--muted2, #94a3b8); line-height: 1.5; }
+.pattern-record b { color: var(--text, #e2e8f0); }
+.rec-tag { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px; font-size: .7rem; font-weight: 600; }
+.rec-worse  { background: rgba(239, 68, 68, .15); color: #fca5a5; }
+.rec-better { background: rgba(16, 185, 129, .15); color: #6ee7b7; }
+.rec-chance { background: rgba(148, 163, 184, .15); color: #cbd5e1; }
