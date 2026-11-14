@@ -98,6 +98,10 @@ def _side(close: float, box: Dict[str, Any]) -> int:
 def _events(candles: Sequence[Dict[str, Any]], box: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Every event after the range ended, oldest first."""
     sides = [_side(float(c["close"]), box) for c in candles]
+    # The range's own candles count as inside, even one that closed just
+    # past an edge within the tolerance that let the range go on.
+    for k in range(min(box["i1"] + 1, len(sides))):
+        sides[k] = 0
     out = []
     for k in range(box["i1"] + 1, len(candles)):
         now, before = sides[k], sides[k - 1]
@@ -148,8 +152,8 @@ def boxes(candles: Sequence[Dict[str, Any]], *, tf_ms: int = 0) -> List[Dict[str
         side = _side(px, r)
         ev = None if current else (_events(candles, r) or [None])[-1]
         where = ("inside it" if side == 0 else
-                 f"{(px - top) / top * 100:+.1f}% above it" if side > 0 else
-                 f"{(px - bot) / bot * 100:+.1f}% below it")
+                 f"{(px - top) / top * 100:.1f}% above it" if side > 0 else
+                 f"{(bot - px) / bot * 100:.1f}% below it")
         text = (f"Price went sideways here for {r['i1'] - r['i0'] + 1} candles between "
                 f"{bot:,.6g} and {top:,.6g}. ")
         text += ("Price is still in this range." if current else f"Price is now {where}.")
