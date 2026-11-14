@@ -315,4 +315,9 @@ def reads(closed: Sequence[Dict[str, Any]], tf: str) -> List[Dict[str, Any]]:
             r = None
         if r:
             out.append(r)
+    try:                                   # range boxes: breaks and deviations
+        import ranges
+        out.extend(ranges.reads(closed, tf))
+    except Exception:                                    # noqa: BLE001
+        pass
     return out

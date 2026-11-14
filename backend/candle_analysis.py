@@ -107,6 +107,7 @@ CANDLE_DERIVED_KEYS = (
     "deep_swing_highs", "deep_swing_lows",
     "volume_spikes", "whale_activity",
     "structure_candles", "structure_supertrend", "structure_trendline",
+    "range_boxes",
     "market_cap",
 )
 
@@ -379,6 +380,15 @@ def _with_flip_ts(indicator: Dict, candles: List[Dict]) -> Dict:
 
 # ── The builder ──────────────────────────────────────────────────────────────
 
+def _range_boxes(candles):
+    try:
+        import ranges
+        step = (int(candles[-1]["timestamp"]) - int(candles[-2]["timestamp"])) if len(candles) > 1 else 0
+        return ranges.boxes(candles, tf_ms=step)
+    except Exception:                                    # noqa: BLE001
+        return []
+
+
 def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
                           market_cap=None,
                           spot_cvd: Optional[Dict] = None,
@@ -566,6 +576,9 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
         "whale_activity": detect_whale_activity(candles),
 
         "structure_candles": candles[-STRUCTURE_CHART_BARS:],
+        # Sideways ranges ("the box") on the structure chart's window, with
+        # where price is now and any break / deviation (ranges.py).
+        "range_boxes": _range_boxes(candles[-STRUCTURE_CHART_BARS:]),
         "structure_supertrend": structure_supertrend,
         "structure_trendline": detect_trendline(candles[-STRUCTURE_CHART_BARS:],
                                                 window=3),

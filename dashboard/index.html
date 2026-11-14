@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/dashboard/css/dashboard.css?v=144" />
+  <link rel="stylesheet" href="/dashboard/css/dashboard.css?v=145" />
 </head>
 <body>
 
@@ -590,8 +590,40 @@
         <span><i class="sc-dot" style="background:rgba(34,197,94,.35)"></i>Bull fade above line</span>
         <span><i class="sc-dot" style="background:rgba(239,68,68,.35)"></i>Bear fade below line</span>
         <span>▲ BUY / ▼ SELL on trend flip</span>
+        <span><i class="sc-dot" style="background:rgba(245,158,11,.55)"></i>Range box <em style="opacity:.7;font-style:italic">(faint = extended)</em></span>
       </div>
       <div id="structureChart" class="struct-chart"></div>
+      <div id="rangeNotes" class="range-notes" style="display:none"></div>
+      <details class="chart-help">
+        <summary>❓ What do these lines and boxes mean?</summary>
+        <dl>
+          <dt>🟧 Range box</dt>
+          <dd>A stretch where price went sideways: for at least 12 candles the candle bodies stayed inside a narrow band. Traders draw these by hand as "the box". Old ranges act as support or resistance when price comes back. A finished range is extended faintly to the right so you can see price returning to it.</dd>
+          <dt>Deviation ✓</dt>
+          <dd>Price closed outside a range for a few candles (up to 6), then closed back inside. The break failed, which traps the traders who chased it. A deviation <b>below</b> a range often comes before a move up; a deviation <b>above</b> often comes before a move down. It is only confirmed on a close back inside, never on a wick.</dd>
+          <dt>Range break ↑ / ↓</dt>
+          <dd>A close outside the range after being inside it. It is not a failure yet: if price closes back inside within a few candles, it becomes a deviation.</dd>
+          <dt>Back in range</dt>
+          <dd>Price returned inside an old range after a long time away (more than 6 candles): a retest of that zone.</dd>
+          <dt>🟡 Liquidity pools</dt>
+          <dd>Levels where price stopped at the same high or low several times (2x, 3x...). Many stop-loss orders usually sit just past them, so price is often pulled there. A thicker line means more touches.</dd>
+          <dt>Grey "Liq swept"</dt>
+          <dd>A pool that price already ran through: those stops were taken. It stays visible because where the stops were still matters, but it is no longer a target.</dd>
+          <dt>Structure High / Low</dt>
+          <dd>The highest high and lowest low of the last 30 candles: the current trading range. A close beyond one of them is a break of structure.</dd>
+          <dt>Asia / London / US boxes</dt>
+          <dd>Intraday charts only: each trading session's high and low. Breaks of the Asia range during London or the US are common setups.</dd>
+          <dt>Support trendline</dt>
+          <dd>A rising line under the higher lows that price keeps defending. Dashed while it has only 2 touches (still forming), solid from 3 touches. Grey when price has broken below it. "Macro" is the longer-term line, "Local" the recent one.</dd>
+          <dt>SuperTrend line and shading</dt>
+          <dd>The trend line that flips green (uptrend) or red (downtrend). The green fade above it / red fade below it shows which trend is in charge.</dd>
+          <dt>▲ BUY / ▼ SELL</dt>
+          <dd>Where the SuperTrend flipped: the trend changed direction on that candle's close.</dd>
+          <dt>CHoCH / BOS</dt>
+          <dd>Change of Character: the first break against the trend, an early warning. Break of Structure: a break with the trend, which confirms it continues.</dd>
+        </dl>
+        <p class="chart-help-note">Everything here is read from closed candles. These are heads-ups, not trade signals.</p>
+      </details>
     </div>
 
     <div class="card flag-card">
@@ -1079,7 +1111,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=261";
+  var DJS = "/dashboard/js/dashboard.js?v=262";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;

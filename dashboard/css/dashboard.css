@@ -2461,3 +2461,15 @@ html { overflow-x: hidden; }
 .per-dl:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .per-note { font-size: 11.5px; color: var(--muted); }
 @media (max-width: 640px) { .per-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Range boxes: the plain-language note under the structure chart, and the
+   "What do these lines and boxes mean?" panel. */
+.range-notes { margin: 8px 2px 0; font-size: .78rem; color: var(--muted2); }
+.range-notes-title { font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.range-note { margin: 3px 0; line-height: 1.4; }
+.chart-help { margin: 10px 2px 2px; font-size: .78rem; color: var(--muted2); }
+.chart-help summary { cursor: pointer; color: var(--text); font-weight: 600; padding: 4px 0; }
+.chart-help dl { margin: 6px 0 0; }
+.chart-help dt { color: var(--text); font-weight: 600; margin-top: 8px; }
+.chart-help dd { margin: 2px 0 0 0; line-height: 1.45; }
+.chart-help-note { margin-top: 10px; font-style: italic; opacity: .8; }
