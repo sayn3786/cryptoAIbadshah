@@ -267,6 +267,10 @@ name: Strategy backtests (private Telegram)
 #            grab, SuperTrend flip, engulfing (and a re-check of reversal
 #            patterns) - trade the signal or the opposite? one trade per factor
 #            per coin per 20 days (backend/reversal_factors_1d.py; ~40-80 min)
+#   tao-case  PRE-REGISTERED: on 1D, the engine SHORT 62+ while the Reversal
+#            Radar says bottoming (elevated/high) - take the short or the long?
+#            live generate_signal + real Fear & Greed history; one per coin per
+#            20 days (backend/tao_case_1d_test.py; ~40-80 min)
 #   ipo-btc  PRE-REGISTERED: does BTC fall into big IPOs? BTC 50 days into /
 #            18 days after / day 18-70 around 12 large IPOs since 2019 vs every
 #            date, SpaceX shown but not counted (backend/ipo_btc_study.py; ~2 min)
@@ -291,7 +295,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -477,6 +481,8 @@ jobs:
             python -m rsi_retest_study --telegram --days 1500
           elif [ "$STUDY" = "close-record" ]; then
             python -m close_record --telegram
+          elif [ "$STUDY" = "tao-case" ]; then
+            python -m tao_case_1d_test --telegram --days 2000
           elif [ "$STUDY" = "reversal-factors" ]; then
             python -m reversal_factors_1d --telegram --days 2000
           elif [ "$STUDY" = "reversal-1d" ]; then
