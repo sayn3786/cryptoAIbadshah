@@ -5205,6 +5205,21 @@ def api_ml_research_collect():
     return _ml_research_request("collect")
 
 
+@app.get("/api/research/ml/status")
+def api_ml_research_status():
+    # Session-only operator access, even when general auth enforcement is off.
+    import auth
+    if not auth.is_admin():
+        response = jsonify({"ok": False, "error_code": "FORBIDDEN"})
+        response.headers["Cache-Control"] = "private, no-store"
+        return response, 403
+    import ml_research_status
+    result = ml_research_status.read_status()
+    response = jsonify(result)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response, (200 if result["ok"] else 503)
+
+
 @app.post("/api/research/execution-pilot/tick")
 def api_execution_pilot_tick():
     def reply(body, status=200):

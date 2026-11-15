@@ -1000,10 +1000,27 @@
   <span class="who" id="cm-who"></span>
   <button type="button" id="cm-users">Users</button>
   <button type="button" id="cm-hl-status">HL status</button>
+  <button type="button" id="cm-ml-status" style="display:none">ML research</button>
   <button type="button" id="cm-scalp" onclick="location.href='/dashboard/scalp.html'">Scalp terminal</button>
   <button type="button" class="run" id="cm-hl-run">Run auto-exec</button>
   <button type="button" id="cm-logout">Log out</button>
 </div>
+
+<dialog id="ml-research-dialog" aria-labelledby="ml-research-title">
+  <div class="ml-research-heading"><h2 id="ml-research-title">ML Research Status</h2>
+    <button type="button" id="ml-research-close">Close</button></div>
+  <p>Read-only research monitoring. This panel cannot send signals, train a model or place trades.</p>
+  <p><strong>Trading readiness: not assessed</strong> — collecting data is not proof of predictive accuracy.</p>
+  <button type="button" id="ml-research-refresh">Refresh status</button>
+  <div id="ml-research-content" aria-live="polite"></div>
+  <h3>What still needs evidence</h3>
+  <ul><li>Publication timing and independent clock/history coverage.</li>
+    <li>Order direction and complete fill lifecycle verification for an approved cohort.</li>
+    <li>Training-data quality review, untouched evaluation and explicit deployment approval.</li></ul>
+  <p>These are verification requirements, not a live checklist. This panel does not evaluate them or read P&amp;L, model predictions or held-out outcomes.</p>
+</dialog>
+<link rel="stylesheet" href="/dashboard/css/ml-research-status.css?v=1">
+<script defer src="/dashboard/js/ml-research-status.js?v=1"></script>
 
 <!-- ── USER MANAGEMENT (admin) ────────────────────────────────────────────── -->
 <div id="cm-users-modal" role="dialog" aria-modal="true">
@@ -1115,6 +1132,7 @@
     var isUserAdmin = role === "user_admin";
     document.getElementById("cm-who").textContent = (user && user.username) || "";
     document.getElementById("cm-hl-status").style.display = isAdmin ? "" : "none";
+    document.getElementById("cm-ml-status").style.display = isAdmin ? "" : "none";
     document.getElementById("cm-hl-run").style.display = isAdmin ? "" : "none";
     document.getElementById("cm-scalp").style.display = isAdmin ? "" : "none";
     document.getElementById("cm-users").style.display = isUserAdmin ? "" : "none";

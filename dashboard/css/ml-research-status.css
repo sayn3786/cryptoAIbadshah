@@ -1,0 +1,14 @@
+#ml-research-dialog { width:min(860px,90vw); max-height:85vh; overflow:auto; box-sizing:border-box; background:#101827; color:#e6edf7; border:1px solid #35435a; border-radius:14px; padding:24px; font:14px/1.6 system-ui,sans-serif; }
+#ml-research-dialog::backdrop { background:rgba(0,0,0,.7); }
+#ml-research-dialog h2 { margin:0; font-size:22px; color:#f5b942; }
+#ml-research-dialog h3 { margin-bottom:8px; }
+.ml-research-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+#ml-research-dialog button { background:#23344e; color:#fff; border:1px solid #6580a6; border-radius:7px; padding:8px 12px; cursor:pointer; }
+#ml-research-dialog button:focus-visible { outline:3px solid #f5b942; outline-offset:3px; }
+#ml-research-dialog button:disabled { opacity:.6; cursor:wait; }
+#ml-research-content { min-height:100px; }
+.ml-research-table-wrap { overflow-x:auto; }
+#ml-research-dialog table { width:100%; border-collapse:collapse; text-align:left; }
+#ml-research-dialog th, #ml-research-dialog td { padding:8px; border-bottom:1px solid #35435a; white-space:nowrap; }
+#ml-research-dialog th { color:#aabbd2; }
+@media(max-width:550px) { #ml-research-dialog { padding:16px; width:94vw; } #ml-research-dialog table { font-size:12px; } }
