@@ -84,3 +84,20 @@ def test_all_ten_assets_are_covered_and_snapshotted():
     js = open(os.path.join(os.path.dirname(__file__), "..", "dashboard", "js",
                            "dashboard.js")).read()
     assert "'LTC', 'DOGE', 'LINK', 'AVAX', 'DOT'" in js
+
+
+def test_sosovalue_is_tried_before_coinglass(monkeypatch):
+    ef._cache.clear()
+    calls = []
+    monkeypatch.setattr(ef, "_ssv_api_flows", lambda s: calls.append("sosovalue") or {"source": "sosovalue"})
+    client = ef.ETFFlowClient(api_key="cg-key")
+    monkeypatch.setattr(client, "_v4_flows", lambda *a: calls.append("coinglass") or None)
+    assert client.get_etf_flows("BTC") == {"source": "sosovalue"} and calls == ["sosovalue"]
+    ef._cache.clear()
+    calls.clear()
+    monkeypatch.setattr(ef, "_ssv_api_flows", lambda s: calls.append("sosovalue") or None)
+    monkeypatch.setattr(ef, "_ssv_etf_flows", lambda s: None)
+    monkeypatch.setattr(ef, "_recorded_flows", lambda s: None)
+    client.get_etf_flows("BTC")
+    assert calls[:2] == ["sosovalue", "coinglass"]      # CoinGlass is the backup
+    ef._cache.clear()
