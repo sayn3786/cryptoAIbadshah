@@ -10,7 +10,7 @@
 //   hh:01/16/31/46       15m scalp book     POST /api/cron/scalp  (testnet HL scalps)
 //   00:15                daily update       POST /api/patterns/alert  (1D/1W list → Telegram)
 //   00:20                TAO snapshot       POST /api/cron/tao-snapshot
-//   00:40                1D reversal book   POST /api/cron/rev-forward  (paper only)
+//   00:40                1D paper books     POST /api/cron/rev-forward  (reversal patterns + 1D signal, paper only)
 //   01:30                data snapshots     POST /api/cron/etf-snapshot, /api/cron/market-snapshot
 //   every 2h at :10      ML collect         POST /api/research/ml/collect  (00:10, 02:10, …)
 //   every 2h at 01:15…   ML label           POST /api/research/ml/label    (01:15, 03:15, …)
