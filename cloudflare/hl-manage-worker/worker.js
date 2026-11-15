@@ -10,6 +10,7 @@
 //   hh:01/16/31/46       15m scalp book     POST /api/cron/scalp  (testnet HL scalps)
 //   00:15                daily update       POST /api/patterns/alert  (1D/1W list → Telegram)
 //   00:20                TAO snapshot       POST /api/cron/tao-snapshot
+//   00:40                1D reversal book   POST /api/cron/rev-forward  (paper only)
 //   01:30                data snapshots     POST /api/cron/etf-snapshot, /api/cron/market-snapshot
 //   every 2h at :10      ML collect         POST /api/research/ml/collect  (00:10, 02:10, …)
 //   every 2h at 01:15…   ML label           POST /api/research/ml/label    (01:15, 03:15, …)
@@ -66,6 +67,10 @@ const JOBS = [
     due: ({ h, m }) => h === 0 && m === 15 },
   { name: "tao-snapshot", path: "/api/cron/tao-snapshot", ...S, retries: 1,
     due: ({ h, m }) => h === 0 && m === 20 },
+  // The 1D reversal-pattern forward paper book (rev_forward): after the
+  // 1D close is settled. Paper only; safe to repeat (one trade per coin/day).
+  { name: "rev-forward", path: "/api/cron/rev-forward", ...S, retries: 1, timeoutMs: 280_000,
+    due: ({ h, m }) => h === 0 && m === 40 },
   { name: "etf-snapshot", path: "/api/cron/etf-snapshot", ...S, retries: 2,
     due: ({ h, m }) => h === 1 && m === 30 },
   { name: "market-snapshot", path: "/api/cron/market-snapshot", ...S, retries: 2,
