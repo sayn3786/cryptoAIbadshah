@@ -531,10 +531,15 @@ class ETFFlowClient:
                 return cached[0]
 
         result = None
-        if self.enabled:
-            # 1. Documented v4 endpoint
+        # 1. SoSoValue official Open API first (Nov 2026: the working source;
+        #    CoinGlass ETF data is plan-gated - "Upgrade plan" - so trying it
+        #    first only cost 2-3 failed calls and delay on every refresh).
+        if ssv:
+            result = _ssv_api_flows(symbol)
+
+        # 2. CoinGlass, if SoSoValue failed: documented v4, then legacy v2
+        if not result and self.enabled:
             result = self._v4_flows(symbol, coin_path)
-            # 2. Legacy v2 guesses
             if not result:
                 for path in v2_paths:
                     data = self._get(symbol, path, {"limit": 60})
@@ -543,15 +548,11 @@ class ETFFlowClient:
                         if result:
                             break
 
-        # 3. SoSoValue official Open API (free key, dedicated ETF data)
-        if not result and ssv:
-            result = _ssv_api_flows(symbol)
-
-        # 4. Keyless best-effort fallback (unofficial endpoints)
+        # 3. Keyless best-effort fallback (unofficial endpoints)
         if not result and ssv:
             result = _ssv_etf_flows(symbol)
 
-        # 5. Our own saved record (etf_flow_daily, filled by the daily
+        # 4. Our own saved record (etf_flow_daily, filled by the daily
         #    snapshot cron): the last known flows, marked stale, rather than
         #    an empty card when every live source is down.
         if not result:
