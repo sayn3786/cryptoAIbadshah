@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '266';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '267';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -8438,9 +8438,11 @@ function _renderMegaIpos(m) {
     const when = d == null ? 'date not set'
       : d > 1 ? `in ${d} days (${e.date})` : d === 1 ? `tomorrow (${e.date})`
       : d === 0 ? `TODAY (${e.date})` : `listed ${-d} days ago (${e.date})`;
-    const size = e.share_of_btc != null
+    const raising = e.deal_usd ? `raising ${big(e.deal_usd)}` : '';
+    const val = e.share_of_btc != null
       ? `valued ${big(e.valuation_usd)} = ${Math.round(e.share_of_btc * 100)}% of BTC's market cap`
-      : 'size not confirmed';
+      : (raising ? 'valuation not confirmed' : 'size not confirmed');
+    const size = raising ? `${raising} · ${val}` : val;
     let line = `${e.name} — ${when} · ${size}`;
     if (d != null && d < 0 && e.btc) {
       const lbl = ['50d before', 'day 0→18', 'day 18→70'];

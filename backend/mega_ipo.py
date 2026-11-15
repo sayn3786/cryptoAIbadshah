@@ -213,9 +213,11 @@ def _when(e: Dict) -> str:
 
 
 def _size(e: Dict) -> str:
+    raise_s = f"raising {_b(e['deal_usd'])}" if e.get("deal_usd") else ""
     if e.get("share_of_btc") is not None:
-        return f"valued {_b(e['valuation_usd'])} = {e['share_of_btc'] * 100:.0f}% of BTC's market cap"
-    return "size not confirmed"
+        val = f"valued {_b(e['valuation_usd'])} = {e['share_of_btc'] * 100:.0f}% of BTC's market cap"
+        return f"{raise_s} · {val}" if raise_s else val
+    return f"{raise_s} · valuation not confirmed" if raise_s else "size not confirmed"
 
 
 def history_line(hist: Sequence[Dict]) -> str:
