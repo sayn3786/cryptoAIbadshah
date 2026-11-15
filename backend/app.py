@@ -2214,16 +2214,41 @@ def api_gomining_tokenomics():
     return jsonify(data)
 
 
+def _btc_daily_closes() -> dict:
+    """BTC daily closes keyed by UTC day start (the last ~300 days)."""
+    rows = client.get_spot_klines("BTCUSDT", "1d", 300)
+    return {int(c["timestamp"]) // 86_400_000 * 86_400_000: float(c["close"]) for c in rows or []}
+
+
+def _mega_ipo() -> dict:
+    """Mega-IPOs (>= 50% of BTC's market cap): upcoming and recent, cached."""
+    import mega_ipo
+    return mega_ipo.current(lambda: client.get_current_price("BTCUSDT"), _btc_daily_closes)
+
+
+def _mega_ipo_notes() -> list:
+    try:
+        import mega_ipo
+        return mega_ipo.notes(_mega_ipo())
+    except Exception as exc:                             # noqa: BLE001
+        print(f"[mega-ipo] skipped: {type(exc).__name__}")
+        return []
+
+
 @app.get("/api/calendar")
 def api_calendar():
-    """Upcoming high-impact economic events (FOMC / CPI / NFP)."""
+    """Upcoming high-impact economic events (FOMC / CPI / NFP) and mega-IPOs."""
     risk = get_event_risk()
     if risk:
         try:
             risk["expectation"] = get_event_expectation(risk["name"])
         except Exception:
             pass
-    return jsonify({"events": get_upcoming_events(21), "risk": risk})
+    try:
+        mega = _mega_ipo()
+    except Exception:                                    # noqa: BLE001
+        mega = None
+    return jsonify({"events": get_upcoming_events(21), "risk": risk, "mega_ipos": mega})
 
 
 @app.get("/api/macro")
@@ -4055,7 +4080,8 @@ def api_patterns_alert():
         lambda: _send_pattern_alerts(reads, active=active,
                                      date_label=now_sgt.strftime("%b %d"),
                                      coins=len(syms or SCAN_SYMBOLS),
-                                     sections=sections, lean_alerts=core))
+                                     sections=sections, lean_alerts=core,
+                                     notes=_mega_ipo_notes()))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
