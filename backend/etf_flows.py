@@ -17,12 +17,22 @@ SSV_BASE   = "https://sosovalue.com"
 # sign in at sosovalue.com → API management → create key → set SOSOVALUE_API_KEY
 SSV_API      = "https://api.sosovalue.xyz"
 SSV_API_KEY  = os.getenv("SOSOVALUE_API_KEY", "")
+# Nov 2026: SoSoValue moved to a new Open API (docs: sosovalue.gitbook.io,
+# "2. ETF"). The old POST .../openapi/v2/etf/historicalInflowChart now gets a
+# 403 page. New: GET {base}/etfs/summary-history?symbol=BTC&country_code=US
+# with the same x-soso-api-key header; the daily total is total_net_inflow in
+# USD, newest first, trading days only, the LAST MONTH only (so the daily
+# snapshot into etf_flow_daily is what builds longer history). The newest row
+# is T+1: its flow is null until it settles, and the parser skips nulls.
+# Base overridable for a future move.
+SSV_V1_BASE  = os.getenv("SOSOVALUE_API_BASE", "https://openapi.sosovalue.com/openapi/v1").rstrip("/")
+SSV_V1_LIMIT = 50
 TIMEOUT     = 10
 SSV_TIMEOUT = 4   # fail fast — probes must fit inside Vercel's serverless limit
 
 # Cache: {symbol -> (data, fetched_at)}
 _cache: Dict[str, tuple] = {}
-_CACHE_TTL      = 3600  # ETF flows reported daily — 1h cache is fine
+_CACHE_TTL      = 3 * 3600  # ETF flows are daily; 3h keeps well inside the API quota
 _FAIL_CACHE_TTL = 600   # retry failures after 10 min, not an hour
 
 # Attempt log for /api/etf?debug=1 — {symbol: [{"src","path","status"}...]}
@@ -173,6 +183,12 @@ ETF_ASSETS = {
     # day SoSoValue adds API support.
     "XRP": {"slug": "us-xrp-spot", "cg": "xrp",      "cache": "xrp_etf"},
     "HBAR": {"slug": "us-hbar-spot", "cg": "hedera", "cache": "hbar_etf"},
+    # Nov 2026: the v1 API serves every US spot-ETF asset it lists.
+    "LTC":  {"slug": "us-ltc-spot",  "cg": "litecoin",  "cache": "ltc_etf"},
+    "DOGE": {"slug": "us-doge-spot", "cg": "dogecoin",  "cache": "doge_etf"},
+    "LINK": {"slug": "us-link-spot", "cg": "chainlink", "cache": "link_etf"},
+    "AVAX": {"slug": "us-avax-spot", "cg": "avalanche", "cache": "avax_etf"},
+    "DOT":  {"slug": "us-dot-spot",  "cg": "polkadot",  "cache": "dot_etf"},
 }
 
 
@@ -187,11 +203,11 @@ def _parse_inflow_rows(rows: List) -> List[Dict]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        net = (row.get("totalNetInflow") or row.get("netInflow") or
-               row.get("dailyNetInflow") or row.get("totalNetFlow") or
-               row.get("netFlow") or row.get("flow"))
-        ds  = (row.get("date") or row.get("day") or row.get("time") or
-               row.get("timestamp") or 0)
+        net = next((row[k] for k in ("total_net_inflow", "totalNetInflow", "netInflow",
+                                     "dailyNetInflow", "totalNetFlow", "netFlow", "flow")
+                    if row.get(k) is not None), None)
+        ds  = (row.get("date") or row.get("trade_date") or row.get("tradeDate") or
+               row.get("day") or row.get("time") or row.get("timestamp") or 0)
         if net is None:
             continue
         try:
@@ -200,10 +216,62 @@ def _parse_inflow_rows(rows: List) -> List[Dict]:
                          .replace(tzinfo=timezone.utc).timestamp() * 1000)
             else:
                 ts = int(ds)
+                if 0 < ts < 100_000_000_000:          # seconds, not milliseconds
+                    ts *= 1000
             daily.append({"ts": ts, "net_usd": float(net)})
         except (TypeError, ValueError):
             continue
     return daily
+
+
+def _v1_rows(payload) -> List:
+    """The row list out of a v1 reply: a bare list, or under data / list."""
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data", payload)
+    if isinstance(data, dict):
+        data = data.get("list") or data.get("data") or data.get("records") or []
+    return data if isinstance(data, list) else []
+
+
+def _ssv_v1_daily(symbol: str, get=None):
+    """SoSoValue Open API v1: GET /etfs/summary-history for the US spot ETFs
+    of `symbol`. ``(daily, "sosovalue")`` or ``(None, None)``."""
+    if not SSV_API_KEY:
+        return None, None
+    path = "/etfs/summary-history"
+    try:
+        r = (get or requests.get)(
+            f"{SSV_V1_BASE}{path}",
+            params={"symbol": symbol, "country_code": "US", "limit": SSV_V1_LIMIT},
+            headers={"x-soso-api-key": SSV_API_KEY, "Accept": "application/json",
+                     "User-Agent": "CryptoBadshah/2.0"},
+            timeout=TIMEOUT)
+        if r.status_code != 200:
+            body = r.text or ""
+            why = ("refused by the provider's firewall (web page, not an API reply)"
+                   if body.lstrip().startswith("<") else body[:90])
+            _log(symbol, "sosovalue-v1", path, f"HTTP {r.status_code}: {why}")
+            return None, None
+        payload = r.json()
+        if isinstance(payload, dict) and str(payload.get("code", "0")) not in ("0", "200"):
+            _log(symbol, "sosovalue-v1", path,
+                 f"code={payload.get('code')} msg={payload.get('msg') or payload.get('message')}")
+            return None, None
+        rows = _v1_rows(payload)
+        daily = _parse_inflow_rows(rows)
+        if not daily:
+            rk = (",".join(list(rows[0].keys())[:14]) if rows and isinstance(rows[0], dict)
+                  else f"{len(rows)} rows")
+            _log(symbol, "sosovalue-v1", path, f"0 days parsed ({rk})")
+            return None, None
+        _log(symbol, "sosovalue-v1", path, f"200 ok ({len(daily)} days)")
+        return daily, "sosovalue"
+    except Exception as e:                               # noqa: BLE001
+        _log(symbol, "sosovalue-v1", path, f"{type(e).__name__}: {e}"[:150])
+        return None, None
 
 
 def _ssv_api_daily(symbol: str):
@@ -220,6 +288,9 @@ def _ssv_api_daily(symbol: str):
     cfg = ETF_ASSETS.get(symbol) or {}
     if not cfg.get("slug"):
         return None, None
+    daily, src = _ssv_v1_daily(symbol)                  # the current API first
+    if daily:
+        return daily, src
     type_candidates = [cfg["slug"]] + cfg.get("alt_slugs", [])
     path = "/openapi/v2/etf/historicalInflowChart"
     from datetime import datetime, timezone
@@ -234,7 +305,10 @@ def _ssv_api_daily(symbol: str):
                 timeout=TIMEOUT,
             )
             if r.status_code != 200:
-                _log(symbol, "sosovalue-api", path, f"{etf_type}: HTTP {r.status_code}: {r.text[:70]}")
+                body = r.text or ""
+                why = ("refused by the provider's firewall (web page, not an API reply)"
+                       if body.lstrip().startswith("<") else body[:70])
+                _log(symbol, "sosovalue-api", path, f"{etf_type}: HTTP {r.status_code}: {why}")
                 continue
             payload = r.json()
             if str(payload.get("code")) not in ("0", "200"):
@@ -349,6 +423,34 @@ def _ssv_etf_flows(symbol: str) -> Optional[Dict]:
     return _build_result(daily, symbol, source="sosovalue") if daily else None
 
 
+def _recorded_flows(symbol: str, list_fn=None) -> Optional[Dict]:
+    """The last 60 recorded days from the durable store, as a normal result
+    with source "recorded" and stale=True; None without a database / rows."""
+    from datetime import datetime, timezone
+    try:
+        if list_fn is None:
+            import etf_store
+            list_fn = etf_store.list_daily
+        rows = list_fn(symbol, limit=60) or []
+    except Exception as e:                               # noqa: BLE001
+        _log(symbol, "recorded", "etf_flow_daily", f"{type(e).__name__}: {e}"[:150])
+        return None
+    daily = []
+    for r in rows:
+        try:
+            ts = int(datetime.strptime(str(r["date"])[:10], "%Y-%m-%d")
+                     .replace(tzinfo=timezone.utc).timestamp() * 1000)
+            daily.append({"ts": ts, "net_usd": float(r["net_usd"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    res = _build_result(daily, symbol, source="recorded") if daily else None
+    _log(symbol, "recorded", "etf_flow_daily",
+         f"{len(daily)} saved days" + ("" if res else " - nothing usable"))
+    if res:
+        res["stale"] = True
+    return res
+
+
 class ETFFlowClient:
     def __init__(self, api_key: str = ""):
         self.api_key = api_key or os.getenv("COINGLASS_API_KEY", "")
@@ -429,10 +531,15 @@ class ETFFlowClient:
                 return cached[0]
 
         result = None
-        if self.enabled:
-            # 1. Documented v4 endpoint
+        # 1. SoSoValue official Open API first (Nov 2026: the working source;
+        #    CoinGlass ETF data is plan-gated - "Upgrade plan" - so trying it
+        #    first only cost 2-3 failed calls and delay on every refresh).
+        if ssv:
+            result = _ssv_api_flows(symbol)
+
+        # 2. CoinGlass, if SoSoValue failed: documented v4, then legacy v2
+        if not result and self.enabled:
             result = self._v4_flows(symbol, coin_path)
-            # 2. Legacy v2 guesses
             if not result:
                 for path in v2_paths:
                     data = self._get(symbol, path, {"limit": 60})
@@ -441,13 +548,15 @@ class ETFFlowClient:
                         if result:
                             break
 
-        # 3. SoSoValue official Open API (free key, dedicated ETF data)
-        if not result and ssv:
-            result = _ssv_api_flows(symbol)
-
-        # 4. Keyless best-effort fallback (unofficial endpoints)
+        # 3. Keyless best-effort fallback (unofficial endpoints)
         if not result and ssv:
             result = _ssv_etf_flows(symbol)
+
+        # 4. Our own saved record (etf_flow_daily, filled by the daily
+        #    snapshot cron): the last known flows, marked stale, rather than
+        #    an empty card when every live source is down.
+        if not result:
+            result = _recorded_flows(symbol)
 
         _cache[cache_key] = (result, time.time())
         return result

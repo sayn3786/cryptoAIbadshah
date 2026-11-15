@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '261';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '269';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3354,7 +3354,7 @@ function renderEtfFlows(etf, symbol) {
   const grid = document.getElementById('etfFlowGrid');
   if (!sec || !grid) return;
 
-  const ETF_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP', 'HBAR'];
+  const ETF_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP', 'HBAR', 'LTC', 'DOGE', 'LINK', 'AVAX', 'DOT'];
   if (!ETF_SYMBOLS.includes(symbol)) {
     sec.style.display = 'none';
     return;
@@ -3362,18 +3362,8 @@ function renderEtfFlows(etf, symbol) {
   sec.style.display = '';
 
   if (!etf) {
-    // XRP/HBAR: ETFs are live but SoSoValue's Open API doesn't serve their
-    // flow history yet (dashboard-only). Link to the live dashboard meanwhile.
-    const SLUGS = { BTC: 'us-btc-spot', ETH: 'us-eth-spot', SOL: 'us-sol-spot',
-                    XRP: 'us-xrp-spot', HBAR: 'us-hbar-spot' };
-    const apiLag = (symbol === 'XRP' || symbol === 'HBAR');
-    const slug = SLUGS[symbol];
-    grid.innerHTML = `<div class="etf-unavailable">${apiLag
-      ? `${symbol} spot ETFs are live, but SoSoValue's API doesn't serve their flow history yet
-         (dashboard-only). View live flows at
-         <a href="https://sosovalue.com/assets/etf/${slug}" target="_blank" rel="noopener">sosovalue.com/assets/etf/${slug}</a>
-         — this card will populate automatically once their API adds coverage.`
-      : 'ETF flow data unavailable — data source unreachable, retrying automatically'}</div>`;
+    grid.innerHTML = `<div class="etf-unavailable">ETF flow data unavailable — data source
+      unreachable, retrying automatically</div>`;
     const sub = document.getElementById('etfFlowsSub');
     if (sub) sub.textContent = 'Institutional inflow / outflow';
     return;
@@ -3381,7 +3371,8 @@ function renderEtfFlows(etf, symbol) {
 
   const sub = document.getElementById('etfFlowsSub');
   if (sub) {
-    const src = etf.source === 'sosovalue' ? 'SoSoValue' : etf.source === 'coinglass' ? 'CoinGlass' : etf.source || '';
+    const src = etf.source === 'sosovalue' ? 'SoSoValue' : etf.source === 'coinglass' ? 'CoinGlass'
+      : etf.source === 'recorded' ? 'our saved record (live source down)' : etf.source || '';
     // Flag if the latest available day is >2 days old (weekend/holiday is
     // normal; older than that suggests the feed itself is behind).
     let asOf = '';
@@ -4324,6 +4315,9 @@ function renderStructureChart(a) {
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
     handleScale:  { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
     rightPriceScale: { ...CHART_OPTS.rightPriceScale, entireTextOnly: true, scaleMargins: { top: 0.1, bottom: 0.1 } },
+    // Room right of the last candle so its marker text ("② Deviation ✓")
+    // is not cut off by the price axis.
+    timeScale: { ...CHART_OPTS.timeScale, rightOffset: 8 },
   });
   const cs = chart.addCandlestickSeries({
     upColor: '#10b981', downColor: '#ef4444', borderUpColor: '#10b981',
@@ -4344,6 +4338,39 @@ function renderStructureChart(a) {
     }));
     try { cs.attachPrimitive(shade); } catch (_) {}
   }
+
+  // Range boxes (ranges.py): where price went sideways - "the box" traders
+  // draw by hand. The range itself is shaded amber; a finished range is
+  // extended faintly to the right so you can see price coming back to it.
+  // The box helper draws only at real candle times, so ends snap to candles.
+  const rbx = (a.range_boxes || []);
+  const _snap = ts => {
+    const s = t(ts); let best = rows[0].time;
+    for (const r of rows) { if (r.time <= s) best = r.time; else break; }
+    return best;
+  };
+  if (rbx.length) {
+    const lastT = rows[rows.length - 1].time;
+    const fmtP = v => (+v).toLocaleString('en-US', { maximumSignificantDigits: 6 });
+    const data = [];
+    rbx.forEach((b, i) => {
+      const t0 = _snap(b.start_ts), t1 = _snap(b.end_ts - 1);
+      if (!(t1 >= t0)) return;
+      const RC = _rangeColor(i), n = _rangeNum(i);
+      data.push({ t0, t1, high: +b.top, low: +b.bottom,
+                  label: `${n} Range ${fmtP(b.bottom)}–${fmtP(b.top)}`, fill: RC + '1f', stroke: RC });
+      if (!b.current && lastT > t1) {
+        // After it ended: dashed, named again at its right end so a range
+        // that started off-screen can still be told apart.
+        data.push({ t0: t1, t1: lastT, high: +b.top, low: +b.bottom, label: '',
+                    labelRight: n, fill: RC + '0a', stroke: RC + '88', dash: [4, 3] });
+      }
+    });
+    const rshade = new SessionShade(chart, cs, { top: true, width: 1.5 });
+    rshade.setData(data);
+    try { cs.attachPrimitive(rshade); } catch (_) {}
+  }
+  _renderRangeNotes(rbx);
 
   // Liquidity pools (equal highs/lows = resting stops) — the yellow levels.
   const pools = (a.liquidity_pools || []);
@@ -4483,6 +4510,20 @@ function renderStructureChart(a) {
                      text: `BOS ×${bos.count || 1}` });
     }
   }
+  // Range events: a confirmed deviation (failed break) or a range break,
+  // marked on the candle where it happened.
+  rbx.forEach((b, i) => {
+    if (!b.event || !b.event_ts) return;
+    const et = _snap(b.event_ts + 1);
+    const dev = b.event.startsWith('deviation');
+    const up = b.event === 'deviation_below' || b.event === 'broke_above';
+    const label = dev ? 'Deviation ✓' : (b.event === 'back_inside' ? 'Back in range'
+                  : (up ? 'Range break ↑' : 'Range break ↓'));
+    // Numbered like its box: which range the event belongs to.
+    markers.push({ time: et, position: up ? 'belowBar' : 'aboveBar',
+                   color: _rangeColor(i), shape: up ? 'arrowUp' : 'arrowDown',
+                   text: `${_rangeNum(i)} ${label}` });
+  });
   if (markers.length) cs.setMarkers(markers.sort((x, y) => x.time - y.time));
   if (chips.length) {
     const cl = new ChipLabels(chart, cs);
@@ -4595,6 +4636,148 @@ function _targetWhen(t) {
   if (eta) return ` by ~${eta}`;
   if (apex) return ` · void by ${apex}`;
   return '';
+}
+
+// Live warning: the still-open candle is already past the level that would
+// kill a pattern. Nothing changes until that candle CLOSES (the detectors
+// read closed candles only) - this only says so early.
+//   kind 'flag' | 'rev' | 'tri'; returns null when there is nothing to warn.
+function _liveRisk(pat, kind) {
+  const lc = S.analysis && S.analysis.live_candle;
+  if (!pat || !lc || lc.close == null || pat.status === 'failed'
+      || pat.status === 'invalidated' || pat.status === 'conflicted') return null;
+  if (pat.direction !== 'bullish' && pat.direction !== 'bearish') return null;
+  const px = +lc.close, bull = pat.direction === 'bullish';
+  let lvl = null, what = '', verb = '';
+  if (kind === 'flag') {
+    if (pat.confirmed) {
+      lvl = bull ? pat.flag_low : pat.flag_high;
+      what = bull ? 'the flag low' : 'the flag high'; verb = 'fail';
+    } else {
+      lvl = bull ? (pat.break_low ?? pat.flag_low) : (pat.break_high ?? pat.flag_high);
+      what = bull ? "the flag's lower rail" : "the flag's upper rail"; verb = 'be invalidated';
+    }
+  } else if (kind === 'rev') {
+    if (pat.confirmed) {
+      lvl = pat.neckline; what = 'the neckline'; verb = 'fail';
+    } else {
+      lvl = pat.head_level != null ? pat.head_level : pat.peak_level;
+      what = pat.head_level != null ? 'the head' : (bull ? 'the bottoms' : 'the tops');
+      verb = 'be invalidated';
+    }
+  } else if (kind === 'tri' && !pat.confirmed) {
+    lvl = bull ? pat.lower_now : pat.upper_now;
+    what = bull ? 'the lower rail' : 'the upper rail'; verb = 'be invalidated';
+  }
+  if (lvl == null || !isFinite(+lvl) || +lvl <= 0) return null;
+  const beyond = bull ? px < +lvl : px > +lvl;
+  if (!beyond) return null;
+  return { px, lvl: +lvl, what, verb, side: bull ? 'below' : 'above',
+           pct: Math.abs(px - lvl) / lvl * 100 };
+}
+
+function _liveWarn(pat, kind, barMs) {
+  const r = _liveRisk(pat, kind);
+  if (!r) return '';
+  const lc = S.analysis.live_candle;
+  const p = v => Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 });
+  let when = '';
+  if (lc.timestamp && barMs) {
+    const d = new Date(+lc.timestamp + barMs);
+    if (!isNaN(d)) when = ` (this candle closes ${d.toLocaleString('en-US',
+      { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`;
+  }
+  return `<div class="pattern-live-warn">⚠️ <b>Live price $${p(r.px)} is ${r.side} ${r.what}</b>
+    ($${p(r.lvl)}, ${r.pct.toFixed(1)}% past it). This pattern will <b>${r.verb}</b> if the
+    candle closes here${when}. Until then it still shows as ${pat.confirmed ? 'confirmed' : 'forming'}.</div>`;
+}
+
+// ── Pattern track record ─────────────────────────────────────────────────────
+// From the pattern-outcomes study (backend/pattern_outcome_study.py, run
+// Nov 15 2026): every CONFIRMED breakout the live detectors found on 48 coins
+// (4H over 720 days, 1D / 1W over 2000 days), entry at the breakout close,
+// stop where the pattern is wrong, at most 50 candles. "Chance" = how often a
+// random price path would reach the target before the stop, given where the
+// target and stop sit - a pattern only has an edge above that.
+// key 'type|tf' -> [breakouts, hit %, chance %, avg R, z]
+const PATTERN_RECORD = {
+  'bear_flag|4H': [5944, 40.6, 36.4, 0.07, 7.51],
+  'bull_flag|4H': [5420, 34.6, 35.7, -0.08, -1.76],
+  'bear_flag|1D': [2715, 30.7, 28.4, 0.16, 2.66],
+  'bull_flag|1D': [2139, 26.3, 26.1, -0.03, 0.23],
+  'triple_top|4H': [1534, 64.7, 59.7, 0.06, 3.98],
+  'falling_wedge|4H': [1440, 17.7, 24.1, -0.16, -5.27],
+  'triple_bottom|4H': [1358, 59.9, 60.3, -0.03, -0.29],
+  'symmetrical_triangle|4H': [1332, 10.8, 17.4, -0.03, -5.47],
+  'symmetrical_triangle|1D': [1002, 14.6, 20.2, 0.13, -3.84],
+  'double_top|4H': [895, 62.3, 59.5, 0.02, 1.64],
+  'rising_wedge|4H': [849, 25.8, 27.7, 0.17, -1.07],
+  'falling_wedge|1D': [847, 21.7, 22.5, 0.14, -0.5],
+  'double_bottom|4H': [701, 57.1, 60.5, -0.09, -1.82],
+  'descending_triangle|4H': [669, 25.6, 31.4, 0.04, -2.71],
+  'ascending_triangle|4H': [432, 26.4, 32.9, -0.19, -2.69],
+  'double_top|1D': [355, 70.1, 60.7, 0.14, 3.59],
+  'rising_wedge|1D': [317, 28.8, 29.2, 0.25, -0.14],
+  'bear_flag|1W': [314, 19.9, 33.5, -0.47, -5.28],
+  'double_bottom|1D': [301, 61.1, 61.1, -0.01, 0.03],
+  'triple_top|1D': [229, 65.0, 60.7, 0.06, 1.32],
+  'triple_bottom|1D': [202, 66.7, 61.6, 0.06, 1.5],
+  'head_shoulders|4H': [197, 64.8, 55.3, 0.13, 2.18],
+  'bull_flag|1W': [171, 28.8, 23.9, 0.36, 1.61],
+  'descending_triangle|1D': [143, 29.7, 34.1, 0.07, -0.96],
+  'symmetrical_triangle|1W': [132, 22.7, 28.6, 0.21, -1.54],
+  'head_shoulders|1D': [119, 50.5, 55.5, -0.09, -0.95],
+  'inverse_head_shoulders|4H': [117, 61.8, 59.1, 0.0, 0.54],
+  'falling_wedge|1W': [105, 32.6, 16.7, 1.30, 4.27],
+  'ascending_triangle|1D': [93, 30.7, 35.8, -0.15, -1.03],
+  'inverse_head_shoulders|1D': [79, 50.8, 56.5, -0.12, -0.93],
+  'double_bottom|1W': [18, 61.1, 62.6, -0.02, -0.13],
+  'rising_wedge|1W': [16, 14.3, 36.8, -0.40, -1.81],
+  'double_top|1W': [16, 33.3, 60.0, -0.39, -2.16],
+  'inverse_head_shoulders|1W': [7, 83.3, 59.9, 0.37, 1.19],
+  'descending_triangle|1W': [5, 0.0, 41.3, -0.78, -1.72],
+};
+const PATTERN_RECORD_NOTE = 'pattern-outcomes study, Nov 2026 · 48 coins';
+
+// 'worse' = clearly below chance (edge <= -3 pts and z <= -2),
+// 'better' = clearly above (edge >= +3, z >= 2), 'few' = under 30 breakouts.
+function _patternRecord(type, tf) {
+  const r = PATTERN_RECORD[`${type}|${tf}`];
+  if (!r) return null;
+  const [n, hit, chance, avgR, z] = r;
+  const edge = hit - chance;
+  const verdict = n < 30 ? 'few'
+    : (edge <= -3 && z <= -2) ? 'worse'
+    : (edge >= 3 && z >= 2) ? 'better' : 'chance';
+  return { n, hit, chance, avgR, z, edge, verdict };
+}
+
+function _recordKey(pat, kind) {
+  if (kind === 'flag') return pat.direction === 'bullish' ? 'bull_flag' : 'bear_flag';
+  return pat.type || '';
+}
+
+function _recordLine(pat, kind) {
+  const r = _patternRecord(_recordKey(pat, kind), pat.timeframe);
+  if (!r) return '';
+  const tag = {
+    worse:  '<span class="rec-tag rec-worse">⚠ Worse than random</span>',
+    better: '<span class="rec-tag rec-better">▲ Beat chance</span>',
+    chance: '<span class="rec-tag rec-chance">≈ About chance</span>',
+    few:    '<span class="rec-tag rec-chance">Too few cases</span>',
+  }[r.verdict];
+  const tip = 'Every confirmed breakout of this pattern on this chart, 48 coins, replayed: ' +
+    'entry at the breakout close, stop where the pattern is wrong. "Chance" is how often ' +
+    'random price moves would reach the target first, given where target and stop sit. ' +
+    'Coins move together and the last year was a falling market, so treat small edges with care.';
+  return `<div class="pattern-record" title="${tip}">📊 Track record (${pat.timeframe}, ` +
+    `${r.n.toLocaleString('en-US')} breakouts): hit target <b>${r.hit}%</b> vs ` +
+    `${r.chance}% by chance · avg ${r.avgR >= 0 ? '+' : ''}${r.avgR.toFixed(2)}R per trade ${tag}</div>`;
+}
+
+function _barMs(candles) {
+  const ts = (candles || []).map(c => +c.timestamp).filter(Boolean).sort((a, b) => a - b);
+  return ts.length > 1 ? ts[ts.length - 1] - ts[ts.length - 2] : 0;
 }
 
 function renderFlags(flags, candles, signal, diagnostics) {
@@ -4717,6 +4900,8 @@ function renderFlags(flags, candles, signal, diagnostics) {
         &nbsp;·&nbsp; Flag zone $${p(f.flag_low)} – $${p(f.flag_high)}
         ${f.rail_break ? `&nbsp;·&nbsp; Break ${isBull ? 'above' : 'below'} <span>$${p(brkLvl(f))}</span> <span class="flag-rail-tag">rail</span>` : ''}
       </div>
+      ${_liveWarn(f, 'flag', _barMs(candles))}
+      ${_recordLine(f, 'flag')}
       ${idx === bestIdx ? `<div class="flag-chart-cap">📊 ${isBull ? 'Bullish' : 'Bearish'}${slopeWord} Flag · ${bestNote}</div>
       ${conflictNote}
       <div class="flag-chart" id="flagChart_${idx}"></div>` : ''}
@@ -4774,6 +4959,8 @@ function renderReversals(patterns, candles) {
       <div class="flag-target">Target: <span>$${p(r.target)}</span>
         &nbsp;·&nbsp; ${statusTxt}
       </div>
+      ${_liveWarn(r, 'rev', _barMs(candles))}
+      ${_recordLine(r, 'rev')}
       <div class="pattern-chart" id="revChart_${idx}"></div>
     </div>`;
   }).join('');
@@ -4850,6 +5037,8 @@ function renderTriangles(patterns, candles) {
         <span class="flag-stat">Converged <span>${t.converge_pct}%</span></span>
       </div>
       <div class="flag-target">${tgt}${statusTxt}</div>
+      ${_liveWarn(t, 'tri', _barMs(candles))}
+      ${_recordLine(t, 'tri')}
       <div class="pattern-chart" id="triChart_${idx}"></div>
     </div>`;
   }).join('');
@@ -5094,19 +5283,24 @@ class ChipLabels {
 }
 
 class SessionShade {
-  constructor(chart, series) { this._chart = chart; this._series = series; this._boxes = []; }
+  // opts.top: draw over the candles (range boxes, which cover the bodies
+  // and would be hidden underneath); opts.width: border width.
+  constructor(chart, series, opts) {
+    this._chart = chart; this._series = series; this._boxes = []; this._opts = opts || {};
+  }
   setData(boxes) { this._boxes = boxes || []; }
   updateAllViews() {}
   paneViews() {
     const self = this;
     return [{
-      zOrder: () => 'bottom',
+      zOrder: () => (self._opts.top ? 'top' : 'bottom'),
       renderer: () => ({
         draw: (target) => {
           target.useMediaCoordinateSpace((scope) => {
             const ctx = scope.context;
             const px = p => self._series.priceToCoordinate(p);
             const tx = t => self._chart.timeScale().timeToCoordinate(t);
+            const top = !!self._opts.top;
             self._boxes.forEach(b => {
               const x0 = tx(b.t0), x1 = tx(b.t1);
               const y0 = px(b.high), y1 = px(b.low);
@@ -5115,11 +5309,21 @@ class SessionShade {
               ctx.fillStyle = b.fill;
               ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
               ctx.strokeStyle = b.stroke;
-              ctx.lineWidth = 1;
+              ctx.lineWidth = self._opts.width || 1;
+              ctx.setLineDash(b.dash || []);
               ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), w, Math.abs(y1 - y0));
+              ctx.setLineDash([]);
               ctx.fillStyle = b.stroke;
-              ctx.font = '9px sans-serif';
-              ctx.fillText(b.label, Math.min(x0, x1) + 3, Math.min(y0, y1) + 10);
+              ctx.font = top ? 'bold 10px sans-serif' : '9px sans-serif';
+              const ly = top ? Math.min(y0, y1) - 4 : Math.min(y0, y1) + 10;
+              if (b.labelRight) {
+                const tw = ctx.measureText(b.labelRight).width;
+                ctx.fillText(b.labelRight, Math.max(x0, x1) - tw - 3, ly);
+              }
+              if (!b.label) return;
+              // Range labels sit just above the box, clear of the candles,
+              // and stay on screen when the box starts left of the view.
+              ctx.fillText(b.label, Math.max(Math.min(x0, x1), 0) + 3, ly);
             });
           });
         },
@@ -8189,6 +8393,7 @@ async function loadCalendar() {
     const res = await fetch(`${API}/calendar`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    _renderMegaIpos(data.mega_ipos);
     const evs = data.events || [];
     if (!evs.length) { el.style.display = 'none'; return; }
     el.innerHTML = evs.slice(0, 4).map(e => {
@@ -8202,6 +8407,50 @@ async function loadCalendar() {
     }).join('');
     el.style.display = '';
   } catch (_) { el.style.display = 'none'; }
+}
+
+// Mega-IPOs (mega_ipo.py): listings valued at >= 50% of BTC's market cap.
+// Information only: two past cases (Aramco, SpaceX) are not a pattern.
+function _renderMegaIpos(m) {
+  const el = document.getElementById('megaIpoStrip');
+  if (!el) return;
+  while (el.firstChild) el.removeChild(el.firstChild);
+  const items = (m && m.items) || [];
+  if (!items.length) { el.style.display = 'none'; return; }
+  const big = v => v >= 1e12 ? `$${(v / 1e12).toFixed(1)}T` : `$${Math.round(v / 1e9)}B`;
+  const pct = v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  const add = (cls, text) => {
+    const p = document.createElement('div'); p.className = cls; p.textContent = text; el.appendChild(p);
+  };
+  add('mega-ipo-title', '🏦 Mega-IPOs (valued at ≥ 50% of Bitcoin\'s market cap'
+      + (m.threshold_usd ? `, ≈ ${big(m.threshold_usd)} now` : '') + ')');
+  items.forEach(e => {
+    const d = e.days_to;
+    const when = d == null ? 'date not set'
+      : d > 1 ? `in ${d} days (${e.date})` : d === 1 ? `tomorrow (${e.date})`
+      : d === 0 ? `TODAY (${e.date})` : `listed ${-d} days ago (${e.date})`;
+    const raising = e.deal_usd ? `raising ${big(e.deal_usd)}` : '';
+    const val = e.share_of_btc != null
+      ? `valued ${big(e.valuation_usd)} = ${Math.round(e.share_of_btc * 100)}% of BTC's market cap`
+      : (raising ? 'valuation not confirmed' : 'size not confirmed');
+    const size = raising ? `${raising} · ${val}` : val;
+    let line = `${e.name} — ${when} · ${size}`;
+    if (d != null && d < 0 && e.btc) {
+      const lbl = ['50d before', 'day 0→18', 'day 18→70'];
+      const done = e.btc.map((v, i) => v == null ? null : `${lbl[i]} ${pct(v)}`).filter(Boolean);
+      if (done.length) line += ` · BTC ${done.join(', ')}`;
+    }
+    if (e.note) line += ` · ${e.note}`;
+    add('mega-ipo-item', '• ' + line);
+  });
+  const hist = (m.history || []).filter(h => h.btc && h.btc[0] != null);
+  if (hist.length) {
+    add('mega-ipo-note', `Past mega-IPOs, BTC in the 50 days before: ` +
+      hist.map(h => `${h.name} ${pct(h.btc[0])}`).join(', ') +
+      ` · BTC rose into normal big IPOs (+23% avg over 11). Only ${hist.length} giant ` +
+      `case${hist.length > 1 ? 's' : ''} so far: information, not a signal.`);
+  }
+  el.style.display = '';
 }
 
 /* ─── Signal outcome tracker (this device) ────────────────────────────────── */
@@ -8826,4 +9075,36 @@ async function loadTracker(force) {
     // a table someone is reading.
     if (!body.innerHTML) section.classList.add('hidden');
   }
+}
+
+
+// Range boxes are numbered oldest first, each with its own colour, so a
+// marker or a note can be matched to its box when boxes overlap.
+const RANGE_COLORS = ['#f59e0b', '#f472b6', '#60a5fa'];
+const RANGE_NUMS = ['①', '②', '③', '④', '⑤'];
+function _rangeColor(i) { return RANGE_COLORS[i % RANGE_COLORS.length]; }
+function _rangeNum(i) { return RANGE_NUMS[i] || `#${i + 1}`; }
+
+// The plain-language line under the structure chart for each range box.
+function _renderRangeNotes(boxes) {
+  const el = document.getElementById('rangeNotes');
+  if (!el) return;
+  while (el.firstChild) el.removeChild(el.firstChild);
+  if (!boxes || !boxes.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const h = document.createElement('div');
+  h.className = 'range-notes-title';
+  h.textContent = '🟧 Ranges on this chart';
+  el.appendChild(h);
+  boxes.forEach((b, i) => {
+    const p = document.createElement('p');
+    p.className = 'range-note';
+    const n = document.createElement('b');
+    n.className = 'range-num';
+    n.style.color = _rangeColor(i);
+    n.textContent = _rangeNum(i) + ' ';
+    p.appendChild(n);
+    p.appendChild(document.createTextNode(b.text || ''));
+    el.appendChild(p);
+  });
 }

@@ -39,7 +39,9 @@ _UPSERT_CHUNK = 100
 
 # Symbols snapshotted by the daily cron. BTC and ETH have working SoSoValue API
 # coverage; SOL does too and can be added, XRP/HBAR return no API rows yet.
-SNAPSHOT_SYMBOLS = ("BTC", "ETH")
+# Every US spot-ETF asset: the v1 API returns only the last month, so this
+# daily record is what keeps longer history.
+SNAPSHOT_SYMBOLS = ("BTC", "ETH", "SOL", "XRP", "HBAR", "LTC", "DOGE", "LINK", "AVAX", "DOT")
 
 
 def has_etf_table(session) -> bool:
