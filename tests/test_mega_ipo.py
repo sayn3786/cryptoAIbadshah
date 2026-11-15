@@ -64,6 +64,20 @@ def test_the_calendar_sets_the_date_and_flags_a_surprise_giant():
     assert "Normal Inc" not in by
 
 
+def test_the_amount_raised_is_shown():
+    cal = [{"name": "Unknown Corp", "date": "2026-11-19", "deal_usd": 74_002_500_000,
+            "stage": "upcoming"}]
+    wl = [{"name": "Unknown", "aliases": ("unknown",), "date": None, "valuation_usd": None}]
+    r = m.build(NOW, 65_000.0, cal, watchlist=wl)
+    line = m.notes(r)[0]
+    assert "Unknown — in 4 days (2026-11-19) · raising $74B · valuation not confirmed" in line
+    g = dict(WL[0], deal_usd=40e9)
+    assert m._size({**g, "share_of_btc": 0.92}).startswith("raising $40B · valued $1.2T = 92%")
+    js = open(os.path.join(os.path.dirname(__file__), "..", "dashboard", "js",
+                           "dashboard.js")).read()
+    assert "raising ${big(e.deal_usd)}" in js
+
+
 def test_btc_is_tracked_after_a_listing():
     d0 = m._ms("2026-10-01")
     closes = {d0 + k * D: 100.0 + k for k in range(-60, 46)}
