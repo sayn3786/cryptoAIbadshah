@@ -3148,6 +3148,122 @@ def _htf_fwd_run(now_ms=None, *, fetch_fn=None) -> dict:
         return {"ran": False, "error": type(exc).__name__}
 
 
+# ── the 1D reversal-pattern FORWARD paper book (rev_forward) ────────────────
+REV_FWD_TTL = 200 * 86_400
+
+
+def _rev_fwd_key() -> str:
+    return f"rev_fwd:{_deploy_env()}"
+
+
+def _rev_fwd_load() -> list:
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(_rev_fwd_key()) or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _rev_fwd_save(trades) -> None:
+    try:
+        import kv as _kv
+        import rev_forward as _rf
+        _kv.set_value(_rev_fwd_key(), json.dumps(list(trades)[-_rf.KEEP:]), ttl_seconds=REV_FWD_TTL)
+    except Exception:
+        pass
+
+
+def _rev_fwd_daily(*, fetch_fn=None, detect_fn=None, notify=True) -> dict:
+    """Once a day after the 1D close: settle the open paper trades on closed
+    1D candles, then open one for every reversal pattern that confirmed on the
+    latest closed day (rev_forward rules). Never raises, never orders."""
+    try:
+        import rev_forward as _rf
+        if not _rf.enabled():
+            return {"ran": False, "reason": "REV_FORWARD_OFF"}
+        fetch_fn = fetch_fn or (lambda sym: _fetch_closed_spot(sym, "1D"))
+        detect_fn = detect_fn or (lambda candles: detect_reversals(candles, "1D"))
+        import kv as _kv
+        lock = f"rev_fwd:lock:{_deploy_env()}"
+        try:
+            if not _kv.claim(lock, ttl_seconds=280):
+                return {"ran": False, "reason": "BUSY"}
+        except Exception:
+            pass
+        try:
+            book = _rev_fwd_load()
+            closed, opened, errors = [], [], 0
+            for sym in sorted(_rf.UNIVERSE):
+                try:
+                    candles = fetch_fn(sym) or []
+                except Exception:
+                    candles, errors = [], errors + 1
+                if not candles:
+                    continue
+                for k, t in enumerate(book):
+                    if t.get("symbol") == sym and t.get("state") == "open":
+                        done = _rf.settle(t, candles)
+                        if done:
+                            book[k] = done
+                            closed.append(done)
+                last_ts = int(candles[-1]["timestamp"])
+                if not _rf.can_open(book, sym, last_ts):
+                    continue
+                try:
+                    pat = _rf.confirmed_today(detect_fn(candles), last_ts)
+                except Exception:
+                    pat = None
+                t = _rf.open_trade(sym, pat, candles) if pat else None
+                if t:
+                    book.append(t)
+                    opened.append(t)
+            if closed or opened:
+                _rev_fwd_save(book)
+            tally = _rf.summary(book)
+            if notify:
+                try:
+                    if opened:
+                        _scalp_private(_rf.opened_note(opened))
+                    for t in closed:
+                        _scalp_private(_rf.closed_note(t, tally))
+                except Exception:
+                    pass
+            return {"ran": True, "opened": len(opened), "closed": len(closed),
+                    "fetch_errors": errors, "verdict": tally.get("verdict")}
+        finally:
+            try:
+                _kv.release(lock)
+            except Exception:
+                pass
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+def _rev_fwd_view() -> dict:
+    import rev_forward as _rf
+    book = _rev_fwd_load()
+    return {"enabled": _rf.enabled(), "paper_only": True,
+            "rule": (f"every confirmed 1D reversal pattern (double / triple top and bottom, head & "
+                     f"shoulders) on {len(_rf.UNIVERSE)} coins; stop and target {_rf.ATR_MULT:g} x 1D "
+                     f"ATR each, max {_rf.HOLD_DAYS} days, ${_rf.RISK_USD:g} risk, 0.13% costs, one per "
+                     f"coin per {_rf.COOLDOWN_DAYS} days; verdict after {_rf.VERDICT_TRADES} trades: a "
+                     f"profit and >= {_rf.MIN_WIN_PCT:g}% wins"),
+            "summary": _rf.summary(book), "recent": book[-40:]}
+
+
+@app.get("/api/cron/rev-forward")
+@app.post("/api/cron/rev-forward")
+def api_cron_rev_forward():
+    """The 1D reversal-pattern paper book, once a day after the 1D close."""
+    if not (_cron_authorized() or _scheduler_token_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    res = _rev_fwd_daily()
+    print(f"[cron/rev-forward] {res}")
+    ok = bool(res.get("ran")) or res.get("reason") in ("REV_FORWARD_OFF", "BUSY")
+    return jsonify({"ok": ok, "result": res}), (200 if ok else 503)
+
+
 FUNCTION_LIMIT_S = 300      # = vercel.json maxDuration (tested to match)
 
 
@@ -7586,6 +7702,7 @@ def api_hl_scalp():
                     "trade_audit": _kv_json_list(f"scalp:audit:{_deploy_env()}")[-60:],
                     "amd_forward": _amd_forward_view(),
                     "htf_forward": _htf_fwd_view(),
+                    "rev_forward": _rev_fwd_view(),
                     "timings": _timings_view(runs)})
 
 
@@ -8202,7 +8319,7 @@ _SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/mon
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
                     "/api/research/ml/collect", "/api/research/ml/label",
-                    "/api/cron/scalp")
+                    "/api/cron/scalp", "/api/cron/rev-forward")
 
 
 def _scheduler_token_ok() -> bool:
