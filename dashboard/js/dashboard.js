@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '268';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '269';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3354,7 +3354,7 @@ function renderEtfFlows(etf, symbol) {
   const grid = document.getElementById('etfFlowGrid');
   if (!sec || !grid) return;
 
-  const ETF_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP', 'HBAR'];
+  const ETF_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP', 'HBAR', 'LTC', 'DOGE', 'LINK', 'AVAX', 'DOT'];
   if (!ETF_SYMBOLS.includes(symbol)) {
     sec.style.display = 'none';
     return;
@@ -3362,18 +3362,8 @@ function renderEtfFlows(etf, symbol) {
   sec.style.display = '';
 
   if (!etf) {
-    // XRP/HBAR: ETFs are live but SoSoValue's Open API doesn't serve their
-    // flow history yet (dashboard-only). Link to the live dashboard meanwhile.
-    const SLUGS = { BTC: 'us-btc-spot', ETH: 'us-eth-spot', SOL: 'us-sol-spot',
-                    XRP: 'us-xrp-spot', HBAR: 'us-hbar-spot' };
-    const apiLag = (symbol === 'XRP' || symbol === 'HBAR');
-    const slug = SLUGS[symbol];
-    grid.innerHTML = `<div class="etf-unavailable">${apiLag
-      ? `${symbol} spot ETFs are live, but SoSoValue's API doesn't serve their flow history yet
-         (dashboard-only). View live flows at
-         <a href="https://sosovalue.com/assets/etf/${slug}" target="_blank" rel="noopener">sosovalue.com/assets/etf/${slug}</a>
-         — this card will populate automatically once their API adds coverage.`
-      : 'ETF flow data unavailable — data source unreachable, retrying automatically'}</div>`;
+    grid.innerHTML = `<div class="etf-unavailable">ETF flow data unavailable — data source
+      unreachable, retrying automatically</div>`;
     const sub = document.getElementById('etfFlowsSub');
     if (sub) sub.textContent = 'Institutional inflow / outflow';
     return;
