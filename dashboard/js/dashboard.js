@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '265';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '266';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -8402,6 +8402,7 @@ async function loadCalendar() {
     const res = await fetch(`${API}/calendar`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    _renderMegaIpos(data.mega_ipos);
     const evs = data.events || [];
     if (!evs.length) { el.style.display = 'none'; return; }
     el.innerHTML = evs.slice(0, 4).map(e => {
@@ -8415,6 +8416,48 @@ async function loadCalendar() {
     }).join('');
     el.style.display = '';
   } catch (_) { el.style.display = 'none'; }
+}
+
+// Mega-IPOs (mega_ipo.py): listings valued at >= 50% of BTC's market cap.
+// Information only: two past cases (Aramco, SpaceX) are not a pattern.
+function _renderMegaIpos(m) {
+  const el = document.getElementById('megaIpoStrip');
+  if (!el) return;
+  while (el.firstChild) el.removeChild(el.firstChild);
+  const items = (m && m.items) || [];
+  if (!items.length) { el.style.display = 'none'; return; }
+  const big = v => v >= 1e12 ? `$${(v / 1e12).toFixed(1)}T` : `$${Math.round(v / 1e9)}B`;
+  const pct = v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  const add = (cls, text) => {
+    const p = document.createElement('div'); p.className = cls; p.textContent = text; el.appendChild(p);
+  };
+  add('mega-ipo-title', '🏦 Mega-IPOs (valued at ≥ 50% of Bitcoin\'s market cap'
+      + (m.threshold_usd ? `, ≈ ${big(m.threshold_usd)} now` : '') + ')');
+  items.forEach(e => {
+    const d = e.days_to;
+    const when = d == null ? 'date not set'
+      : d > 1 ? `in ${d} days (${e.date})` : d === 1 ? `tomorrow (${e.date})`
+      : d === 0 ? `TODAY (${e.date})` : `listed ${-d} days ago (${e.date})`;
+    const size = e.share_of_btc != null
+      ? `valued ${big(e.valuation_usd)} = ${Math.round(e.share_of_btc * 100)}% of BTC's market cap`
+      : 'size not confirmed';
+    let line = `${e.name} — ${when} · ${size}`;
+    if (d != null && d < 0 && e.btc) {
+      const lbl = ['50d before', 'day 0→18', 'day 18→70'];
+      const done = e.btc.map((v, i) => v == null ? null : `${lbl[i]} ${pct(v)}`).filter(Boolean);
+      if (done.length) line += ` · BTC ${done.join(', ')}`;
+    }
+    if (e.note) line += ` · ${e.note}`;
+    add('mega-ipo-item', '• ' + line);
+  });
+  const hist = (m.history || []).filter(h => h.btc && h.btc[0] != null);
+  if (hist.length) {
+    add('mega-ipo-note', `Past mega-IPOs, BTC in the 50 days before: ` +
+      hist.map(h => `${h.name} ${pct(h.btc[0])}`).join(', ') +
+      ` · BTC rose into normal big IPOs (+23% avg over 11). Only ${hist.length} giant ` +
+      `case${hist.length > 1 ? 's' : ''} so far: information, not a signal.`);
+  }
+  el.style.display = '';
 }
 
 /* ─── Signal outcome tracker (this device) ────────────────────────────────── */

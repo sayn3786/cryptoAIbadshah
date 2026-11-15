@@ -340,7 +340,8 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "",
                         active: Optional[Dict[str, str]] = None,
                         coins: Optional[int] = None,
                         sections: Optional[List] = None,
-                        lean_alerts: Optional[List[Dict]] = None) -> bool:
+                        lean_alerts: Optional[List[Dict]] = None,
+                        notes: Optional[List[str]] = None) -> bool:
     """Send freshly-confirmed alerts to the configured Telegram channel as ONE
     coin-grouped, ranked "Market Update" (see telegram_digest), instead of a
     separate message per alert type. Every read is included; a long update is
@@ -363,7 +364,7 @@ def send_pattern_alerts(alerts: List[Dict], date_label: str = "",
         from telegram_digest import build_market_digest_sections
         parts, loud = build_market_digest_sections(sections, active=active,
                                                    date_label=date_label, coins=coins,
-                                                   lean_alerts=lean_alerts)
+                                                   lean_alerts=lean_alerts, notes=notes)
     else:
         from telegram_digest import build_market_digest_parts
         parts, loud = build_market_digest_parts(alerts, active=active, date_label=date_label,

@@ -369,7 +369,8 @@ def build_market_digest_sections(sections: List[Tuple[str, List[Dict[str, Any]]]
                                  date_label: str = "",
                                  max_chars: Optional[int] = MAX_MESSAGE_CHARS,
                                  coins: Optional[int] = None,
-                                 lean_alerts: Optional[List[Dict[str, Any]]] = None
+                                 lean_alerts: Optional[List[Dict[str, Any]]] = None,
+                                 notes: Optional[List[str]] = None
                                  ) -> Tuple[List[str], bool]:
     """([message texts], loud) for the morning Market Update grouped by
     timeframe: `sections` = [(header line, that timeframe's reads)] in order
@@ -383,6 +384,8 @@ def build_market_digest_sections(sections: List[Tuple[str, List[Dict[str, Any]]]
         import market_lean
         blocks.append(market_lean.render(lean_alerts if lean_alerts is not None else every,
                                          coins))
+    if notes:
+        blocks.append("\n".join(notes))       # e.g. a mega-IPO heads-up (mega_ipo)
     loud_any, fresh_any, body = False, False, []
     for head, items in sections:
         cb, fb, fresh, loud = _coin_blocks(items, active)

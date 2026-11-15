@@ -2488,3 +2488,10 @@ html { overflow-x: hidden; }
 .rec-worse  { background: rgba(239, 68, 68, .15); color: #fca5a5; }
 .rec-better { background: rgba(16, 185, 129, .15); color: #6ee7b7; }
 .rec-chance { background: rgba(148, 163, 184, .15); color: #cbd5e1; }
+
+/* Mega-IPO watch (mega_ipo.py). */
+.mega-ipo { margin: 8px 0; padding: 8px 10px; border-radius: 8px; font-size: .78rem; line-height: 1.5;
+  border: 1px solid rgba(251, 191, 36, .35); background: rgba(251, 191, 36, .06); color: var(--muted2, #94a3b8); }
+.mega-ipo-title { font-weight: 600; color: var(--text, #e2e8f0); margin-bottom: 2px; }
+.mega-ipo-item { margin: 2px 0; }
+.mega-ipo-note { margin-top: 4px; font-style: italic; }
