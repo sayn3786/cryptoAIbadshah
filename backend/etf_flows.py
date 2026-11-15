@@ -234,7 +234,10 @@ def _ssv_api_daily(symbol: str):
                 timeout=TIMEOUT,
             )
             if r.status_code != 200:
-                _log(symbol, "sosovalue-api", path, f"{etf_type}: HTTP {r.status_code}: {r.text[:70]}")
+                body = r.text or ""
+                why = ("refused by the provider's firewall (web page, not an API reply)"
+                       if body.lstrip().startswith("<") else body[:70])
+                _log(symbol, "sosovalue-api", path, f"{etf_type}: HTTP {r.status_code}: {why}")
                 continue
             payload = r.json()
             if str(payload.get("code")) not in ("0", "200"):
@@ -349,6 +352,34 @@ def _ssv_etf_flows(symbol: str) -> Optional[Dict]:
     return _build_result(daily, symbol, source="sosovalue") if daily else None
 
 
+def _recorded_flows(symbol: str, list_fn=None) -> Optional[Dict]:
+    """The last 60 recorded days from the durable store, as a normal result
+    with source "recorded" and stale=True; None without a database / rows."""
+    from datetime import datetime, timezone
+    try:
+        if list_fn is None:
+            import etf_store
+            list_fn = etf_store.list_daily
+        rows = list_fn(symbol, limit=60) or []
+    except Exception as e:                               # noqa: BLE001
+        _log(symbol, "recorded", "etf_flow_daily", f"{type(e).__name__}: {e}"[:150])
+        return None
+    daily = []
+    for r in rows:
+        try:
+            ts = int(datetime.strptime(str(r["date"])[:10], "%Y-%m-%d")
+                     .replace(tzinfo=timezone.utc).timestamp() * 1000)
+            daily.append({"ts": ts, "net_usd": float(r["net_usd"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    res = _build_result(daily, symbol, source="recorded") if daily else None
+    _log(symbol, "recorded", "etf_flow_daily",
+         f"{len(daily)} saved days" + ("" if res else " - nothing usable"))
+    if res:
+        res["stale"] = True
+    return res
+
+
 class ETFFlowClient:
     def __init__(self, api_key: str = ""):
         self.api_key = api_key or os.getenv("COINGLASS_API_KEY", "")
@@ -448,6 +479,12 @@ class ETFFlowClient:
         # 4. Keyless best-effort fallback (unofficial endpoints)
         if not result and ssv:
             result = _ssv_etf_flows(symbol)
+
+        # 5. Our own saved record (etf_flow_daily, filled by the daily
+        #    snapshot cron): the last known flows, marked stale, rather than
+        #    an empty card when every live source is down.
+        if not result:
+            result = _recorded_flows(symbol)
 
         _cache[cache_key] = (result, time.time())
         return result

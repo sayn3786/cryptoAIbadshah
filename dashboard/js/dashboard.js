@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '267';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '268';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -3381,7 +3381,8 @@ function renderEtfFlows(etf, symbol) {
 
   const sub = document.getElementById('etfFlowsSub');
   if (sub) {
-    const src = etf.source === 'sosovalue' ? 'SoSoValue' : etf.source === 'coinglass' ? 'CoinGlass' : etf.source || '';
+    const src = etf.source === 'sosovalue' ? 'SoSoValue' : etf.source === 'coinglass' ? 'CoinGlass'
+      : etf.source === 'recorded' ? 'our saved record (live source down)' : etf.source || '';
     // Flag if the latest available day is >2 days old (weekend/holiday is
     // normal; older than that suggests the feed itself is behind).
     let asOf = '';
