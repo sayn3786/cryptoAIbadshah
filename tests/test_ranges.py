@@ -48,7 +48,7 @@ def test_a_deviation_below_is_confirmed_on_the_close_back_inside():
 def test_a_break_and_a_long_absence_are_not_deviations():
     brk = rg.boxes(trend_then_range([215]))[-1]
     assert brk["event"] == "broke_above" and brk["position"] == "above"
-    away = rg.boxes(trend_then_range([215, 220, 225, 230, 228, 226, 224, 220, 207]))[-1]
+    away = rg.boxes(trend_then_range([215, 220, 225, 230, 228, 226, 224, 220, 205]))[-1]
     assert away["event"] == "back_inside" and away["outside_candles"] == 8
     up = rg.boxes(trend_then_range([214, 205]))[-1]
     assert up["event"] == "deviation_above"
@@ -96,3 +96,30 @@ def test_a_range_candle_inside_the_tolerance_does_not_hide_the_break():
     b = rg.boxes(bars)[-1]
     assert b["event"] == "broke_below" and b["event_ago"] == 0
     assert "below it" in b["text"] and "-" not in b["text"].split("Price is now")[1][:3]
+
+
+def test_a_close_just_over_the_edge_is_not_back_inside():
+    # 207 is inside 202-208 by 1, within 0.25 ATR (~1.5): still outside
+    b = rg.boxes(trend_then_range([215, 207]))[-1]
+    assert b["event"] == "broke_above" and b["event_ago"] == 1
+    assert rg.boxes(trend_then_range([215, 205]))[-1]["event"] == "deviation_above"
+
+
+def test_an_old_range_stops_at_the_next_one():
+    """TAO, Nov 2026: a big candle breaks below range A, a new range B forms
+    whose top overlaps A's bottom; pokes into the overlap must not re-break A."""
+    bars, p = [], 50.0
+    for i in range(30):                                   # trend: ATR ~ 6
+        bars.append(bar(i, p, p + 5)); p += 5
+    for k in range(20):                                   # range A: 202-208
+        o, c = (202, 208) if k % 2 == 0 else (208, 202)
+        bars.append(bar(30 + k, o, c))
+    bars.append(bar(50, 202, 185))                        # the big break below A
+    for k in range(20):                                   # range B: 184-203 (top overlaps A)
+        o, c = (186, 203) if k % 2 == 0 else (203, 186)
+        bars.append(bar(51 + k, o, c))
+    bars.append(bar(71, 203, 180))                        # B breaks down later
+    found = rg.find_ranges(bars)
+    assert len(found) >= 2
+    a = [b for b in rg.boxes(bars) if b["top"] == 208][0]
+    assert a["event"] == "broke_below" and a["event_ts"] == 50 * D   # the big candle keeps it
