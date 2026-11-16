@@ -6237,7 +6237,17 @@ def _hl_auto_execute_pass():
                                           "user": _ha.account_address()}) or []
         except Exception:
             open_orders = None             # the position manager still cleans up
-        out = _ax.execute(signals, account_state=acct, open_orders=open_orders)
+        capture, events = None, []
+        if os.getenv("HL_TESTNET_CAPTURE_SCOPE") and _ha._env() == "testnet":
+            from published_order_recorder import prepare
+            capture = prepare(acct, _ha.account_address(), events)
+        try:
+            out = _ax.execute(signals, account_state=acct, open_orders=open_orders,
+                              **({"capture": capture} if capture else {}))
+        finally:
+            if events:
+                from published_order_recorder import flush
+                flush(events)
     _record_hl_signal_runs(signals, out.get("results") or [], skipped)
     try:                                   # private trade/problem alerts; never fatal
         import ops_alerts
