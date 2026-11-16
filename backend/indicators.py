@@ -2003,7 +2003,11 @@ def calculate_stoch_rsi(closes: List[float], rsi_period: int = 14,
         signal = "neutral"
 
     zone = "oversold" if k < 20 else ("overbought" if k > 80 else "neutral")
-    return {"k": k, "d": d, "signal": signal, "zone": zone}
+    # The last 40 values of each line (newest last; D is aligned to K's end)
+    # for the dashboard card's mini chart. Display only.
+    return {"k": k, "d": d, "signal": signal, "zone": zone,
+            "k_series": [round(v, 2) for v in k_line[-40:]],
+            "d_series": [round(v, 2) for v in d_line[-40:]]}
 
 
 def calculate_volume_signal(candles: List[Dict], lookback: int = 20) -> Dict:

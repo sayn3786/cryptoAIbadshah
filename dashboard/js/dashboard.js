@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '269';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '270';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -461,11 +461,11 @@ function renderAll(a) {
   renderCVDDivergence(a.cvd_divergence);
   renderOBV(a.obv);
   renderFVGTable(a.fvgs);
-  renderFlags(a.flags, a.candles, a.signal, a.flag_diagnostics);
+  S._patArgs = { flags: a.flags, rev: a.reversal_patterns, tri: a.triangle_patterns,
+                  candles: a.candles, signal: a.signal, diag: a.flag_diagnostics };
+  _renderPatternLists();      // flags, reversals, triangles: high-chance first (see _patternChance)
   renderStructurePanel(a.structure_panel);
   renderStructureChart(a);
-  renderReversals(a.reversal_patterns, a.candles);
-  renderTriangles(a.triangle_patterns, a.candles);
   // The card lists the last 4 closed candles (engulfing_recent); the score
   // itself reads only the newest one (a.engulfing).
   renderEngulfing(a.engulfing_recent || a.engulfing, a.timeframe, a.engulfing_near_miss);
@@ -2246,7 +2246,46 @@ function renderStochRsiCard(srsi) {
   zoneEl.style.color = zone === 'oversold' ? 'var(--bull)' : zone === 'overbought' ? 'var(--bear)' : 'var(--muted2)';
   rowsEl.innerHTML = `
     <div class="srsi-row"><span class="srsi-label">K</span><span>${srsi.k ?? '—'}</span></div>
-    <div class="srsi-row"><span class="srsi-label">D</span><span>${srsi.d ?? '—'}</span></div>`;
+    <div class="srsi-row"><span class="srsi-label">D</span><span>${srsi.d ?? '—'}</span></div>
+    ${_stochSvg(srsi)}`;
+}
+
+// Mini chart for the Stoch RSI card: the last 40 candles of K (blue) and D
+// (orange), the oversold (< 20, green) and overbought (> 80, red) zones, and a
+// marker at every K/D cross inside a zone - ▲ bull cross in oversold, ▼ bear
+// cross in overbought (the crosses the card's signal names).
+function _stochSvg(srsi) {
+  const k = (srsi.k_series || []).map(Number), d = (srsi.d_series || []).map(Number);
+  if (k.length < 3) return '';
+  const W = 260, H = 96, n = k.length;
+  const dk = d.slice(-n), off = n - dk.length;             // align D's end to K's end
+  const x = i => (i / (n - 1)) * (W - 8) + 4;
+  const y = v => 4 + (1 - Math.max(0, Math.min(100, v)) / 100) * (H - 8);
+  const line = (arr, o) => arr.map((v, i) => `${i ? 'L' : 'M'}${x(i + o).toFixed(1)},${y(v).toFixed(1)}`).join('');
+  const marks = [];
+  for (let i = Math.max(1, off + 1); i < n; i++) {
+    const kd = k[i] - dk[i - off], kdp = k[i - 1] - dk[i - 1 - off];
+    // A real cross only: K turning by more than 2 points (flat lines hugging
+    // 0 or 100 flip-flop by fractions and would litter the chart).
+    if (kdp <= 0 && kd > 0 && Math.min(k[i], k[i - 1]) <= 20 && k[i] - k[i - 1] > 2) {
+      marks.push(`<path d="M${x(i) - 5},${y(k[i]) - 3} L${x(i) + 5},${y(k[i]) - 3} L${x(i)},${y(k[i]) - 11} Z" fill="#22c55e"/>`);
+    } else if (kdp >= 0 && kd < 0 && Math.max(k[i], k[i - 1]) >= 80 && k[i - 1] - k[i] > 2) {
+      marks.push(`<path d="M${x(i) - 5},${y(k[i]) - 11} L${x(i) + 5},${y(k[i]) - 11} L${x(i)},${y(k[i]) - 3} Z" fill="#ef4444"/>`);
+    }
+  }
+  return `<div class="srsi-chart" title="Stoch RSI: K (blue) and D (orange), last ${n} candles. Green zone = oversold (below 20), red zone = overbought (above 80). ▲ = K crossed above D in oversold (bull cross), ▼ = K crossed below D in overbought (bear cross).">
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Stoch RSI K and D lines">
+      <rect x="0" y="${y(100)}" width="${W}" height="${y(80) - y(100)}" fill="rgba(239,68,68,.10)"/>
+      <rect x="0" y="${y(20)}" width="${W}" height="${y(0) - y(20)}" fill="rgba(34,197,94,.12)"/>
+      <line x1="0" x2="${W}" y1="${y(80)}" y2="${y(80)}" stroke="rgba(239,68,68,.5)" stroke-dasharray="3 3"/>
+      <line x1="0" x2="${W}" y1="${y(20)}" y2="${y(20)}" stroke="rgba(34,197,94,.5)" stroke-dasharray="3 3"/>
+      <path d="${line(dk, off)}" fill="none" stroke="#f59e0b" stroke-width="1.6"/>
+      <path d="${line(k, 0)}" fill="none" stroke="#60a5fa" stroke-width="1.8"/>
+      ${marks.join('')}
+    </svg>
+    <div class="srsi-legend"><span style="color:#60a5fa">━ K</span> <span style="color:#f59e0b">━ D</span>
+      <span>▲ bull cross in oversold · ▼ bear cross in overbought · last ${n} candles</span></div>
+  </div>`;
 }
 
 function renderVolSignalCard(vol) {
@@ -4752,14 +4791,83 @@ function _patternRecord(type, tf) {
   return { n, hit, chance, avgR, z, edge, verdict };
 }
 
+// Which patterns count as HIGH CHANCE (shown by default; the rest sit behind
+// "show more"): a 1D reversal pattern - the one family that beat the opposite
+// trade in two tests (reversal_1d_test, reversal_factors_1d: 55-60% on a
+// 1.5 x ATR 1:1 trade) - or a pattern whose track record beat chance.
+const TESTED_1D_REVERSALS = ['double_top', 'double_bottom', 'triple_top', 'triple_bottom',
+                             'head_shoulders', 'inverse_head_shoulders'];
+function _patternChance(pat, kind) {
+  if (kind === 'rev' && pat.timeframe === '1D' && TESTED_1D_REVERSALS.includes(pat.type)) return 'high';
+  const r = _patternRecord(_recordKey(pat, kind), pat.timeframe);
+  if (!r) return 'unknown';
+  return r.verdict === 'better' ? 'high' : r.verdict === 'worse' ? 'low' : 'chance';
+}
+
+function _showAllPatterns() {
+  try { return localStorage.getItem('patterns_show_all') === '1'; } catch (_) { return false; }
+}
+
+function _splitByChance(list, kind) {
+  const all = (list || []).filter(Boolean);
+  if (_showAllPatterns()) return { shown: all, hidden: [] };
+  return { shown: all.filter(p => _patternChance(p, kind) === 'high'),
+           hidden: all.filter(p => _patternChance(p, kind) !== 'high') };
+}
+
+// The "N more hidden" line under a pattern list, with the show / hide toggle.
+function _hiddenNote(listId, hiddenCount) {
+  const el = document.getElementById(listId);
+  if (!el) return;
+  const all = _showAllPatterns();
+  if (!all && !hiddenCount) return;
+  const empty = el.querySelector('p.empty');
+  if (empty && !all) empty.textContent = 'No high-chance patterns right now';
+  const p = document.createElement('div');
+  p.className = 'pattern-hidden-note';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'pattern-toggle';
+  b.textContent = all ? 'Show only high-chance patterns' : `Show ${hiddenCount} more`;
+  b.addEventListener('click', () => {
+    try { localStorage.setItem('patterns_show_all', all ? '0' : '1'); } catch (_) {}
+    _renderPatternLists();
+  });
+  p.appendChild(document.createTextNode(all
+    ? 'Showing every pattern, including the low-chance ones. '
+    : `${hiddenCount} lower-chance pattern${hiddenCount > 1 ? 's' : ''} hidden ` +
+      '(about chance, worse than random, or no track record). '));
+  p.appendChild(b);
+  el.appendChild(p);
+}
+
+function _renderPatternLists() {
+  const a = S._patArgs;
+  if (!a) return;
+  const f = _splitByChance(a.flags, 'flag');
+  const r = _splitByChance(a.rev, 'rev');
+  const t = _splitByChance(a.tri, 'tri');
+  renderFlags(f.shown, a.candles, a.signal, a.diag);
+  _hiddenNote('flagList', f.hidden.length);
+  renderReversals(r.shown, a.candles);
+  _hiddenNote('revList', r.hidden.length);
+  renderTriangles(t.shown, a.candles);
+  _hiddenNote('triList', t.hidden.length);
+}
+
 function _recordKey(pat, kind) {
   if (kind === 'flag') return pat.direction === 'bullish' ? 'bull_flag' : 'bear_flag';
   return pat.type || '';
 }
 
 function _recordLine(pat, kind) {
+  const tested = (kind === 'rev' && pat.timeframe === '1D' && TESTED_1D_REVERSALS.includes(pat.type))
+    ? '<div class="pattern-record"><span class="rec-tag rec-better">✓ Tested edge</span> On 1D, ' +
+      'trading these patterns won 55–60% in two separate tests (stop and target 1.5 × the daily ' +
+      'range, up to 20 days), against 39–45% for the opposite trade. Being paper-tested live now.</div>'
+    : '';
   const r = _patternRecord(_recordKey(pat, kind), pat.timeframe);
-  if (!r) return '';
+  if (!r) return tested;
   const tag = {
     worse:  '<span class="rec-tag rec-worse">⚠ Worse than random</span>',
     better: '<span class="rec-tag rec-better">▲ Beat chance</span>',
@@ -4770,7 +4878,7 @@ function _recordLine(pat, kind) {
     'entry at the breakout close, stop where the pattern is wrong. "Chance" is how often ' +
     'random price moves would reach the target first, given where target and stop sit. ' +
     'Coins move together and the last year was a falling market, so treat small edges with care.';
-  return `<div class="pattern-record" title="${tip}">📊 Track record (${pat.timeframe}, ` +
+  return tested + `<div class="pattern-record" title="${tip}">📊 Track record (${pat.timeframe}, ` +
     `${r.n.toLocaleString('en-US')} breakouts): hit target <b>${r.hit}%</b> vs ` +
     `${r.chance}% by chance · avg ${r.avgR >= 0 ? '+' : ''}${r.avgR.toFixed(2)}R per trade ${tag}</div>`;
 }

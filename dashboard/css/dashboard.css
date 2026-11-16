@@ -2495,3 +2495,13 @@ html { overflow-x: hidden; }
 .mega-ipo-title { font-weight: 600; color: var(--text, #e2e8f0); margin-bottom: 2px; }
 .mega-ipo-item { margin: 2px 0; }
 .mega-ipo-note { margin-top: 4px; font-style: italic; }
+
+/* Stoch RSI mini chart. */
+.srsi-chart { margin-top: 8px; }
+.srsi-chart svg { display: block; border-radius: 4px; background: rgba(148, 163, 184, .04); }
+.srsi-legend { font-size: .7rem; color: var(--muted2, #94a3b8); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Pattern lists: lower-chance patterns hidden behind a toggle. */
+.pattern-hidden-note { margin: 8px 2px 2px; font-size: .76rem; color: var(--muted2, #94a3b8); }
+.pattern-toggle { margin-left: 4px; padding: 2px 9px; border-radius: 10px; font-size: .74rem; cursor: pointer;
+  background: rgba(96, 165, 250, .12); color: #93c5fd; border: 1px solid rgba(96, 165, 250, .35); }
