@@ -333,7 +333,7 @@ def _reflect_open(account_state: Dict[str, Any], coin: str, notional: Any) -> No
 
 def _attach_exits(sig: Dict[str, Any], res: Dict[str, Any], *,
                   table: Dict[str, Any], exit_fn: Callable,
-                  env: Optional[str]) -> None:
+                  env: Optional[str], observer=None) -> None:
     """Place the reduce-only SL + TP1 for a filled open. Best-effort: a failure
     is recorded on the result and never raises — the position stays either way,
     and reduce-only exits can only ever shrink it."""
@@ -363,7 +363,7 @@ def _attach_exits(sig: Dict[str, Any], res: Dict[str, Any], *,
             coin, is_buy_exit, size, sl_px, tp_px, env=env,
             sl_cloid=hl_execution.client_order_id(sid, "sl", cts) if sl_px else None,
             tp_cloid=hl_execution.client_order_id(sid, "tp1", cts) if tp_px else None,
-            **extra)
+            **extra, **({"evidence_signal": sig, "evidence_observer": observer} if observer else {}))
         res["exit_prices"] = {"sl": sl_px, "tp": tp_px,
                               "tp2": tp2_px if split else None,
                               "signal_sl": sig.get("sl")}
@@ -414,7 +414,7 @@ def execute(signals: List[Dict[str, Any]], *,
             exit_fn: Optional[Callable] = None,
             open_orders: Optional[List[Dict[str, Any]]] = None,
             cancel_fn: Optional[Callable] = None,
-            env: Optional[str] = None) -> Dict[str, Any]:
+            env: Optional[str] = None, capture=None) -> Dict[str, Any]:
     """Open each signal through the Phase-4a guard, attaching a stop + TP1 to
     every fill. Returns {"attempted", "executed", "results"}.
 
@@ -431,6 +431,8 @@ def execute(signals: List[Dict[str, Any]], *,
     results: List[Dict[str, Any]] = []
     run_count = 0
     for sig in signals:
+        observer = (capture[1] if capture and str(sig.get("id")) == capture[0]
+                    and hl_exchange.hl_account._env(env) == "testnet" else None)
         cleared = []
         if open_orders is not None:
             coin = hl_meta.resolve_coin(sig.get("symbol"), table)
@@ -444,12 +446,13 @@ def execute(signals: List[Dict[str, Any]], *,
             if cleared:
                 open_orders = [o for o in open_orders if o.get("oid") not in cleared]
         res = open_fn(sig, account_state=account_state, table=table,
-                      run_order_count=run_count, cfg=cfg, env=env)
+                      run_order_count=run_count, cfg=cfg, env=env,
+                      **({"evidence_observer": observer} if observer else {}))
         if cleared:
             res["cleared_leftover_oids"] = cleared
         if res.get("ok"):
             run_count += 1
             _reflect_open(account_state, res.get("coin"), res.get("notional_usd"))
-            _attach_exits(sig, res, table=table, exit_fn=exit_fn, env=env)
+            _attach_exits(sig, res, table=table, exit_fn=exit_fn, env=env, observer=observer)
         results.append(res)
     return {"attempted": len(signals), "executed": run_count, "results": results}
