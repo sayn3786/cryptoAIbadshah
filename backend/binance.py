@@ -2,6 +2,7 @@
 Market data client — tries Binance → CoinGecko → Kraken → Gate.io → demo.
 Pure Python (requests), no compilation required.
 """
+import threading
 import time
 import requests
 import os
@@ -347,6 +348,32 @@ class BinanceClient:
         r = self._s.get(url, params=params or {}, timeout=TIMEOUT)
         r.raise_for_status()
         return r.json()
+
+    # OKX public endpoints have per-IP rate limits (funding-rate-history: 10
+    # requests / 2 s). The close job reads up to 20 coins at once, so about
+    # half the funding calls were refused and fell back to a mock estimate
+    # (the forward log showed funding real on only 45% of coins, OI - same
+    # coins, a 20 / 2 s endpoint - on 90%). OKX calls go through a small
+    # semaphore and retry when OKX says "too many requests".
+    _okx_slots = threading.BoundedSemaphore(4)
+    OKX_RATE_CODES = ("50011", "50061")
+
+    def _okx_get(self, url: str, params: dict = None, tries: int = 3) -> dict:
+        last = None
+        for k in range(tries):
+            with self._okx_slots:
+                try:
+                    d = self._get(url, params)
+                except requests.HTTPError as e:            # HTTP 429 = rate limited
+                    if getattr(e.response, "status_code", None) != 429:
+                        raise
+                    d, last = None, e
+            if d is not None and str((d or {}).get("code", "0")) not in self.OKX_RATE_CODES:
+                return d
+            time.sleep(0.5 * (k + 1))
+        if last:
+            raise last
+        return d or {}
 
     def _parse_kline(self, k: list) -> Dict:
         return {
@@ -1186,7 +1213,19 @@ class BinanceClient:
         self.data_source = current_source
         return result
 
+    _funding_cache: Dict[str, tuple] = {}
+    FUNDING_TTL_S = 600      # one number for every timeframe; changes every few hours
+
     def get_funding_rate(self, symbol: str, limit: int = 10) -> Dict:
+        hit = self._funding_cache.get((symbol, limit))
+        if hit and time.time() - hit[1] < self.FUNDING_TTL_S:
+            return dict(hit[0])
+        got = self._funding_rate_live(symbol, limit)
+        if got.get("source") != "mock":
+            self._funding_cache[(symbol, limit)] = (dict(got), time.time())
+        return got
+
+    def _funding_rate_live(self, symbol: str, limit: int = 10) -> Dict:
         try:
             data = self._get(f"{FUTURES_BASE}/fapi/v1/fundingRate",
                              {"symbol": symbol, "limit": limit})
@@ -1220,8 +1259,8 @@ class BinanceClient:
 
     def _okx_funding(self, symbol: str, limit: int = 10) -> Optional[Dict]:
         base = symbol[:-4] if symbol.endswith("USDT") else symbol
-        d = self._get(f"{OKX_BASE}/api/v5/public/funding-rate-history",
-                      {"instId": f"{base}-USDT-SWAP", "limit": limit})
+        d = self._okx_get(f"{OKX_BASE}/api/v5/public/funding-rate-history",
+                          {"instId": f"{base}-USDT-SWAP", "limit": limit})
         rows = sorted(((d or {}).get("data") or []), key=lambda r: int(r["fundingTime"]))
         if not rows:
             return None
@@ -1326,8 +1365,75 @@ class BinanceClient:
             }
         except Exception:
             pass
+        # Fallback: OKX's public liquidation feed (keyless, reachable where
+        # Binance futures is geo-blocked - which is every request from the US
+        # servers, so this is the live source in practice).
+        try:
+            got = self._okx_liquidations(symbol)
+            if got:
+                return got
+        except Exception:
+            pass
         from mock_data import mock_liquidations
         return {**mock_liquidations(symbol), "source": "mock"}
+
+    _okx_ctval: Dict[str, float] = {}
+    _okx_ctval_at = 0.0
+
+    def _okx_contract_value(self, inst_id: str) -> Optional[float]:
+        """Coins per contract of an OKX USDT swap (ctVal), from the instrument
+        list - one call for all swaps, refreshed daily."""
+        if not self._okx_ctval or time.time() - self._okx_ctval_at > 86_400:
+            d = self._okx_get(f"{OKX_BASE}/api/v5/public/instruments", {"instType": "SWAP"})
+            vals = {}
+            for r in (d or {}).get("data") or []:
+                try:
+                    vals[r["instId"]] = float(r["ctVal"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if vals:
+                type(self)._okx_ctval = vals
+                type(self)._okx_ctval_at = time.time()
+        return self._okx_ctval.get(inst_id)
+
+    def _okx_liquidations(self, symbol: str, hours: int = 24) -> Optional[Dict]:
+        """Filled liquidations of the coin's OKX USDT swap over the last
+        `hours`, in USD: a long liquidated is a forced SELL (posSide long)."""
+        base = symbol[:-4] if symbol.endswith("USDT") else symbol
+        inst = f"{base}-USDT-SWAP"
+        ct = self._okx_contract_value(inst)
+        if not ct:
+            return None
+        d = self._okx_get(f"{OKX_BASE}/api/v5/public/liquidation-orders",
+                          {"instType": "SWAP", "uly": f"{base}-USDT", "state": "filled", "limit": 100})
+        rows = (d or {}).get("data")
+        if rows is None:
+            return None
+        since = (time.time() - hours * 3600) * 1000
+        longs = shorts = 0.0
+        recent = []
+        for block in rows or []:
+            for x in block.get("details") or []:
+                try:
+                    ts = int(x["ts"])
+                    px, sz = float(x["bkPx"]), float(x["sz"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if ts < since:
+                    continue
+                usd = sz * ct * px
+                is_long = (x.get("posSide") == "long") or (x.get("posSide") in (None, "", "net")
+                                                          and x.get("side") == "sell")
+                if is_long:
+                    longs += usd
+                else:
+                    shorts += usd
+                recent.append({"side": "LONG" if is_long else "SHORT", "qty": round(sz * ct, 8),
+                               "price": px, "value": round(usd, 2), "timestamp": ts})
+        recent.sort(key=lambda r: r["timestamp"], reverse=True)
+        return {"longs_liquidated": round(longs, 2), "shorts_liquidated": round(shorts, 2),
+                "total": round(longs + shorts, 2), "recent": recent[:20],
+                "window_hours": hours, "source": "okx"}
 
     def get_long_short_ratio(self, symbol: str) -> Dict:
         """Aggregated long/short ratio — fetches Binance, Bybit, OKX in parallel

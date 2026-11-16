@@ -95,15 +95,35 @@ def _side(close: float, box: Dict[str, Any]) -> int:
     return 1 if close > box["top"] else -1 if close < box["bottom"] else 0
 
 
-def _events(candles: Sequence[Dict[str, Any]], box: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Every event after the range ended, oldest first."""
-    sides = [_side(float(c["close"]), box) for c in candles]
+def _events(candles: Sequence[Dict[str, Any]], box: Dict[str, Any], *,
+            stop: Optional[int] = None, tol: float = 0.0) -> List[Dict[str, Any]]:
+    """Every event after the range ended, oldest first.
+
+    stop  events are only read up to (not including) this candle - the start
+          of the NEXT range: once price has left a range and a new one has
+          formed, the old one's story is over. Otherwise a new range that
+          overlaps the old one's edge (TAO, Nov 2026: range 3 212.75-226.55
+          under range 2 223.37-238.96) re-enters and re-breaks the old range
+          on every poke into the overlap, and the real break (the big candle
+          that left it) loses its marker to a later, meaningless one.
+    tol   once outside, a close counts as back INSIDE only when it is clearly
+          inside - more than `tol` past the edge (EDGE_TOL_ATR x ATR, the
+          tolerance the box edges already use); a close just over the edge
+          stays outside."""
+    end = len(candles) if stop is None else max(0, min(stop, len(candles)))
+    sides = [_side(float(c["close"]), box) for c in candles[:end]]
     # The range's own candles count as inside, even one that closed just
     # past an edge within the tolerance that let the range go on.
     for k in range(min(box["i1"] + 1, len(sides))):
         sides[k] = 0
+    for k in range(box["i1"] + 1, len(sides)):          # hysteresis on the way back in
+        close, prev = float(candles[k]["close"]), sides[k - 1]
+        if sides[k] == 0 and prev < 0 and close < box["bottom"] + tol:
+            sides[k] = -1
+        elif sides[k] == 0 and prev > 0 and close > box["top"] - tol:
+            sides[k] = 1
     out = []
-    for k in range(box["i1"] + 1, len(candles)):
+    for k in range(box["i1"] + 1, len(sides)):
         now, before = sides[k], sides[k - 1]
         if now == before:
             continue
@@ -140,7 +160,13 @@ def boxes(candles: Sequence[Dict[str, Any]], *, tf_ms: int = 0) -> List[Dict[str
         return []
     last = len(candles) - 1
     px = float(candles[last]["close"])
-    found = find_ranges(candles)[-MAX_BOXES:]
+    every = find_ranges(candles)
+    # where the next range starts: an older range's events stop there (_events)
+    # (+1: the next range's first candle can be the very candle that broke
+    # this one - it still belongs to this range's story)
+    next_start = {id(r): (every[k + 1]["i0"] + 1 if k + 1 < len(every) else None)
+                  for k, r in enumerate(every)}
+    found = every[-MAX_BOXES:]
     out = []
     for r in found:
         top, bot = r["top"], r["bottom"]
@@ -150,7 +176,9 @@ def boxes(candles: Sequence[Dict[str, Any]], *, tf_ms: int = 0) -> List[Dict[str
             continue
         current = r["i1"] >= last
         side = _side(px, r)
-        ev = None if current else (_events(candles, r) or [None])[-1]
+        tol = EDGE_TOL_ATR * (_atr(candles, r["i1"]) or 0.0)
+        ev = None if current else (_events(candles, r, stop=next_start[id(r)], tol=tol)
+                                   or [None])[-1]
         where = ("inside it" if side == 0 else
                  f"{(px - top) / top * 100:.1f}% above it" if side > 0 else
                  f"{(bot - px) / bot * 100:.1f}% below it")
