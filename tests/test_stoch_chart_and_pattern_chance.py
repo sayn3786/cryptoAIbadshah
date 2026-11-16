@@ -26,6 +26,7 @@ def test_stoch_rsi_carries_its_recent_lines():
 def test_the_card_draws_it():
     assert "${_stochSvg(srsi)}" in JS and "function _stochSvg(srsi)" in JS
     assert "k[i] - k[i - 1] > 2" in JS                                 # real crosses only
+    assert "Tested on 1D (Nov 2026" in JS and "not a buy signal on its own" in JS
 
 
 def test_high_chance_patterns_only_by_default():

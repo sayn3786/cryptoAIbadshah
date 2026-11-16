@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '270';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '271';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2247,7 +2247,10 @@ function renderStochRsiCard(srsi) {
   rowsEl.innerHTML = `
     <div class="srsi-row"><span class="srsi-label">K</span><span>${srsi.k ?? '—'}</span></div>
     <div class="srsi-row"><span class="srsi-label">D</span><span>${srsi.d ?? '—'}</span></div>
-    ${_stochSvg(srsi)}`;
+    ${_stochSvg(srsi)}
+    <div class="pattern-record">🧪 Tested on 1D (Nov 2026, 47 coins, 2 periods, 1:1 trades):
+      <b>bull cross</b> — no edge, buying it won 45–50%, so not a buy signal on its own;
+      <b>bear cross</b> — shorting it leaned positive (53–56%), but not yet proven.</div>`;
 }
 
 // Mini chart for the Stoch RSI card: the last 40 candles of K (blue) and D
