@@ -91,5 +91,5 @@ def test_scheduled_and_shown():
     assert worker_schedule().get("rev-forward") == [(0, 40)]
     root = os.path.join(os.path.dirname(__file__), "..")
     js = open(os.path.join(root, "dashboard", "js", "scalp.js")).read()
-    assert "function renderRevForward()" in js and "S.data.rev_forward" in js
+    assert "function renderRevForward()" in js and 'renderBook1D("rev_forward"' in js
     assert 'id="revFwd"' in open(os.path.join(root, "dashboard", "scalp.html")).read()

@@ -3252,15 +3252,129 @@ def _rev_fwd_view() -> dict:
             "summary": _rf.summary(book), "recent": book[-40:]}
 
 
+# ── the 1D engine-signal FORWARD paper book (sig1d_forward) ─────────────────
+def _sig1d_key() -> str:
+    return f"sig1d_fwd:{_deploy_env()}"
+
+
+def _sig1d_load() -> list:
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(_sig1d_key()) or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _sig1d_save(trades) -> None:
+    try:
+        import kv as _kv
+        import sig1d_forward as _sf
+        _kv.set_value(_sig1d_key(), json.dumps(list(trades)[-_sf.KEEP:]), ttl_seconds=REV_FWD_TTL)
+    except Exception:
+        pass
+
+
+def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
+    """Once a day after the 1D close: settle the open paper trades, then open
+    one for every coin whose tested 1D signal (price + Fear & Greed) is LONG /
+    SHORT at 62+ on the latest closed day. Never raises, never orders."""
+    try:
+        import sig1d_forward as _sf
+        if not _sf.enabled():
+            return {"ran": False, "reason": "SIG1D_FORWARD_OFF"}
+        fetch_fn = fetch_fn or (lambda sym: _fetch_closed_spot(sym, "1D"))
+        if signal_fn is None:
+            fg = _fetch_fear_greed()
+            signal_fn = lambda candles, sym: _sf.signal(candles, sym, fg)   # noqa: E731
+        import kv as _kv
+        lock = f"sig1d_fwd:lock:{_deploy_env()}"
+        try:
+            if not _kv.claim(lock, ttl_seconds=280):
+                return {"ran": False, "reason": "BUSY"}
+        except Exception:
+            pass
+        try:
+            book = _sig1d_load()
+            closed, opened, errors = [], [], 0
+            for sym in sorted(_sf.UNIVERSE):
+                try:
+                    candles = fetch_fn(sym) or []
+                except Exception:
+                    candles, errors = [], errors + 1
+                if not candles:
+                    continue
+                for k, t in enumerate(book):
+                    if t.get("symbol") == sym and t.get("state") == "open":
+                        done = _sf.settle(t, candles)
+                        if done:
+                            book[k] = done
+                            closed.append(done)
+                try:
+                    sig = signal_fn(candles, sym) or {}
+                except Exception:
+                    sig = {}
+                d = sig.get("direction")
+                last_ts = int(candles[-1]["timestamp"])
+                if d not in ("LONG", "SHORT") or not _sf.can_open(book, sym, d, last_ts):
+                    continue
+                t = _sf.open_trade(sym, sig, candles)
+                if t:
+                    book.append(t)
+                    opened.append(t)
+            if closed or opened:
+                _sig1d_save(book)
+            tally = _sf.summary(book)
+            if notify:
+                try:
+                    if opened:
+                        _scalp_private(_sf.opened_note(opened))
+                    for t in closed:
+                        _scalp_private(_sf.closed_note(t, tally))
+                except Exception:
+                    pass
+            return {"ran": True, "opened": len(opened), "closed": len(closed),
+                    "fetch_errors": errors, "verdict": tally.get("verdict")}
+        finally:
+            try:
+                _kv.release(lock)
+            except Exception:
+                pass
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+def _sig1d_view() -> dict:
+    import sig1d_forward as _sf
+    book = _sig1d_load()
+    return {"enabled": _sf.enabled(), "paper_only": True,
+            "rule": (f"each coin's 1D signal (price + Fear & Greed, as tested) at strength >= "
+                     f"{_sf.FLOOR:g} on the latest closed day, {len(_sf.UNIVERSE)} coins; stop and "
+                     f"target {_sf.ATR_MULT:g} x 1D ATR each, max {_sf.HOLD_DAYS} days, "
+                     f"${_sf.RISK_USD:g} risk, 0.13% costs, one per coin per direction per "
+                     f"{_sf.COOLDOWN_DAYS} days; verdict after {_sf.VERDICT_TRADES} trades: a profit "
+                     f"and >= {_sf.MIN_WIN_PCT:g}% wins"),
+            "summary": _sf.summary(book), "recent": book[-40:]}
+
+
 @app.get("/api/cron/rev-forward")
 @app.post("/api/cron/rev-forward")
 def api_cron_rev_forward():
-    """The 1D reversal-pattern paper book, once a day after the 1D close."""
+    """The two 1D paper books (reversal patterns, the 1D signal), once a day
+    after the 1D close. Each coin's daily candles are fetched once and shared."""
     if not (_cron_authorized() or _scheduler_token_ok()):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
-    res = _rev_fwd_daily()
+    cache = {}
+
+    def fetch(sym):
+        if sym not in cache:
+            cache[sym] = _fetch_closed_spot(sym, "1D")
+        return cache[sym]
+    res = {"reversal_patterns": _rev_fwd_daily(fetch_fn=fetch),
+           "signal_1d": _sig1d_daily(fetch_fn=fetch)}
     print(f"[cron/rev-forward] {res}")
-    ok = bool(res.get("ran")) or res.get("reason") in ("REV_FORWARD_OFF", "BUSY")
+    okv = lambda r, off: bool(r.get("ran")) or r.get("reason") in (off, "BUSY")   # noqa: E731
+    ok = okv(res["reversal_patterns"], "REV_FORWARD_OFF") and okv(res["signal_1d"], "SIG1D_FORWARD_OFF")
     return jsonify({"ok": ok, "result": res}), (200 if ok else 503)
 
 
@@ -7703,6 +7817,7 @@ def api_hl_scalp():
                     "amd_forward": _amd_forward_view(),
                     "htf_forward": _htf_fwd_view(),
                     "rev_forward": _rev_fwd_view(),
+                    "sig1d_forward": _sig1d_view(),
                     "timings": _timings_view(runs)})
 
 

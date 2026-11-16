@@ -109,6 +109,7 @@
     renderTrades();
     renderForward();
     renderRevForward();
+    renderSig1dForward();
     renderTimings();
   }
 
@@ -177,14 +178,14 @@
   }
 
   // ── the 1D reversal-pattern forward paper book (rev_forward) ─────────────
-  function renderRevForward() {
-    var f = (S.data && S.data.rev_forward) || null;
-    var box = $("revFwd");
+  function renderBook1D(key, boxId, subId, offName, emptyTxt, colName, colKey) {
+    var f = (S.data && S.data[key]) || null;
+    var box = $(boxId);
     if (!box) return;
     clear(box);
     if (!f) { box.appendChild(el("div", "empty", "Not available on this deploy yet.")); return; }
     var sm = f.summary || {};
-    $("revSub").textContent = f.enabled ? String(sm.verdict || "") : "switched off (REV_FORWARD)";
+    $(subId).textContent = f.enabled ? String(sm.verdict || "") : "switched off (" + offName + ")";
     var tiles = el("div", "grid g-kpi");
     tiles.style.marginTop = "0";
     [["Closed", String(sm.closed || 0), (sm.open || 0) + " open"],
@@ -201,21 +202,32 @@
     box.appendChild(tiles);
     box.appendChild(el("p", "muted small", f.rule || ""));
     var rows = (f.recent || []).slice().reverse().slice(0, 12);
-    if (!rows.length) { box.appendChild(el("div", "empty", "No trades yet: they open after a daily close that confirms a reversal pattern.")); return; }
+    if (!rows.length) { box.appendChild(el("div", "empty", emptyTxt)); return; }
     var t = el("table"), hd = el("tr");
-    ["Day", "Coin", "Side", "Pattern", "Entry", "Exit", "P&L"].forEach(function (h, k) {
+    ["Day", "Coin", "Side", colName, "Entry", "Exit", "P&L"].forEach(function (h, k) {
       hd.appendChild(el("th", k >= 4 ? "num" : "", h));
     });
     t.appendChild(hd);
     rows.forEach(function (r) {
       var tr = el("tr");
       add(tr, el("td", "", dayTime(ms(r.day_ms))), el("td", "", r.symbol || ""), el("td", "", dirTxt(r.direction)),
-        el("td", "", r.pattern || ""), el("td", "num", px(r.entry)),
+        el("td", "", String(r[colKey] != null ? r[colKey] : "")), el("td", "num", px(r.entry)),
         el("td", "num", r.state === "open" ? "open" : (r.exit_reason || "") + " " + px(r.exit)),
         el("td", "num " + signCls(r.pnl_usd), r.state === "open" ? "—" : usd(r.pnl_usd, true)));
       t.appendChild(tr);
     });
     var sc = el("div", "scroll"); sc.appendChild(t); box.appendChild(sc);
+  }
+
+  function renderRevForward() {
+    renderBook1D("rev_forward", "revFwd", "revSub", "REV_FORWARD",
+      "No trades yet: they open after a daily close that confirms a reversal pattern.", "Pattern", "pattern");
+  }
+
+  // ── the 1D engine-signal forward paper book (sig1d_forward) ──────────────
+  function renderSig1dForward() {
+    renderBook1D("sig1d_forward", "sig1dFwd", "sig1dSub", "SIG1D_FORWARD",
+      "No trades yet: they open after a daily close with a 1D signal at 62+.", "Score", "strength");
   }
 
   function renderStatus() {
