@@ -4311,7 +4311,7 @@ def api_patterns_alert():
                                      date_label=now_sgt.strftime("%b %d"),
                                      coins=len(syms or SCAN_SYMBOLS),
                                      sections=sections, lean_alerts=core,
-                                     notes=_mega_ipo_notes()))
+                                     notes=_mega_ipo_notes() + _flow_anomaly_notes()))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
@@ -5181,6 +5181,70 @@ def _flowlog_record(day: str, close_ms: int, analyses: dict) -> bool:
         return False
 
 
+def _flowanom_key(day: str) -> str:
+    return f"flowanom:{_deploy_env()}:{day}"
+
+
+def _btc_coinbase_offshore() -> tuple:
+    """(Coinbase BTC-USD, OKX BTC-USDT) last prices; (None, None) on failure."""
+    cb = ok = None
+    try:
+        import requests as _rq
+        cb = float(_rq.get("https://api.exchange.coinbase.com/products/BTC-USD/ticker",
+                           timeout=8).json()["price"])
+    except Exception:
+        cb = None
+    try:
+        d = client._get("https://www.okx.com/api/v5/market/ticker", {"instId": "BTC-USDT"})
+        ok = float(((d or {}).get("data") or [{}])[0].get("last"))
+    except Exception:
+        ok = None
+    return cb, ok
+
+
+def _flowanom_record(day: str, analyses: dict, *, history=None, etfs=None, prices=None) -> list:
+    """The day's flow anomalies (flow_anomalies), stored for later testing.
+    Never raises; [] on failure."""
+    try:
+        import flow_anomalies as _fa
+        import kv as _kv
+        from etf_flows import ETF_ASSETS as _EA
+        if history is None:
+            history = [d for d in _flowlog_days(45) if d.get("date") != day]
+        if etfs is None:
+            etfs = {}
+            for sym in ("BTC", "ETH", "SOL", "XRP"):
+                if sym in _EA:
+                    try:
+                        etfs[sym] = etf_client.get_etf_flows(sym)
+                    except Exception:
+                        etfs[sym] = None
+        cb, ok = prices if prices is not None else _btc_coinbase_offshore()
+        reads = _fa.detect(analyses, history, etfs, cb, ok)
+        _kv.set_value(_flowanom_key(day), json.dumps({"date": day, "reads": reads,
+                                                      "coinbase_btc": cb, "offshore_btc": ok}),
+                      ttl_seconds=400 * 86_400)
+        return reads
+    except Exception:
+        return []
+
+
+def _flow_anomaly_notes() -> list:
+    """Market Update lines: today's flow anomalies (else yesterday's, dated)."""
+    try:
+        import flow_anomalies as _fa
+        import kv as _kv
+        today = datetime.now(timezone.utc).date()
+        for k, label in ((0, ""), (1, "yesterday's close")):
+            day = (today - timedelta(days=k)).strftime("%Y-%m-%d")
+            raw = _kv.get_value(_flowanom_key(day))
+            if raw:
+                return _fa.notes(json.loads(raw).get("reads") or [], label)
+    except Exception:
+        pass
+    return []
+
+
 def _flowlog_days(days: int, until=None) -> list:
     """The logged days, oldest first, from `until` (a date, default today) back."""
     import kv as _kv
@@ -5260,6 +5324,9 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
         # reversal studies had no history of it. Best effort, never blocks.
         _flowlog_record(close_publish.close_key(now), expected,
                         {sym: analyses[sym] for sym in current})
+        # Positioning anomalies of this close (flow_anomalies): stored for the
+        # Market Update and for testing later. Best effort, never blocks.
+        _flowanom_record(close_publish.close_key(now), {sym: analyses[sym] for sym in current})
 
     htf = close_publish.HIGHER_TF[tf]
     wanted = [sym for sym in current if reads[sym]["direction"] in ("LONG", "SHORT")]
