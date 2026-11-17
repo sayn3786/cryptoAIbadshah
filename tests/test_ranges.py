@@ -123,3 +123,8 @@ def test_an_old_range_stops_at_the_next_one():
     assert len(found) >= 2
     a = [b for b in rg.boxes(bars) if b["top"] == 208][0]
     assert a["event"] == "broke_below" and a["event_ts"] == 50 * D   # the big candle keeps it
+
+
+def test_help_says_a_break_cannot_be_confirmed():
+    html = open(os.path.join(os.path.dirname(__file__), "..", "dashboard", "index.html")).read()
+    assert "Can a range break be confirmed?" in html and "<b>retest</b> of the broken edge" in html
