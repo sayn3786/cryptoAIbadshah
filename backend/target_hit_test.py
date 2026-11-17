@@ -78,7 +78,12 @@ def scan(candles: Sequence[Dict], tf: str, lookback: int, sym: str = "", *,
             same = "LONG" if ev["direction"] == "bullish" else "SHORT"
             opp = "SHORT" if same == "LONG" else "LONG"
             entry, after = float(candles[j]["close"]), candles[j + 1:]
+            # the trend at the target hit: close vs the 200 EMA of this chart
+            ema = po._ema([float(c["close"]) for c in candles[max(0, j - 599):j + 1]], 200)
+            trend = None if ema is None else ("up" if entry > ema else "down")
+            with_trend = None if trend is None else (trend == "up") == (same == "LONG")
             out.append({"symbol": sym, "tf": tf, "type": ev["type"], "ts": int(candles[j]["timestamp"]),
+                        "trend": trend, "with_trend": with_trend,
                         "high_chance": high_chance(ev["type"], tf),
                         "flag": ev["type"].endswith("flag"),
                         "same": rv.walk(same, entry, atr, after),

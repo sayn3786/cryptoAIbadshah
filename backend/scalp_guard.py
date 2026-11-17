@@ -23,7 +23,7 @@ Limits (SCALP_*; the defaults are the proposal, see EXECUTION.md):
                              entries and adds included, with costs     25
   SCALP_STOPOUT_COOLDOWN_HOURS  no same-way re-entry after a stop-out    4
   SCALP_MAX_ATR_EXTENSION    close vs EMA 20, in ATR, the trade's way   2.0
-  SCALP_MIN_ROOM_R           room to the nearest opposing swing, in R  0.5
+  SCALP_MIN_ROOM_R           room to the nearest opposing swing, in R  0 (off)
                              (1.0 rejected ~60% of reads on synthetic data:
                              a minor 15m swing within a day nearly always
                              sits inside 1R - a blanket cut, not an
@@ -120,7 +120,9 @@ def max_atr_extension() -> float:
 
 
 def min_room_r() -> float:
-    return _num_env("SCALP_MIN_ROOM_R", 0.5)
+    # owner, Nov 17: OFF by default (was 0.5R) - it skipped most setups;
+    # SCALP_MIN_ROOM_R=0.5 brings it back
+    return _num_env("SCALP_MIN_ROOM_R", 0.0)
 
 
 def min_net_rr() -> float:

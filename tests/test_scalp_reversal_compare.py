@@ -1,4 +1,5 @@
 """The fresh reversal-reads study: bottoms / tops, Fib, divergence, S/R."""
+import pytest
 import os
 import random
 import sys
@@ -74,3 +75,14 @@ def test_workflow_runs_it():
     wf = open(os.path.join(os.path.dirname(__file__), "..", ".github", "workflows",
                            "cadence-backtest.yml")).read()
     assert "scalp-reversal) MODULE=scalp_reversal_compare" in wf
+
+
+
+# Nov 17 2026: the live defaults changed (fixed -10% / +15% exits off, room
+# check off, 24h hold, $5 risk). These tests check the mechanisms behind the
+# OLD defaults, which can still be switched back on, so they pin them.
+@pytest.fixture(autouse=True)
+def _pre_nov17_scalp_defaults(monkeypatch):
+    for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
+                 ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
+        monkeypatch.setenv(k, v)
