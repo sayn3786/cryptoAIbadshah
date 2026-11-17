@@ -44,6 +44,9 @@ def clean_env(monkeypatch):
               "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS", "SCALP_REVERSAL_POINTS"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("SCALP_REQUIRE_REVERSAL", raising=False)   # off by default
+    for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
+                 ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
+        monkeypatch.setenv(k, v)   # the pre-Nov-17 defaults these tests check
     # The scoring tests below were written at the old 75 floor (the default is
     # 100 now, test_the_scalp_floor_is_100).
     monkeypatch.setenv("SCALP_MIN_STRENGTH", "75")
@@ -51,7 +54,7 @@ def clean_env(monkeypatch):
 
 def test_defaults_and_switches(monkeypatch):
     assert sl.enabled() and sl.auto_enabled()
-    assert sl.max_hold_ms() == 4 * H and sl.max_open() == 4 and sl.ENTRY_MS == 2 * H  # Nov 2026
+    assert sl.max_hold_ms() == 4 * H and sl.max_open() == 4 and sl.ENTRY_MS == 2 * H  # pinned (old defaults)
     monkeypatch.setenv("HL_SCALP_AUTO_EXECUTE", "0")
     assert sl.enabled() and not sl.auto_enabled()
     monkeypatch.setenv("SCALP_ENABLED", "off")
@@ -1065,3 +1068,14 @@ def test_fixed_scalp_adds_only_while_in_profit(app_mod, hl_fake, monkeypatch):
     out = app_mod._scalp_hl([{**setup, "entry": 143.5, "limit": 143.5, "slot_ms": 10}], 3 * H)
     assert out["results"][0].get("ok") and [c for c in calls if c[0] == "open"]
     assert app_mod._scalp_records()["AAVE"]["adds"] == 1
+
+
+
+# Nov 17 2026: the live defaults changed (fixed -10% / +15% exits off, room
+# check off, 24h hold, $5 risk). These tests check the mechanisms behind the
+# OLD defaults, which can still be switched back on, so they pin them.
+@pytest.fixture(autouse=True)
+def _pre_nov17_scalp_defaults(monkeypatch):
+    for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
+                 ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
+        monkeypatch.setenv(k, v)

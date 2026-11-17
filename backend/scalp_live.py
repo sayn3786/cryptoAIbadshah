@@ -47,7 +47,7 @@ SYMBOLS = ("BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "AVAX", "LINK", "SUI",
 MAX_BASIS = 0.01          # skip a coin whose HL price is >1% from the candles' price
 ENTRY_AT = "top"
 ENTRY_MS = sweep_fvg.ENTRY_BARS * M15_MS          # a limit is good for 2 hours
-DEFAULT_MAX_HOLD_HOURS = 4.0     # a scalp that drifts for hours is not a scalp
+DEFAULT_MAX_HOLD_HOURS = 24.0    # owner, Nov 17: was 4h - too few trades reached their exits
 DEFAULT_MAX_OPEN = 4              # Nov 2026: was len(SYMBOLS) (18) - in effect no cap;
                                   # with SCALP_MAX_LONGS / _SHORTS and the $ risk cap
                                   # (scalp_guard) a broad move no longer opens a book
@@ -113,7 +113,7 @@ def flip_block(setup: Dict[str, Any], *, flipped_recently: bool) -> Optional[str
 # the steadier its 15m candles — and by Hyperliquid's own maximum for it.
 LEV_TIERS = ((100e9, 20), (10e9, 10), (1e9, 7), (200e6, 5), (0, 3))
 MIN_STOP_PCT = 0.002      # a stop tighter than 0.2% is sized as 0.2% (noise)
-DEFAULT_RISK_USD = 1.0
+DEFAULT_RISK_USD = 5.0          # owner, Nov 17: = the old fixed exits' risk (10% of $50 margin)
 DEFAULT_MARGIN_USD = 25.0
 
 
@@ -174,7 +174,10 @@ def size_plan(entry: float, stop: float, market_cap: Optional[float], *,
 # Nothing else moves them.
 # SCALP_FIXED_MARGIN_USD=0 = the old risk sizing with structure exits.
 DEFAULT_SCALP_LEVERAGE = 11
-DEFAULT_FIXED_MARGIN_USD = 50.0
+FIXED_EXITS_MARGIN_USD = 50.0    # the margin the fixed -10% / +15% exits were built around
+                                 # (replays of the fixed-exit book use this)
+DEFAULT_FIXED_MARGIN_USD = 0.0   # owner, Nov 17: fixed -10% / +15% of margin OFF -> structure
+                                 # exits + risk sizing (SCALP_FIXED_MARGIN_USD=50 brings them back)
 SL_ROE_PCT = 10.0
 TP1_ROE_PCT = 15.0          # the single target; on an add, TP1 (half)
 TP2_ROE_PCT = 20.0          # on an add only: TP2 (the rest)

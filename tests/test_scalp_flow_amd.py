@@ -1,4 +1,5 @@
 """The 15m order-flow and AMD studies, and their matched random baseline."""
+import pytest
 import os
 import random
 import sys
@@ -259,3 +260,14 @@ def test_no_edge_from_random_walk_booking():
     flipped = sb.live_book([sb.flip(c, random.Random(i)) for i, c in enumerate(cands)], m15)
     win = lambda ts: sum(1 for t in ts if t["pnl_usd"] > 0) / len(ts)        # noqa: E731
     assert abs(win(booked) - win(flipped)) < 0.03
+
+
+
+# Nov 17 2026: the live defaults changed (fixed -10% / +15% exits off, room
+# check off, 24h hold, $5 risk). These tests check the mechanisms behind the
+# OLD defaults, which can still be switched back on, so they pin them.
+@pytest.fixture(autouse=True)
+def _pre_nov17_scalp_defaults(monkeypatch):
+    for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
+                 ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
+        monkeypatch.setenv(k, v)

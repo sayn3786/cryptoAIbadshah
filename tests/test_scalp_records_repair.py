@@ -130,3 +130,14 @@ def test_the_summary_counts_closes_with_no_result():
             {"status": "CLOSED", "pnl_usd": None, "exit_reason": "unknown", "filled_at": "x"}]
     sm = scalp_store.summary(rows)
     assert sm["closed"] == 1 and sm["no_result"] == 1 and sm["pnl_usd"] == 5.0
+
+
+
+# Nov 17 2026: the live defaults changed (fixed -10% / +15% exits off, room
+# check off, 24h hold, $5 risk). These tests check the mechanisms behind the
+# OLD defaults, which can still be switched back on, so they pin them.
+@pytest.fixture(autouse=True)
+def _pre_nov17_scalp_defaults(monkeypatch):
+    for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
+                 ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
+        monkeypatch.setenv(k, v)
