@@ -18,7 +18,7 @@ def candles(closes):
 def test_funding_extremes_both_ways_and_mock_ignored():
     hot = fa.coin_reads("TAO", {"funding_rate": {"current_8h": 0.08, "source": "okx"}}, [])
     assert hot[0]["kind"] == "funding_extreme" and hot[0]["direction"] == "bearish"
-    assert "longs crowded" in hot[0]["label"]
+    assert "longs crowded" in hot[0]["label"] and "not a reliable turn signal" in hot[0]["label"]
     cold = fa.coin_reads("TAO", {"funding_rate": {"current_8h": -0.05, "source": "okx"}}, [])
     assert cold[0]["direction"] == "bullish" and "shorts crowded" in cold[0]["label"]
     assert fa.coin_reads("TAO", {"funding_rate": {"current_8h": 0.2, "source": "mock"}}, []) == []
