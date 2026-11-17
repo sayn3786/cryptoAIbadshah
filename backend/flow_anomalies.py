@@ -70,7 +70,8 @@ def coin_reads(sym: str, a: Dict[str, Any], history: Sequence[Dict]) -> List[Dic
             crowd = "longs" if fr > 0 else "shorts"
             out.append({"kind": "funding_extreme", "symbol": sym, "value": fr,
                         "direction": "bearish" if fr > 0 else "bullish",
-                        "label": f"funding {fr:+.3f}%/8h — {crowd} crowded and paying{zs}"})
+                        "label": f"funding {fr:+.3f}%/8h — {crowd} crowded and paying{zs} "
+                                 f"(tested on Hyperliquid 2023-26: not a reliable turn signal)"})
     oi = _real(a.get("open_interest"))
     if oi and oi.get("change_pct") is not None:
         chg = float(oi["change_pct"])
