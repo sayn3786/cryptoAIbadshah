@@ -1637,7 +1637,23 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
         # A FAILED pattern only shows while the failure is recent.
         if res["status"] == "failed" and not _failure_is_fresh(candles, res.get("failed_ts")):
             continue
+        # Nov 2026: a confirmed pattern whose price has since reached the
+        # measured-move target is PLAYED OUT - the card must say so instead of
+        # looking live (BTC 1D triple top: target 70,945, price 64,221).
+        hit_ts = None
+        if res["confirmed"] and res.get("break_ts") is not None:
+            after = False
+            for c in candles:
+                if c["timestamp"] == res["break_ts"]:
+                    after = True
+                    continue
+                if after and ((want_top and float(c["low"]) <= target)
+                              or (not want_top and float(c["high"]) >= target)):
+                    hit_ts = c["timestamp"]
+                    break
+        first = pivots[-3] if triple else None
         out.append({
+            "target_reached": hit_ts is not None, "target_hit_ts": hit_ts,
             "type":        ("triple_top" if triple else "double_top") if want_top
                            else ("triple_bottom" if triple else "double_bottom"),
             "label":       ("Triple Top" if triple else "Double Top") if want_top
@@ -1657,7 +1673,8 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 candles, next((k for k, c in enumerate(candles)
                                if c["timestamp"] == res["break_ts"]), None))
                 if res["confirmed"] else None),
-            "points": [
+            "points": ([{"role": "peak0" if want_top else "trough0", "price": round(first["price"], 8),
+                         "timestamp": first["timestamp"]}] if first else []) + [
                 {"role": "peak1" if want_top else "trough1", "price": round(a["price"], 8), "timestamp": a["timestamp"]},
                 {"role": "neckline", "price": round(neck, 8), "timestamp": neck_piv["timestamp"]},
                 {"role": "peak2" if want_top else "trough2", "price": round(b["price"], 8), "timestamp": b["timestamp"]},
