@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '271';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '272';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4864,7 +4864,8 @@ function _recordKey(pat, kind) {
 }
 
 function _recordLine(pat, kind) {
-  const tested = (kind === 'rev' && pat.timeframe === '1D' && TESTED_1D_REVERSALS.includes(pat.type))
+  const tested = (kind === 'rev' && pat.timeframe === '1D' && TESTED_1D_REVERSALS.includes(pat.type)
+                  && !pat.target_reached && pat.status !== 'failed')
     ? '<div class="pattern-record"><span class="rec-tag rec-better">✓ Tested edge</span> On 1D, ' +
       'trading these patterns won 55–60% in two separate tests (stop and target 1.5 × the daily ' +
       'range, up to 20 days), against 39–45% for the opposite trade. Being paper-tested live now.</div>'
@@ -4881,7 +4882,7 @@ function _recordLine(pat, kind) {
     'entry at the breakout close, stop where the pattern is wrong. "Chance" is how often ' +
     'random price moves would reach the target first, given where target and stop sit. ' +
     'Coins move together and the last year was a falling market, so treat small edges with care.';
-  return tested + `<div class="pattern-record" title="${tip}">📊 Track record (${pat.timeframe}, ` +
+  return tested + `<div class="pattern-record" title="${tip}">📊 Track record with the pattern's own target (${pat.timeframe}, ` +
     `${r.n.toLocaleString('en-US')} breakouts): hit target <b>${r.hit}%</b> vs ` +
     `${r.chance}% by chance · avg ${r.avgR >= 0 ? '+' : ''}${r.avgR.toFixed(2)}R per trade ${tag}</div>`;
 }
@@ -5047,8 +5048,12 @@ function renderReversals(patterns, candles) {
     const cls    = isBull ? 'bull' : 'bear';
     const icon   = isBull ? '▲' : '▼';
     const revFailed = r.status === 'failed';
+    const revHit = !revFailed && r.target_reached;
     const statusTxt = revFailed
       ? `❌ FAILED${r.failure_reason ? ` — ${r.failure_reason}` : ''}${_failedWhen(r.failed_ts)}`
+      : revHit
+        ? `🎯 TARGET REACHED${_failedWhen(r.target_hit_ts)} — the measured move to $${p(r.target)} has ` +
+          `played out; this pattern is no longer a live setup`
       : r.confirmed
         ? `✅ confirmed — closed ${isBull ? 'above' : 'below'} the neckline${_volTag(r.breakout_volume)}${_retestTag(r.retest)}`
         : `⏳ forming — awaiting a close ${isBull ? 'above' : 'below'} $${p(r.neckline)}`;
@@ -5059,6 +5064,7 @@ function renderReversals(patterns, candles) {
         <span class="flag-name ${revFailed ? '' : cls}">${icon} ${r.label}</span>
         <span class="flag-tf">${r.timeframe}</span>
         ${revFailed ? '<span class="flag-failed-badge">✕ Failed</span>'
+          : revHit ? '<span class="flag-confirmed">🎯 Target hit</span>'
           : r.confirmed ? `<span class="flag-confirmed">${isBull ? '↑' : '↓'} Confirmed</span>`
                         : '<span class="flag-active">Forming</span>'}
       </div>
@@ -5225,9 +5231,12 @@ function drawPatternMiniChart(el, pat, rows, interval) {
       const pts = uniq(pat.points.filter(p => p.role !== 'neckline')
                                  .map(p => ({ ...p, time: t(p.timestamp) }))
                                  .sort((a, b) => a.time - b.time));
+      // Tops / bottoms are numbered in time order (a triple shows 1, 2, 3).
+      let k = 0;
       pts.forEach(p => markers.push({
         time: p.time, position: isTop ? 'aboveBar' : 'belowBar',
-        color: col, shape: 'circle', text: LBL[p.role] || '',
+        color: col, shape: 'circle',
+        text: /^(peak|trough)\d$/.test(p.role) ? String(++k) : (LBL[p.role] || ''),
       }));
     }
   }
