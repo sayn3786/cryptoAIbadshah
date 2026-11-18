@@ -5381,12 +5381,13 @@ def _close_send(sets: dict, now: datetime) -> bool:
     import telegram as _tg
     import weekly_report
     text = close_publish.build_message(sets, day=close_publish.close_day(now))
+    signal_ids = [r.get("signal_id") for tf in close_publish.ORDER for r in sets.get(tf, [])]
     token, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     sent = False
     if token and chat:
-        sent = _tg._post_message(token, chat, text, markdown=False)
+        sent = _tg._post_message(token, chat, text, markdown=False, signal_ids=signal_ids)
     try:
-        private = weekly_report.send_private(text)
+        private = weekly_report.send_private(text, signal_ids=signal_ids)
     except Exception:
         private = False
     return sent or (not chat and private)

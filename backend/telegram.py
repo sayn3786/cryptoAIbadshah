@@ -312,7 +312,8 @@ def build_rsi_swing_alert_message(alerts: List[Dict], date_label: str = "") -> s
 
 
 def _post_message(token: str, chat_id: str, text: str, *,
-                  markdown: bool = True, silent: bool = False) -> bool:
+                  markdown: bool = True, silent: bool = False,
+                  signal_ids=None) -> bool:
     """`silent` delivers without a sound/vibration (Telegram's
     disable_notification): used for routine updates so the channel only pings
     for real news."""
@@ -321,6 +322,54 @@ def _post_message(token: str, chat_id: str, text: str, *,
         body["parse_mode"] = "Markdown"
     if silent:
         body["disable_notification"] = True
+    if signal_ids is not None:
+        import publication_evidence as evidence
+        if evidence.enabled():
+            import hashlib
+            import kv
+            import deploy_context
+            # A destination claim survives ambiguous transport/receipt failures.
+            # Hash the audience and exact payload; never put chat IDs in keys.
+            identity = hashlib.sha256((str(chat_id) + "\n" + text).encode()).hexdigest()
+            key = f"tg:daily-evidence:{deploy_context.environment()}:{identity}"
+            try:
+                claimed = kv.claim_durable(key, ttl_seconds=7 * 24 * 3600)
+            except Exception:
+                print("[telegram] Durable daily destination claim unavailable; send blocked")
+                return False
+            if not claimed:
+                print("[telegram] Daily destination already attempted; no automatic resend")
+                return False
+            # Empty daily reports have no trade attribution. Do not invent IDs.
+            if not signal_ids:
+                return _post_message(token, chat_id, text, markdown=markdown, silent=silent)
+            try:
+                attempt = evidence.begin(signal_ids, text)
+            except Exception:
+                kv.release(key)  # No HTTP request has been attempted.
+                print("[telegram] Daily publication evidence unavailable; send blocked")
+                return False
+            accepted = False
+            try:
+                resp = requests.post(f"{TELEGRAM_API}/bot{token}/sendMessage", json=body, timeout=15)
+                from datetime import datetime, timezone
+                at = datetime.now(timezone.utc)
+                resp.raise_for_status()
+                payload = resp.json()
+                msg = payload.get("result") or {}
+                mid = msg.get("message_id")
+                accepted = payload.get("ok") is True and type(mid) is int and mid > 0
+                outcome = "ACCEPTED" if accepted else ("REJECTED" if payload.get("ok") is False else "UNKNOWN")
+                evidence.finish(attempt, outcome, message_id=mid if accepted else None, now=at)
+                return accepted
+            except Exception:
+                if not accepted:
+                    try:
+                        evidence.finish(attempt, "UNKNOWN")
+                    except Exception:
+                        pass
+                print("[telegram] Daily publication send or receipt unresolved")
+                return accepted
     resp = requests.post(f"{TELEGRAM_API}/bot{token}/sendMessage", json=body, timeout=15)
     resp.raise_for_status()
     return True
