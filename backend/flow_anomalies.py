@@ -19,6 +19,13 @@ thresholds set before any data was seen:
   ETF flow streak     5+ outflow (or inflow) days in a row, or the first day
                       the other way after such a streak
   Coinbase premium    BTC on Coinbase (USD) vs OKX (USDT): |premium| >= 0.10%
+  squeeze setup       (Nov 18) real SPOT CVD turned bullish over its last 5
+                      candles while real FUTURES CVD is bearish and price moved
+                      less than 3% over the window: spot buyers returning while
+                      futures stay short-biased - the condition a short squeeze
+                      usually needs (selling drying up). The mirror (spot
+                      selling, futures buying, price flat) = long-squeeze
+                      setup. Fires on the day the condition first appears.
 
 Every read carries a textbook lean (crowded longs -> bearish, a flush or a
 long cascade -> bullish, ...) for later testing; none of it is scored.
@@ -35,6 +42,8 @@ LIQ_MULT, LIQ_MIN_USD, LIQ_MIN_DAYS = 3.0, 1_000_000.0, 7
 ETF_STREAK = 5
 PREMIUM_PCT = 0.10
 FUND_Z_DAYS = 20
+SQUEEZE_FLAT_PCT = 3.0
+SQUEEZE_BARS = 5
 
 
 def _real(block: Any) -> Optional[Dict]:
@@ -84,6 +93,9 @@ def coin_reads(sym: str, a: Dict[str, Any], history: Sequence[Dict]) -> List[Dic
             out.append({"kind": "oi_surge", "symbol": sym, "value": chg, "direction": "neutral",
                         "label": f"OI {chg:+.0f}% in {win} days (price {px:+.0f}%) — leverage piling in"
                         if px is not None else f"OI {chg:+.0f}% in {win} days — leverage piling in"})
+    sq = _squeeze(a, history[-1] if history else None)
+    if sq:
+        out.append({**sq, "symbol": sym})
     lq = _real(a.get("liquidations"))
     if lq:
         for side, key, hkey, lean in (("long", "longs_liquidated", "liq_longs_usd", "bullish"),
@@ -98,6 +110,36 @@ def coin_reads(sym: str, a: Dict[str, Any], history: Sequence[Dict]) -> List[Dic
                             "label": f"{side} liquidations {_m(now)} in 24h, {now / base:.1f}× its normal — "
                                      f"forced {'selling' if side == 'long' else 'buying'}"})
     return out
+
+
+def _cvd_trend(block: Any) -> Optional[str]:
+    """The trend of a REAL exchange CVD (USD, taker split) - None for the
+    candle estimate (unit 'base'), which only guesses the split."""
+    if isinstance(block, dict) and (block.get("usd") or block.get("unit") == "usd"):
+        return block.get("trend")
+    return None
+
+
+def _squeeze(a: Dict[str, Any], yesterday: Optional[Dict]) -> Optional[Dict]:
+    spot, fut = _cvd_trend(a.get("spot_cvd")), _cvd_trend(a.get("futures_cvd"))
+    px = _price_change(a.get("candles") or [], SQUEEZE_BARS)
+    if spot is None or fut is None or px is None or abs(px) >= SQUEEZE_FLAT_PCT:
+        return None
+    if spot == "bullish" and fut == "bearish":
+        kind, lean = "short_squeeze_setup", "bullish"
+        label = (f"spot buyers returning (spot CVD up) while futures stay short-biased "
+                 f"(futures CVD down), price {px:+.1f}% in {SQUEEZE_BARS} days — short-squeeze setup")
+    elif spot == "bearish" and fut == "bullish":
+        kind, lean = "long_squeeze_setup", "bearish"
+        label = (f"spot selling (spot CVD down) while futures keep buying (futures CVD up), "
+                 f"price {px:+.1f}% in {SQUEEZE_BARS} days — long-squeeze setup")
+    else:
+        return None
+    y = yesterday or {}
+    if (kind == "short_squeeze_setup" and y.get("spot_cvd") == "bullish" and y.get("futures_cvd") == "bearish") \
+            or (kind == "long_squeeze_setup" and y.get("spot_cvd") == "bearish" and y.get("futures_cvd") == "bullish"):
+        return None                                    # already there yesterday: not new
+    return {"kind": kind, "value": round(px, 2), "direction": lean, "label": label}
 
 
 def etf_reads(sym: str, etf: Optional[Dict]) -> List[Dict]:
@@ -155,9 +197,10 @@ def detect(analyses: Dict[str, Dict], history_days: Sequence[Dict], etfs: Dict[s
     return out
 
 
-ICON = {"funding_extreme": "💸", "oi_flush": "🧹", "oi_surge": "📈", "liquidation_cascade": "💥",
+ICON = {"short_squeeze_setup": "🗜️", "long_squeeze_setup": "🗜️", "funding_extreme": "💸", "oi_flush": "🧹", "oi_surge": "📈", "liquidation_cascade": "💥",
         "etf_streak": "🏦", "etf_streak_break": "🏦", "coinbase_premium": "🇺🇸"}
-ORDER = ("etf_streak", "etf_streak_break", "coinbase_premium", "liquidation_cascade", "oi_flush",
+ORDER = ("etf_streak", "etf_streak_break", "coinbase_premium", "short_squeeze_setup",
+         "long_squeeze_setup", "liquidation_cascade", "oi_flush",
          "funding_extreme", "oi_surge")
 
 

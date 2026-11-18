@@ -95,3 +95,27 @@ def test_recorded_at_the_close_and_shown_in_the_update(monkeypatch):
     src = open(os.path.join(os.path.dirname(__file__), "..", "backend", "app.py")).read()
     assert "_flowanom_record(close_publish.close_key(now)" in src
     assert "notes=_mega_ipo_notes() + _flow_anomaly_notes()" in src
+
+
+def _cvd(trend, real=True):
+    return {"trend": trend, "usd": True, "unit": "usd"} if real else {"trend": trend, "unit": "base"}
+
+
+def test_short_squeeze_setup_and_its_mirror():
+    flat = candles([100, 100.5, 99.8, 100.2, 100.4, 101])
+    a = {"spot_cvd": _cvd("bullish"), "futures_cvd": _cvd("bearish"), "candles": flat}
+    got = fa.coin_reads("BTC", a, [])
+    assert got[0]["kind"] == "short_squeeze_setup" and got[0]["direction"] == "bullish"
+    mirror = fa.coin_reads("BTC", {**a, "spot_cvd": _cvd("bearish"), "futures_cvd": _cvd("bullish")}, [])
+    assert mirror[0]["kind"] == "long_squeeze_setup" and mirror[0]["direction"] == "bearish"
+
+
+def test_squeeze_needs_real_cvd_a_flat_price_and_is_new():
+    flat = candles([100, 100.5, 99.8, 100.2, 100.4, 101])
+    a = {"spot_cvd": _cvd("bullish"), "futures_cvd": _cvd("bearish"), "candles": flat}
+    assert fa.coin_reads("BTC", {**a, "spot_cvd": _cvd("bullish", real=False)}, []) == []
+    moving = {**a, "candles": candles([100, 101, 102, 103, 104, 106])}
+    assert fa.coin_reads("BTC", moving, []) == []                     # price already moved 6%
+    seen = [{"spot_cvd": "bullish", "futures_cvd": "bearish"}]
+    assert fa.coin_reads("BTC", a, seen) == []                        # already there yesterday
+    assert fa.coin_reads("BTC", a, [{"spot_cvd": "neutral", "futures_cvd": "bearish"}])
