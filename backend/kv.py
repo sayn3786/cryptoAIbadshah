@@ -67,6 +67,13 @@ def _file_claim(key: str) -> bool:
 
 
 # ── public API ───────────────────────────────────────────────────────────────
+def claim_durable(key: str, ttl_seconds: int = DEFAULT_TTL) -> bool:
+    """Fail closed for evidence-bearing sends; never fall back to local files."""
+    if not kv_enabled():
+        raise RuntimeError("DURABLE_CLAIM_UNAVAILABLE")
+    return _kv_cmd("SET", key, "1", "NX", "EX", ttl_seconds) == "OK"
+
+
 def claim(key: str, ttl_seconds: int = DEFAULT_TTL) -> bool:
     """Atomically claim ``key``. Returns True if it was NEWLY claimed (caller
     should act on it), False if it was already claimed (skip). Exact-once when

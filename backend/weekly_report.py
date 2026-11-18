@@ -101,7 +101,7 @@ def extra_chat_ids() -> List[str]:
     return out
 
 
-def mirror(text: str, *, token: str, primary: str, session: Any = None) -> int:
+def mirror(text: str, *, token: str, primary: str, session: Any = None, signal_ids=None) -> int:
     """Copy `text` to the extra private chats. Best-effort: a failing extra
     chat never fails the main send. Returns how many went out."""
     import requests
@@ -110,6 +110,11 @@ def mirror(text: str, *, token: str, primary: str, session: Any = None) -> int:
         if chat == primary:
             continue
         try:
+            if signal_ids is not None:
+                import telegram
+                sent += int(telegram._post_message(token, chat, text, markdown=False,
+                                                   signal_ids=signal_ids))
+                continue
             resp = (session or requests).post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat, "text": text, "disable_web_page_preview": True},
@@ -121,13 +126,19 @@ def mirror(text: str, *, token: str, primary: str, session: Any = None) -> int:
     return sent
 
 
-def send_private(text: str, *, session: Any = None) -> bool:
+def send_private(text: str, *, session: Any = None, signal_ids=None) -> bool:
     """Send to TELEGRAM_REPORT_CHAT_ID (and a copy to TELEGRAM_EXTRA_CHAT_IDS).
     False (not sent) when unset."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_REPORT_CHAT_ID", "")
     if not token or not chat_id:
         return False
+    if signal_ids is not None:
+        import telegram
+        ok = telegram._post_message(token, chat_id, text, markdown=False, signal_ids=signal_ids)
+        if ok:
+            mirror(text, token=token, primary=chat_id, session=session, signal_ids=signal_ids)
+        return ok
     import requests
     resp = (session or requests).post(
         f"https://api.telegram.org/bot{token}/sendMessage",
