@@ -53,6 +53,7 @@ CURVE: Dict[str, str] = {
     "rsi_divergence": "window",
     "flag":           "window",
     "triangle":       "window",
+    "reversal":       "window",
     "choch":          "linear",
     "liquidity_grab": "linear",
     "engulfing":      "linear",
