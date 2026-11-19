@@ -36,7 +36,10 @@ __all__ = [
 # Matches the keys in lifecycle.FRESH_BARS. A kind not listed here is not
 # recorded rather than recorded under a name nothing else recognises.
 PATTERN_KINDS = ("rsi_divergence", "choch", "liquidity_grab", "engulfing",
-                 "flag", "triangle", "acc_eql_fvg")
+                 "flag", "triangle", "acc_eql_fvg",
+                 # Nov 2026: double / triple tops and bottoms, head & shoulders
+                 # (detect_reversals), logged from the daily close job.
+                 "reversal")
 
 OBSERVABLE_STATUSES = ("forming", "confirmed", "expired", "invalidated",
                        # Two fits of the same candles confirmed in opposite
@@ -61,7 +64,11 @@ _STATUS_ALIASES = {
 # nothing is copied unless it is named.
 _DETAIL_KEYS = ("description", "level", "signal", "type", "strength",
                 "points", "kind", "invalidation_reason", "closes_to_confirm",
-                "breakout_dir", "retest_state", "trend")
+                "breakout_dir", "retest_state", "trend",
+                # Nov 2026: the outcome of a confirmed pattern - "target_hit"
+                # once price reached the measured-move target (status stays
+                # "confirmed": the table's status CHECK predates this).
+                "target", "outcome", "target_hit_ts", "label")
 
 _MAX_STR = 400
 

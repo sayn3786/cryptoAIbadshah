@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '273';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '274';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -9069,7 +9069,19 @@ async function _forceRefresh() {
 const PAT_LABEL = {
   rsi_divergence: 'RSI Divergence', choch: 'CHoCH', liquidity_grab: 'Liquidity Grab',
   engulfing: 'Engulfing', flag: 'Flag', triangle: 'Triangle', acc_eql_fvg: 'Acc+EQL+FVG',
+  reversal: 'Reversal',
 };
+
+// What happened to it: a confirmed pattern whose target was reached, one that
+// failed, or still open. Only flags, triangles and reversals have a target.
+function _patOutcome(e) {
+  const d = e.detail || {};
+  if (d.outcome === 'target_hit') return '<span class="pat-dir bull">🎯 target hit</span>';
+  if (e.status === 'invalidated') return '<span class="pat-dir bear">✕ failed</span>';
+  if (e.status === 'expired') return '<span class="pat-age">expired</span>';
+  if (!['flag', 'triangle', 'reversal'].includes(e.pattern_kind)) return '<span class="pat-age">no target</span>';
+  return e.status === 'confirmed' ? '<span class="pat-age">open</span>' : '<span class="pat-age">—</span>';
+}
 const PAT_STATUS_CLS = {
   forming: 'pat-forming', confirmed: 'pat-confirmed',
   expired: 'pat-expired', invalidated: 'pat-invalid',
@@ -9077,8 +9089,9 @@ const PAT_STATUS_CLS = {
 
 function _patRow(e) {
   const when = e.candle_close_time
-    ? new Date(e.candle_close_time).toLocaleString('en-GB',
-        { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+    ? new Date(e.candle_close_time).toLocaleString('en-GB', e.timeframe === '1D'
+        ? { day: '2-digit', month: 'short', year: '2-digit' }
+        : { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
     : '—';
   // age_candles is only recorded for divergences; triangles/flags leave it
   // null. Guard on null explicitly — `+null === 0` is finite, so the old check
@@ -9092,10 +9105,14 @@ function _patRow(e) {
   // Fall back to the pattern_type column so flags (no detail.type) still label.
   const detail = (e.detail && (e.detail.description || e.detail.signal || e.detail.type))
     || e.pattern_type || '';
+  const name = (e.pattern_kind === 'reversal' && e.detail && e.detail.label)
+    || PAT_LABEL[e.pattern_kind] || e.pattern_kind;
   return `<tr>
     <td class="pat-when">${when}</td>
-    <td>${PAT_LABEL[e.pattern_kind] || e.pattern_kind}</td>
+    <td>${e.timeframe || '—'}</td>
+    <td>${name}</td>
     <td><span class="pat-status ${PAT_STATUS_CLS[e.status] || ''}">${e.status}</span></td>
+    <td>${_patOutcome(e)}</td>
     <td>${dir}</td>
     <td class="pat-age">${age}</td>
     <td class="pat-detail">${detail}</td>
@@ -9114,9 +9131,16 @@ async function loadPatternHistory() {
     const rows = data.events || [];
     if (!rows.length) { body.innerHTML = ''; sec.style.display = 'none'; return; }
     body.innerHTML = `<table class="tracker-table pat-table">
-      <thead><tr><th>BAR</th><th>PATTERN</th><th>STATUS</th><th>SIDE</th>
+      <thead><tr><th>BAR</th><th>TF</th><th>PATTERN</th><th>STATUS</th><th>OUTCOME</th><th>SIDE</th>
         <th>AGE</th><th>DETAIL</th></tr></thead>
-      <tbody>${rows.map(_patRow).join('')}</tbody></table>`;
+      <tbody>${rows.map(_patRow).join('')}</tbody></table>
+      <div class="pat-age" style="margin-top:8px;font-size:12px;line-height:1.4">
+        A diary of what the detectors saw, one row per pattern per candle — not a win rate.
+        Since Nov 2026 the 1D patterns of every coin are logged at each daily close (8 AM SGT);
+        older 2H rows came from the retired intraday run, which stopped on 11 Oct.
+        OUTCOME: 🎯 target hit = price reached the pattern's measured-move target ·
+        ✕ failed = it broke back · open = confirmed, target not reached yet ·
+        no target = Radar signs (divergence, CHoCH…), which have none.</div>`;
     if (sub) sub.textContent = `${S.symbol} · ${rows.length} observation${rows.length === 1 ? '' : 's'}`;
     sec.style.display = '';
   } catch (_) { sec.style.display = 'none'; }
