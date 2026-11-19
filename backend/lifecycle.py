@@ -69,6 +69,7 @@ FRESH_BARS: Dict[str, int] = {
     "acc_eql_fvg":    10,
     "flag":            8,
     "triangle":        8,
+    "reversal":        8,   # double/triple tops, H&S - logged only (pattern_store)
 }
 
 # Kept visible for this many candles after expiry, so a setup that lapsed reads

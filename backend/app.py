@@ -2978,6 +2978,30 @@ def _slot_envelope(slot: dict) -> dict:
     }
 
 
+def _pattern_target_hit(pat: dict, candles: list):
+    """The timestamp of the first candle AFTER the break that reached a
+    confirmed pattern's target (None if not reached / unknown). Uses the
+    detector's own target_reached when it has one (reversals)."""
+    if pat.get("target_reached"):
+        return pat.get("target_hit_ts") or pat.get("break_ts")
+    target = pat.get("target")
+    brk = pat.get("break_ts") or pat.get("breakout_ts")
+    if not pat.get("confirmed") or target is None or brk is None:
+        return None
+    up = (pat.get("breakout_dir") == "up") if pat.get("breakout_dir") in ("up", "down") \
+        else pat.get("direction") == "bullish"
+    try:
+        target = float(target)
+        for c in candles or []:
+            if int(c["timestamp"]) <= int(brk):
+                continue
+            if (up and float(c["high"]) >= target) or (not up and float(c["low"]) <= target):
+                return c["timestamp"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None
+
+
 def _observed_patterns(analysis: dict) -> list:
     """
     The lifecycle-bearing patterns in one analysis, ready to log.
@@ -3003,10 +3027,15 @@ def _observed_patterns(analysis: dict) -> list:
 
     # Flags and triangles already carry forming/confirmed/invalidated of their
     # own; they are logged under the status the detector itself assigned.
-    for key, kind in (("flags", "flag"), ("triangle_patterns", "triangle")):
+    # Each carries its outcome: "target_hit" once price reached the target.
+    candles = analysis.get("candles") or []
+    for key, kind in (("flags", "flag"), ("triangle_patterns", "triangle"),
+                      ("reversal_patterns", "reversal")):
         for pat in (analysis.get(key) or [])[:3]:
             if pat.get("status"):
-                out.append({**pat, "kind": kind})
+                hit = _pattern_target_hit(pat, candles)
+                out.append({**pat, "kind": kind,
+                            **({"outcome": "target_hit", "target_hit_ts": hit} if hit else {})})
     return out
 
 
@@ -5181,6 +5210,22 @@ def _flowlog_record(day: str, close_ms: int, analyses: dict) -> bool:
         return False
 
 
+def _pattern_log_close(analyses: dict, *, record=None) -> dict:
+    """Log every coin's 1D patterns at the daily close. Never raises."""
+    try:
+        import pattern_store as _pstore
+        rows = []
+        for sym, an in (analyses or {}).items():
+            ms = (an or {}).get("signal_candle_closed_at")
+            if not ms:
+                continue
+            ct = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+            rows += _pstore.build_events(sym, "1D", ct, _observed_patterns(an))
+        return (record or _pstore.record_events)(rows) if rows else {"recorded": 0}
+    except Exception as exc:
+        return {"recorded": 0, "error": type(exc).__name__}
+
+
 def _flowanom_key(day: str) -> str:
     return f"flowanom:{_deploy_env()}:{day}"
 
@@ -5327,6 +5372,10 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
         # Positioning anomalies of this close (flow_anomalies): stored for the
         # Market Update and for testing later. Best effort, never blocks.
         _flowanom_record(close_publish.close_key(now), {sym: analyses[sym] for sym in current})
+        # Pattern history (pattern_store): the 1D patterns of EVERY coin at this
+        # close. The 2H publishing run that used to write it no longer runs
+        # (the log stopped on Oct 11). Best effort, never blocks.
+        _pattern_log_close({sym: analyses[sym] for sym in current})
 
     htf = close_publish.HIGHER_TF[tf]
     wanted = [sym for sym in current if reads[sym]["direction"] in ("LONG", "SHORT")]
