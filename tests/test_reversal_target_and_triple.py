@@ -42,3 +42,9 @@ def test_the_card_shows_it():
     assert "&& !pat.target_reached && pat.status !== 'failed')" in js       # no "tested edge" once played out
     assert "/^(peak|trough)\\d$/.test(p.role) ? String(++k)" in js
     assert "Track record with the pattern's own target" in js
+
+
+def test_target_dates_show_the_year_when_not_this_year():
+    js = open(os.path.join(os.path.dirname(__file__), "..", "dashboard", "js", "dashboard.js")).read()
+    body = js[js.index("function _targetWhen"):js.index("// Live warning: the still-open")]
+    assert "if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';" in body

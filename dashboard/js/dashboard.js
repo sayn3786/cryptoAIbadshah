@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '272';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '273';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -4664,7 +4664,12 @@ function _failedWhen(ts) {
 function _targetWhen(t) {
   const fmt = ms => {
     const d = new Date(+ms);
-    return isNaN(d) ? null : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (isNaN(d)) return null;
+    // The year only when it isn't this year (a weekly pattern's ETA can be
+    // months out: "~May 17" read as this year when it meant 2027).
+    const opts = { month: 'short', day: 'numeric' };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+    return d.toLocaleDateString('en-US', opts);
   };
   const eta = t.target_eta_ts ? fmt(t.target_eta_ts) : null;
   const apex = t.expiry_ts ? fmt(t.expiry_ts) : null;
