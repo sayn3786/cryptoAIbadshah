@@ -2324,8 +2324,13 @@ def structure_range(candles: List[Dict], bars: int = STRUCTURE_WINDOW_BARS) -> D
     lo = min(c["low"] for c in win)
     price = win[-1]["close"]
     rng = hi - lo
+    # How many candles ago each extreme printed (0 = the latest candle; the
+    # latest one if it printed more than once).
+    n = len(win)
+    hi_ago = next(n - 1 - k for k in range(n - 1, -1, -1) if win[k]["high"] == hi)
+    lo_ago = next(n - 1 - k for k in range(n - 1, -1, -1) if win[k]["low"] == lo)
     return {
-        "high": hi, "low": lo, "bars": len(win),
+        "high": hi, "low": lo, "bars": len(win), "high_bars_ago": hi_ago, "low_bars_ago": lo_ago,
         "position_pct": ((price - lo) / rng * 100) if rng > 0 else None,
         "midline": (hi + lo) / 2.0,
     }
@@ -2435,10 +2440,16 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     # Name the lookback. The same price can sit HIGH in a 30-bar range and LOW in
     # a longer one, so 1D and 1W legitimately differ — without the window shown
     # that reads as a contradiction rather than a multi-timeframe picture.
+    # Nov 2026: "· 30 bars" read as "30 bars ago" - say both the window and
+    # when the extreme actually printed.
+    def _when(k):
+        return "this bar" if k == 0 else f"{k} bar{'s' if k != 1 else ''} ago"
     row("Structure High", f"{s_hi:,.4f}", "neutral",
-        f"{(s_hi - price) / price * 100:+.1f}% · {_n} bars")
+        f"{(s_hi - price) / price * 100:+.1f}% · set {_when(_rng_info['high_bars_ago'])} "
+        f"· highest of the last {_n} bars")
     row("Structure Low",  f"{s_lo:,.4f}", "neutral",
-        f"{(s_lo - price) / price * 100:+.1f}% · {_n} bars")
+        f"{(s_lo - price) / price * 100:+.1f}% · set {_when(_rng_info['low_bars_ago'])} "
+        f"· lowest of the last {_n} bars")
 
     # ── Liquidity pools (equal highs/lows = resting stops) ───────────────────
     # A pool is LIVE only on its own side of price: equal highs above, equal

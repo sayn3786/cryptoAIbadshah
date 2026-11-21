@@ -416,3 +416,15 @@ def test_held_bos_streak_sets_structure_bias_without_choch():
     assert r["Alignment"]["value"] == "ALIGNED"
     given_back = _analysis(up=False, bos_streak={"direction": "bearish", "count": 5, "held": False})
     assert _rows(build_structure_panel(given_back))["Structure Bias"]["value"] == "RANGE"
+
+
+def test_structure_high_low_say_when_they_printed():
+    a = _analysis(up=False)
+    r = _rows(build_structure_panel(a))
+    assert "lowest of the last" in r["Structure Low"]["detail"]
+    assert "set " in r["Structure Low"]["detail"] and "highest of the last" in r["Structure High"]["detail"]
+    from patterns import structure_range
+    cs = [{"high": 10, "low": 5, "close": 7}, {"high": 12, "low": 6, "close": 8},
+          {"high": 9, "low": 4, "close": 5}]
+    info = structure_range(cs, bars=3)
+    assert info["high_bars_ago"] == 1 and info["low_bars_ago"] == 0
