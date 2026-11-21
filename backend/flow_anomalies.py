@@ -27,6 +27,20 @@ thresholds set before any data was seen:
                       selling, futures buying, price flat) = long-squeeze
                       setup. Fires on the day the condition first appears.
 
+  OI divergence       (Nov 21) over the ~30 days of daily OI history: price
+                      down >= 15% while open interest IN COINS is up >= 10%
+                      (new positions piling into the drop), or the mirror
+                      (price up >= 15%, OI in coins up >= 10%). OI does not
+                      say which side, so funding labels it: in a drop,
+                      funding < 0 = crowded shorts building (squeeze risk,
+                      bullish lean), funding > 0 = longs averaging down (flush
+                      risk, bearish lean); in a rally the reverse.
+                      PRE-REGISTERED TEST (before any data): with 60+ days
+                      logged, the first day of each divergence (one per coin per
+                      20 days) - does price move 1.5 x 1D ATR the lean's way
+                      before 1.5 x ATR the other way, >= 55% with z >= 2 in
+                      both halves? Otherwise no edge.
+
 Every read carries a textbook lean (crowded longs -> bearish, a flush or a
 long cascade -> bullish, ...) for later testing; none of it is scored.
 Pure: analyses / histories in, reads out. app.py fetches and stores.
@@ -44,6 +58,7 @@ PREMIUM_PCT = 0.10
 FUND_Z_DAYS = 20
 SQUEEZE_FLAT_PCT = 3.0
 SQUEEZE_BARS = 5
+DIV_PRICE_PCT, DIV_OI_PCT, DIV_MIN_DAYS = 15.0, 10.0, 20
 
 
 def _real(block: Any) -> Optional[Dict]:
@@ -93,6 +108,9 @@ def coin_reads(sym: str, a: Dict[str, Any], history: Sequence[Dict]) -> List[Dic
             out.append({"kind": "oi_surge", "symbol": sym, "value": chg, "direction": "neutral",
                         "label": f"OI {chg:+.0f}% in {win} days (price {px:+.0f}%) — leverage piling in"
                         if px is not None else f"OI {chg:+.0f}% in {win} days — leverage piling in"})
+    dv = _oi_divergence(a)
+    if dv:
+        out.append({**dv, "symbol": sym})
     sq = _squeeze(a, history[-1] if history else None)
     if sq:
         out.append({**sq, "symbol": sym})
@@ -110,6 +128,44 @@ def coin_reads(sym: str, a: Dict[str, Any], history: Sequence[Dict]) -> List[Dic
                             "label": f"{side} liquidations {_m(now)} in 24h, {now / base:.1f}× its normal — "
                                      f"forced {'selling' if side == 'long' else 'buying'}"})
     return out
+
+
+def _oi_divergence(a: Dict[str, Any]) -> Optional[Dict]:
+    """Price and open interest IN COINS over the daily OI history (~30 days):
+    a big price move while OI in coins keeps rising. Funding names the side."""
+    oi = _real(a.get("open_interest"))
+    hist = [h for h in (oi or {}).get("history") or [] if h.get("oi")]
+    if len(hist) < 2:
+        return None
+    closes = {int(c["timestamp"]) // 86_400_000: float(c["close"]) for c in a.get("candles") or []}
+    pts = [(h["timestamp"], h["oi"], closes.get(int(h["timestamp"]) // 86_400_000)) for h in hist]
+    pts = [p for p in pts if p[2]]
+    if len(pts) < 2 or (pts[-1][0] - pts[0][0]) / 86_400_000 < DIV_MIN_DAYS:
+        return None
+    (t0, oi0, px0), (t1, oi1, px1) = pts[0], pts[-1]
+    days = round((t1 - t0) / 86_400_000)
+    px_chg = (px1 / px0 - 1) * 100
+    coin_chg = ((oi1 / px1) / (oi0 / px0) - 1) * 100
+    if abs(px_chg) < DIV_PRICE_PCT or coin_chg < DIV_OI_PCT:
+        return None
+    f = _real(a.get("funding_rate"))
+    fr = float(f["current_8h"]) if f and f.get("current_8h") is not None else None
+    drop = px_chg < 0
+    head = (f"price {px_chg:+.0f}% in {days} days while OI in coins {coin_chg:+.0f}%"
+            f" — positions piling into the {'drop' if drop else 'rally'}")
+    if fr is None or fr == 0:
+        lean, tail = "neutral", "; funding unavailable, side unclear"
+    elif drop:
+        lean, tail = (("bullish", f"; funding {fr:+.3f}%/8h: crowded shorts building — squeeze risk")
+                      if fr < 0 else
+                      ("bearish", f"; funding {fr:+.3f}%/8h: longs averaging down — flush risk"))
+    else:
+        lean, tail = (("bearish", f"; funding {fr:+.3f}%/8h: crowded longs chasing — long-squeeze risk")
+                      if fr > 0 else
+                      ("bullish", f"; funding {fr:+.3f}%/8h: shorts fighting the rally — squeeze risk"))
+    return {"kind": "oi_divergence", "value": round(coin_chg, 1), "direction": lean,
+            "price_pct": round(px_chg, 1), "days": days, "funding_8h": fr,
+            "label": head + tail + " (logged for a test, not yet tested)"}
 
 
 def _cvd_trend(block: Any) -> Optional[str]:
@@ -197,9 +253,9 @@ def detect(analyses: Dict[str, Dict], history_days: Sequence[Dict], etfs: Dict[s
     return out
 
 
-ICON = {"short_squeeze_setup": "🗜️", "long_squeeze_setup": "🗜️", "funding_extreme": "💸", "oi_flush": "🧹", "oi_surge": "📈", "liquidation_cascade": "💥",
+ICON = {"oi_divergence": "🧲", "short_squeeze_setup": "🗜️", "long_squeeze_setup": "🗜️", "funding_extreme": "💸", "oi_flush": "🧹", "oi_surge": "📈", "liquidation_cascade": "💥",
         "etf_streak": "🏦", "etf_streak_break": "🏦", "coinbase_premium": "🇺🇸"}
-ORDER = ("etf_streak", "etf_streak_break", "coinbase_premium", "short_squeeze_setup",
+ORDER = ("etf_streak", "etf_streak_break", "coinbase_premium", "oi_divergence", "short_squeeze_setup",
          "long_squeeze_setup", "liquidation_cascade", "oi_flush",
          "funding_extreme", "oi_surge")
 
