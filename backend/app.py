@@ -3211,7 +3211,7 @@ def _rev_fwd_daily(*, fetch_fn=None, detect_fn=None, notify=True) -> dict:
         import rev_forward as _rf
         if not _rf.enabled():
             return {"ran": False, "reason": "REV_FORWARD_OFF"}
-        fetch_fn = fetch_fn or (lambda sym: _fetch_closed_spot(sym, "1D"))
+        fetch_fn = fetch_fn or (lambda sym: _monitor_candles(sym, "1D"))
         detect_fn = detect_fn or (lambda candles: detect_reversals(candles, "1D"))
         import kv as _kv
         lock = f"rev_fwd:lock:{_deploy_env()}"
@@ -3222,7 +3222,7 @@ def _rev_fwd_daily(*, fetch_fn=None, detect_fn=None, notify=True) -> dict:
             pass
         try:
             book = _rev_fwd_load()
-            closed, opened, errors = [], [], 0
+            closed, opened, voided, errors = [], [], [], 0
             for sym in sorted(_rf.UNIVERSE):
                 try:
                     candles = fetch_fn(sym) or []
@@ -3232,6 +3232,11 @@ def _rev_fwd_daily(*, fetch_fn=None, detect_fn=None, notify=True) -> dict:
                     continue
                 for k, t in enumerate(book):
                     if t.get("symbol") == sym and t.get("state") == "open":
+                        bad = _rf.void_if_bad_entry(t, candles)
+                        if bad:
+                            book[k] = bad
+                            voided.append(bad)
+                            continue
                         done = _rf.settle(t, candles)
                         if done:
                             book[k] = done
@@ -3247,18 +3252,21 @@ def _rev_fwd_daily(*, fetch_fn=None, detect_fn=None, notify=True) -> dict:
                 if t:
                     book.append(t)
                     opened.append(t)
-            if closed or opened:
+            if closed or opened or voided:
                 _rev_fwd_save(book)
             tally = _rf.summary(book)
             if notify:
                 try:
                     if opened:
                         _scalp_private(_rf.opened_note(opened))
+                    for t in voided:
+                        _scalp_private(f"⚠️ Paper trade voided: {t['symbol']} {t['direction']} — "
+                                       f"{t['void_reason']}. It does not count in the book.")
                     for t in closed:
                         _scalp_private(_rf.closed_note(t, tally))
                 except Exception:
                     pass
-            return {"ran": True, "opened": len(opened), "closed": len(closed),
+            return {"ran": True, "opened": len(opened), "closed": len(closed), "voided": len(voided),
                     "fetch_errors": errors, "verdict": tally.get("verdict")}
         finally:
             try:
@@ -3312,7 +3320,7 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
         import sig1d_forward as _sf
         if not _sf.enabled():
             return {"ran": False, "reason": "SIG1D_FORWARD_OFF"}
-        fetch_fn = fetch_fn or (lambda sym: _fetch_closed_spot(sym, "1D"))
+        fetch_fn = fetch_fn or (lambda sym: _monitor_candles(sym, "1D"))
         if signal_fn is None:
             fg = _fetch_fear_greed()
             signal_fn = lambda candles, sym: _sf.signal(candles, sym, fg)   # noqa: E731
@@ -3325,7 +3333,7 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
             pass
         try:
             book = _sig1d_load()
-            closed, opened, errors = [], [], 0
+            closed, opened, voided, errors = [], [], [], 0
             for sym in sorted(_sf.UNIVERSE):
                 try:
                     candles = fetch_fn(sym) or []
@@ -3335,6 +3343,11 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
                     continue
                 for k, t in enumerate(book):
                     if t.get("symbol") == sym and t.get("state") == "open":
+                        bad = _sf.void_if_bad_entry(t, candles)
+                        if bad:
+                            book[k] = bad
+                            voided.append(bad)
+                            continue
                         done = _sf.settle(t, candles)
                         if done:
                             book[k] = done
@@ -3351,18 +3364,21 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
                 if t:
                     book.append(t)
                     opened.append(t)
-            if closed or opened:
+            if closed or opened or voided:
                 _sig1d_save(book)
             tally = _sf.summary(book)
             if notify:
                 try:
                     if opened:
                         _scalp_private(_sf.opened_note(opened))
+                    for t in voided:
+                        _scalp_private(f"⚠️ Paper trade voided: {t['symbol']} {t['direction']} — "
+                                       f"{t['void_reason']}. It does not count in the book.")
                     for t in closed:
                         _scalp_private(_sf.closed_note(t, tally))
                 except Exception:
                     pass
-            return {"ran": True, "opened": len(opened), "closed": len(closed),
+            return {"ran": True, "opened": len(opened), "closed": len(closed), "voided": len(voided),
                     "fetch_errors": errors, "verdict": tally.get("verdict")}
         finally:
             try:
@@ -3397,7 +3413,16 @@ def api_cron_rev_forward():
 
     def fetch(sym):
         if sym not in cache:
-            cache[sym] = _fetch_closed_spot(sym, "1D")
+            # _monitor_candles REFUSES demo / stale data (raises): when every
+            # live source failed, the client falls back to synthetic candles
+            # (LTC at ~100 while it traded near 40, Nov 2026). A refused coin
+            # is skipped this run (a fetch error), never traded on.
+            try:
+                cache[sym] = _monitor_candles(sym, "1D")
+            except Exception as exc:
+                cache[sym] = exc
+        if isinstance(cache[sym], Exception):
+            raise cache[sym]
         return cache[sym]
     res = {"reversal_patterns": _rev_fwd_daily(fetch_fn=fetch),
            "signal_1d": _sig1d_daily(fetch_fn=fetch)}

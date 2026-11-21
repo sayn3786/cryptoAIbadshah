@@ -77,6 +77,8 @@ def open_trade(sym: str, sig: Dict, candles: Sequence[Dict]) -> Optional[Dict]:
 
 def can_open(book: Sequence[Dict], sym: str, direction: str, day_ms: int) -> bool:
     for t in book:
+        if t.get("state") == "void":
+            continue                 # opened on bad (demo) data: never counts
         if t.get("symbol") != sym or t.get("direction") != direction:
             continue
         if t.get("state") == "open" or t.get("id") == f"{sym}:{direction}:{day_ms}":
@@ -87,6 +89,7 @@ def can_open(book: Sequence[Dict], sym: str, direction: str, day_ms: int) -> boo
 
 
 settle = rf.settle
+void_if_bad_entry = rf.void_if_bad_entry
 summary = rf.summary
 
 
