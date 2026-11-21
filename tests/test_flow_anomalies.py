@@ -119,3 +119,48 @@ def test_squeeze_needs_real_cvd_a_flat_price_and_is_new():
     seen = [{"spot_cvd": "bullish", "futures_cvd": "bearish"}]
     assert fa.coin_reads("BTC", a, seen) == []                        # already there yesterday
     assert fa.coin_reads("BTC", a, [{"spot_cvd": "neutral", "futures_cvd": "bearish"}])
+
+
+# ── OI divergence (Nov 21 2026): price down big while OI in coins rises ────
+def _div_analysis(px0, px1, oi_usd0, oi_usd1, funding, days=29):
+    D = 86_400_000
+    t0 = 1_790_000_000_000 // D * D
+    candles = [{"timestamp": t0 + i * D, "open": 1, "high": 1, "low": 1,
+                "close": px0 + (px1 - px0) * i / days} for i in range(days + 1)]
+    hist = [{"timestamp": t0 + i * D, "oi": oi_usd0 + (oi_usd1 - oi_usd0) * i / days}
+            for i in range(days + 1)]
+    return {"candles": candles,
+            "open_interest": {"source": "okx", "change_pct": 0, "window_bars": 5, "history": hist},
+            "funding_rate": None if funding is None else {"source": "okx", "current_8h": funding}}
+
+
+def test_oi_divergence_drop_with_negative_funding_is_squeeze_risk():
+    import flow_anomalies as fa
+    # price 92k -> 58k (-37%); OI in USD 20B -> 14.4B = coins 217k -> 248k (+14%)
+    a = _div_analysis(92_000, 58_000, 20e9, 14.4e9, -0.01)
+    r = [x for x in fa.coin_reads("BTC", a, []) if x["kind"] == "oi_divergence"][0]
+    assert r["direction"] == "bullish" and r["price_pct"] < -35 and r["value"] > 10
+    assert "crowded shorts" in r["label"] and "not yet tested" in r["label"]
+
+
+def test_oi_divergence_drop_with_positive_funding_is_flush_risk():
+    import flow_anomalies as fa
+    r = fa._oi_divergence(_div_analysis(92_000, 58_000, 20e9, 14.4e9, 0.01))
+    assert r["direction"] == "bearish" and "longs averaging down" in r["label"]
+
+
+def test_oi_divergence_needs_size_and_coins_not_usd():
+    import flow_anomalies as fa
+    assert fa._oi_divergence(_div_analysis(92_000, 85_000, 20e9, 20e9, -0.01)) is None   # -8% only
+    # OI in USD fell with price, coins flat: no divergence
+    assert fa._oi_divergence(_div_analysis(92_000, 58_000, 20e9, 12.6e9, -0.01)) is None
+    assert fa._oi_divergence(_div_analysis(92_000, 58_000, 20e9, 14.4e9, -0.01, days=10)) is None
+    m = fa._oi_divergence({**_div_analysis(92_000, 58_000, 20e9, 14.4e9, -0.01),
+                           "open_interest": {"source": "mock", "history": []}})
+    assert m is None
+
+
+def test_oi_divergence_rally_mirror():
+    import flow_anomalies as fa
+    r = fa._oi_divergence(_div_analysis(50_000, 60_000, 10e9, 14e9, 0.02))
+    assert r["direction"] == "bearish" and "long-squeeze" in r["label"]
