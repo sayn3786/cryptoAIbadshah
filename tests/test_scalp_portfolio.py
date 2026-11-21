@@ -28,6 +28,7 @@ NEW_ENVS = ("SCALP_MAX_NEW_PER_CANDLE", "SCALP_MAX_LONGS", "SCALP_MAX_SHORTS", "
 def clean_guard_env(monkeypatch):
     for k in NEW_ENVS:
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr("scalp_live.FIXED_EXITS_RETIRED", False)
     for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
                  ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
         monkeypatch.setenv(k, v)   # the pre-Nov-17 defaults these tests check
@@ -670,6 +671,7 @@ def test_the_terminal_page_is_admin_and_text_only():
 # OLD defaults, which can still be switched back on, so they pin them.
 @pytest.fixture(autouse=True)
 def _pre_nov17_scalp_defaults(monkeypatch):
+    monkeypatch.setattr("scalp_live.FIXED_EXITS_RETIRED", False)
     for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
                  ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
         monkeypatch.setenv(k, v)

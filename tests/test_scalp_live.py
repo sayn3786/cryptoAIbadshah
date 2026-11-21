@@ -44,6 +44,7 @@ def clean_env(monkeypatch):
               "SCALP_FLIP_MIN_STRENGTH", "SCALP_FLIP_COOLDOWN_HOURS", "SCALP_REVERSAL_POINTS"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("SCALP_REQUIRE_REVERSAL", raising=False)   # off by default
+    monkeypatch.setattr("scalp_live.FIXED_EXITS_RETIRED", False)
     for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
                  ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
         monkeypatch.setenv(k, v)   # the pre-Nov-17 defaults these tests check
@@ -1076,6 +1077,7 @@ def test_fixed_scalp_adds_only_while_in_profit(app_mod, hl_fake, monkeypatch):
 # OLD defaults, which can still be switched back on, so they pin them.
 @pytest.fixture(autouse=True)
 def _pre_nov17_scalp_defaults(monkeypatch):
+    monkeypatch.setattr("scalp_live.FIXED_EXITS_RETIRED", False)
     for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
                  ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
         monkeypatch.setenv(k, v)

@@ -183,6 +183,9 @@ TP1_ROE_PCT = 15.0          # the single target; on an add, TP1 (half)
 TP2_ROE_PCT = 20.0          # on an add only: TP2 (the rest)
 
 
+FIXED_EXITS_RETIRED = True
+
+
 def fixed_margin_usd() -> float:
     """$ margin a scalp opens with (0: the engine's exits and risk sizing).
 
@@ -190,8 +193,13 @@ def fixed_margin_usd() -> float:
     stops and targets always come from the engine (scalp_live.exits: the
     swing stop when 0.2-3% away, else 1.5 x ATR; the swing or 1.5R target).
     SCALP_FIXED_MARGIN_USD is ignored, so a value left in the deploy settings
-    cannot bring them back."""
-    return 0.0
+    cannot bring them back. (FIXED_EXITS_RETIRED = False only in the tests
+    that pin the old settings.)"""
+    if FIXED_EXITS_RETIRED:
+        return 0.0
+    if _off("SCALP_FIXED_MARGIN_USD"):
+        return 0.0
+    return _num_env("SCALP_FIXED_MARGIN_USD", DEFAULT_FIXED_MARGIN_USD)
 
 
 def scalp_leverage() -> int:

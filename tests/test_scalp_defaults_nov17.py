@@ -22,6 +22,9 @@ def test_new_defaults(monkeypatch):
 
 def test_each_comes_back_with_its_setting(monkeypatch):
     monkeypatch.setenv("SCALP_FIXED_MARGIN_USD", "50")
+    # retired Nov 21: the setting no longer brings the fixed exits back
+    assert sl.fixed_margin_usd() == 0.0
+    monkeypatch.setattr(sl, "FIXED_EXITS_RETIRED", False)
     monkeypatch.setenv("SCALP_MIN_ROOM_R", "0.5")
     monkeypatch.setenv("SCALP_MAX_HOLD_HOURS", "4")
     assert sl.fixed_margin_usd() == 50.0 and sg.min_room_r() == 0.5
