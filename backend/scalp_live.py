@@ -363,7 +363,9 @@ def reversal_reads(a: Dict[str, Any], bars: Sequence[Dict[str, Any]]) -> Dict[st
             put("SHORT", "top", fade(m["bars_ago"]))
     div = a.get("rsi_divergence") or {}
     kind = str(div.get("type") or "")
-    if kind and not div.get("played_out"):
+    # Only a divergence at an oversold bottom / overbought top counts (Nov 2026).
+    import signals as _sg
+    if kind and not div.get("played_out") and _sg.divergence_at_extreme(div):
         if div.get("forming"):
             w = 1.0
         else:
