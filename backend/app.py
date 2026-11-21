@@ -1625,15 +1625,16 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # Only compute futures CVD when we have real perp candles — if
     # get_futures_klines fell back to spot data, futures CVD would be identical
     # to spot CVD (misleading).
-    fut_cvd  = calculate_cvd(futures, "futures") if futures_real else None
-    # Fallback: aggregate real taker CVD from Binance+OKX perps directly. Covers
-    # alts like TAO whose perp isn't the primary futures source (so futures_real
-    # is False) but which do trade perpetuals on major venues.
-    if not fut_cvd:
-        agg_fut = fetch_aggregated_futures_cvd(bs, interval, limit)
-        if agg_fut:
-            fut_cvd = agg_fut
-            futures_real = True   # we now have genuine perp taker data
+    # Futures CVD: REAL taker flow first (Binance + OKX perps, USD), the same
+    # kind as the aggregated spot CVD it is compared with. The candle estimate
+    # (buy share guessed from the close's place in the range) only when no real
+    # source answers. (Nov 2026: the estimate on OKX contract volume was the
+    # default and read "futures 5147x spot".)
+    fut_cvd = fetch_aggregated_futures_cvd(bs, interval, limit, price_map=_cvd_price_map)
+    if fut_cvd:
+        futures_real = True       # genuine perp taker data
+    elif futures_real:
+        fut_cvd = calculate_cvd(futures, "futures")
 
     # CoinGlass aggregated CVD: real taker buy/sell volume across
     # Binance+Bybit+OKX+others. Always preferred over candle-estimated fut_cvd

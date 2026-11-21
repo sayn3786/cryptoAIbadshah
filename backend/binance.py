@@ -702,6 +702,10 @@ class BinanceClient:
         if not spot_id:
             return None
         inst_id = spot_id + "-SWAP"   # BTC-USDT → BTC-USDT-SWAP
+        # SWAP candles: k[5] = volume in CONTRACTS (BTC: 0.01 BTC each), k[6] =
+        # volCcy in the BASE coin. The coin volume is used, as every other
+        # source does (Nov 2026: contracts made futures volume ~100x too big
+        # for BTC - "futures 5147x spot").
         _OKX_BAR = {
             "15m": "15m", "1h": "1H", "2h": "2H", "4h": "4H",  "8h": "8H",
             "12h": "12Hutc", "1d": "1Dutc", "1w": "1Wutc", "1W": "1Wutc", "1M": "1Mutc",
@@ -715,7 +719,7 @@ class BinanceClient:
                 return None
             out = []
             for k in reversed(rows):
-                vol = float(k[5])
+                vol = float(k[6]) if len(k) > 6 and k[6] not in (None, "") else float(k[5])
                 out.append({
                     "timestamp":        int(k[0]),
                     "open":             float(k[1]),
