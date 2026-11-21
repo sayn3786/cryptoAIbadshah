@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '275';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '276';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -418,6 +418,7 @@ function renderAll(a) {
 
   renderPrice(a);
   renderSignal(a.signal);
+  renderSignalProgress(a);
   renderMACDCard(a.macd);
   renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
@@ -750,6 +751,47 @@ function renderSignal(s) {
       cw.style.display = 'none';
     }
   }
+}
+
+/* What price has done SINCE the signal's candle closed (Nov 2026). The levels
+   are set at that close; on 1D / 1W the forming candle can already have run to
+   the targets or the stop (BTC 1W SHORT from 66,754: the week's low 55,134 was
+   past TP3 60,000) - the card must say so instead of looking like a fresh entry. */
+function signalProgress(s, live, livePx) {
+  const dir = s && s.direction;
+  if (!s || !['LONG', 'SHORT'].includes(dir) || !s.entry) return null;
+  const tps = (s.tp_targets || []).filter(x => x != null);
+  const hi = live && live.high != null ? +live.high : livePx;
+  const lo = live && live.low != null ? +live.low : livePx;
+  if (hi == null || lo == null) return null;
+  const long = dir === 'LONG';
+  const reached = tps.filter(t => long ? hi >= t : lo <= t).length;
+  const stopped = s.sl != null && (long ? lo <= s.sl : hi >= s.sl);
+  const p = n => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
+  const away = livePx != null ? (livePx / s.entry - 1) * 100 : null;
+  const now = away != null ? ` Price now ${p(livePx)} (${away >= 0 ? '+' : ''}${away.toFixed(1)}% from the entry).` : '';
+  if (stopped && reached) {
+    return `⚠ Since this candle closed, price touched BOTH the stop (${p(s.sl)}) and TP${reached} ` +
+      `— the setup has resolved one way or the other; not a fresh entry.${now}`;
+  }
+  if (stopped) return `⛔ Stop already hit since the signal's candle closed (${p(s.sl)}) — this setup failed; not a fresh entry.${now}`;
+  if (reached && reached === tps.length) {
+    return `🎯 Already past the last target (TP${reached} ${p(tps[reached - 1])}) since the signal's candle ` +
+      `closed — the move it called has played out; entering now is not this setup.${now}`;
+  }
+  if (reached) {
+    return `🎯 TP${reached} already reached since the signal's candle closed (${p(tps[reached - 1])}) — ` +
+      `much of the move is spent; an entry now has far less room to the remaining target.${now}`;
+  }
+  return null;
+}
+
+function renderSignalProgress(a) {
+  const el = document.getElementById('signalProgress');
+  if (!el) return;
+  const msg = signalProgress(a.signal, a.live_candle, a.live_price);
+  el.textContent = msg || '';
+  el.style.display = msg ? '' : 'none';
 }
 
 /* ─── RSI gauge (canvas arc) ──────────────────────────────────────────────── */
