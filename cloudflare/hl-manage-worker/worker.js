@@ -71,6 +71,10 @@ const JOBS = [
   // 1D close is settled. Paper only; safe to repeat (one trade per coin/day).
   { name: "rev-forward", path: "/api/cron/rev-forward", ...S, retries: 1, timeoutMs: 280_000,
     due: ({ h, m }) => h === 0 && m === 40 },
+  // Hyperliquid liquidation clusters (information): hourly, a rotation of
+  // wallets per run, paced under Hyperliquid's rate limit.
+  { name: "hl-liq", path: "/api/cron/hl-liq", ...S, retries: 0, timeoutMs: 280_000,
+    due: ({ m }) => m === 25 },
   { name: "etf-snapshot", path: "/api/cron/etf-snapshot", ...S, retries: 2,
     due: ({ h, m }) => h === 1 && m === 30 },
   { name: "market-snapshot", path: "/api/cron/market-snapshot", ...S, retries: 2,

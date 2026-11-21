@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '274';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '275';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -453,6 +453,7 @@ function renderAll(a) {
   renderOI(a.open_interest);
   renderOiRotation(a.regime, a.symbol);
   renderLiquidations(a.liquidations);
+  renderHlLiq(a.symbol);
   renderSmartMoney(a.smart_money);
   renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels, a.fib);
@@ -948,6 +949,32 @@ function renderLiquidations(l) {
       bEl.style.display = 'none';
     }
   }
+}
+
+/* Hyperliquid liquidation clusters: exact liquidation prices of its larger
+   wallets' open positions (hl_liq_levels). Information only, untested. */
+async function renderHlLiq(sym) {
+  const el = document.getElementById('liqHl');
+  if (!el || !sym) return;
+  try {
+    const r = await fetch(`${API}/hl-liq?symbol=${sym}`);
+    const d = r.ok ? await r.json() : {};
+    const c = (d.coins || {})[sym];
+    if (!c || (!(c.above || []).length && !(c.below || []).length)) { el.style.display = 'none'; return; }
+    const m = v => v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : `$${Math.round(v / 1e3)}K`;
+    const px = v => v >= 100 ? `$${Math.round(v).toLocaleString('en-US')}` : `$${(+v).toPrecision(4)}`;
+    const row = (side, who, cls) => (c[side] || []).slice().sort((x, y) => y.usd - x.usd)
+      .map(b => `<span class="${cls}">${who} ${m(b.usd)} @ ${px(b.px)} (${b.pct > 0 ? '+' : ''}${b.pct.toFixed(1)}%)</span>`)
+      .join('<br>');
+    const age = d.ts ? Math.round((Date.now() / 1000 - d.ts) / 60) : null;
+    const both = (c.above || []).length && (c.below || []).length;
+    el.innerHTML = `<div style="margin-top:8px;font-weight:600">💧 Hyperliquid liquidation clusters</div>` +
+      `<div style="font-size:12px;line-height:1.5">` +
+      `${row('above', '▲ shorts', 'bullish')}${both ? '<br>' : ''}${row('below', '▼ longs', 'bearish')}</div>` +
+      `<div style="font-size:11px;opacity:.7;margin-top:4px" title="Hyperliquid is on-chain, so these are the exact liquidation prices of real positions. Shorts above price get force-bought if price rises there; longs below get force-sold. Only Hyperliquid, and only its larger wallets. Not yet tested as a signal.">` +
+      `exact, Hyperliquid's larger wallets only · ${c.wallets} wallets${age != null ? ` · ${age} min ago` : ''} · information, not yet tested ⓘ</div>`;
+    el.style.display = '';
+  } catch (_) { el.style.display = 'none'; }
 }
 
 /* ─── Smart money (Hyperliquid whale positioning) ───────────────────────────
