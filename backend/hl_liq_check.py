@@ -27,12 +27,16 @@ def main(argv=None) -> int:
     except Exception as exc:                             # noqa: BLE001
         print(f"leaderboard error: {type(exc).__name__}")
         lb = []
-    fresh = []
+    fresh, n_tr, n_users = [], 0, 0
     for coin in ("BTC", "ETH", "SOL"):
         try:
-            fresh += hq.trade_wallets(hq._post({"type": "recentTrades", "coin": coin}))
+            tr = hq._post({"type": "recentTrades", "coin": coin}) or []
+            n_tr += len(tr)
+            n_users += sum(1 for t in tr if t.get("users"))
+            fresh += hq.trade_wallets(tr)
         except Exception as exc:                         # noqa: BLE001
             print(f"recentTrades {coin} error: {type(exc).__name__}")
+    print(f"recent trades: {n_tr}, with wallet addresses: {n_users}")
     wallets = hq.merge_wallets(lb, fresh)[:args.wallets]
     got, _, checked, errors = hq.scan(wallets, 0, known, budget_s=args.budget)
     book = hq.merge_positions({}, got, int(time.time()))

@@ -32,13 +32,18 @@ def test_positions_parse_filter_and_kcoins():
 
 
 def test_wallet_discovery():
-    rows = [{"ethAddress": "0xAA", "accountValue": "5000000"},
-            {"ethAddress": "0xbb", "accountValue": "50000"},
-            {"ethAddress": "0xcc", "accountValue": "200000"}]
-    assert hq.leaderboard_wallets(rows) == ["0xaa", "0xcc"]
+    wk = lambda v: [["day", {"vlm": "1"}], ["week", {"vlm": str(v)}]]   # noqa: E731
+    rows = [{"ethAddress": "0xAA", "accountValue": "5000000", "windowPerformances": wk(0)},
+            {"ethAddress": "0xbb", "accountValue": "50000", "windowPerformances": wk(9e8)},
+            {"ethAddress": "0xcc", "accountValue": "200000", "windowPerformances": wk(1e6)},
+            {"ethAddress": "0xdd", "accountValue": "5000", "windowPerformances": wk(9e9)}]
+    # active traders first (by week volume), then by size; tiny accounts out
+    assert hq.leaderboard_wallets(rows) == ["0xbb", "0xcc", "0xaa"]
     trades = [{"px": "60000", "sz": "1", "users": ["0x1", "0x2"]},
               {"px": "60000", "sz": "0.1", "users": ["0x3", "0x4"]}]
     assert hq.trade_wallets(trades) == ["0x1", "0x2"]
+    pieces = [{"px": "60000", "sz": "0.05", "users": ["0x7", "0x8"]}] * 4   # 4 x $3K fills
+    assert hq.trade_wallets(pieces) == ["0x7", "0x8"]
     assert hq.merge_wallets(["0xaa", "0x1"], ["0x1", "0x9"]) == ["0x1", "0x9", "0xaa"]
 
 

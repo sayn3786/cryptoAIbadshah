@@ -39,8 +39,8 @@ HL_INFO = "https://api.hyperliquid.xyz/info"
 LEADERBOARD = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 
 MAX_WALLETS = 4000           # wallets kept in the rotation
-LEADER_MIN_USD = 100_000.0   # leaderboard accounts at least this big
-TRADE_MIN_USD = 25_000.0     # a recent trade this big adds both wallets
+LEADER_MIN_USD = 10_000.0    # leaderboard accounts at least this big
+TRADE_MIN_USD = 10_000.0     # a wallet's recent fills adding up to this add it
 POS_MIN_USD = 10_000.0       # positions smaller than this are ignored
 MAX_POS_PER_WALLET = 8
 STALE_S = 24 * 3600          # a wallet's positions older than this are dropped
@@ -69,8 +69,22 @@ def hl_symbol(coin: str, known: Iterable[str]) -> Optional[tuple]:
 
 
 # ── wallet discovery ─────────────────────────────────────────────────────────
+def _week_volume(r: Dict) -> float:
+    for w in r.get("windowPerformances") or []:
+        try:
+            if w[0] == "week":
+                return float((w[1] or {}).get("vlm") or 0)
+        except (IndexError, TypeError, ValueError, AttributeError):
+            continue
+    return 0.0
+
+
 def leaderboard_wallets(rows: Sequence[Dict], limit: int = MAX_WALLETS) -> List[str]:
-    out = []
+    """Mostly ACTIVE traders: the largest accounts run low leverage, so their
+    liquidation prices sit far from price; the clusters near price come from
+    leveraged, active wallets. Three quarters ranked by the week's trading
+    volume, a quarter by account size; no duplicates."""
+    rows_ok = []
     for r in rows or []:
         try:
             av = float(r.get("accountValue") or 0)
@@ -78,8 +92,17 @@ def leaderboard_wallets(rows: Sequence[Dict], limit: int = MAX_WALLETS) -> List[
             continue
         a = str(r.get("ethAddress") or "").lower()
         if a.startswith("0x") and av >= LEADER_MIN_USD:
-            out.append((av, a))
-    return [a for _, a in sorted(out, reverse=True)[:limit]]
+            rows_ok.append((av, _week_volume(r), a))
+    by_vol = [a for _, v, a in sorted(rows_ok, key=lambda x: -x[1]) if v > 0]
+    by_size = [a for av, _, a in sorted(rows_ok, key=lambda x: -x[0])]
+    out, seen = [], set()
+    for a in by_vol[:limit * 3 // 4] + by_size:
+        if a not in seen:
+            seen.add(a)
+            out.append(a)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def fetch_leaderboard(get: Optional[Callable] = None) -> List[str]:
@@ -90,18 +113,19 @@ def fetch_leaderboard(get: Optional[Callable] = None) -> List[str]:
 
 
 def trade_wallets(trades: Sequence[Dict]) -> List[str]:
-    out = []
+    """Wallets whose recent fills ADD UP to TRADE_MIN_USD (a big order fills
+    in many small pieces), largest first."""
+    tot: Dict[str, float] = {}
     for t in trades or []:
         try:
             usd = float(t["px"]) * float(t["sz"])
         except (KeyError, TypeError, ValueError):
             continue
-        if usd >= TRADE_MIN_USD:
-            for u in t.get("users") or []:
-                u = str(u).lower()
-                if u.startswith("0x") and u not in out:
-                    out.append(u)
-    return out
+        for u in t.get("users") or []:
+            u = str(u).lower()
+            if u.startswith("0x"):
+                tot[u] = tot.get(u, 0.0) + usd
+    return [u for u, v in sorted(tot.items(), key=lambda x: -x[1]) if v >= TRADE_MIN_USD]
 
 
 def merge_wallets(current: Sequence[str], new: Sequence[str], limit: int = MAX_WALLETS) -> List[str]:
@@ -223,6 +247,8 @@ def clusters(book: Dict[str, list], prices: Dict[str, float]) -> Dict[str, Dict]
 
 
 def _m(v: float) -> str:
+    if v <= 0:
+        return "none"
     return f"${v / 1e9:.2f}B" if v >= 1e9 else f"${v / 1e6:.1f}M" if v >= 1e6 else f"${v / 1e3:.0f}K"
 
 

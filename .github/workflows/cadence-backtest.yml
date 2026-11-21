@@ -515,7 +515,7 @@ jobs:
           elif [ "$STUDY" = "close-record" ]; then
             python -m close_record --telegram
           elif [ "$STUDY" = "hl-liq-check" ]; then
-            python -m hl_liq_check --telegram --wallets 600
+            python -m hl_liq_check --telegram --wallets 1200 --budget 175
           elif [ "$STUDY" = "score-cleanup" ]; then
             python -m score_cleanup_test --telegram --days 3400
           elif [ "$STUDY" = "funding-extreme" ]; then
