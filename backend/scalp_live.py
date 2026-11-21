@@ -184,10 +184,14 @@ TP2_ROE_PCT = 20.0          # on an add only: TP2 (the rest)
 
 
 def fixed_margin_usd() -> float:
-    """$ margin a scalp opens with (0 / off: the old risk sizing)."""
-    if _off("SCALP_FIXED_MARGIN_USD"):
-        return 0.0
-    return _num_env("SCALP_FIXED_MARGIN_USD", DEFAULT_FIXED_MARGIN_USD)
+    """$ margin a scalp opens with (0: the engine's exits and risk sizing).
+
+    Nov 21 2026, the owner: the fixed -10% / +15%-of-margin exits are RETIRED;
+    stops and targets always come from the engine (scalp_live.exits: the
+    swing stop when 0.2-3% away, else 1.5 x ATR; the swing or 1.5R target).
+    SCALP_FIXED_MARGIN_USD is ignored, so a value left in the deploy settings
+    cannot bring them back."""
+    return 0.0
 
 
 def scalp_leverage() -> int:
