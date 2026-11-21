@@ -125,6 +125,8 @@ def settle(trade: Dict[str, Any], bars_1d: Sequence[Dict[str, Any]]) -> Optional
 
 def can_open(book: Sequence[Dict], sym: str, day_ms: int) -> bool:
     for t in book:
+        if t.get("state") == "void":
+            continue                 # opened on bad (demo) data: never counts
         if t.get("symbol") != sym:
             continue
         if t.get("state") == "open" or t.get("id") == f"{sym}:{day_ms}":
@@ -132,6 +134,25 @@ def can_open(book: Sequence[Dict], sym: str, day_ms: int) -> bool:
         if day_ms - int(t.get("day_ms") or 0) < COOLDOWN_DAYS * DAY_MS:
             return False
     return True
+
+
+BAD_ENTRY_PCT = 25.0
+
+
+def void_if_bad_entry(t: Dict[str, Any], candles: Sequence[Dict]) -> Optional[Dict[str, Any]]:
+    """An OPEN trade whose entry is far (> 25%) from the REAL close of the day
+    it opened was built on fallback demo candles (Nov 2026: LTC opened at ~100
+    while it traded near 40). It is voided: no win, no loss, no cooldown."""
+    if t.get("state") != "open":
+        return None
+    day = next((c for c in candles if int(c["timestamp"]) == int(t.get("day_ms") or -1)), None)
+    if not day or not float(day["close"]):
+        return None
+    off = abs(float(t["entry"]) / float(day["close"]) - 1) * 100
+    if off <= BAD_ENTRY_PCT:
+        return None
+    return {**t, "state": "void", "void_reason": (f"opened on demo data: entry {float(t['entry']):.6g} "
+                                                  f"vs the real close {float(day['close']):.6g}")}
 
 
 def summary(trades: Sequence[Dict[str, Any]]) -> Dict[str, Any]:

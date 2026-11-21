@@ -61,7 +61,7 @@ def test_daily_job_and_the_shared_endpoint(monkeypatch):
     assert all(t["state"] == "closed" and t["exit_reason"] == "target" for t in store["b"])
 
     calls = []
-    monkeypatch.setattr(app_mod, "_fetch_closed_spot", lambda s, tf: calls.append(s) or candles())
+    monkeypatch.setattr(app_mod, "_monitor_candles", lambda s, tf: calls.append(s) or candles())
     monkeypatch.setattr(app_mod, "_rev_fwd_daily",
                         lambda fetch_fn: [fetch_fn(s) for s in ("TAO", "ETH")] and {"ran": True})
     monkeypatch.setattr(app_mod, "_sig1d_daily",
