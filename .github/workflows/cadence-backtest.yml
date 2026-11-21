@@ -163,6 +163,9 @@ name: Strategy backtests (private Telegram)
 #            15M tables, capped context): score distribution and trades at
 #            85 / 90 / 100 / 110 with the live fixed exits; end_days_ago 0 and
 #            135 (backend/scalp_score_compare.py; ~45-60 min, two engine passes)
+#   scalp-div-gate  15m scalp: divergence only at an oversold bottom /
+#            overbought top, before vs after, at 90 / 95 / 100 with the live
+#            exits; end_days_ago 0 and 135 (backend/scalp_div_gate_compare.py)
 #   scalp-flow  15m order flow from real taker volume (flow push, the same
 #            with the candle-shape estimate, faded, CVD divergence, absorption
 #            candle) with the live exits, each vs a matched random-direction
@@ -328,7 +331,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -457,6 +460,8 @@ jobs:
             scalp-smc) MODULE=scalp_smc_compare
                        EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp-score) MODULE=scalp_score_compare
+                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;
+            scalp-div-gate) MODULE=scalp_div_gate_compare
                          EXTRA="--end-days-ago $END_DAYS_AGO" ;;
             scalp-flow) MODULE=scalp_flow_compare
                         EXTRA="--end-days-ago $END_DAYS_AGO" ;;

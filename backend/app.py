@@ -6914,6 +6914,10 @@ def _scalp_engine_read(win, tf, symbol):
     import candle_analysis
     import scalp_live as _sl
     a = candle_analysis.build_candle_analysis(list(win), tf, symbol)
+    if tf == "15M":
+        # The owner's rule (Nov 2026): on the 15m scalp a divergence scores
+        # only at an oversold bottom / overbought top (signals.divergence_at_extreme).
+        a["div_need_extreme"] = True
     sig = generate_signal(a)
     if tf == "15M":
         # The fresh reversal reads the scalp score adds (scalp_live.blend).

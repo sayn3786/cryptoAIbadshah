@@ -1240,6 +1240,25 @@ DIV_RECENCY_FLOOR = 0.40
 REVERSAL_FRONT_FRESH_BARS = 1
 
 
+def divergence_at_extreme(div: Dict) -> bool:
+    """Did the divergence form at an RSI extreme? A bullish one needs a pivot
+    at an OVERSOLD bottom (RSI <= 40), a bearish one a pivot at an OVERBOUGHT
+    top (RSI >= 60) - the same levels the RSI chart circles
+    (candle_analysis.RSI_MARK_OVERSOLD / _OVERBOUGHT). Unknown pivots = False."""
+    import candle_analysis as _ca
+    pts = (div or {}).get("points") or {}
+    rs = [float(p["rsi"]) for p in (pts.get("prev"), pts.get("curr"))
+          if isinstance(p, dict) and p.get("rsi") is not None]
+    kind = str((div or {}).get("type") or "")
+    if not rs or not kind:
+        return False
+    if "bullish" in kind:
+        return min(rs) <= _ca.RSI_MARK_OVERSOLD
+    if "bearish" in kind:
+        return max(rs) >= _ca.RSI_MARK_OVERBOUGHT
+    return False
+
+
 def divergence_recency(age_candles) -> float:
     """Front-loaded weight for a CONFIRMED divergence by closes since it was
     confirmed (age since the second pivot minus the pivot window). 1.0 when
@@ -2570,7 +2589,14 @@ def generate_signal(analysis: Dict) -> Dict:
         out = int(round(raw * div_fresh))
         return out if out or div_fresh <= 0 else 1
 
-    if div_played_out and div_type:
+    # Nov 2026 (the owner's rule, 15m scalp only - analysis flag
+    # "div_need_extreme"): a divergence adds points only when it formed at an
+    # oversold bottom (bullish) / overbought top (bearish). Elsewhere: none.
+    div_off_extreme = bool(analysis.get("div_need_extreme")) and bool(div_type) \
+        and not divergence_at_extreme(rsi_div)
+    if div_off_extreme:
+        pass
+    elif div_played_out and div_type:
         # Spent divergence: recovery already ran. Add no points and paint no
         # bull/bear reason — the whole point is to withhold the conviction it
         # used to contribute. (No neutral-reason channel is surfaced, so this is
