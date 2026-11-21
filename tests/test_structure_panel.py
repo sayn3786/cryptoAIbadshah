@@ -384,3 +384,47 @@ def test_trend_state_names_its_evidence():
     assert "above EMA7/EMA21" in d
     assert "below EMA50/EMA200" in d
     assert "SuperTrend bullish" in d, "a mixed read must be readable, not just a label"
+
+
+# ── Nov 2026: swept pools and BOS-driven structure bias ────────────────────
+def test_equal_lows_above_price_are_swept_not_liquidity_below():
+    a = _analysis(up=False)
+    px = a["candles"][-1]["close"]
+    a["equal_levels"] = {"eql": {"price": px * 1.034, "touches": 2}}
+    r = _rows(build_structure_panel(a))
+    assert r["Liquidity Below"]["value"] == "—"
+    assert "already swept" in r["Liquidity Below"]["detail"]
+    assert r["Pool Distance"]["value"] == "—"
+
+
+def test_live_pools_still_reported():
+    a = _analysis(up=False)
+    px = a["candles"][-1]["close"]
+    a["equal_levels"] = {"eql": {"price": px * 0.97, "touches": 3},
+                         "eqh": {"price": px * 1.05, "touches": 2}}
+    r = _rows(build_structure_panel(a))
+    assert r["Liquidity Below"]["value"] != "—" and r["Liquidity Above"]["value"] != "—"
+    assert "dn" in r["Pool Distance"]["value"] and "up" in r["Pool Distance"]["value"]
+
+
+def test_held_bos_streak_sets_structure_bias_without_choch():
+    a = _analysis(up=False, bos_streak={"direction": "bearish", "count": 5, "held": True,
+                                        "bars_ago": 5, "last_level": 62003.9})
+    r = _rows(build_structure_panel(a))
+    assert r["Structure Bias"]["value"] == "BEARISH"
+    assert r["Last Structure Event"]["value"] == "BOS (5 bars ago)"
+    assert r["Alignment"]["value"] == "ALIGNED"
+    given_back = _analysis(up=False, bos_streak={"direction": "bearish", "count": 5, "held": False})
+    assert _rows(build_structure_panel(given_back))["Structure Bias"]["value"] == "RANGE"
+
+
+def test_structure_high_low_say_when_they_printed():
+    a = _analysis(up=False)
+    r = _rows(build_structure_panel(a))
+    assert "lowest of the last" in r["Structure Low"]["detail"]
+    assert "set " in r["Structure Low"]["detail"] and "highest of the last" in r["Structure High"]["detail"]
+    from patterns import structure_range
+    cs = [{"high": 10, "low": 5, "close": 7}, {"high": 12, "low": 6, "close": 8},
+          {"high": 9, "low": 4, "close": 5}]
+    info = structure_range(cs, bars=3)
+    assert info["high_bars_ago"] == 1 and info["low_bars_ago"] == 0

@@ -2324,8 +2324,13 @@ def structure_range(candles: List[Dict], bars: int = STRUCTURE_WINDOW_BARS) -> D
     lo = min(c["low"] for c in win)
     price = win[-1]["close"]
     rng = hi - lo
+    # How many candles ago each extreme printed (0 = the latest candle; the
+    # latest one if it printed more than once).
+    n = len(win)
+    hi_ago = next(n - 1 - k for k in range(n - 1, -1, -1) if win[k]["high"] == hi)
+    lo_ago = next(n - 1 - k for k in range(n - 1, -1, -1) if win[k]["low"] == lo)
     return {
-        "high": hi, "low": lo, "bars": len(win),
+        "high": hi, "low": lo, "bars": len(win), "high_bars_ago": hi_ago, "low_bars_ago": lo_ago,
         "position_pct": ((price - lo) / rng * 100) if rng > 0 else None,
         "midline": (hi + lo) / 2.0,
     }
@@ -2374,6 +2379,13 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
 
     # ── Structure bias / last structure event ────────────────────────────────
     ch = analysis.get("choch") or {}
+    bos = analysis.get("bos_streak") or {}
+    # The structure the panel reports: a CHoCH when there is one, else a HELD
+    # BOS streak (Nov 2026: "RANGE / —" next to "5x BEARISH" BOS read as a
+    # contradiction - five breaks of structure the same way are not a range).
+    sbias = ch.get("signal") if ch.get("signal") in ("bullish", "bearish") else (
+        bos.get("direction") if bos.get("direction") in ("bullish", "bearish")
+        and bos.get("count") and bos.get("held", True) else None)
     if ch.get("signal") in ("bullish", "bearish"):
         ago = ch.get("candles_ago")
         row("Structure Bias", ch["signal"].upper(),
@@ -2382,12 +2394,18 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
             f"CHoCH{f' ({ago} bars ago)' if ago is not None else ''}",
             "bull" if ch["signal"] == "bullish" else "bear",
             f"broke {ch.get('level')}")
+    elif sbias:
+        _ago = bos.get("bars_ago")
+        row("Structure Bias", sbias.upper(), "bull" if sbias == "bullish" else "bear")
+        row("Last Structure Event",
+            f"BOS{f' ({_ago} bars ago)' if _ago is not None else ''}",
+            "bull" if sbias == "bullish" else "bear",
+            f"broke {bos.get('last_level')}")
     else:
         row("Structure Bias", "RANGE", "neutral")
         row("Last Structure Event", "—", "neutral")
 
     # BOS streak — how persistently structure is being taken out one way.
-    bos = analysis.get("bos_streak") or {}
     if bos.get("direction") and bos.get("count"):
         _bd   = bos["direction"]
         _held = bos.get("held", True)
@@ -2407,8 +2425,8 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         row("BOS Streak", "—", "neutral")
 
     # Alignment: does structure agree with trend?
-    if ch.get("signal") in ("bullish", "bearish") and trend != "NEUTRAL":
-        aligned = (ch["signal"] == "bullish") == (trend == "BULLISH")
+    if sbias and trend != "NEUTRAL":
+        aligned = (sbias == "bullish") == (trend == "BULLISH")
         row("Alignment", "ALIGNED" if aligned else "CONFLICTED",
             "bull" if aligned else "bear")
     else:
@@ -2422,19 +2440,35 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     # Name the lookback. The same price can sit HIGH in a 30-bar range and LOW in
     # a longer one, so 1D and 1W legitimately differ — without the window shown
     # that reads as a contradiction rather than a multi-timeframe picture.
+    # Nov 2026: "· 30 bars" read as "30 bars ago" - say both the window and
+    # when the extreme actually printed.
+    def _when(k):
+        return "this bar" if k == 0 else f"{k} bar{'s' if k != 1 else ''} ago"
     row("Structure High", f"{s_hi:,.4f}", "neutral",
-        f"{(s_hi - price) / price * 100:+.1f}% · {_n} bars")
+        f"{(s_hi - price) / price * 100:+.1f}% · set {_when(_rng_info['high_bars_ago'])} "
+        f"· highest of the last {_n} bars")
     row("Structure Low",  f"{s_lo:,.4f}", "neutral",
-        f"{(s_lo - price) / price * 100:+.1f}% · {_n} bars")
+        f"{(s_lo - price) / price * 100:+.1f}% · set {_when(_rng_info['low_bars_ago'])} "
+        f"· lowest of the last {_n} bars")
 
     # ── Liquidity pools (equal highs/lows = resting stops) ───────────────────
+    # A pool is LIVE only on its own side of price: equal highs above, equal
+    # lows below. Once price trades through it the resting stops have been
+    # taken (swept) - Nov 2026: equal lows at 62,004 were shown as "Liquidity
+    # Below, 3.4% away" while price sat 3.4% BELOW them.
     eq = analysis.get("equal_levels") or {}
     for key, label, tone in (("eqh", "Liquidity Above", "bear"), ("eql", "Liquidity Below", "bull")):
         lv = eq.get(key)
         if lv and lv.get("price"):
+            live = lv["price"] > price if key == "eqh" else lv["price"] < price
             d = (lv["price"] - price) / price * 100
-            row(label, f"{lv['price']:,.4f}", tone,
-                f"{abs(d):.1f}% away · {lv.get('touches', 0)} touches")
+            if live:
+                row(label, f"{lv['price']:,.4f}", tone,
+                    f"{abs(d):.1f}% away · {lv.get('touches', 0)} touches")
+            else:
+                row(label, "—", "neutral",
+                    f"equal {'highs' if key == 'eqh' else 'lows'} at {lv['price']:,.4f} already swept "
+                    f"(price {'above' if key == 'eqh' else 'below'} them)")
         else:
             row(label, "—", "neutral")
 
@@ -2450,11 +2484,10 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     # longer overhead liquidity — labelling it "up 0.1 ATR" claimed there were
     # resting stops just overhead when price was already through them, which is
     # the opposite of the truth and disagreed with the confluence scorer.
-    _above, _below = [], []
-    for _lv in (_eqh, _eql):
-        if not _lv:
-            continue
-        (_above if _lv > price else _below).append(_lv)
+    # Only LIVE pools count: equal highs still above, equal lows still below.
+    # One price has traded through is swept - no stops rest there any more.
+    _above = [_eqh] if _eqh and _eqh > price else []
+    _below = [_eql] if _eql and _eql < price else []
 
     if atr > 0 and (_above or _below):
         _up_d = (min(_above) - price) / atr if _above else None      # nearest overhead
