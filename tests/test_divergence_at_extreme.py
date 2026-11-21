@@ -53,3 +53,12 @@ def test_scalp_engine_read_sets_the_flag():
     src = open(os.path.join(os.path.dirname(__file__), "..", "backend", "app.py"), encoding="utf-8").read()
     i = src.index("def _scalp_engine_read")
     assert 'a["div_need_extreme"] = True' in src[i:i + 600]
+
+
+def test_forming_divergence_also_needs_the_extreme():
+    mid = _div("bullish", 45, 50, forming=True, closes_to_confirm=2)
+    low = _div("bullish", 33, 39, forming=True, closes_to_confirm=2)
+    top_mid = _div("bearish", 57, 52, forming=True, closes_to_confirm=1)
+    top_hi = _div("bearish", 66, 61, forming=True, closes_to_confirm=1)
+    assert _score(mid, True) == 0 and _score(low, True) > 0
+    assert _score(top_mid, True) == 0 and _score(top_hi, True) < 0
