@@ -3312,7 +3312,40 @@ def _sig1d_save(trades) -> None:
         pass
 
 
-def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
+def _liqsh_key() -> str:
+    return f"sig1d_liqlean:{_deploy_env()}"
+
+
+def _liqsh_load() -> list:
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(_liqsh_key()) or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _liqsh_save(trades) -> None:
+    try:
+        import kv as _kv
+        import sig1d_forward as _sf
+        _kv.set_value(_liqsh_key(), json.dumps(list(trades)[-_sf.KEEP:]), ttl_seconds=REV_FWD_TTL)
+    except Exception:
+        pass
+
+
+def _liq_leans() -> dict:
+    """Every coin's shadow liquidation lean (liq_lean_shadow) from a fresh
+    Hyperliquid cluster summary; {} when stale or missing."""
+    try:
+        import time as _time
+        import liq_lean_shadow as _ll
+        return _ll.leans(_hlliq_get("summary", None), int(_time.time()))
+    except Exception:
+        return {}
+
+
+def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None) -> dict:
     """Once a day after the 1D close: settle the open paper trades, then open
     one for every coin whose tested 1D signal (price + Fear & Greed) is LONG /
     SHORT at 62+ on the latest closed day. Never raises, never orders."""
@@ -3332,7 +3365,13 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
         except Exception:
             pass
         try:
+            import liq_lean_shadow as _ll
             book = _sig1d_load()
+            # SHADOW book: the same signal with the liquidation lean applied
+            # (liq_lean_shadow, pre-registered). Never changes the real book.
+            shadow = _liqsh_load()
+            leans = _liq_leans() if leans is None else leans
+            sh_opened, sh_changed = [], False
             closed, opened, voided, errors = [], [], [], 0
             for sym in sorted(_sf.UNIVERSE):
                 try:
@@ -3352,20 +3391,37 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
                         if done:
                             book[k] = done
                             closed.append(done)
+                for k, t in enumerate(shadow):
+                    if t.get("symbol") == sym and t.get("state") == "open":
+                        upd = _sf.void_if_bad_entry(t, candles) or _sf.settle(t, candles)
+                        if upd:
+                            shadow[k], sh_changed = upd, True
                 try:
                     sig = signal_fn(candles, sym) or {}
                 except Exception:
                     sig = {}
                 d = sig.get("direction")
                 last_ts = int(candles[-1]["timestamp"])
+                ln = leans.get(sym)
+                if d in ("LONG", "SHORT") and _sf.can_open(shadow, sym, d, last_ts):
+                    s2 = _ll.adjusted(d, float(sig.get("strength") or 0), ln)
+                    t2 = _sf.open_trade(sym, {**sig, "strength": s2}, candles)
+                    if t2:
+                        t2 = _ll.tag({**t2, "raw_strength": float(sig.get("strength") or 0)}, ln)
+                        shadow.append(t2)
+                        sh_opened.append(t2)
+                        sh_changed = True
                 if d not in ("LONG", "SHORT") or not _sf.can_open(book, sym, d, last_ts):
                     continue
                 t = _sf.open_trade(sym, sig, candles)
                 if t:
+                    t = _ll.tag(t, ln)
                     book.append(t)
                     opened.append(t)
             if closed or opened or voided:
                 _sig1d_save(book)
+            if sh_changed:
+                _liqsh_save(shadow)
             tally = _sf.summary(book)
             if notify:
                 try:
@@ -3379,7 +3435,8 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
                 except Exception:
                     pass
             return {"ran": True, "opened": len(opened), "closed": len(closed), "voided": len(voided),
-                    "fetch_errors": errors, "verdict": tally.get("verdict")}
+                    "fetch_errors": errors, "verdict": tally.get("verdict"),
+                    "liq_shadow_opened": len(sh_opened), "leans": len(leans)}
         finally:
             try:
                 _kv.release(lock)
@@ -3391,8 +3448,12 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True) -> dict:
 
 def _sig1d_view() -> dict:
     import sig1d_forward as _sf
+    import liq_lean_shadow as _ll
     book = _sig1d_load()
+    shadow = _liqsh_load()
     return {"enabled": _sf.enabled(), "paper_only": True,
+            "liq_lean_shadow": {**_ll.verdict(book, shadow, int(time.time() * 1000)),
+                                "summary": _sf.summary(shadow), "recent": shadow[-20:]},
             "rule": (f"each coin's 1D signal (price + Fear & Greed, as tested) at strength >= "
                      f"{_sf.FLOOR:g} on the latest closed day, {len(_sf.UNIVERSE)} coins; stop and "
                      f"target {_sf.ATR_MULT:g} x 1D ATR each, max {_sf.HOLD_DAYS} days, "
@@ -3500,6 +3561,15 @@ def _hlliq_notes() -> list:
         if not s or int(_time.time()) - int(s.get("ts") or 0) > 6 * 3600:
             return []
         return _hq.note_lines(s)
+    except Exception:
+        return []
+
+
+def _liq_lean_notes() -> list:
+    try:
+        import time as _time
+        import liq_lean_shadow as _ll
+        return _ll.notes(_hlliq_get("summary", None), int(_time.time()))
     except Exception:
         return []
 
@@ -4489,7 +4559,8 @@ def api_patterns_alert():
                                      date_label=now_sgt.strftime("%b %d"),
                                      coins=len(syms or SCAN_SYMBOLS),
                                      sections=sections, lean_alerts=core,
-                                     notes=_mega_ipo_notes() + _flow_anomaly_notes() + _hlliq_notes()))
+                                     notes=_mega_ipo_notes() + _flow_anomaly_notes() + _hlliq_notes()
+                                     + _liq_lean_notes()))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
