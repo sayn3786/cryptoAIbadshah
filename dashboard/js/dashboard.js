@@ -966,7 +966,7 @@ async function renderHlLiq(sym) {
     const row = (side, who, cls) => (c[side] || []).slice().sort((x, y) => y.usd - x.usd)
       .map(b => `<span class="${cls}">${who} ${m(b.usd)} @ ${px(b.px)} (${b.pct > 0 ? '+' : ''}${b.pct.toFixed(1)}%)</span>`)
       .join('<br>');
-    const age = d.ts ? Math.round((Date.now() / 1000 - d.ts) / 60) : null;
+    const age = d.ts ? Math.round((Date.now() - d.ts * 1000) / 60000) : null;
     const both = (c.above || []).length && (c.below || []).length;
     el.innerHTML = `<div style="margin-top:8px;font-weight:600">💧 Hyperliquid liquidation clusters</div>` +
       `<div style="font-size:12px;line-height:1.5">` +
