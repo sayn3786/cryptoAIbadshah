@@ -3402,6 +3402,130 @@ def _sig1d_view() -> dict:
             "summary": _sf.summary(book), "recent": book[-40:]}
 
 
+# ── Hyperliquid liquidation clusters (hl_liq_levels) ────────────────────────
+HLLIQ_TTL = 3 * 86_400
+HLLIQ_LEADER_EVERY_S = 20 * 3600
+HLLIQ_BUDGET_S = 190.0
+
+
+def _hlliq_key(part: str) -> str:
+    return f"hlliq:{_deploy_env()}:{part}"
+
+
+def _hlliq_get(part: str, default):
+    try:
+        import kv as _kv
+        raw = _kv.get_value(_hlliq_key(part))
+        return json.loads(raw) if raw else default
+    except Exception:
+        return default
+
+
+def _hlliq_set(part: str, obj, ttl: int = HLLIQ_TTL) -> None:
+    try:
+        import kv as _kv
+        import hl_liq_levels as _hq
+        _kv.set_value(_hlliq_key(part), _hq.dumps(obj), ttl_seconds=ttl)
+    except Exception:
+        pass
+
+
+def _hlliq_run(*, post=None, leaderboard=None, budget_s: float = HLLIQ_BUDGET_S) -> dict:
+    """One pass: refresh the wallet list, read a rotation of wallets' positions,
+    rebuild the clusters. Information only; never raises, never orders."""
+    try:
+        import time as _time
+        import hl_liq_levels as _hq
+        post = post or _hq._post
+        known = list(SYMBOLS)
+        now = int(_time.time())
+        st = _hlliq_get("wallets", {}) or {}
+        wallets, cursor = list(st.get("wallets") or []), int(st.get("cursor") or 0)
+        lb_ts = int(st.get("leader_ts") or 0)
+        lb_err = None
+        if now - lb_ts >= HLLIQ_LEADER_EVERY_S or not wallets:
+            try:
+                lb = leaderboard() if leaderboard else _hq.fetch_leaderboard()
+                if lb:
+                    wallets, lb_ts = _hq.merge_wallets(wallets, lb), now
+            except Exception as exc:
+                lb_err = type(exc).__name__
+        fresh = []
+        majors = ["BTC", "ETH", "SOL"]
+        for coin in majors + [s for s in SCAN_SYMBOLS if s not in majors][:12]:
+            try:
+                fresh += _hq.trade_wallets(post({"type": "recentTrades", "coin": coin}))
+            except Exception:
+                continue
+        wallets = _hq.merge_wallets(wallets, fresh)
+        if fresh:
+            cursor = 0                 # the newest big traders are read first
+        got, cursor, checked, errors = _hq.scan(
+            wallets, cursor, known, budget_s=budget_s,
+            fetch=lambda a: post({"type": "clearinghouseState", "user": a}))
+        book = _hq.merge_positions(_hlliq_get("positions", {}) or {}, got, now)
+        mids = {}
+        try:
+            for coin, px in (post({"type": "allMids"}) or {}).items():
+                m = _hq.hl_symbol(coin, known)
+                if m:
+                    mids[m[0]] = float(px) * m[1]
+        except Exception:
+            pass
+        summary = {"ts": now, "wallets_tracked": len(wallets), "wallets_with_positions": len(book),
+                   "coins": _hq.clusters(book, mids)}
+        _hlliq_set("wallets", {"wallets": wallets, "cursor": cursor, "leader_ts": lb_ts})
+        _hlliq_set("positions", book)
+        if mids:
+            _hlliq_set("summary", summary)
+        return {"ran": True, "wallets": len(wallets), "checked": checked, "errors": errors,
+                "with_positions": len(book), "coins": len(summary["coins"]),
+                "new_traders": len(fresh), "leaderboard_error": lb_err}
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+def _hlliq_log_close(day: str) -> None:
+    """The day's cluster snapshot, kept 400 days for the pre-registered test."""
+    s = _hlliq_get("summary", None)
+    if s and s.get("coins"):
+        _hlliq_set(f"log:{day}", s, ttl=400 * 86_400)
+
+
+def _hlliq_notes() -> list:
+    try:
+        import time as _time
+        import hl_liq_levels as _hq
+        s = _hlliq_get("summary", None)
+        if not s or int(_time.time()) - int(s.get("ts") or 0) > 6 * 3600:
+            return []
+        return _hq.note_lines(s)
+    except Exception:
+        return []
+
+
+@app.post("/api/cron/hl-liq")
+def api_cron_hl_liq():
+    if not (_cron_authorized() or _scheduler_token_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    res = _hlliq_run()
+    print(f"[cron/hl-liq] {res}")
+    return jsonify({"ok": bool(res.get("ran")), "result": res}), (200 if res.get("ran") else 503)
+
+
+@app.get("/api/hl-liq")
+def api_hl_liq():
+    """The latest Hyperliquid liquidation clusters ({} until the first pass)."""
+    s = _hlliq_get("summary", None) or {}
+    sym = (request.args.get("symbol") or "").upper()
+    coins = s.get("coins") or {}
+    return jsonify({"ts": s.get("ts"), "wallets_tracked": s.get("wallets_tracked"),
+                    "wallets_with_positions": s.get("wallets_with_positions"),
+                    "coins": ({sym: coins[sym]} if sym in coins else {}) if sym else coins,
+                    "note": "Hyperliquid only: exact liquidation prices of its larger wallets' "
+                            "positions. Information, not yet tested."})
+
+
 @app.get("/api/cron/rev-forward")
 @app.post("/api/cron/rev-forward")
 def api_cron_rev_forward():
@@ -4365,7 +4489,7 @@ def api_patterns_alert():
                                      date_label=now_sgt.strftime("%b %d"),
                                      coins=len(syms or SCAN_SYMBOLS),
                                      sections=sections, lean_alerts=core,
-                                     notes=_mega_ipo_notes() + _flow_anomaly_notes()))
+                                     notes=_mega_ipo_notes() + _flow_anomaly_notes() + _hlliq_notes()))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
@@ -5401,6 +5525,8 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
         # close. The 2H publishing run that used to write it no longer runs
         # (the log stopped on Oct 11). Best effort, never blocks.
         _pattern_log_close({sym: analyses[sym] for sym in current})
+        # Hyperliquid liquidation clusters at this close, for the later test.
+        _hlliq_log_close(close_publish.close_key(now))
 
     htf = close_publish.HIGHER_TF[tf]
     wanted = [sym for sym in current if reads[sym]["direction"] in ("LONG", "SHORT")]
@@ -8586,7 +8712,7 @@ _SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/mon
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
                     "/api/research/ml/collect", "/api/research/ml/label",
-                    "/api/cron/scalp", "/api/cron/rev-forward")
+                    "/api/cron/scalp", "/api/cron/rev-forward", "/api/cron/hl-liq")
 
 
 def _scheduler_token_ok() -> bool:
