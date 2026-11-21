@@ -215,6 +215,7 @@ def clusters(book: Dict[str, list], prices: Dict[str, float]) -> Dict[str, Dict]
     """Per coin: the biggest short-liquidation bins above price and long ones below."""
     bins: Dict[str, Dict[tuple, float]] = {}
     wallets: Dict[str, set] = {}
+    wpx: Dict[str, Dict[tuple, float]] = {}      # size-weighted liquidation price per bin
     for a, (_, pos) in (book or {}).items():
         for sym, szi, liq, _entry, usd in pos:
             px = prices.get(sym)
@@ -229,6 +230,8 @@ def clusters(book: Dict[str, list], prices: Dict[str, float]) -> Dict[str, Dict]
             key = (side, int(rel // BIN))
             bins.setdefault(sym, {})
             bins[sym][key] = bins[sym].get(key, 0.0) + usd
+            wpx.setdefault(sym, {})
+            wpx[sym][key] = wpx[sym].get(key, 0.0) + usd * liq
             wallets.setdefault(sym, set()).add(a)
     out = {}
     for sym, b in bins.items():
@@ -237,9 +240,11 @@ def clusters(book: Dict[str, list], prices: Dict[str, float]) -> Dict[str, Dict]
         for side in ("above", "below"):
             items = [(usd, i) for (s, i), usd in b.items() if s == side]
             top = sorted(items, reverse=True)[:TOP]
-            res[side] = [{"px": round(px * (1 + (i + 0.5) * BIN), 8),
-                          "pct": round((i + 0.5) * BIN * 100, 2), "usd": round(usd)}
-                         for usd, i in sorted(top, key=lambda x: abs(x[1]))]
+            res[side] = []
+            for usd, i in sorted(top, key=lambda x: abs(x[1])):
+                lp = wpx[sym][(side, i)] / usd if usd else px * (1 + (i + 0.5) * BIN)
+                res[side].append({"px": round(lp, 8), "pct": round((lp / px - 1) * 100, 2),
+                                  "usd": round(usd)})
             for w in (5, 10):
                 res[f"{side}_{w}pct_usd"] = round(sum(u for u, i in items if abs((i + 0.5) * BIN) <= w / 100))
         out[sym] = res
