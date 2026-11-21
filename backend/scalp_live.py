@@ -339,7 +339,8 @@ def require_reversal() -> bool:
     return os.getenv("SCALP_REQUIRE_REVERSAL", "").strip().lower() in ("1", "on", "true", "yes")
 
 
-def reversal_reads(a: Dict[str, Any], bars: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+def reversal_reads(a: Dict[str, Any], bars: Sequence[Dict[str, Any]], *,
+                   need_extreme: bool = True) -> Dict[str, Dict[str, float]]:
     """{"LONG": {read: weight}, "SHORT": {...}}: the reversal reads on a 15m
     candle analysis `a` of `bars`, each weighted 1.0 (just happened / right at
     the level) down to 0 (played out). Pure."""
@@ -365,7 +366,7 @@ def reversal_reads(a: Dict[str, Any], bars: Sequence[Dict[str, Any]]) -> Dict[st
     kind = str(div.get("type") or "")
     # Only a divergence at an oversold bottom / overbought top counts (Nov 2026).
     import signals as _sg
-    if kind and not div.get("played_out") and _sg.divergence_at_extreme(div):
+    if kind and not div.get("played_out") and (not need_extreme or _sg.divergence_at_extreme(div)):
         if div.get("forming"):
             w = 1.0
         else:

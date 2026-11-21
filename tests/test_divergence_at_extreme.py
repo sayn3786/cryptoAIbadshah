@@ -62,3 +62,11 @@ def test_forming_divergence_also_needs_the_extreme():
     top_hi = _div("bearish", 66, 61, forming=True, closes_to_confirm=1)
     assert _score(mid, True) == 0 and _score(low, True) > 0
     assert _score(top_mid, True) == 0 and _score(top_hi, True) < 0
+
+
+def test_replay_baseline_can_switch_the_rule_off():
+    bars = [{"timestamp": 15 * 60_000 * i, "open": 1, "high": 1, "low": 1, "close": 1} for i in range(10)]
+    a_mid = {"rsi_divergence": _div("bullish", 45, 52, forming=True)}
+    assert "divergence" in sl.reversal_reads(a_mid, bars, need_extreme=False)["LONG"]
+    import scalp_div_gate_compare as g
+    assert g.THRESHOLDS == (90.0, 95.0, 100.0)
