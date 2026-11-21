@@ -981,7 +981,7 @@ def test_reversal_reads_fade_as_they_play_out():
     last = bars[-1]["timestamp"]
     a = {"rsi_markers": [{"kind": "oversold_bottom", "bars_ago": 0, "status": "active"},
                          {"kind": "overbought_top", "bars_ago": 3, "status": "active"}],
-         "rsi_divergence": {"type": "bullish", "points": {"curr": {"timestamp": last - 6 * M}}},
+         "rsi_divergence": {"type": "bullish", "points": {"curr": {"timestamp": last - 6 * M, "rsi": 32}}},
          "fib": {"in_entry_zone": True, "bias": "long", "status": "entry_zone"},
          "sr_zones": {"support": {"dist_pct": -0.2}, "resistance": {"dist_pct": 2.0}}}
     r = sl.reversal_reads(a, bars)
