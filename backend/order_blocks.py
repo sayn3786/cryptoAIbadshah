@@ -1,5 +1,7 @@
 """
-Order blocks (Nov 22 2026) - INFORMATION ONLY until tested (order_block_test).
+Order blocks (Nov 22 2026) - INFORMATION ONLY. order_block_test (pre-registered,
+Nov 22): on 1D, the first return into a fresh block was a coin flip in both
+periods (~2,500 trades) - no edge, so it stays context, never scored.
 
 An order block is the last opposite-coloured candle before a strong move that
 breaks structure - where the side that drove the move is thought to have

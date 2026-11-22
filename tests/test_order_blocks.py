@@ -69,7 +69,7 @@ def test_panel_rows():
                                        "touches": 0, "bars_ago": 12, "inside": False}], "bearish": []}}
     rows = {r["label"]: r for r in build_structure_panel(a)["rows"]}
     assert rows["Bull Order Block"]["value"].startswith("90.0000")
-    assert "3.2% below" in rows["Bull Order Block"]["detail"] and "untested" in rows["Bull Order Block"]["detail"]
+    assert "3.2% below" in rows["Bull Order Block"]["detail"] and "no edge" in rows["Bull Order Block"]["detail"]
     assert rows["Bear Order Block"]["value"] == "—"
 
 
