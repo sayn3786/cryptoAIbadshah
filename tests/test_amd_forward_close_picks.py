@@ -43,8 +43,14 @@ def test_latest_finds_the_setup_only_on_the_closed_candle():
     close = bars[-1]["timestamp"] + M
     s = al.latest("ETH", bars, close + 60_000)
     assert s and s["direction"] == "SHORT" and s["slot_ms"] == close and s["state"] == "open"
-    assert abs(s["paper_sl"] - 100.8 * (1 + 0.10 / 11)) < 1e-9          # -10% of margin
-    assert abs(s["paper_tp"] - 100.8 * (1 - 0.15 / 11)) < 1e-9          # +15% of margin
+    # Nov 22: the engine's exits (as the live scalp), sized to $10 at the stop
+    import scalp_live as sl
+    import sweep_fvg as sf
+    ex = sl.exits(bars, len(bars) - 1, "SHORT", sf.pivots(bars))
+    assert s["paper_sl"] == ex["sl"] and s["paper_tp"] == ex["target"]
+    assert s["paper_sl"] > 100.8 > s["paper_tp"]
+    assert abs(s["notional_usd"] - round(sl.risk_usd() / ((s["paper_sl"] - 100.8) / 100.8), 2)) < 0.01
+    assert s["hold_h"] == sl.max_hold_ms() / 3_600_000
     assert al.latest("ETH", bars, close + M + 1) is None                # a candle late
     later = amd_bars(after=[(100.9, 100.6, 100.7)])
     assert al.latest("ETH", later, later[-1]["timestamp"] + M + 1) is None   # an earlier setup
@@ -66,16 +72,18 @@ def test_paper_settle_tp_stop_timeout_and_void():
     t = _trade()
     base = amd_bars()
     nxt = base[-1]["timestamp"] + M
-    tp = base + [bar(nxt, 100.8, 100.9, 99.3, 99.4)]
+    lo_tp, hi_sl = t["paper_tp"] - 0.1, t["paper_sl"] + 0.1
+    tp = base + [bar(nxt, 100.8, 100.8, lo_tp, lo_tp + 0.05)]
     r = al.settle(t, tp)
     assert r["exit_reason"] == "tp" and r["fill"] == 100.8 and r["pnl_usd"] > 0
-    assert abs(r["pnl_usd"] - round(550 * ((100.8 - t["paper_tp"]) / 100.8 - 8 / 10_000), 2)) < 0.01
-    both = base + [bar(nxt, 100.8, 101.9, 99.3, 100.0)]
+    assert abs(r["pnl_usd"] - round(t["notional_usd"] * ((100.8 - t["paper_tp"]) / 100.8 - 8 / 10_000), 2)) < 0.01
+    both = base + [bar(nxt, 100.8, hi_sl, lo_tp, 100.0)]
     assert al.settle(t, both)["exit_reason"] == "stop"                  # stop first
-    assert al.settle(t, both)["pnl_usd"] < -5
-    flat = base + [bar(nxt + k * M, 100.8, 100.9, 100.7, 100.8) for k in range(17)]
+    assert al.settle(t, both)["pnl_usd"] < -9                           # about the $10 risk
+    n = int(t["hold_h"] * 4) + 1
+    flat = base + [bar(nxt + k * M, 100.8, 100.8, 100.75, 100.8) for k in range(n)]
     assert al.settle(t, flat)["exit_reason"] == "timeout"
-    assert al.settle(t, base + [bar(nxt, 100.8, 100.9, 100.7, 100.8)]) is None   # still running
+    assert al.settle(t, base + [bar(nxt, 100.8, 100.8, 100.75, 100.8)]) is None   # still running
     gone = [bar(nxt + 5 * M, 100.8, 100.9, 100.7, 100.8)]
     assert al.settle(t, gone)["state"] == "void"
     s = al.summary([r, al.settle(t, both), {"state": "open"}, {"state": "void"}])
