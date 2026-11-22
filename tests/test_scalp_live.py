@@ -498,6 +498,54 @@ def test_engine_scalp_opens_at_market_risk_sized(app_mod, hl_fake, monkeypatch):
 
 
 
+@pytest.mark.parametrize("closed", [True, False])
+def test_capture_flush_follows_emergency_protection(app_mod, monkeypatch, closed):
+    import hashlib
+    from datetime import datetime, timedelta, timezone
+    import hl_account
+    import hl_autoexec
+    import hl_exchange
+    import hl_meta
+    import scalp_store
+    import scalp_order_observation as observation
+
+    address = "0x" + "1" * 40
+    acct = dict(configured=True, env="testnet", address=address)
+    monkeypatch.setattr(hl_account, "account_address", lambda: address)
+    monkeypatch.setattr(hl_account, "_env", lambda *args: "testnet")
+    monkeypatch.setattr(hl_meta, "resolve_coin", lambda *args: "ETH")
+    monkeypatch.setattr(app_mod, "_scalp_size", lambda *a, **kw:
+                        ({"notional_usd": 20, "leverage": 2}, None))
+    monkeypatch.setattr(hl_exchange, "caps", lambda: {})
+    order = []
+    monkeypatch.setattr(observation, "order_wrappers", lambda **kw:
+                        (lambda: kw["sink"]({"phase": "INTENT"}), lambda: None))
+    def execute(*args, **kwargs):
+        kwargs["open_fn"]()
+        order.append("opening_and_exits")
+        return {"results": [{"ok": True, "exits_ok": False, "size": 1}]}
+    monkeypatch.setattr(hl_autoexec, "execute", execute)
+    monkeypatch.setattr(scalp_store, "placed", lambda *a, **kw: None)
+    monkeypatch.setattr(scalp_store, "closed", lambda *a, **kw: order.append("closed_record"))
+    monkeypatch.setattr(hl_exchange, "send_market_close",
+                        lambda *a: order.append("emergency_close") or {})
+    monkeypatch.setattr(hl_exchange, "order_accepted", lambda result: (closed, None))
+    monkeypatch.setattr(app_mod, "_scalp_left_open", lambda coin: 0)
+    monkeypatch.setattr(app_mod, "_scalp_audit", lambda event: order.append("protection_audit"))
+    now = datetime.now(timezone.utc)
+    capture = observation.BufferedCapture(flush=lambda batch: order.append("flush"),
+        environment="research", account_hash=hashlib.sha256(address.encode()).hexdigest(),
+        symbol="ETH", slot_ms=7, starts_at=now, ends_at=now+timedelta(hours=1))
+    setup = dict(symbol="ETH", direction="LONG", strength=80, entry=100,
+                 sl=99, target=102, slot_ms=7)
+    result = capture.run(lambda wrappers: app_mod._scalp_market(
+        setup, acct=acct, table={}, recs={}, now_ms=8,
+        observation_order_functions=wrappers), account_state=acct)
+    assert result["reason"] == ("UNPROTECTED_CLOSED" if closed else "UNPROTECTED_OPEN")
+    assert order[-1] == "flush"
+    assert order.index("emergency_close") < order.index("protection_audit") < order.index("flush")
+
+
 def test_blend_1h_is_points_not_a_gate():
     bars = padded()
     h1 = [b(i, 1, 1, 1, 1) for i in range(sl.H1_WINDOW)]
