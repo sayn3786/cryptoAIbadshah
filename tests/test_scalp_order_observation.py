@@ -62,3 +62,62 @@ def test_exit_wrapper_and_expiry(monkeypatch):
         clock=lambda:now+timedelta(hours=1))
     expired("BTC",False,1,90,None,env="testnet",sl_cloid=cloid)
     assert not events and trigger.call_count==3
+
+@pytest.mark.parametrize("mismatch", [None, "address", "network", "hash"])
+def test_buffer_account_scope_and_flush_after_protection(monkeypatch, mismatch):
+    from datetime import datetime, timedelta, timezone
+    import scalp_order_observation as module
+    import hl_account
+    address = "0x" + "1" * 40
+    monkeypatch.setattr(hl_account, "account_address", lambda: address)
+    monkeypatch.setattr(hl_account, "_env", lambda: "testnet")
+    state = dict(configured=True, env="testnet", address=address)
+    account_hash = hashlib.sha256(address.encode()).hexdigest()
+    if mismatch == "address":
+        state["address"] = "0x" + "2" * 40
+    if mismatch == "network":
+        state["env"] = "mainnet"
+    if mismatch == "hash":
+        account_hash = "a" * 64
+    order = []
+    def wrappers(**kwargs):
+        assert kwargs["account_guard"]()
+        return lambda: kwargs["sink"]({"phase": "INTENT"})
+    monkeypatch.setattr(module, "order_wrappers", wrappers)
+    def workflow(wrapper):
+        order.append("open")
+        if wrapper:
+            wrapper()
+        order.append("protection_complete")
+        return 42
+    now = datetime.now(timezone.utc)
+    capture = module.BufferedCapture(flush=lambda batch: order.append("flush"),
+        environment="production", account_hash=account_hash, symbol="BTC",
+        slot_ms=123, starts_at=now, ends_at=now+timedelta(hours=1))
+    assert capture.run(workflow, account_state=state) == 42
+    assert order == (["open", "protection_complete", "flush"] if mismatch is None
+                     else ["open", "protection_complete"])
+    assert capture.flush_status == ("FLUSHED" if mismatch is None else "EMPTY")
+    with pytest.raises(ValueError, match="CAPTURE_ALREADY_USED"):
+        capture.run(workflow, account_state=state)
+
+@pytest.mark.parametrize("overflow", [False, True])
+def test_buffer_failure_preserves_workflow_exception(monkeypatch, overflow):
+    import scalp_order_observation as module
+    import hl_account
+    address = "0x" + "1" * 40
+    monkeypatch.setattr(hl_account, "account_address", lambda: address)
+    monkeypatch.setattr(hl_account, "_env", lambda: "testnet")
+    def wrappers(**kwargs):
+        return lambda: [kwargs["sink"]({}) for _ in range(9 if overflow else 2)]
+    monkeypatch.setattr(module, "order_wrappers", wrappers)
+    flush = Mock(side_effect=RuntimeError("database unavailable"))
+    capture = module.BufferedCapture(flush=flush,
+        account_hash=hashlib.sha256(address.encode()).hexdigest())
+    def workflow(wrapper):
+        wrapper()
+        raise TimeoutError("original")
+    with pytest.raises(TimeoutError, match="original"):
+        capture.run(workflow, account_state=dict(configured=True, env="testnet", address=address))
+    assert capture.flush_status == ("OVERFLOW" if overflow else "FAILED")
+    assert flush.call_count == (0 if overflow else 1)

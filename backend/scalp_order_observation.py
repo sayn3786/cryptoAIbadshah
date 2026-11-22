@@ -69,7 +69,7 @@ def persist(event, connection):
 
 
 def order_wrappers(*, sink, environment, account_hash, symbol, slot_ms,
-                   starts_at, ends_at, clock=None):
+                   starts_at, ends_at, clock=None, account_guard=None):
     """Inactive, explicitly injected wrappers for one market scalp and its exits.
 
     The owner must supply the verified account scope and flush buffered events
@@ -81,6 +81,13 @@ def order_wrappers(*, sink, environment, account_hash, symbol, slot_ms,
         raise ValueError("INVALID_CAPTURE_WINDOW")
     clock = clock or (lambda: datetime.now(timezone.utc))
     def scoped(call, intent, cloid, is_buy, env):
+        if account_guard is not None:
+            try:
+                allowed = account_guard()
+            except Exception:
+                allowed = False
+            if not allowed:
+                return call()
         if not starts_at <= clock() < ends_at:
             return call()
         return observe(call, sink=sink, network=exchange.hl_account._env(env),
@@ -100,3 +107,67 @@ def order_wrappers(*, sink, environment, account_hash, symbol, slot_ms,
             scalp_order_observer=lambda call,intent,cloid,is_buy:
                 scoped(call,intent,cloid,is_buy,env))
     return opening, exits
+
+
+class BufferedCapture:
+    """Single-use, inactive adapter around the ENTIRE protective workflow.
+
+    call receives optional order wrappers; flush receives an immutable batch
+    only after call has returned/raised. The owner must place all protection
+    inside call and persist the batch atomically. No retries or activation.
+    """
+
+    def __init__(self, *, flush, **scope):
+        self._scope = dict(scope)
+        self._flush = flush
+        self._used = False
+        self.flush_status = "NOT_RUN"
+
+    def run(self, call, *, account_state):
+        if self._used:
+            raise ValueError("CAPTURE_ALREADY_USED")
+        self._used = True
+        import hl_account
+        events = []
+        overflow = False
+
+        def account_guard():
+            address = hl_account.account_address()
+            return (
+                hl_account._env() == "testnet"
+                and isinstance(address, str)
+                and re.fullmatch(r"0x[0-9a-fA-F]{40}", address) is not None
+                and isinstance(account_state, dict)
+                and account_state.get("configured") is True
+                and account_state.get("env") == "testnet"
+                and str(account_state.get("address", "")).lower() == address.lower()
+                and hashlib.sha256(address.lower().encode()).hexdigest()
+                == self._scope.get("account_hash")
+            )
+
+        def buffer(event):
+            nonlocal overflow
+            if len(events) >= 8:
+                overflow = True
+                return
+            events.append(event)
+
+        try:
+            wrappers = (order_wrappers(sink=buffer, account_guard=account_guard,
+                                      **self._scope)
+                        if account_guard() else None)
+        except Exception:
+            wrappers = None
+        try:
+            return call(wrappers)
+        finally:
+            if overflow:
+                self.flush_status = "OVERFLOW"
+            elif not events:
+                self.flush_status = "EMPTY"
+            else:
+                try:
+                    self._flush(tuple(events))
+                    self.flush_status = "FLUSHED"
+                except Exception:
+                    self.flush_status = "FAILED"
