@@ -62,6 +62,8 @@ def test_threshold_verdict():
     assert slf.threshold_verdict(rows) == {"lowest_ok": 95.0}
     rows[95.0]["pf_usd"] = 1.11                                   # more than 0.05 under 1.17
     assert slf.threshold_verdict(rows) == {"lowest_ok": 100.0}
+    full = {k: {**v, "per_day": 1.0, "win_rate_pct": 45.0, "pnl_usd": 10.0, "max_dd_usd": 5.0}
+            for k, v in rows.items()}
     assert "can the threshold come down" in slf.render_thresholds(
         {"window": {"start": "2026-01-01", "end": "2026-03-01", "days": 60}, "coins": ["X"],
-         "thresholds": rows, "threshold_verdict": {"lowest_ok": 100.0}})
+         "thresholds": full, "threshold_verdict": {"lowest_ok": 100.0}})
