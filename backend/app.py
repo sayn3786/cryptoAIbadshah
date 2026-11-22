@@ -7711,7 +7711,10 @@ def _scalp_hl(setups, now_ms, reads=None) -> dict:
                     res = {**res, "pnl_usd": None}     # not known yet: not a "fees only" loss
                 _ss.closed(env, rec, at_ms=now_ms, result=res or {"exit_reason": "timeout"})
                 _ended(rec, res, "timeout")
-                notes.append(f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h"
+                notes.append((f"closed {rec['symbol']} at the session end (Mon-Fri "
+                              f"{_sl.SESSION_START_H:02d}:00-{_sl.SESSION_END_H:02d}:00 UTC)"
+                              if not _sl.in_session(now_ms) else
+                              f"closed {rec['symbol']} after {_sl.max_hold_ms() // 3_600_000}h")
                              + (f" (${res['pnl_usd']:+.2f})"
                                 if res and res.get("pnl_usd") is not None else ""))
             for coin in act["drop"]:
@@ -7967,8 +7970,15 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
     # higher score, then the less stretched entry. R:R is the same 1.5 for
     # every fixed-exit scalp, so sorting by it left the coin list to decide.
     found.sort(key=_sg.rank_key)
+    # Trading session (the owner, Nov 22): new scalps only Mon-Fri 13:00-21:00
+    # UTC; outside it nothing new is alerted or opened (sweep closes the rest).
+    if not _sl.in_session(now_ms):
+        rejected.append("OUTSIDE_SESSION")
+        found_in_session = []
+    else:
+        found_in_session = found
     new = []
-    for x in found:
+    for x in found_in_session:
         try:
             import kv as _kv
             if _kv.claim(f"scalp:sig:{_deploy_env()}:{x['symbol']}:{x['slot_ms']}",

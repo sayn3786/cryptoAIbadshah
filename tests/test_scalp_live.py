@@ -46,8 +46,9 @@ def clean_env(monkeypatch):
     monkeypatch.delenv("SCALP_REQUIRE_REVERSAL", raising=False)   # off by default
     monkeypatch.setattr("scalp_live.FIXED_EXITS_RETIRED", False)
     for k, v in (("SCALP_FIXED_MARGIN_USD", "50"), ("SCALP_MIN_ROOM_R", "0.5"),
-                 ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1")):
-        monkeypatch.setenv(k, v)   # the pre-Nov-17 defaults these tests check
+                 ("SCALP_MAX_HOLD_HOURS", "4"), ("SCALP_RISK_USD", "1"),
+                 ("SCALP_MARGIN_USD", "25")):
+        monkeypatch.setenv(k, v)   # the pre-Nov-17 defaults these tests check (margin: pre-Nov-22)
     # The scoring tests below were written at the old 75 floor (the default is
     # 100 now, test_the_scalp_floor_is_100).
     monkeypatch.setenv("SCALP_MIN_STRENGTH", "75")
