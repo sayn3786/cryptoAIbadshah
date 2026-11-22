@@ -7148,6 +7148,40 @@ def _scalp_engine_read(win, tf, symbol):
     return sig
 
 
+def _scalp_daily_leans(now_ms: int):
+    """The previous closed day's money leans (computed at 00:40 UTC), or None
+    when the stored reading is missing or older than 2 days."""
+    try:
+        s = _hlliq_get("moneylean", None) or {}
+        day = int(s.get("day") or 0)
+        today = int(now_ms) // 86_400_000 * 86_400_000
+        if not day or today - day > 2 * 86_400_000:
+            return None
+        return {"premium": s.get("premium"), "stable": s.get("stable")}
+    except Exception:
+        return None
+
+
+def _scalp_lean_note(now_ms: int, leans) -> None:
+    """Once a day, privately: which way the lean filter lets the scalp trade."""
+    try:
+        import kv as _kv
+        day = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        if not _kv.claim(f"scalp:leannote:{_deploy_env()}:{day}", ttl_seconds=2 * 86_400):
+            return
+        if not leans:
+            msg = "no fresh daily lean reading - no scalps today"
+        else:
+            sides = {s for s in (leans.get("premium"), leans.get("stable")) if s}
+            allowed = (f"only {next(iter(sides))} scalps" if len(sides) == 1 else
+                       "no scalps (the leans disagree)" if sides else "no scalps (no lean today)")
+            msg = (f"premium {leans.get('premium') or 'none'}, stablecoins "
+                   f"{leans.get('stable') or 'none'} → {allowed}")
+        _scalp_private(f"🧭 Scalp lean filter today: {msg}")
+    except Exception:
+        pass
+
+
 def _scalp_private(text) -> None:
     try:                                   # the owner's PRIVATE chat only
         import weekly_report
@@ -8181,6 +8215,19 @@ def _scalp_run(now_ms=None, *, fetch_fn=None, read_fn=None) -> dict:
         found_in_session = []
     else:
         found_in_session = found
+    # Daily money-lean filter (owner, Nov 22 2026): only scalps that the
+    # previous day's Coinbase premium / stablecoin lean agrees with and none
+    # is against (scalp_lean_filter_compare: PF 1.17 / 1.18 in both periods
+    # vs 0.86 / 0.83 unfiltered). No fresh reading -> no scalps.
+    if _sl.lean_filter_enabled() and found_in_session:
+        _leans = _scalp_daily_leans(now_ms)
+        _kept = [x for x in found_in_session if _sl.lean_allows(x["direction"], _leans)]
+        if len(_kept) < len(found_in_session):
+            rejected.append(f"LEAN_FILTER: {len(found_in_session) - len(_kept)} skipped "
+                            f"(premium {(_leans or {}).get('premium') or 'none'}, "
+                            f"stable {(_leans or {}).get('stable') or 'none'})")
+        found_in_session = _kept
+        _scalp_lean_note(now_ms, _leans)
     new = []
     for x in found_in_session:
         try:

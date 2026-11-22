@@ -78,6 +78,22 @@ def enabled() -> bool:
 SESSION_START_H, SESSION_END_H = 13, 21
 
 
+def lean_filter_enabled() -> bool:
+    """The daily money-lean filter (owner, Nov 22 2026; passed
+    scalp_lean_filter_compare in both periods as agree-only).
+    SCALP_LEAN_FILTER=off trades every scalp as before."""
+    return not _off("SCALP_LEAN_FILTER")
+
+
+def lean_allows(direction: str, leans: Optional[Dict[str, Any]]) -> bool:
+    """agree-only: at least one lean points the scalp's way and none against.
+    No reading (None) = no scalp - the safe side."""
+    if not leans:
+        return False
+    sides = [s for s in (leans.get("premium"), leans.get("stable")) if s in ("LONG", "SHORT")]
+    return any(s == direction for s in sides) and not any(s != direction for s in sides)
+
+
 def session_enforced() -> bool:
     return not _off("SCALP_SESSION")
 
