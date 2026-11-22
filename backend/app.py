@@ -5703,9 +5703,10 @@ def _opposite_exit_targets(active: list, reads: dict) -> list:
     return out
 
 
-def _opposite_signal_exits(reads: dict, close_ms, *, store=None, notify=True) -> dict:
-    """Close open 1D picks on an opposite 62+ 1D signal at this close (exit_rule_test).
-    Never raises."""
+def _opposite_signal_exits(reads: dict, close_ms, *, store=None, notify=True,
+                           reason: str = "OPPOSITE_SIGNAL", label: str = "1D") -> dict:
+    """Close open 1D picks whose coin's `label` signal (reads) points the other
+    way at 62+, at that candle's close. Never raises."""
     out = {"closed": 0, "errors": 0}
     try:
         import db as _db
@@ -5721,18 +5722,72 @@ def _opposite_signal_exits(reads: dict, close_ms, *, store=None, notify=True) ->
             if not px:
                 continue
             try:
-                store.close_signal(r["id"], float(px), closed_at=at, reason="OPPOSITE_SIGNAL",
+                store.close_signal(r["id"], float(px), closed_at=at, reason=reason,
                                    source_ts=at)
                 out["closed"] += 1
-                notes.append(f"{r['symbol']} {r['direction']} closed at ~{float(px):,.6g}: its 1D signal "
+                notes.append(f"{r['symbol']} {r['direction']} closed at ~{float(px):,.6g}: its {label} signal "
                              f"is now {rd['direction']} {float(rd.get('strength') or 0):.0f}")
             except Exception:
                 out["errors"] += 1
         if notify and notes:
-            _scalp_private("🚪 Early exits (opposite 1D signal at 62+, tested 2018-now):\n" + "\n".join(notes))
+            _scalp_private(f"🚪 Early exits (opposite {label} signal at 62+, tested):\n" + "\n".join(notes))
     except Exception as exc:
         out["error"] = type(exc).__name__
     return out
+
+
+H8_MS = 8 * 3_600_000
+
+
+def _exit_8h_run(now_ms=None, *, store=None, build=None, notify=True) -> dict:
+    """At an 8H close: each coin with an open 1D pick gets a FRESH 8H analysis;
+    picks whose coin's 8H signal now points the other way at 62+ are closed at
+    that 8H close (exit_8h_test, pre-registered, adopted Nov 22 2026). Only a
+    reading of the 8H candle that just closed counts. Never raises."""
+    try:
+        import db as _db
+        if store is None:
+            if not _db.db_configured():
+                return {"ran": False, "reason": "no database"}
+            import signal_store as store
+        now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+        expected = now_ms // H8_MS * H8_MS                 # the 8H close that just happened
+        active = store.list_active_signals(environment=_deploy_env(), limit=500)
+        syms = sorted({str(r.get("symbol") or "").upper() for r in active
+                       if str(r.get("timeframe") or "") == close_publish.DAILY
+                       and str(r.get("status") or "") in ("OPEN", "PARTIAL_TP")})
+        if not syms:
+            return {"ran": True, "checked": 0, "closed": 0}
+        build = build or build_analysis
+
+        def _one(sym):
+            try:
+                return sym, build(sym, "8H")
+            except Exception:
+                return sym, None
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            got = dict(ex.map(_one, [s for s in syms if s in SYMBOLS]))
+        reads = {}
+        for sym, a in got.items():
+            if not a:
+                continue
+            rd = _close_read(a)
+            if rd.get("closed_at") == expected:            # only the candle that just closed
+                reads[sym] = rd
+        res = _opposite_signal_exits(reads, expected, store=store, notify=notify,
+                                     reason="OPPOSITE_SIGNAL_8H", label="8H")
+        return {"ran": True, "checked": len(reads), "of": len(syms), **res}
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+@app.post("/api/cron/exit-8h")
+def api_cron_exit_8h():
+    if not (_cron_authorized() or _scheduler_token_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    res = _exit_8h_run()
+    print(f"[cron/exit-8h] {res}")
+    return jsonify({"ok": bool(res.get("ran")), "result": res}), (200 if res.get("ran") else 503)
 
 
 def _close_read(data: dict) -> dict:
@@ -5930,10 +5985,8 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
         _pattern_log_close({sym: analyses[sym] for sym in current})
         # Hyperliquid liquidation clusters at this close, for the later test.
         _hlliq_log_close(close_publish.close_key(now))
-        # Early exit (exit_rule_test, pre-registered, adopted Nov 22 2026): an
-        # open 1D pick whose coin's 1D signal now points the OTHER way at 62+
-        # is closed at this close. Best effort, never blocks the close.
-        _opposite_signal_exits({sym: reads[sym] for sym in current}, expected)
+        # Early exits for open 1D picks now run at every 8H close (the
+        # exit-8h job, exit_8h_test) - that check covers this close too.
 
     htf = close_publish.HIGHER_TF[tf]
     wanted = [sym for sym in current if reads[sym]["direction"] in ("LONG", "SHORT")]
@@ -9188,7 +9241,7 @@ _SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/mon
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
                     "/api/research/ml/collect", "/api/research/ml/label",
                     "/api/cron/scalp", "/api/cron/rev-forward", "/api/cron/hl-liq",
-                    "/api/cron/swiftedge", "/api/cron/polymarket")
+                    "/api/cron/swiftedge", "/api/cron/polymarket", "/api/cron/exit-8h")
 
 
 def _scheduler_token_ok() -> bool:

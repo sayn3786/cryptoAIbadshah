@@ -82,6 +82,10 @@ const JOBS = [
   // so the morning Market Update has a fresh read.
   { name: "polymarket", path: "/api/cron/polymarket", ...S, retries: 1,
     due: ({ h, m }) => m === 43 && (h % 4 === 0 || h === 23) },
+  // Early exits for open 1D picks at every 8H close (00 / 08 / 16 UTC):
+  // an opposite 8H signal at 62+ closes the pick (exit_8h_test).
+  { name: "exit-8h", path: "/api/cron/exit-8h", ...S, retries: 1, timeoutMs: 120_000,
+    due: ({ h, m }) => h % 8 === 0 && m === 12 },
   { name: "etf-snapshot", path: "/api/cron/etf-snapshot", ...S, retries: 2,
     due: ({ h, m }) => h === 1 && m === 30 },
   { name: "market-snapshot", path: "/api/cron/market-snapshot", ...S, retries: 2,
