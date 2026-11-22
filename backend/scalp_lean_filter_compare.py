@@ -182,13 +182,12 @@ def leans_by_day(btc_daily: Sequence[Dict]) -> Dict[str, Dict[int, str]]:
     import macro_lean_test as ml
     btc = {int(c["timestamp"]) // DAY_MS * DAY_MS: float(c["close"]) for c in btc_daily}
     out: Dict[str, Dict[int, str]] = {"premium": {}, "stable": {}}
-    if not btc:
-        return out
-    try:
-        out["premium"] = ml.premium_lean(ml.fetch_coinbase_daily(min(btc), max(btc) + DAY_MS), btc)
-    except Exception:
-        pass
-    try:
+    if btc:
+        try:
+            out["premium"] = ml.premium_lean(ml.fetch_coinbase_daily(min(btc), max(btc) + DAY_MS), btc)
+        except Exception:
+            pass
+    try:                                    # needs no BTC candles
         out["stable"] = ml.stable_lean(ml.fetch_stable_supply())
     except Exception:
         pass
@@ -204,7 +203,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     import time
     import app as appmod
-    import read_study as rs
+    import continuation_short_confirm as cs
     now = int(time.time() * 1000) // M15 * M15
     end_ms = now - int(args.end_days_ago * DAY_MS) // M15 * M15
     syms = {s: appmod.SYMBOLS[s] for s in cc.COINS if s in appmod.SYMBOLS}
@@ -213,9 +212,14 @@ def main(argv=None) -> int:
     if not m15:
         print("error: no 15m history", file=sys.stderr)
         return 2
-    daily = rs.fetch_daily({"BTC": appmod.SYMBOLS["BTC"]}, int(args.fetch_days + args.end_days_ago + 60), log=log)
+    # The same daily fetch macro_lean_test used (the first run's read_study
+    # fetch came back empty: no lean days, so the books were all the same).
+    daily = cs.fetch_deep({"BTC": appmod.SYMBOLS["BTC"]}, int(args.fetch_days + args.end_days_ago + 60), log=log)
     leans = leans_by_day(daily.get("BTC") or [])
     log(f"  lean days: premium {len(leans['premium'])}, stable {len(leans['stable'])}")
+    if not (leans["premium"] or leans["stable"]):
+        print("error: no lean data - the comparison would be meaningless", file=sys.stderr)
+        return 3
     res = compare(m15, leans, start_ms=end_ms - int(args.fetch_days * DAY_MS), end_ms=end_ms, log=log)
     if args.telegram:
         import weekly_report
