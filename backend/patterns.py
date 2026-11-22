@@ -2522,6 +2522,16 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         else:
             row(label, "—", "neutral")
 
+    # ── Volume profile (volume_profile): POC and value area ─────────────────
+    _vp = analysis.get("volume_profile") or {}
+    if _vp.get("poc"):
+        row("Volume POC", f"{_vp['poc']:,.4f}", "neutral",
+            f"{_vp['poc_dist_pct']:+.1f}% · most-traded price of the last {_vp['window']} bars")
+        row("Value Area", f"{_vp['val']:,.4f} – {_vp['vah']:,.4f}", "neutral",
+            f"70% of the volume · price {_vp['where']} · untested")
+    else:
+        row("Volume POC", "—", "neutral")
+
     # ── Range position / midline stretch ─────────────────────────────────────
     rng = s_hi - s_lo
     if rng > 0:

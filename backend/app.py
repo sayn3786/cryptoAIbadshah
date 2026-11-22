@@ -3580,6 +3580,9 @@ def _hlliq_log_close(day: str) -> None:
     w = _hlliq_get("swift", None)
     if w and w.get("coins"):
         _hlliq_set(f"swiftlog:{day}", w, ttl=400 * 86_400)
+    pm = _hlliq_get("poly", None)
+    if pm and (pm.get("macro") or pm.get("crypto")):
+        _hlliq_set(f"polylog:{day}", pm, ttl=400 * 86_400)
 
 
 def _hlliq_notes() -> list:
@@ -3626,6 +3629,48 @@ def _swift_notes() -> list:
         return _sw.note_lines(s)
     except Exception:
         return []
+
+
+def _poly_run(*, get=None) -> dict:
+    """Polymarket macro / crypto odds (polymarket). Never raises; keeps the
+    last good summary when the source is down."""
+    try:
+        import polymarket as _pm
+        got = _pm.fetch(get)
+        n = len(got.get("macro") or []) + len(got.get("crypto") or [])
+        if n:
+            _hlliq_set("poly", {"ts": int(time.time()), **got})
+        return {"ran": True, "markets": n}
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+def _poly_notes() -> list:
+    try:
+        import polymarket as _pm
+        s = _hlliq_get("poly", None)
+        if not s or int(time.time()) - int(s.get("ts") or 0) > 12 * 3600:
+            return []
+        return _pm.note_lines(s)
+    except Exception:
+        return []
+
+
+@app.post("/api/cron/polymarket")
+def api_cron_polymarket():
+    if not (_cron_authorized() or _scheduler_token_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    res = _poly_run()
+    print(f"[cron/polymarket] {res}")
+    return jsonify({"ok": True, "result": res})
+
+
+@app.get("/api/polymarket")
+def api_polymarket():
+    s = _hlliq_get("poly", None) or {}
+    return jsonify({"ts": s.get("ts"), "macro": s.get("macro") or [], "crypto": s.get("crypto") or [],
+                    "source": "Polymarket (gamma-api.polymarket.com)",
+                    "note": "Real-money prediction-market odds. Information, not yet tested."})
 
 
 @app.post("/api/cron/swiftedge")
@@ -4635,7 +4680,8 @@ def api_patterns_alert():
                                      coins=len(syms or SCAN_SYMBOLS),
                                      sections=sections, lean_alerts=core,
                                      notes=_mega_ipo_notes() + _flow_anomaly_notes() + _hlliq_notes()
-                                     + _liq_lean_notes() + _swift_notes()))
+                                     + _liq_lean_notes() + _swift_notes()
+                                     + _poly_notes()))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
@@ -8873,7 +8919,7 @@ _SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/mon
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
                     "/api/research/ml/collect", "/api/research/ml/label",
                     "/api/cron/scalp", "/api/cron/rev-forward", "/api/cron/hl-liq",
-                    "/api/cron/swiftedge")
+                    "/api/cron/swiftedge", "/api/cron/polymarket")
 
 
 def _scheduler_token_ok() -> bool:
