@@ -65,11 +65,11 @@ def test_daily_job_and_the_shared_endpoint(monkeypatch):
     monkeypatch.setattr(app_mod, "_rev_fwd_daily",
                         lambda fetch_fn: [fetch_fn(s) for s in ("TAO", "ETH")] and {"ran": True})
     monkeypatch.setattr(app_mod, "_sig1d_daily",
-                        lambda fetch_fn: [fetch_fn(s) for s in ("TAO", "ETH")] and {"ran": True})
+                        lambda fetch_fn, money=None: [fetch_fn(s) for s in ("TAO", "ETH")] and {"ran": True})
     monkeypatch.setattr(app_mod, "_cron_authorized", lambda: True)
     with app_mod.app.test_request_context("/api/cron/rev-forward", method="POST"):
         resp, code = app_mod.api_cron_rev_forward()
-    assert code == 200 and sorted(calls) == ["ETH", "TAO"]           # each coin fetched once
+    assert code == 200 and sorted(calls) == ["BTC", "ETH", "TAO"]    # each coin fetched once (BTC: the money leans)
 
 
 def test_shown():
