@@ -11,10 +11,10 @@ rates / recession / inflation (macro) or Bitcoin / Ethereum / Solana / XRP /
 crypto (crypto).
 
 For each market: the question, the leading outcome and its probability, the
-24h change when Polymarket reports one, volume and end date.
+7-day change, volume and end date.
 
 LATER CHECK (written now, before any data): once 60+ daily snapshots exist,
-do big 24h odds moves (>= 10 points) on the macro markets come before bigger
+do big day-to-day odds moves (>= 10 points, from our own daily log) on the macro markets come before bigger
 BTC moves the next day than other days? Information until then; nothing here
 is scored.
 """
@@ -25,7 +25,8 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
-LIMIT = 500
+LIMIT = 100          # the API returns at most 100 a call
+PAGES = 3
 MIN_VOLUME = 100_000.0
 KEEP = 6
 TIMEOUT = 15
@@ -74,9 +75,11 @@ def parse(m: Dict) -> Optional[Dict]:
     if [o.lower() for o in outs] == ["yes", "no"]:
         k = 0
     vol = _f(m.get("volumeNum")) or _f(m.get("volume")) or 0.0
-    chg = _f(m.get("oneDayPriceChange"))
+    # The API reports no 24h change (Nov 2026 live check: one-hour / week /
+    # month / year only) - the 7-day change of the first outcome is shown.
+    chg = _f(m.get("oneWeekPriceChange"))
     return {"question": q, "outcome": outs[k], "prob": round(prices[k] * 100, 1),
-            "change_24h": round(chg * 100, 1) if chg is not None and k == 0 else None,
+            "change_7d": round(chg * 100, 1) if chg is not None and k == 0 else None,
             "volume": round(vol), "end": m.get("endDate"), "slug": m.get("slug")}
 
 
@@ -96,22 +99,27 @@ def pick(markets: List[Dict]) -> Dict[str, List[Dict]]:
 
 
 def fetch(get: Optional[Callable] = None) -> Dict[str, List[Dict]]:
-    """The macro and crypto markets; tries the volume-sorted listing first,
-    then a plain active listing if that parameter is refused."""
+    """The macro and crypto markets among the ones trading most in the last
+    24h (PAGES x 100; Nov 2026 live check: sorting by ALL-TIME volume gives
+    old sports / election markets and no Fed or crypto ones)."""
     get = get or _get
-    base = {"active": "true", "closed": "false", "limit": LIMIT}
-    for extra in ({"order": "volumeNum", "ascending": "false"}, {}):
+    rows: List[Dict] = []
+    for page in range(PAGES):
         try:
-            rows = get({**base, **extra})
+            got = get({"active": "true", "closed": "false", "limit": LIMIT, "offset": page * LIMIT,
+                       "order": "volume24hr", "ascending": "false"})
         except Exception:
-            continue
-        if isinstance(rows, list) and rows:
-            return pick(rows)
-    return {"macro": [], "crypto": []}
+            break
+        if not isinstance(got, list) or not got:
+            break
+        rows += got
+        if len(got) < LIMIT:
+            break
+    return pick(rows)
 
 
 def _pct(p: Dict) -> str:
-    ch = f" ({p['change_24h']:+.0f} pts 24h)" if p.get("change_24h") else ""
+    ch = f" ({p['change_7d']:+.0f} pts 7d)" if p.get("change_7d") else ""
     who = "" if p["outcome"].lower() == "yes" else f" {p['outcome']}"
     return f"{p['question']}{who}: {p['prob']:.0f}%{ch}"
 

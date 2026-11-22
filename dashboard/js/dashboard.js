@@ -1082,7 +1082,7 @@ async function renderPolymarket() {
     const d = r.ok ? await r.json() : {};
     const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const row = p => {
-      const ch = p.change_24h ? ` <span class="${p.change_24h > 0 ? 'bullish' : 'bearish'}">(${p.change_24h > 0 ? '+' : ''}${p.change_24h.toFixed(0)} pts 24h)</span>` : '';
+      const ch = p.change_7d ? ` <span class="${p.change_7d > 0 ? 'bullish' : 'bearish'}">(${p.change_7d > 0 ? '+' : ''}${p.change_7d.toFixed(0)} pts 7d)</span>` : '';
       const who = String(p.outcome).toLowerCase() === 'yes' ? '' : ` — ${esc(p.outcome)}`;
       const link = p.slug ? `https://polymarket.com/market/${encodeURIComponent(p.slug)}` : 'https://polymarket.com';
       return `<div><a href="${link}" target="_blank" rel="noopener">${esc(p.question)}</a>${who}: <b>${Number(p.prob).toFixed(0)}%</b>${ch}</div>`;
