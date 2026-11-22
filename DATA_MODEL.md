@@ -1,5 +1,16 @@
 # CryptoMonk — Signal Tracking Guide & Data Dictionary
 
+## Scalp order observations (migration `027`)
+
+`027_scalp_order_observations.sql` creates the append-only testnet-only
+`scalp_order_observations` journal. It requires the immutability function from
+`020`. Scope is environment, account hash, symbol and setup slot; scalp identities
+are not daily signal UUIDs and have no foreign key to `signals`. Events retain
+correlation IDs, intent, phase, timestamps and an identity payload. Training
+eligibility is constrained to false. Acknowledgements do not establish fills.
+Collection remains inactive; applying this migration does not activate it.
+See `docs/scalp-observation-journal.md` for buffered capture and its limitations.
+
 ## Initial exit-order observations (migration `026`)
 
 `026_exit_order_observations.sql` adds `exit_order_observations`, an append-only

@@ -7104,7 +7104,8 @@ def _scalp_size(sym, coin, setup, *, acct, table, recs):
     return plan, None
 
 
-def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
+def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None,
+                  observation_order_functions=None) -> dict:
     """An engine-triggered scalp: a MARKET open through hl_autoexec.execute
     (stale-entry guard against the 15m close, exact-once id, the structure stop
     and target attached right after the fill), risk-sized. Never raises."""
@@ -7127,7 +7128,12 @@ def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None) -> dict:
     # 4h book's cap must not apply to it.
     cfg = {**_he.caps(), "notional_usd": plan["notional_usd"], "leverage": plan["leverage"],
            "max_exposure_usd": 1e12, "max_orders_per_run": 1_000}
-    out = _ax.execute([sig], account_state=acct, table=table, cfg=cfg, open_orders=orders)
+    observe_kwargs = {}
+    if observation_order_functions is not None and _he.hl_account._env() == "testnet":
+        observe_kwargs = dict(open_fn=observation_order_functions[0],
+                              exit_fn=observation_order_functions[1])
+    out = _ax.execute([sig], account_state=acct, table=table, cfg=cfg, open_orders=orders,
+                      **observe_kwargs)
     r = (out.get("results") or [{}])[0]
     if not r.get("ok"):
         return {"symbol": sym, "ok": False, "reason": r.get("reason"),
