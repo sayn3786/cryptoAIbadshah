@@ -44,6 +44,7 @@ from indicators import (
     detect_fvg, detect_rsi_divergence, detect_whale_activity, fibonacci_retracement,
     find_pivots, find_volume_spikes, flip_close_ts,
 )
+import order_blocks as _order_blocks
 from patterns import (
     analyze_elliott_wave, detect_acc_eql_fvg_setup, detect_bos_streak,
     detect_choch, detect_equal_levels, detect_flags, detect_liquidity_grab,
@@ -107,7 +108,7 @@ CANDLE_DERIVED_KEYS = (
     "deep_swing_highs", "deep_swing_lows",
     "volume_spikes", "whale_activity",
     "structure_candles", "structure_supertrend", "structure_trendline",
-    "range_boxes",
+    "range_boxes", "order_blocks",
     "market_cap",
 )
 
@@ -564,6 +565,8 @@ def build_candle_analysis(candles: List[Dict], timeframe: str, symbol: str, *,
         "equal_levels": detect_equal_levels(candles),
         "bos_streak": detect_bos_streak(candles),
         "liquidity_pools": detect_liquidity_pools(candles),
+        # Order blocks (order_blocks): display only until order_block_test.
+        "order_blocks": _order_blocks.detect(candles),
         "session_ranges": session_ranges(candles, timeframe),
 
         # Deep swing pivots over the FULL fetched history — the far structure a

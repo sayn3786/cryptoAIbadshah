@@ -2506,6 +2506,21 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     else:
         row("Pool Distance", "—", "neutral")
 
+    # ── Order blocks (order_blocks): nearest live one each side ─────────────
+    _ob = analysis.get("order_blocks") or {}
+    for side, label, tone in (("bullish", "Bull Order Block", "bull"), ("bearish", "Bear Order Block", "bear")):
+        obs = _ob.get(side) or []
+        if obs:
+            o = obs[0]
+            where = ("price inside it" if o.get("inside") else
+                     f"{abs(o['dist_pct']):.1f}% {'below' if side == 'bullish' else 'above'}")
+            row(label, f"{o['bottom']:,.4f} – {o['top']:,.4f}", tone,
+                f"{where} · {o['status']}"
+                + (f" ({o['touches']}× touched)" if o.get("touches") else "")
+                + f" · formed {o['bars_ago']} bars ago · untested signal")
+        else:
+            row(label, "—", "neutral")
+
     # ── Range position / midline stretch ─────────────────────────────────────
     rng = s_hi - s_lo
     if rng > 0:
