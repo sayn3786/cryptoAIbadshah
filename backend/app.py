@@ -3370,7 +3370,40 @@ def _liq_leans() -> dict:
         return {}
 
 
-def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None) -> dict:
+def _moneysh_key(lean: str) -> str:
+    return f"sig1d_money_{lean}:{_deploy_env()}"
+
+
+def _moneysh_load(lean: str) -> list:
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(_moneysh_key(lean)) or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _moneysh_save(lean: str, trades) -> None:
+    try:
+        import kv as _kv
+        import sig1d_forward as _sf
+        _kv.set_value(_moneysh_key(lean), json.dumps(list(trades)[-_sf.KEEP:]), ttl_seconds=REV_FWD_TTL)
+    except Exception:
+        pass
+
+
+def _money_notes() -> list:
+    try:
+        import money_lean_shadow as _ms
+        s = _hlliq_get("moneylean", None)
+        if not s or int(time.time() * 1000) - int(s.get("day") or 0) > 3 * 86_400_000:
+            return []
+        return _ms.note_lines(s)
+    except Exception:
+        return []
+
+
+def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None, money=None) -> dict:
     """Once a day after the 1D close: settle the open paper trades, then open
     one for every coin whose tested 1D signal (price + Fear & Greed) is LONG /
     SHORT at 62+ on the latest closed day. Never raises, never orders."""
@@ -3397,6 +3430,13 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None) -> d
             shadow = _liqsh_load()
             leans = _liq_leans() if leans is None else leans
             sh_opened, sh_changed = [], False
+            # Money leans (money_lean_shadow, pre-registered): one shadow book
+            # each, market-wide (the same lean for every coin).
+            import money_lean_shadow as _ms
+            money = money or {}
+            msh = {k: _moneysh_load(k) for k in _ms.LEANS}
+            msh_changed = {k: False for k in _ms.LEANS}
+            msh_opened = {k: 0 for k in _ms.LEANS}
             closed, opened, voided, errors = [], [], [], 0
             for sym in sorted(_sf.UNIVERSE):
                 try:
@@ -3421,6 +3461,12 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None) -> d
                         upd = _sf.void_if_bad_entry(t, candles) or _sf.settle(t, candles)
                         if upd:
                             shadow[k], sh_changed = upd, True
+                for _lk, _book in msh.items():
+                    for k, t in enumerate(_book):
+                        if t.get("symbol") == sym and t.get("state") == "open":
+                            upd = _sf.void_if_bad_entry(t, candles) or _sf.settle(t, candles)
+                            if upd:
+                                _book[k], msh_changed[_lk] = upd, True
                 try:
                     sig = signal_fn(candles, sym) or {}
                 except Exception:
@@ -3436,17 +3482,29 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None) -> d
                         shadow.append(t2)
                         sh_opened.append(t2)
                         sh_changed = True
+                for _lk, _book in msh.items():
+                    _side = money.get(_lk)
+                    if d in ("LONG", "SHORT") and _sf.can_open(_book, sym, d, last_ts):
+                        _s3 = _ll.adjusted(d, float(sig.get("strength") or 0), {"lean": _side})
+                        _t3 = _sf.open_trade(sym, {**sig, "strength": _s3}, candles)
+                        if _t3:
+                            _book.append({**_t3, "raw_strength": float(sig.get("strength") or 0),
+                                          f"{_lk}_lean": _side})
+                            msh_changed[_lk], msh_opened[_lk] = True, msh_opened[_lk] + 1
                 if d not in ("LONG", "SHORT") or not _sf.can_open(book, sym, d, last_ts):
                     continue
                 t = _sf.open_trade(sym, sig, candles)
                 if t:
-                    t = _ll.tag(t, ln)
+                    t = _ms.tag(_ll.tag(t, ln), money)
                     book.append(t)
                     opened.append(t)
             if closed or opened or voided:
                 _sig1d_save(book)
             if sh_changed:
                 _liqsh_save(shadow)
+            for _lk, _ch in msh_changed.items():
+                if _ch:
+                    _moneysh_save(_lk, msh[_lk])
             tally = _sf.summary(book)
             if notify:
                 try:
@@ -3461,7 +3519,9 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None) -> d
                     pass
             return {"ran": True, "opened": len(opened), "closed": len(closed), "voided": len(voided),
                     "fetch_errors": errors, "verdict": tally.get("verdict"),
-                    "liq_shadow_opened": len(sh_opened), "leans": len(leans)}
+                    "liq_shadow_opened": len(sh_opened), "leans": len(leans),
+                    "money_shadow_opened": msh_opened,
+                    "money_leans": {k: money.get(k) for k in _ms.LEANS}}
         finally:
             try:
                 _kv.release(lock)
@@ -3469,6 +3529,20 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None) -> d
                 pass
     except Exception as exc:
         return {"ran": False, "error": type(exc).__name__}
+
+
+def _money_views(book) -> dict:
+    try:
+        import money_lean_shadow as _ms
+        import sig1d_forward as _sf
+        now = int(time.time() * 1000)
+        out = {}
+        for k in _ms.LEANS:
+            sh = _moneysh_load(k)
+            out[k] = {**_ms.verdict(book, sh, k, now), "summary": _sf.summary(sh), "recent": sh[-20:]}
+        return {"latest": _hlliq_get("moneylean", None), **out}
+    except Exception as exc:
+        return {"error": type(exc).__name__}
 
 
 def _sig1d_view() -> dict:
@@ -3479,6 +3553,7 @@ def _sig1d_view() -> dict:
     return {"enabled": _sf.enabled(), "paper_only": True,
             "liq_lean_shadow": {**_ll.verdict(book, shadow, int(time.time() * 1000)),
                                 "summary": _sf.summary(shadow), "recent": shadow[-20:]},
+            "money_lean_shadow": _money_views(book),
             "rule": (f"each coin's 1D signal (price + Fear & Greed, as tested) at strength >= "
                      f"{_sf.FLOOR:g} on the latest closed day, {len(_sf.UNIVERSE)} coins; stop and "
                      f"target {_sf.ATR_MULT:g} x 1D ATR each, max {_sf.HOLD_DAYS} days, "
@@ -3738,8 +3813,18 @@ def api_cron_rev_forward():
         if isinstance(cache[sym], Exception):
             raise cache[sym]
         return cache[sym]
+    # Money leans (money_lean_shadow) of the latest closed day, from BTC's
+    # candles + Coinbase + DefiLlama; stored for the Market Update line.
+    money = {}
+    try:
+        import money_lean_shadow as _ms
+        money = _ms.compute(fetch("BTC"))
+        if money.get("day"):
+            _hlliq_set("moneylean", money, ttl=7 * 86_400)
+    except Exception:
+        money = {}
     res = {"reversal_patterns": _rev_fwd_daily(fetch_fn=fetch),
-           "signal_1d": _sig1d_daily(fetch_fn=fetch)}
+           "signal_1d": _sig1d_daily(fetch_fn=fetch, money=money)}
     print(f"[cron/rev-forward] {res}")
     okv = lambda r, off: bool(r.get("ran")) or r.get("reason") in (off, "BUSY")   # noqa: E731
     ok = okv(res["reversal_patterns"], "REV_FORWARD_OFF") and okv(res["signal_1d"], "SIG1D_FORWARD_OFF")
@@ -4681,7 +4766,7 @@ def api_patterns_alert():
                                      sections=sections, lean_alerts=core,
                                      notes=_mega_ipo_notes() + _flow_anomaly_notes() + _hlliq_notes()
                                      + _liq_lean_notes() + _swift_notes()
-                                     + _poly_notes()))
+                                     + _poly_notes() + _money_notes()))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
