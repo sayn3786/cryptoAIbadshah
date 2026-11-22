@@ -1,6 +1,8 @@
 """
-Volume profile (Nov 22 2026) - INFORMATION ONLY until tested
-(volume_profile_test).
+Volume profile (Nov 22 2026) - INFORMATION ONLY. volume_profile_test
+(pre-registered, Nov 22): bouncing at the value-area edges lost in both
+periods on 1D (48.1% / 45.7%; the recent period failed outright) - no edge,
+the edges tended to break rather than hold. Context only, never scored.
 
 Where the volume traded over the last WINDOW candles: each candle's volume
 spread evenly across its high-low range into BINS price bins.
