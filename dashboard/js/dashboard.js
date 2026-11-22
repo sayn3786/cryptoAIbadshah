@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '276';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '277';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -455,6 +455,7 @@ function renderAll(a) {
   renderOiRotation(a.regime, a.symbol);
   renderLiquidations(a.liquidations);
   renderHlLiq(a.symbol);
+  renderSwift(a.symbol);
   renderSmartMoney(a.smart_money);
   renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels, a.fib);
@@ -1015,6 +1016,39 @@ async function renderHlLiq(sym) {
       `${row('above', '▲ shorts', 'bullish')}${both ? '<br>' : ''}${row('below', '▼ longs', 'bearish')}</div>` +
       `<div style="font-size:11px;opacity:.7;margin-top:4px" title="Hyperliquid is on-chain, so these are the exact liquidation prices of real positions. Shorts above price get force-bought if price rises there; longs below get force-sold. Only Hyperliquid, and only its larger wallets. Not yet tested as a signal.">` +
       `exact, Hyperliquid's larger wallets only · ${c.wallets} wallets${age != null ? ` · ${age} min ago` : ''} · information, not yet tested ⓘ</div>`;
+    el.style.display = '';
+  } catch (_) { el.style.display = 'none'; }
+}
+
+/* Swiftedge order flow (third-party, free API; swiftedge.py): $1M+ trades,
+   positioning flip, liquidation clusters. BTC / ETH / SOL / XRP only. */
+async function renderSwift(sym) {
+  const el = document.getElementById('liqSwift');
+  if (!el || !sym) return;
+  try {
+    const r = await fetch(`${API}/swiftedge?symbol=${sym}`);
+    const d = r.ok ? await r.json() : {};
+    const c = (d.coins || {})[sym];
+    if (!c) { el.style.display = 'none'; return; }
+    const m = v => !v ? '—' : v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : `$${Math.round(v / 1e3)}K`;
+    const px = v => v >= 100 ? `$${Math.round(v).toLocaleString('en-US')}` : `$${(+v).toPrecision(4)}`;
+    const lines = [];
+    if (c.large_buy_usd != null && c.large_sell_usd != null)
+      lines.push(`$1M+ trades 24h: <span class="bullish">buys ${m(c.large_buy_usd)}</span> · ` +
+                 `<span class="bearish">sells ${m(c.large_sell_usd)}</span>`);
+    const h = c.heatmap || {};
+    const top = arr => (arr || []).slice().sort((x, y) => y.usd - x.usd)[0];
+    const up = top(h.above), dn = top(h.below);
+    if (up) lines.push(`<span class="bullish">▲ shorts ${m(up.usd)} @ ${px(up.price)} (${up.pct > 0 ? '+' : ''}${up.pct.toFixed(1)}%)</span>`);
+    if (dn) lines.push(`<span class="bearish">▼ longs ${m(dn.usd)} @ ${px(dn.price)} (${dn.pct.toFixed(1)}%)</span>`);
+    const p = c.positioning || {};
+    if (p.flip) lines.push(`positioning flip ${px(p.flip)}${p.upper_wall ? ` · upper wall ${px(p.upper_wall)}` : ''}${p.lower_wall ? ` · lower wall ${px(p.lower_wall)}` : ''}`);
+    if (!lines.length) { el.style.display = 'none'; return; }
+    el.innerHTML = `<div style="margin-top:8px;font-weight:600">🌊 Swiftedge order flow</div>` +
+      `<div style="font-size:12px;line-height:1.5">${lines.join('<br>')}</div>` +
+      `<div style="font-size:11px;opacity:.7;margin-top:4px" title="Third-party data from swiftedge.uk's free API, refreshed hourly. Its liquidation levels for exchanges that publish no positions are estimates. Not yet tested as a signal.">` +
+      `data: <a href="https://swiftedge.uk" target="_blank" rel="noopener">swiftedge.uk</a> · ` +
+      `estimates off Hyperliquid · information, not yet tested ⓘ</div>`;
     el.style.display = '';
   } catch (_) { el.style.display = 'none'; }
 }

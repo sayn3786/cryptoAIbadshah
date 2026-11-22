@@ -3572,10 +3572,14 @@ def _hlliq_run(*, post=None, leaderboard=None, budget_s: float = HLLIQ_BUDGET_S)
 
 
 def _hlliq_log_close(day: str) -> None:
-    """The day's cluster snapshot, kept 400 days for the pre-registered test."""
+    """The day's cluster snapshot (and Swiftedge's), kept 400 days for the
+    pre-registered tests."""
     s = _hlliq_get("summary", None)
     if s and s.get("coins"):
         _hlliq_set(f"log:{day}", s, ttl=400 * 86_400)
+    w = _hlliq_get("swift", None)
+    if w and w.get("coins"):
+        _hlliq_set(f"swiftlog:{day}", w, ttl=400 * 86_400)
 
 
 def _hlliq_notes() -> list:
@@ -3597,6 +3601,52 @@ def _liq_lean_notes() -> list:
         return _ll.notes(_hlliq_get("summary", None), int(_time.time()))
     except Exception:
         return []
+
+
+# ── Swiftedge order-flow snapshots (swiftedge; third-party, information) ────
+def _swift_run(*, get=None) -> dict:
+    """Hourly: BTC / ETH / SOL / XRP snapshots from Swiftedge's free API.
+    Never raises; keeps the last good summary when the source is down."""
+    try:
+        import swiftedge as _sw
+        coins = _sw.fetch_all(get)
+        if coins:
+            _hlliq_set("swift", {"ts": int(time.time()), "coins": coins})
+        return {"ran": True, "coins": len(coins)}
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+def _swift_notes() -> list:
+    try:
+        import swiftedge as _sw
+        s = _hlliq_get("swift", None)
+        if not s or int(time.time()) - int(s.get("ts") or 0) > 6 * 3600:
+            return []
+        return _sw.note_lines(s)
+    except Exception:
+        return []
+
+
+@app.post("/api/cron/swiftedge")
+def api_cron_swiftedge():
+    if not (_cron_authorized() or _scheduler_token_ok()):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    res = _swift_run()
+    print(f"[cron/swiftedge] {res}")
+    # A third-party source being down is not an app failure: 200 either way.
+    return jsonify({"ok": True, "result": res})
+
+
+@app.get("/api/swiftedge")
+def api_swiftedge():
+    s = _hlliq_get("swift", None) or {}
+    sym = (request.args.get("symbol") or "").upper()
+    coins = s.get("coins") or {}
+    return jsonify({"ts": s.get("ts"), "source": "swiftedge.uk (free API)",
+                    "coins": ({sym: coins[sym]} if sym in coins else {}) if sym else coins,
+                    "note": "Third-party order flow; liquidation levels off Hyperliquid are "
+                            "estimates. Information, not yet tested."})
 
 
 @app.post("/api/cron/hl-liq")
@@ -4585,7 +4635,7 @@ def api_patterns_alert():
                                      coins=len(syms or SCAN_SYMBOLS),
                                      sections=sections, lean_alerts=core,
                                      notes=_mega_ipo_notes() + _flow_anomaly_notes() + _hlliq_notes()
-                                     + _liq_lean_notes()))
+                                     + _liq_lean_notes() + _swift_notes()))
     return jsonify({"ok": True, "reads": len(reads), "result": result.split(":")[0]})
 
 
@@ -8822,7 +8872,8 @@ _SCHEDULER_PATHS = ("/api/cron/publish", "/api/cron/telegram", "/api/signals/mon
                     "/api/cron/etf-snapshot", "/api/cron/market-snapshot",
                     "/api/cron/tao-snapshot", "/api/cron/weekly-report",
                     "/api/research/ml/collect", "/api/research/ml/label",
-                    "/api/cron/scalp", "/api/cron/rev-forward", "/api/cron/hl-liq")
+                    "/api/cron/scalp", "/api/cron/rev-forward", "/api/cron/hl-liq",
+                    "/api/cron/swiftedge")
 
 
 def _scheduler_token_ok() -> bool:
