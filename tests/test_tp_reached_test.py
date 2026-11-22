@@ -39,3 +39,22 @@ def test_era_checks():
     assert e["passes"]
     e2 = tt.era(ev("after TP1", 21, 40) + ev("other", 22, 40))
     assert not e2["passes"]
+
+
+def test_weekly_bars_are_complete_monday_weeks():
+    mon = 1_795_392_000_000           # 2026-11-23 is a Monday
+    days = [{"timestamp": mon - 3 * D + k * D, "open": k, "high": k + 1, "low": k - 1,
+             "close": k + 0.5, "volume": 1} for k in range(17)]   # Fri..: partial, 2 full weeks
+    w = tt.weekly(days)
+    assert [x["timestamp"] for x in w] == [mon, mon + 7 * D]
+    assert w[0]["open"] == 3 and w[0]["close"] == 9.5 and w[0]["high"] == 10 and w[0]["low"] == 2
+
+
+def test_weekly_run_uses_its_own_settings():
+    mon = 1_795_392_000_000 - 400 * 7 * D
+    days = [{"timestamp": mon + k * D, "open": 100, "high": 101, "low": 94 if (k // 7) % 2 else 99,
+             "close": 100, "volume": 1} for k in range(7 * 120)]
+    sig = {"direction": "SHORT", "strength": 70, "tp_targets": [95, 90]}
+    res = tt.run({"X": days}, {}, log=lambda m: None, tf="1W", signal_fn=lambda w, s, f: sig)
+    assert res["tf"] == "1W" and res["min_resolved"] == 20
+    assert "1W signal" in tt.render_telegram(res) and "20 weeks" in tt.render_telegram(res)

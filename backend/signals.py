@@ -55,6 +55,9 @@ POOL_STALE_FLOOR = 0.35       # never fully discounted
 SL_POOL_MIN_FRESHNESS = 0.5   # i.e. touched within ~20 bars
 
 
+# tp_reached_test (1W, Nov 22 2026): penalty after last week's TP1 was reached.
+TP1_REACHED_PENALTY = 10.0
+
 def _candle_interval_ms(candles: List[Dict]) -> Optional[int]:
     """Bar length in ms, from the most recent pair that gives a positive gap."""
     if not candles or len(candles) < 2:
@@ -3465,6 +3468,20 @@ def generate_signal(analysis: Dict) -> Dict:
         (bear_reasons if direction == "LONG" else bull_reasons).append(
             f"🔷 Trading against the Fib golden pocket bias ({fib_adj})")
         g['pattern'] += fib_adj
+
+    # Weekly TP1 already reached (tp_reached_test, Nov 22 2026, pre-registered,
+    # passed both eras on 1W): when LAST week's 62+ signal saw its TP1 reached
+    # in the week that just closed, the next signal the SAME way won only
+    # ~39-40% (vs 46-55%). -10 strength. Set only on the calendar 1W
+    # (analysis["prev_tp1_reached"], app.build_analysis).
+    _ptr = analysis.get("prev_tp1_reached") or {}
+    if direction in ("LONG", "SHORT") and _ptr.get("direction") == direction:
+        strength = max(0, min(100, strength - TP1_REACHED_PENALTY))
+        (bear_reasons if direction == "LONG" else bull_reasons).append(
+            f"🎯 Last week's {direction.lower()} already reached its TP1 "
+            f"(${float(_ptr.get('tp1') or 0):,.6g}) — the next same-way weekly signal "
+            f"historically won only ~40% (-{TP1_REACHED_PENALTY:g})")
+        g['pattern'] -= TP1_REACHED_PENALTY if direction == "LONG" else -TP1_REACHED_PENALTY
 
     # Strength tiers (strength = score / 220 * 100):
     # Weak     (16–32): score  35–70  — 2-3 signals, cautious 25% size

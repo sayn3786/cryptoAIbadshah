@@ -28,7 +28,15 @@ Then a fixed -10 points for the same direction after its TP1 was reached -
 through a paper test first, as with every scoring change. Coins move
 together, so z overstates certainty.
 
+WEEKLY (added Nov 22 2026, before its run): the same question on WEEKLY
+closes (--tf 1W). The dashboard's 1W analysis on Monday-to-Sunday weeks built
+from the daily history (complete weeks only; up to 150 weeks of window as live,
+from 60 weeks in), the trade 1:1 at 1.5 x 1W ATR, max 20 WEEKS, one per coin
+per direction per 20 weeks. Same checks, but 20+ resolved "after TP1" trades
+per era (weekly gives far fewer), fixed now.
+
     python -m tp_reached_test --days 3400
+    python -m tp_reached_test --days 3400 --tf 1W
 """
 from __future__ import annotations
 
@@ -43,6 +51,37 @@ DAY_MS = rv.DAY_MS
 FLOOR = 62.0
 MIN_GAP_PTS = 5.0
 MIN_RESOLVED = 30
+MIN_RESOLVED_1W = 20
+W_LOOKBACK, W_WARMUP = 150, 60
+_MONDAY0 = 4 * DAY_MS          # 1970-01-05 was a Monday
+
+
+def weekly(daily: Sequence[Dict]) -> List[Dict]:
+    """Complete Monday-to-Sunday (UTC) weeks from daily candles."""
+    weeks: Dict[int, List[Dict]] = {}
+    for c in daily:
+        t = int(c["timestamp"])
+        wk = t - (t - _MONDAY0) % (7 * DAY_MS)
+        weeks.setdefault(wk, []).append(c)
+    out = []
+    for wk in sorted(weeks):
+        ds = sorted(weeks[wk], key=lambda c: int(c["timestamp"]))
+        if len(ds) != 7:
+            continue
+        out.append({"timestamp": wk, "open": float(ds[0]["open"]),
+                    "high": max(float(c["high"]) for c in ds), "low": min(float(c["low"]) for c in ds),
+                    "close": float(ds[-1]["close"]),
+                    "volume": sum(float(c.get("volume") or 0) for c in ds)})
+    return out
+
+
+def signal_at_1w(window: List[Dict], sym: str, fg: Optional[int]) -> Dict:
+    import candle_analysis as ca
+    import signals
+    a = ca.build_candle_analysis(window, "1W", sym)
+    if fg is not None:
+        a["fear_greed"] = {"value": fg, "label": tc._cls(fg), "classification": tc._cls(fg)}
+    return signals.generate_signal(a)
 GROUPS = ("after TP1", "other", "after last TP")
 
 
@@ -60,12 +99,17 @@ def reached(sig: Optional[Dict], candle: Dict) -> Dict[str, bool]:
 
 
 def scan(daily: Sequence[Dict], sym: str, fg: Dict[int, int], *,
-         signal_fn: Callable = tc.signal_at) -> List[Dict]:
+         signal_fn: Callable = tc.signal_at, lookback: int = rv.LOOKBACK,
+         warmup: Optional[int] = None, fg_offset_ms: int = 0) -> List[Dict]:
+    """`daily` = the bars of the timeframe tested (daily, or weekly with
+    lookback / warmup / fg_offset_ms set: Fear & Greed of the week's last day)."""
     out, last, prev = [], {}, None
-    for i in range(rv.LOOKBACK - 1, len(daily)):
-        window = list(daily[i - rv.LOOKBACK + 1:i + 1])
+    start = (warmup or lookback) - 1
+    for i in range(start, len(daily)):
+        window = list(daily[max(0, i - lookback + 1):i + 1])
         ts = int(window[-1]["timestamp"])
-        sig = signal_fn(window, sym, fg.get(ts // DAY_MS * DAY_MS)) or {}
+        fg_day = (ts + fg_offset_ms) // DAY_MS * DAY_MS
+        sig = signal_fn(window, sym, fg.get(fg_day)) or {}
         ran = reached(prev, window[-1])
         prev_dir = (prev or {}).get("direction")
         prev = sig
@@ -88,11 +132,11 @@ def scan(daily: Sequence[Dict], sym: str, fg: Dict[int, int], *,
     return out
 
 
-def era(evs: Sequence[Dict]) -> Dict:
+def era(evs: Sequence[Dict], min_resolved: int = MIN_RESOLVED) -> Dict:
     st = {g: rv.side_stats([e for e in evs if e["group"] == g], "x") for g in GROUPS}
     a, o = st["after TP1"], st["other"]
     checks = {
-        f"{MIN_RESOLVED}+ resolved after TP1": (a["resolved"] or 0) >= MIN_RESOLVED,
+        f"{min_resolved}+ resolved after TP1": (a["resolved"] or 0) >= min_resolved,
         f"after TP1 wins ≥ {MIN_GAP_PTS:g} pts less": (a["win_pct"] is not None and o["win_pct"] is not None
                                                         and o["win_pct"] - a["win_pct"] >= MIN_GAP_PTS),
         "after TP1 makes less per trade": (a["avg_r"] is not None and o["avg_r"] is not None
@@ -101,25 +145,35 @@ def era(evs: Sequence[Dict]) -> Dict:
     return {"stats": st, "checks": checks, "passes": all(checks.values())}
 
 
-def run(daily_by_coin: Dict[str, List[Dict]], fg: Dict[int, int], *, log=print, **kw) -> Dict:
+def run(daily_by_coin: Dict[str, List[Dict]], fg: Dict[int, int], *, log=print, tf: str = "1D",
+        **kw) -> Dict:
     evs = []
+    if tf == "1W":
+        kw = {"signal_fn": signal_at_1w, "lookback": W_LOOKBACK, "warmup": W_WARMUP,
+              "fg_offset_ms": 6 * DAY_MS, **kw}
     for sym, daily in daily_by_coin.items():
-        evs += scan(daily, sym, fg, **kw)
+        bars = weekly(daily) if tf == "1W" else daily
+        evs += scan(bars, sym, fg, **kw)
         log(f"  {sym}: scanned")                         # no results in the public log
-    a = era([e for e in evs if e["ts"] < rgs.ERA_SPLIT])
-    b = era([e for e in evs if e["ts"] >= rgs.ERA_SPLIT])
+    mr = MIN_RESOLVED_1W if tf == "1W" else MIN_RESOLVED
+    a = era([e for e in evs if e["ts"] < rgs.ERA_SPLIT], mr)
+    b = era([e for e in evs if e["ts"] >= rgs.ERA_SPLIT], mr)
     import scalp_baseline as sb
-    return {"eras": {"A": a, "B": b}, "supported": a["passes"] and b["passes"],
+    return {"tf": tf, "min_resolved": mr,
+            "eras": {"A": a, "B": b}, "supported": a["passes"] and b["passes"],
             "coins": sorted({e["symbol"] for e in evs}),
             "from": sb.sc._iso(min(e["ts"] for e in evs)) if evs else "-"}
 
 
 def render_telegram(res: Dict) -> str:
-    lines = ["🎯 After the targets were reached: is the next same-way 1D signal weaker? (pre-registered)",
-             f"From {res['from'][:10]} · {len(res['coins'])} coins · 1D signal at strength ≥ 62 · "
-             "1:1 at 1.5 × 1D ATR · max 20 days · 0.13% costs · one per coin per direction per 20 days",
-             "after TP1 = yesterday's 62+ signal saw its TP1 reached today, and today's signal points the "
-             "same way", ""]
+    tf = res.get("tf", "1D")
+    unit, prev, cur = (("weeks", "last week's", "this week")
+                       if tf == "1W" else ("days", "yesterday's", "today"))
+    lines = [f"🎯 After the targets were reached: is the next same-way {tf} signal weaker? (pre-registered)",
+             f"From {res['from'][:10]} · {len(res['coins'])} coins · {tf} signal at strength ≥ 62 · "
+             f"1:1 at 1.5 × {tf} ATR · max 20 {unit} · 0.13% costs · one per coin per direction per 20 {unit}",
+             f"after TP1 = {prev} 62+ signal saw its TP1 reached {cur}, and {cur}'s signal points the "
+             "same way".replace("this week's", "this week's"), ""]
     for k, name in (("A", "ERA A: 2018 → 2021"), ("B", "ERA B: 2022 → now")):
         e = res["eras"][k]
         lines.append(f"━━ {name}  →  {'PENALTY HOLDS ✅' if e['passes'] else 'no ❌'}")
@@ -129,7 +183,8 @@ def render_telegram(res: Dict) -> str:
         lines.append("")
     lines.append(f"Verdict: {'PENALTY SUPPORTED ✅ (-10 pts, paper test first)' if res['supported'] else 'NOT supported ❌ (the card banner stays information only)'}")
     lines.append(f"Rule fixed before the run: after TP1, the next same-way signal wins ≥ {MIN_GAP_PTS:g} points "
-                 f"less than the others AND makes less per trade, with {MIN_RESOLVED}+ resolved, in BOTH eras. "
+                 f"less than the others AND makes less per trade, with {res.get('min_resolved', MIN_RESOLVED)}+ "
+                 "resolved, in BOTH eras. "
                  "Coins move together, so z overstates certainty.")
     return "\n".join(lines)
 
@@ -138,6 +193,7 @@ def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(prog="tp_reached_test", description=__doc__.split("\n\n")[0])
     ap.add_argument("--days", type=int, default=3400)
+    ap.add_argument("--tf", choices=("1D", "1W"), default="1D")
     ap.add_argument("--telegram", action="store_true",
                     help="send to TELEGRAM_REPORT_CHAT_ID (private); print only whether it was sent")
     args = ap.parse_args(argv)
@@ -151,7 +207,7 @@ def main(argv=None) -> int:
         log(f"  fear & greed history unavailable: {type(exc).__name__}")
         fg = {}
     daily = cs.fetch_deep({s: appmod.SYMBOLS[s] for s in appmod.SCAN_SYMBOLS}, args.days, log=log)
-    res = run(daily, fg, log=log)
+    res = run(daily, fg, log=log, tf=args.tf)
     text = render_telegram(res)
     if args.telegram:
         import weekly_report

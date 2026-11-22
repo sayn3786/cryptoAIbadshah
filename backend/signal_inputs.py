@@ -71,6 +71,9 @@ EXTERNAL_HISTORICAL = frozenset({
 
 LIVE_ONLY = frozenset({
     "order_book",
+    # 1W only (Nov 2026): last week's signal re-run on the closed weeks before
+    # the latest; app.build_analysis sets it, the candle builder does not.
+    "prev_tp1_reached",
 })
 
 EXTERNAL_POINT_IN_TIME = frozenset({
