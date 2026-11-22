@@ -12,7 +12,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 
 def _m(q, outs, prices, vol=1e6, chg=None, **kw):
     return {"question": q, "outcomes": json.dumps(outs), "outcomePrices": json.dumps([str(p) for p in prices]),
-            "volumeNum": vol, "oneDayPriceChange": chg, "endDate": "2026-12-10", "slug": "s",
+            "volumeNum": vol, "oneWeekPriceChange": chg, "endDate": "2026-12-10", "slug": "s",
             "active": True, "closed": False, **kw}
 
 
@@ -25,28 +25,28 @@ ROWS = [_m("Fed decreases interest rates by 25 bps after December 2026 meeting?"
 
 def test_parse_and_pick():
     p = pm.parse(ROWS[0])
-    assert p["prob"] == 72.0 and p["outcome"] == "Yes" and p["change_24h"] == 8.0
+    assert p["prob"] == 72.0 and p["outcome"] == "Yes" and p["change_7d"] == 8.0
     got = pm.pick(ROWS)
     assert [x["question"][:3] for x in got["macro"]] == ["Fed"]
     assert [x["question"][:4] for x in got["crypto"]] == ["Will"] and got["crypto"][0]["prob"] == 18.0
     assert pm.parse({"question": "x", "outcomes": "bad", "outcomePrices": "[]"}) is None
 
 
-def test_fetch_falls_back_when_the_sorted_listing_is_refused():
+def test_fetch_pages_by_24h_volume():
     calls = []
 
     def get(params):
         calls.append(params)
-        if "order" in params:
-            raise RuntimeError("422")
-        return ROWS
+        return (ROWS * 20) if params["offset"] == 0 else ROWS     # a full page, then a short one
     got = pm.fetch(get)
-    assert len(calls) == 2 and got["macro"]
+    assert [c["offset"] for c in calls] == [0, 100]
+    assert all(c["order"] == "volume24hr" and c["limit"] == 100 for c in calls)
+    assert got["macro"] and got["crypto"]
 
 
 def test_notes():
     lines = pm.note_lines(pm.pick(ROWS))
-    assert "Polymarket" in lines[0] and "72% (+8 pts 24h)" in lines[1]
+    assert "Polymarket" in lines[0] and "72% (+8 pts 7d)" in lines[1]
 
 
 def test_run_endpoint_and_wiring(monkeypatch):
