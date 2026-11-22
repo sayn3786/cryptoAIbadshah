@@ -16,6 +16,12 @@ live scalp exits ($50 margin at 11x, stop -10% / target +15% of margin, max
 stop 6.5 bps, target 1.5 bps). Each later run settles open paper trades on
 closed candles (stop first when one candle touches both).
 
+Nov 22 2026 (owner): the paper trades now use the ENGINE's exits, as the live
+scalp does - scalp_live.exits (swing stop when 0.2-3% away, else 1.5 x ATR;
+the swing target or 1.5R), the scalp's max hold (24h) and its risk sizing
+($10 at the stop) - instead of the fixed -10% / +15% of $50 margin, 4h.
+Trades opened before keep the levels and size they were booked with.
+
 AMD_FORWARD=0 turns it off. Pure apart from the env switch; app.py does I/O.
 """
 from __future__ import annotations
@@ -148,10 +154,18 @@ def latest(sym: str, bars: Sequence[Dict], now_ms: int) -> Optional[Dict]:
     if not got:
         return None
     s = got[0]
-    sgn = 1 if s["direction"] == "LONG" else -1
+    import scalp_live as _sl
+    import sweep_fvg as _sf
+    ex = _sl.exits(bars, len(bars) - 1, s["direction"], _sf.pivots(bars))
+    if not ex:
+        return None
     e = s["entry"]
-    return {**s, "paper_sl": e * (1 - sgn * SL_ROE_PCT / 100 / LEVERAGE),
-            "paper_tp": e * (1 + sgn * TP_ROE_PCT / 100 / LEVERAGE),
+    stop_pct = abs(e - ex["sl"]) / e
+    if stop_pct <= 0:
+        return None
+    return {**s, "paper_sl": ex["sl"], "paper_tp": ex["target"], "exits": ex.get("how"),
+            "rr": ex.get("rr"), "notional_usd": round(_sl.risk_usd() / stop_pct, 2),
+            "hold_h": _sl.max_hold_ms() / HOUR_MS,
             "state": "open", "id": f"{sym}:{close_ms}"}
 
 
@@ -171,7 +185,7 @@ def settle(trade: Dict, bars: Sequence[Dict]) -> Optional[Dict]:
     sgn = 1 if long else -1
     fill = float(fwd[0]["open"])
     sl, tp = float(trade["paper_sl"]), float(trade["paper_tp"])
-    end = int(fwd[0]["timestamp"]) + MAX_HOLD_H * HOUR_MS
+    end = int(fwd[0]["timestamp"]) + float(trade.get("hold_h") or MAX_HOLD_H) * HOUR_MS
     exit_px, why, at = None, None, None
     for b in fwd:
         hi, lo = float(b["high"]), float(b["low"])
@@ -186,7 +200,8 @@ def settle(trade: Dict, bars: Sequence[Dict]) -> Optional[Dict]:
             break
     if why is None:
         return None
-    notional = MARGIN_USD * LEVERAGE
+    # engine exits (Nov 22): sized to the risk; older trades: $50 x 11x
+    notional = float(trade.get("notional_usd") or MARGIN_USD * LEVERAGE)
     gross = (exit_px - fill) / fill * sgn
     cost = (COST_BPS["entry"] + COST_BPS[why]) / 10_000
     pnl = round(notional * (gross - cost), 2)
@@ -212,16 +227,21 @@ def _px(v: float) -> str:
 def alert(s: Dict) -> str:
     side = "high" if s["direction"] == "SHORT" else "low"
     how = "closed back inside" if s["kind"] == "wick" else "came back inside within 2 candles"
+    hold = float(s.get("hold_h") or MAX_HOLD_H)
+    sizing = (f"engine exits ({s.get('exits') or 'swing / ATR'}, R:R {s.get('rr')}), "
+              f"${s.get('notional_usd'):,.0f} position = $10 at the stop"
+              if s.get("notional_usd") else
+              f"${MARGIN_USD:g} at {LEVERAGE}x: -{SL_ROE_PCT:g}% / +{TP_ROE_PCT:g}%")
     return ("🎭 AMD forward test (alert only, no order)\n"
             f"{s['symbol']} {s['direction']} · Asia range {_px(s['asia_lo'])}–{_px(s['asia_hi'])}"
             f" · London swept the {side} ({_px(s['extreme'])}) and {how}\n"
             f"Entry ~{_px(s['entry'])} · paper SL {_px(s['paper_sl'])} / TP {_px(s['paper_tp'])}"
-            f" (${MARGIN_USD:g} at {LEVERAGE}x: -{SL_ROE_PCT:g}% / +{TP_ROE_PCT:g}%) · max "
-            f"{MAX_HOLD_H}h")
+            f" ({sizing}) · max {hold:g}h")
 
 
 def closed_note(t: Dict, tally: Dict) -> str:
-    word = {"tp": "target", "stop": "stop", "timeout": f"{MAX_HOLD_H}h timeout"}[t["exit_reason"]]
+    hold = float(t.get("hold_h") or MAX_HOLD_H)
+    word = {"tp": "target", "stop": "stop", "timeout": f"{hold:g}h timeout"}[t["exit_reason"]]
     return (f"🎭 AMD paper: {t['symbol']} {t['direction']} closed at {word} "
             f"{'+' if t['pnl_usd'] >= 0 else '-'}${abs(t['pnl_usd']):.2f} · so far "
             f"{tally['closed']} trades, {tally['win_rate_pct']}% win, "

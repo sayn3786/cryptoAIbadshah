@@ -8438,8 +8438,9 @@ def _amd_forward_view() -> dict:
     import amd_live as _al
     trades = [t for t in _amd_load() if isinstance(t, dict)]
     return {"enabled": _al.enabled(), "alert_only": True, "coins": list(_al.COINS),
-            "exits": f"${_al.MARGIN_USD:g} at {_al.LEVERAGE}x, -{_al.SL_ROE_PCT:g}% / "
-                     f"+{_al.TP_ROE_PCT:g}% of margin, max {_al.MAX_HOLD_H}h (paper)",
+            "exits": ("the engine's exits as the live scalp (swing / ATR stop, swing or 1.5R "
+                      "target), $10 at the stop, max 24h (paper; from Nov 22 2026 - earlier "
+                      "trades: $50 at 11x, -10% / +15% of margin, max 4h)"),
             "summary": _al.summary(trades), "recent": trades[-30:]}
 
 
