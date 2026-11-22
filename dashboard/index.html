@@ -543,6 +543,21 @@
 
   <!-- What the detectors saw on past bars. Hidden until migration 005 has run
        and something has actually been logged. -->
+  <!-- Swiftedge's free live order-book widget (BTC). Shown on the BTC page
+       only: the embed snippet has no documented coin setting. Swiftedge asks to
+       keep its link and the line under the widget. -->
+  <section class="row-rsi" id="swiftWidgetSection" style="display:none">
+    <div class="card rsi-chart-card">
+      <div class="chart-header">
+        <span class="chart-title">🌊 Live BTC order book</span>
+        <span class="chart-sub">third-party · swiftedge.uk</span>
+      </div>
+      <div id="swiftWidgetBody"></div>
+      <p style="font:12px/1.4 system-ui,sans-serif;margin:6px 0 0">Live BTC order book heatmap by
+        <a href="https://swiftedge.uk/depth?utm_source=widget&amp;utm_medium=embed_link" target="_blank" rel="noopener">Swiftedge Depth</a></p>
+    </div>
+  </section>
+
   <section class="row-rsi" id="patHistSection" style="display:none">
     <div class="card rsi-chart-card">
       <div class="chart-header">
@@ -1136,7 +1151,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=277";
+  var DJS = "/dashboard/js/dashboard.js?v=278";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;

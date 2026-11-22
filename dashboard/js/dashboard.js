@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '277';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '278';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -456,6 +456,7 @@ function renderAll(a) {
   renderLiquidations(a.liquidations);
   renderHlLiq(a.symbol);
   renderSwift(a.symbol);
+  renderSwiftWidget(a.symbol);
   renderSmartMoney(a.smart_money);
   renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels, a.fib);
@@ -1051,6 +1052,22 @@ async function renderSwift(sym) {
       `estimates off Hyperliquid · information, not yet tested ⓘ</div>`;
     el.style.display = '';
   } catch (_) { el.style.display = 'none'; }
+}
+
+/* Swiftedge's free live order-book widget, BTC page only (the embed snippet
+   has no documented coin setting). The iframe is created only while BTC is
+   shown and removed otherwise, so it holds no live connection on other coins. */
+function renderSwiftWidget(sym) {
+  const sec = document.getElementById('swiftWidgetSection');
+  const body = document.getElementById('swiftWidgetBody');
+  if (!sec || !body) return;
+  if (sym !== 'BTC') { body.innerHTML = ''; sec.style.display = 'none'; return; }
+  if (!body.querySelector('iframe')) {
+    body.innerHTML = '<iframe src="https://swiftedge.uk/embed/depth?m=3" width="100%" height="420" ' +
+      'style="border:0;border-radius:10px;max-width:100%" loading="lazy" ' +
+      'title="Live Bitcoin order book heatmap by Swiftedge"></iframe>';
+  }
+  sec.style.display = '';
 }
 
 /* ─── Smart money (Hyperliquid whale positioning) ───────────────────────────
