@@ -1504,6 +1504,18 @@ def _liquidation_bias(liq: dict, oi: dict) -> dict:
 
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
+def _money_leans_live() -> dict:
+    """{"premium": side|None, "stable": side|None} from the latest stored
+    reading if it is fresh (<= 2 days); {} otherwise. Never raises."""
+    try:
+        s = _hlliq_get("moneylean", None) or {}
+        if not s.get("day") or int(time.time() * 1000) - int(s["day"]) > 2 * 86_400_000 + 3_600_000:
+            return {}
+        return {"premium": s.get("premium"), "stable": s.get("stable")}
+    except Exception:
+        return {}
+
+
 def _prev_tp1_reached(closed: list, symbol: str, *, signal_fn=None):
     """{"direction", "tp1"} when the signal on the closed weeks BEFORE the last
     one was LONG / SHORT at 62+ and the last closed week reached its TP1 (as
@@ -1905,6 +1917,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # same-way signal now takes -10 (tp_reached_test, passed on 1W).
     if timeframe == "1W" and not business:
         analysis["prev_tp1_reached"] = _prev_tp1_reached(spot, symbol)
+    # Money leans (Coinbase premium, stablecoin supply), live on ALT 1D
+    # signals at +/-5 (owner, Nov 22 2026). Computed daily at 00:40 UTC by
+    # the paper-book run; only a reading at most 2 days old is used.
+    if timeframe == "1D" and not business and symbol != "BTC":
+        analysis["money_leans"] = _money_leans_live()
     analysis["signal"] = generate_signal(analysis)
 
     # Bull Market Support Band (20W SMA + 21W EMA) — a WEEKLY macro read, so it

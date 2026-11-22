@@ -74,6 +74,8 @@ LIVE_ONLY = frozenset({
     # 1W only (Nov 2026): last week's signal re-run on the closed weeks before
     # the latest; app.build_analysis sets it, the candle builder does not.
     "prev_tp1_reached",
+    # 1D alts only (Nov 2026): the stored money-lean reading (money_lean_shadow).
+    "money_leans",
 })
 
 EXTERNAL_POINT_IN_TIME = frozenset({
