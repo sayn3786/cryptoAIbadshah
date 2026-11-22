@@ -1504,6 +1504,14 @@ def _liquidation_bias(liq: dict, oi: dict) -> dict:
 
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
+def _rsi_live_watch(closed, live):
+    try:
+        import live_divergence as _ld
+        return _ld.watch(closed, live)
+    except Exception:
+        return None
+
+
 def _money_leans_live() -> dict:
     """{"premium": side|None, "stable": side|None} from the latest stored
     reading if it is fresh (<= 2 days); {} otherwise. Never raises."""
@@ -1867,6 +1875,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     analysis = dict(_cd)
     analysis.update({
         "live_candle":  live_candle,          # forming candle — display only
+        # Live RSI divergence WATCH on the forming candle (live_divergence):
+        # display only, unconfirmed, never scored.
+        "rsi_live_watch": _rsi_live_watch(spot, live_candle),
         "live_price":   live_price,           # latest (possibly unfinished) price
         "signal_price": signal_price,         # last CLOSED close
         "spot_cvd":     spot_cvd,
