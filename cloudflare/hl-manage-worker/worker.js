@@ -78,6 +78,10 @@ const JOBS = [
   // Swiftedge order-flow snapshots (third-party, information): hourly.
   { name: "swiftedge", path: "/api/cron/swiftedge", ...S, retries: 0,
     due: ({ m }) => m === 37 },
+  // Polymarket macro / crypto odds (information): every 4 hours, and at 23:43
+  // so the morning Market Update has a fresh read.
+  { name: "polymarket", path: "/api/cron/polymarket", ...S, retries: 1,
+    due: ({ h, m }) => m === 43 && (h % 4 === 0 || h === 23) },
   { name: "etf-snapshot", path: "/api/cron/etf-snapshot", ...S, retries: 2,
     due: ({ h, m }) => h === 1 && m === 30 },
   { name: "market-snapshot", path: "/api/cron/market-snapshot", ...S, retries: 2,

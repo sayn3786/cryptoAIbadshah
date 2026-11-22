@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '278';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '279';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -457,6 +457,7 @@ function renderAll(a) {
   renderHlLiq(a.symbol);
   renderSwift(a.symbol);
   renderSwiftWidget(a.symbol);
+  renderPolymarket();
   renderSmartMoney(a.smart_money);
   renderMarketCap(a.market_cap);
   renderMainChart(a.candles, a.fvgs, a.supertrend, a.ichimoku, a.btc_mining, a.symbol, a.trendline, a.sr_zones, a.ema_lines, a.htf_levels, a.fib);
@@ -1068,6 +1069,33 @@ function renderSwiftWidget(sym) {
       'title="Live Bitcoin order book heatmap by Swiftedge"></iframe>';
   }
   sec.style.display = '';
+}
+
+/* Polymarket odds (polymarket.py): the most-traded macro and crypto markets.
+   Information only - a crowd's real-money read, not a signal. */
+async function renderPolymarket() {
+  const sec = document.getElementById('polySection');
+  const body = document.getElementById('polyBody');
+  if (!sec || !body) return;
+  try {
+    const r = await fetch(`${API}/polymarket`);
+    const d = r.ok ? await r.json() : {};
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const row = p => {
+      const ch = p.change_24h ? ` <span class="${p.change_24h > 0 ? 'bullish' : 'bearish'}">(${p.change_24h > 0 ? '+' : ''}${p.change_24h.toFixed(0)} pts 24h)</span>` : '';
+      const who = String(p.outcome).toLowerCase() === 'yes' ? '' : ` — ${esc(p.outcome)}`;
+      const link = p.slug ? `https://polymarket.com/market/${encodeURIComponent(p.slug)}` : 'https://polymarket.com';
+      return `<div><a href="${link}" target="_blank" rel="noopener">${esc(p.question)}</a>${who}: <b>${Number(p.prob).toFixed(0)}%</b>${ch}</div>`;
+    };
+    const parts = [];
+    if ((d.macro || []).length) parts.push(`<div style="opacity:.7;margin-top:4px">🏛️ Macro</div>` + d.macro.slice(0, 4).map(row).join(''));
+    if ((d.crypto || []).length) parts.push(`<div style="opacity:.7;margin-top:8px">🪙 Crypto</div>` + d.crypto.slice(0, 4).map(row).join(''));
+    if (!parts.length) { sec.style.display = 'none'; return; }
+    body.innerHTML = parts.join('') +
+      `<div style="font-size:11px;opacity:.7;margin-top:8px">source: <a href="https://polymarket.com" target="_blank" rel="noopener">Polymarket</a> · ` +
+      `odds = the market's price of each outcome · information, not yet tested</div>`;
+    sec.style.display = '';
+  } catch (_) { sec.style.display = 'none'; }
 }
 
 /* ─── Smart money (Hyperliquid whale positioning) ───────────────────────────
