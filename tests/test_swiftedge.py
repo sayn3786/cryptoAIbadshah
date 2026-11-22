@@ -72,3 +72,11 @@ def test_wiring():
     assert 'path: "/api/cron/swiftedge"' in w
     js = open(os.path.join(ROOT, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
     assert "renderSwift(a.symbol)" in js
+
+
+def test_widget_on_btc_only_with_attribution():
+    html = open(os.path.join(ROOT, "dashboard", "index.html"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
+    assert 'id="swiftWidgetSection"' in html and "Swiftedge Depth</a>" in html
+    assert "renderSwiftWidget(a.symbol)" in js and "if (sym !== 'BTC')" in js
+    assert "swiftedge.uk/embed/depth?m=3" in js
