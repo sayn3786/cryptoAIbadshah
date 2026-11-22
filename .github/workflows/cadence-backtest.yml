@@ -305,6 +305,8 @@ name: Strategy backtests (private Telegram)
 #            (backend/hl_liq_check.py; result to Telegram only; ~3 min)
 #   volume-profile  PRE-REGISTERED: do 30-day value-area edges (VAL / VAH) make
 #            1D price reverse? both periods (backend/volume_profile_test.py)
+#   volume-profile-4h  PRE-REGISTERED out-of-sample: do 4H value-area edges BREAK
+#            (break side >= 53%, z >= 2, both periods)?
 #   polymarket-check  live check of the Polymarket odds read (to Telegram only)
 #   order-blocks  PRE-REGISTERED: does price reverse at the first return into a
 #            fresh 1D order block? both periods (backend/order_block_test.py)
@@ -344,7 +346,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate, tp-reached, tp-reached-1w, strength-tier, order-blocks, volume-profile, polymarket-check]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate, tp-reached, tp-reached-1w, strength-tier, order-blocks, volume-profile, volume-profile-4h, polymarket-check]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -534,6 +536,8 @@ jobs:
             python -m close_record --telegram
           elif [ "$STUDY" = "hl-liq-check" ]; then
             python -m hl_liq_check --telegram --wallets 1200 --budget 175
+          elif [ "$STUDY" = "volume-profile-4h" ]; then
+            python -m volume_profile_test --telegram --tf 4H --h4-days 720
           elif [ "$STUDY" = "volume-profile" ]; then
             python -m volume_profile_test --telegram --days 2000
           elif [ "$STUDY" = "polymarket-check" ]; then

@@ -25,7 +25,19 @@ Decided before running, on BOTH periods (older / the last 365 days):
 Context: VAL (long) and VAH (short) separately. Coins move together, so z
 overstates certainty.
 
+4H BREAK CHECK (added Nov 22 2026, before its run; --tf 4H): the 1D run
+above found the bounce LOSING and the break side ahead (51.7% / 54.1%). That
+was not the question asked, so it is checked on data it has not seen - 4H
+candles (720 days of 1H history, aggregated), the same events with a 30-bar
+4H profile, the trade 1:1 at 1.5 x 4H ATR, max 20 bars. Decided now:
+  EDGES BREAK   in BOTH periods (older / last 365 days) the BREAK side (the
+                opposite of the level's side) wins >= 53% with z >= 2, avg R > 0
+                and 30+ resolved
+  otherwise     no edge - value areas stay context only
+Only if it holds does a break lean go to a shadow paper test.
+
     python -m volume_profile_test --days 2000
+    python -m volume_profile_test --tf 4H --h4-days 720
 """
 from __future__ import annotations
 
@@ -96,6 +108,39 @@ def run(daily_by_coin: Dict[str, List[Dict]], *, end_ms: int, log=print) -> Dict
             "coins": sorted(daily_by_coin), "events": len(evs)}
 
 
+def summarize_break(evs: Sequence[Dict], cutoff_ms: int) -> Dict:
+    """The 4H question: does the BREAK side (the opposite) win?"""
+    out = {}
+    for p, sel in (("older", [e for e in evs if e["ts"] < cutoff_ms]),
+                   ("recent", [e for e in evs if e["ts"] >= cutoff_ms])):
+        brk, hold = rv.side_stats(sel, "opp"), rv.side_stats(sel, "with")
+        ok = ((brk["resolved"] or 0) >= rv.MIN_N and (brk["win_pct"] or 0) >= rv.WIN_HI
+              and (brk["z"] or 0) >= rv.Z_MIN and (brk["avg_r"] or 0) > 0)
+        out[p] = {"break": brk, "hold": hold, "breaks": ok}
+    out["answer"] = "EDGES BREAK" if out["older"]["breaks"] and out["recent"]["breaks"] else "no edge"
+    return out
+
+
+def render_break(res: Dict) -> str:
+    b = res["break"]
+    lines = ["📊 4H check: do VALUE AREA edges BREAK? (pre-registered, out-of-sample for the 1D result)",
+             f"{len(res['coins'])} coins · 4H (720 days of 1H, aggregated) · 30-bar profile of the previous "
+             f"bars · split at {res['cutoff'][:10]} (older / last 365 days)",
+             "Event = a 4H bar reaches VAL from above / VAH from below and holds it at the close · trade the "
+             "BREAK side vs the bounce · 1:1 at 1.5 × 4H ATR · max 20 bars · 0.13% costs", "",
+             f"━━ answer  →  {b['answer']}"]
+    for p in ("older", "recent"):
+        q = b[p]
+        lines.append(f"  {p}: {'BREAK WINS ✅' if q['breaks'] else 'no ❌'}")
+        lines.append(f"    break side:  {rv._s(q['break'])}")
+        lines.append(f"    bounce side: {rv._s(q['hold'])}")
+    lines.append("")
+    lines.append(f"Rule fixed before the run: the break side wins ≥ {rv.WIN_HI:g}% with z ≥ {rv.Z_MIN:g}, avg R > 0 "
+                 f"and {rv.MIN_N}+ resolved, in BOTH periods. Only then a break lean goes to a shadow paper "
+                 "test. Coins move together, so z overstates certainty.")
+    return "\n".join(lines)
+
+
 def render_telegram(res: Dict) -> str:
     lines = ["📊 Do VALUE AREA edges make price reverse? (pre-registered)",
              f"{len(res['coins'])} coins · 1D · 30-day volume profile of the previous days · split at "
@@ -121,6 +166,8 @@ def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(prog="volume_profile_test", description=__doc__.split("\n\n")[0])
     ap.add_argument("--days", type=int, default=2000)
+    ap.add_argument("--tf", choices=("1D", "4H"), default="1D")
+    ap.add_argument("--h4-days", type=int, default=720)
     ap.add_argument("--telegram", action="store_true",
                     help="send to TELEGRAM_REPORT_CHAT_ID (private); print only whether it was sent")
     args = ap.parse_args(argv)
@@ -129,9 +176,21 @@ def main(argv=None) -> int:
     import read_study as rs
     log = lambda m: print(m, file=sys.stderr)          # noqa: E731
     end_ms = int(time.time() * 1000) // DAY_MS * DAY_MS
-    daily = rs.fetch_daily({s: appmod.SYMBOLS[s] for s in appmod.SCAN_SYMBOLS}, args.days, log=log)
-    res = run(daily, end_ms=end_ms, log=log)
-    text = render_telegram(res)
+    syms = {s: appmod.SYMBOLS[s] for s in appmod.SCAN_SYMBOLS}
+    if args.tf == "4H":
+        import cadence_compare as cc
+        h1 = cc.fetch_history(syms, args.h4_days, log=log)
+        bars = {s: cc.aggregate(h1[s]["1H"], 4) for s in h1}
+        res = run(bars, end_ms=end_ms, log=log)
+        evs = []
+        for s, b in bars.items():
+            evs += scan(b, s)
+        res["break"] = summarize_break(evs, end_ms - rv.HOLDOUT_DAYS * DAY_MS)
+        text = render_break(res)
+    else:
+        daily = rs.fetch_daily(syms, args.days, log=log)
+        res = run(daily, end_ms=end_ms, log=log)
+        text = render_telegram(res)
     if args.telegram:
         import weekly_report
         try:

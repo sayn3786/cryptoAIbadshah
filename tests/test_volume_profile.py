@@ -47,3 +47,19 @@ def test_panel_rows():
     rows = {r["label"]: r for r in build_structure_panel(a)["rows"]}
     assert rows["Volume POC"]["value"].startswith("100.0000")
     assert "no edge" in rows["Value Area"]["detail"]
+
+
+def test_break_summary_rule():
+    import reversal_1d_test as rv
+
+    def ev(ts, brk_win):
+        res = lambda w: {"result": "target" if w else "stop", "r": 1.0 if w else -1.0}  # noqa: E731
+        return {"ts": ts, "kind": "val", "opp": res(brk_win), "with": res(not brk_win)}
+    cut = 1000
+    strong = [ev(1, k % 10 < 6) for k in range(200)] + [ev(2000, k % 10 < 6) for k in range(200)]
+    assert vpt.summarize_break(strong, cut)["answer"] == "EDGES BREAK"
+    weak = [ev(1, k % 10 < 6) for k in range(200)] + [ev(2000, k % 2 == 0) for k in range(200)]
+    b = vpt.summarize_break(weak, cut)
+    assert b["answer"] == "no edge" and b["older"]["breaks"] and not b["recent"]["breaks"]
+    assert "4H check" in vpt.render_break({"coins": ["X"], "cutoff": "2025-11-22T00:00", "break": b})
+    assert rv.MIN_N == 30
