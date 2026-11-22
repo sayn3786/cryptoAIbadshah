@@ -2514,10 +2514,11 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
             o = obs[0]
             where = ("price inside it" if o.get("inside") else
                      f"{abs(o['dist_pct']):.1f}% {'below' if side == 'bullish' else 'above'}")
-            row(label, f"{o['bottom']:,.4f} – {o['top']:,.4f}", tone,
+            # neutral colour: tested, no edge - not a bullish / bearish read
+            row(label, f"{o['bottom']:,.4f} – {o['top']:,.4f}", "neutral",
                 f"{where} · {o['status']}"
                 + (f" ({o['touches']}× touched)" if o.get("touches") else "")
-                + f" · formed {o['bars_ago']} bars ago · untested signal")
+                + f" · formed {o['bars_ago']} bars ago · tested on 1D: no edge (a coin flip), context only")
         else:
             row(label, "—", "neutral")
 
