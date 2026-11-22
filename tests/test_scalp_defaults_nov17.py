@@ -12,12 +12,13 @@ import scalp_live as sl                                                # noqa: E
 
 
 def test_new_defaults(monkeypatch):
-    for k in ("SCALP_FIXED_MARGIN_USD", "SCALP_MIN_ROOM_R", "SCALP_MAX_HOLD_HOURS", "SCALP_RISK_USD"):
+    for k in ("SCALP_FIXED_MARGIN_USD", "SCALP_MIN_ROOM_R", "SCALP_MAX_HOLD_HOURS", "SCALP_RISK_USD",
+              "SCALP_MARGIN_USD"):
         monkeypatch.delenv(k, raising=False)
     assert sl.fixed_margin_usd() == 0.0                    # structure exits, risk sizing
     assert sg.min_room_r() == 0.0                          # no room-to-target skip
     assert sl.max_hold_ms() == 24 * 3_600_000
-    assert sl.risk_usd() == 5.0
+    assert sl.risk_usd() == 10.0 and sl.margin_usd() == 100.0      # owner, Nov 22
 
 
 def test_each_comes_back_with_its_setting(monkeypatch):

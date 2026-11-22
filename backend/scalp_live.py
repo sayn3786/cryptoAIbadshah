@@ -70,6 +70,27 @@ def enabled() -> bool:
     return not _off("SCALP_ENABLED")
 
 
+# ── trading session (the owner, Nov 22 2026) ────────────────────────────────
+# New scalps only Monday-Friday 13:00-21:00 UTC (London afternoon + New York
+# to its close). Outside it - every weekday from 21:00, and all weekend - the
+# book is FLAT: open scalps are closed and resting entries cancelled
+# (sweep). SCALP_SESSION=off trades around the clock as before.
+SESSION_START_H, SESSION_END_H = 13, 21
+
+
+def session_enforced() -> bool:
+    return not _off("SCALP_SESSION")
+
+
+def in_session(now_ms: int) -> bool:
+    """Monday-Friday, SESSION_START_H <= hour < SESSION_END_H (UTC)."""
+    if not session_enforced():
+        return True
+    import datetime as _dt
+    t = _dt.datetime.fromtimestamp(int(now_ms) / 1000, tz=_dt.timezone.utc)
+    return t.weekday() < 5 and SESSION_START_H <= t.hour < SESSION_END_H
+
+
 def auto_enabled() -> bool:
     return enabled() and not _off("HL_SCALP_AUTO_EXECUTE")
 
@@ -113,8 +134,8 @@ def flip_block(setup: Dict[str, Any], *, flipped_recently: bool) -> Optional[str
 # the steadier its 15m candles — and by Hyperliquid's own maximum for it.
 LEV_TIERS = ((100e9, 20), (10e9, 10), (1e9, 7), (200e6, 5), (0, 3))
 MIN_STOP_PCT = 0.002      # a stop tighter than 0.2% is sized as 0.2% (noise)
-DEFAULT_RISK_USD = 5.0          # owner, Nov 17: = the old fixed exits' risk (10% of $50 margin)
-DEFAULT_MARGIN_USD = 25.0
+DEFAULT_RISK_USD = 10.0         # owner, Nov 22: $10 at the stop (was $5, Nov 17)
+DEFAULT_MARGIN_USD = 100.0      # owner, Nov 22: $100 margin cap (was $25 / $50)
 
 
 def lev_cap(market_cap: Optional[float]) -> int:
@@ -796,6 +817,7 @@ def sweep(records: Dict[str, Dict[str, Any]], positions: Sequence[Dict[str, Any]
     `open_orders` None (unknown) never drops or cancels a pending entry."""
     hold_ms = max_hold_ms() if hold_ms is None else hold_ms
     out: Dict[str, List[str]] = {"promote": [], "cancel": [], "close": [], "drop": []}
+    session = in_session(now_ms)          # outside it the book goes flat
     resting = None if open_orders is None else {
         o.get("oid") for o in open_orders if isinstance(o, dict)}
     for coin, rec in (records or {}).items():
@@ -814,11 +836,11 @@ def sweep(records: Dict[str, Dict[str, Any]], positions: Sequence[Dict[str, Any]
                 mark = None
             through = mark is not None and (mark <= rec["sl"] if rec["direction"] == "LONG"
                                             else mark >= rec["sl"])
-            if now_ms - int(rec.get("placed_ms") or 0) >= ENTRY_MS or through:
+            if now_ms - int(rec.get("placed_ms") or 0) >= ENTRY_MS or through or not session:
                 out["cancel"].append(coin)
         elif not held(positions, rec):
             out["drop"].append(coin)
-        elif now_ms - int(rec.get("opened_ms") or 0) >= hold_ms:
+        elif now_ms - int(rec.get("opened_ms") or 0) >= hold_ms or not session:
             out["close"].append(coin)
     return out
 
