@@ -2532,6 +2532,28 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     else:
         row("Volume POC", "—", "neutral")
 
+    # ── Multi-year major levels + megaphone (major_levels): context only ────
+    _ml = analysis.get("major_levels") or {}
+
+    def _band(b):
+        return (f"{b['bottom']:,.0f} – {b['top']:,.0f}" if b["top"] - b["bottom"] > 0
+                else f"{b['bottom']:,.0f}")
+
+    def _why(b):
+        return (f"{b['dist_pct']:+.1f}% · {b['touches']} touches · {b['flip'] or b['role']} "
+                f"({b['first_year']}–{b['last_year']}) · context only, not scored")
+    if _ml.get("inside"):
+        row("Major Level (in)", _band(_ml["inside"]), "neutral", _why(_ml["inside"]))
+    for k, b in enumerate(_ml.get("above") or []):
+        row("Major Level Above" + (f" {k + 1}" if k else ""), _band(b), "neutral", _why(b))
+    for k, b in enumerate(_ml.get("below") or []):
+        row("Major Level Below" + (f" {k + 1}" if k else ""), _band(b), "neutral", _why(b))
+    _mg = analysis.get("megaphone")
+    if _mg:
+        row("Megaphone", _mg["status"].upper(), "neutral",
+            f"widening range: highs rising, lows falling · upper {_mg['upper_now']:,.4f} / lower "
+            f"{_mg['lower_now']:,.4f} now · a close outside is the break · context only")
+
     # ── Range position / midline stretch ─────────────────────────────────────
     rng = s_hi - s_lo
     if rng > 0:
