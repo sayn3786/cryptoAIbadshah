@@ -1403,6 +1403,45 @@ def _daily_history(symbol: str) -> Optional[list]:
     return data
 
 
+def _weekly_history(symbol: str) -> Optional[list]:
+    """About 8 years of CLOSED weekly candles, cached 30 min (major_levels).
+    None on demo data, so no fake levels are drawn."""
+    now = datetime.now(timezone.utc)
+    key = f"wk_{symbol}_{now.strftime('%Y%m%d%H')}{(now.minute // 30) * 30:02d}"
+    with _htf_cache_lock:
+        e = _htf_cache.get(("_weekly", symbol))
+        if e and e.get("key") == key:
+            return e["data"]
+    data = None
+    _saved_src = client.data_source
+    try:
+        raw = client.get_spot_klines(SYMBOLS[symbol], "1w", 450)
+        src = client.data_source
+        closed, _live = _split_closed(raw, 7 * 86400)
+        if src != "demo" and closed and len(closed) >= 20:
+            data = closed
+    except Exception:
+        data = None
+    finally:
+        client.data_source = _saved_src
+    with _htf_cache_lock:
+        _htf_cache[("_weekly", symbol)] = {"key": key, "data": data}
+    return data
+
+
+def _major_levels_for(symbol: str, timeframe: str, closed: list) -> tuple:
+    """(major_levels, megaphone) for 1D and higher timeframes; display only."""
+    if timeframe not in ("1D", "1W", "2W", "3W", "1M") or not closed:
+        return None, None
+    try:
+        import major_levels as _ml
+        wk = _weekly_history(symbol)
+        lv = _ml.levels(wk, float(closed[-1]["close"])) if wk else None
+        return lv, _ml.megaphone(closed[-60:])
+    except Exception:
+        return None, None
+
+
 def _collect_htf_levels(symbol: str, timeframe: str) -> list:
     """Swing high/low of every anchor TF above `timeframe`, derived from one
     daily series so the levels are source-consistent and correctly nested."""
@@ -1933,6 +1972,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # the paper-book run; only a reading at most 2 days old is used.
     if timeframe == "1D" and not business and symbol != "BTC":
         analysis["money_leans"] = _money_leans_live()
+    # Multi-year major levels + the megaphone shape (major_levels): display
+    # only, never scored. Not for the business week (its own candle set).
+    if not business:
+        analysis["major_levels"], analysis["megaphone"] = _major_levels_for(symbol, timeframe, spot)
     analysis["signal"] = generate_signal(analysis)
 
     # Bull Market Support Band (20W SMA + 21W EMA) — a WEEKLY macro read, so it
