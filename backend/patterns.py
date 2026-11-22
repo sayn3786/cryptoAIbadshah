@@ -2528,7 +2528,7 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
         row("Volume POC", f"{_vp['poc']:,.4f}", "neutral",
             f"{_vp['poc_dist_pct']:+.1f}% · most-traded price of the last {_vp['window']} bars")
         row("Value Area", f"{_vp['val']:,.4f} – {_vp['vah']:,.4f}", "neutral",
-            f"70% of the volume · price {_vp['where']} · untested")
+            f"70% of the volume · price {_vp['where']} · tested on 1D: no edge (value-area edges tended to break, not hold), context only")
     else:
         row("Volume POC", "—", "neutral")
 

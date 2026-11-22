@@ -46,4 +46,4 @@ def test_panel_rows():
                             "where": "inside the value area", "poc_dist_pct": -1.2}}
     rows = {r["label"]: r for r in build_structure_panel(a)["rows"]}
     assert rows["Volume POC"]["value"].startswith("100.0000")
-    assert "untested" in rows["Value Area"]["detail"]
+    assert "no edge" in rows["Value Area"]["detail"]
