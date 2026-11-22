@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '279';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '280';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -419,6 +419,7 @@ function renderAll(a) {
   renderPrice(a);
   renderSignal(a.signal);
   renderSignalProgress(a);
+  renderDivWatch(a.rsi_live_watch, a.timeframe);
   renderMACDCard(a.macd);
   renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
@@ -2303,6 +2304,30 @@ function renderRsiDivCard(div, candles, rsiSeries, now) {
 /* The dedicated panel. Hidden entirely when there is nothing to draw — an empty
    chart frame reads as "no data" when the truth is "no divergence", and a stale
    one reads as a live signal. */
+/* Live RSI divergence WATCH (live_divergence): the divergence a trader would
+   draw on the still-forming candle. Unconfirmed - it can vanish before the
+   close - and never scored. */
+function renderDivWatch(w, tf) {
+  const sec = document.getElementById('divWatchSection');
+  const body = document.getElementById('divWatchBody');
+  if (!sec || !body) return;
+  if (!w) { body.innerHTML = ''; sec.style.display = 'none'; return; }
+  const bull = w.type === 'bullish';
+  const px = v => `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
+  const when = w.prev_ts ? new Date(w.prev_ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  const t = document.getElementById('divWatchTitle');
+  if (t) t.textContent = `🔴 Live watch — ${bull ? 'bullish' : 'bearish'} divergence forming${tf ? ` (${tf})` : ''}`;
+  body.innerHTML =
+    `<div class="${bull ? 'bullish' : 'bearish'}">Price ${bull ? 'lower low' : 'higher high'}: ` +
+    `${px(w.live_price)} now vs ${px(w.prev_price)} (${when}) · RSI ${bull ? 'higher low' : 'lower high'}: ` +
+    `${w.live_rsi} now vs ${w.prev_rsi}</div>` +
+    `<div style="font-size:12px;opacity:.75;margin-top:4px">Drawn on the candle that is still forming, as on ` +
+    `TradingView. The dashboard's divergence card only shows it after the candle closes and the swing ` +
+    `is confirmed. It can vanish before the close. Display only, not scored — RSI divergences tested ` +
+    `as a coin flip on 1D.</div>`;
+  sec.style.display = '';
+}
+
 function renderDivergencePanel(div, candles, rsiSeries, now) {
   const sec = document.getElementById('divPanelSection');
   const box = document.getElementById('divPanel');
