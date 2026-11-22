@@ -45,3 +45,36 @@ def test_wired_display_only():
     assert "rsi_live_watch" not in sig                                 # never scored
     js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
     assert "renderDivWatch(a.rsi_live_watch, a.timeframe)" in js
+
+
+def test_uses_the_swing_with_the_biggest_rsi_gap_not_only_the_lowest():
+    """BTC 2W: June's 57.8k low has RSI ~38 (no gap), Feb's 60k has RSI 35 -
+    the watch must be drawn from Feb, as Ted does."""
+    import indicators
+    closed = _series()
+    real = indicators.calculate_rsi_series
+    closes = [float(c["close"]) for c in closed]
+
+    def fake(xs, period=14):
+        r = real(xs, period)
+        if len(xs) == len(closes):                  # the closed series: pin the two swing RSIs
+            r = list(r)
+            r[29], r[-3] = 35.2, 38.2
+        else:
+            r = list(r[:-1]) + [38.3]               # live RSI
+        return r
+    import live_divergence as ld2
+    lows = [29, len(closed) - 3]
+    closed[29]["low"], closed[-3]["low"] = 60000, 57809
+    for k in range(len(closed) - 5, len(closed)):
+        if k != len(closed) - 3:
+            closed[k]["low"] = max(closed[k]["low"], 58500)
+    orig = ld2._swings
+    try:
+        ld2._swings = lambda c, w=2: (lows, [])
+        indicators.calculate_rsi_series = fake
+        w = ld2.watch(closed, {"timestamp": 0, "open": 60000, "high": 61000, "low": 55100, "close": 59000})
+    finally:
+        indicators.calculate_rsi_series = real
+        ld2._swings = orig
+    assert w["prev_price"] == 60000 and w["prev_rsi"] == 35.2 and w["live_rsi"] == 38.3

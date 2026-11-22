@@ -6,11 +6,13 @@ after it), so a divergence drawn on the still-forming candle - as traders do
 on TradingView - only reaches the dashboard after the candle closes. This
 shows it early, clearly marked UNCONFIRMED:
 
-  bullish watch  the forming candle's LOW is below the lowest confirmed swing
-                 low of the last LOOKBACK closed candles, while RSI now
-                 (closed closes + the live price) is at least MIN_GAP points
-                 ABOVE the RSI at that swing low
-  bearish watch  the mirror at the highest swing high
+  bullish watch  the forming candle's LOW is below a confirmed swing low of
+                 the last LOOKBACK closed candles, while RSI now (closed
+                 closes + the live price) is at least MIN_GAP points ABOVE the
+                 RSI at that swing low; of all such lows, the one with the
+                 biggest RSI gap is shown (as traders draw it - e.g. BTC 2W
+                 from Feb's 60k / RSI 35, not June's 57.8k / RSI 38)
+  bearish watch  the mirror at the swing highs
 
 It can appear and vanish while the candle forms; it decides nothing.
 """
@@ -49,20 +51,20 @@ def watch(closed: Sequence[Dict], live: Optional[Dict]) -> Optional[Dict]:
     lows = [i for i in lows if i >= start and rsi_closed[i] is not None]
     highs = [i for i in highs if i >= start and rsi_closed[i] is not None]
     out = None
-    if lows:
-        i = min(lows, key=lambda k: float(closed[k]["low"]))
-        p0, r0 = float(closed[i]["low"]), float(rsi_closed[i])
-        if float(live["low"]) < p0 and rsi_live >= r0 + MIN_GAP:
-            out = {"type": "bullish", "prev_price": p0, "prev_rsi": round(r0, 1),
-                   "prev_ts": closed[i]["timestamp"], "live_price": float(live["low"]),
-                   "live_rsi": round(rsi_live, 1)}
-    if out is None and highs:
-        i = max(highs, key=lambda k: float(closed[k]["high"]))
-        p0, r0 = float(closed[i]["high"]), float(rsi_closed[i])
-        if float(live["high"]) > p0 and rsi_live <= r0 - MIN_GAP:
-            out = {"type": "bearish", "prev_price": p0, "prev_rsi": round(r0, 1),
-                   "prev_ts": closed[i]["timestamp"], "live_price": float(live["high"]),
-                   "live_rsi": round(rsi_live, 1)}
+    bull = [i for i in lows if float(live["low"]) < float(closed[i]["low"])
+            and rsi_live >= float(rsi_closed[i]) + MIN_GAP]
+    if bull:
+        i = max(bull, key=lambda k: rsi_live - float(rsi_closed[k]))
+        out = {"type": "bullish", "prev_price": float(closed[i]["low"]),
+               "prev_rsi": round(float(rsi_closed[i]), 1), "prev_ts": closed[i]["timestamp"],
+               "live_price": float(live["low"]), "live_rsi": round(rsi_live, 1)}
+    bear = [i for i in highs if float(live["high"]) > float(closed[i]["high"])
+            and rsi_live <= float(rsi_closed[i]) - MIN_GAP]
+    if out is None and bear:
+        i = max(bear, key=lambda k: float(rsi_closed[k]) - rsi_live)
+        out = {"type": "bearish", "prev_price": float(closed[i]["high"]),
+               "prev_rsi": round(float(rsi_closed[i]), 1), "prev_ts": closed[i]["timestamp"],
+               "live_price": float(live["high"]), "live_rsi": round(rsi_live, 1)}
     if out:
         out["note"] = ("UNCONFIRMED - drawn on the still-forming candle; it can vanish before the close. "
                        "Display only, not scored (RSI divergences tested as a coin flip on 1D).")
