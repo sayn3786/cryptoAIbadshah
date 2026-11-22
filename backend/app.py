@@ -5680,6 +5680,61 @@ CLOSE_RUN_WINDOW_H = 3          # after this, a missed close is not published la
 CLOSE_MIN_CURRENT = 0.5         # share of coins whose newest candle must be the new close
 
 
+OPPOSITE_EXIT_FLOOR = 62.0
+
+
+def _opposite_exit_targets(active: list, reads: dict) -> list:
+    """[(signal row, read)] for open 1D picks whose coin's 1D signal now points
+    the other way at OPPOSITE_EXIT_FLOOR+. Pending (unfilled) orders are left
+    alone - the test measured filled trades. Pure."""
+    out = []
+    for r in active or []:
+        if str(r.get("timeframe") or "") != close_publish.DAILY:
+            continue
+        if str(r.get("status") or "") not in ("OPEN", "PARTIAL_TP"):
+            continue
+        rd = reads.get(str(r.get("symbol") or "").upper())
+        if not rd:
+            continue
+        d = rd.get("direction")
+        if d in ("LONG", "SHORT") and d != r.get("direction") \
+                and float(rd.get("strength") or 0) >= OPPOSITE_EXIT_FLOOR:
+            out.append((r, rd))
+    return out
+
+
+def _opposite_signal_exits(reads: dict, close_ms, *, store=None, notify=True) -> dict:
+    """Close open 1D picks on an opposite 62+ 1D signal at this close (exit_rule_test).
+    Never raises."""
+    out = {"closed": 0, "errors": 0}
+    try:
+        import db as _db
+        if store is None:
+            if not _db.db_configured():
+                return {**out, "skipped": "no database"}
+            import signal_store as store
+        active = store.list_active_signals(environment=_deploy_env(), limit=500)
+        at = (datetime.fromtimestamp(int(close_ms) / 1000, tz=timezone.utc) if close_ms else None)
+        notes = []
+        for r, rd in _opposite_exit_targets(active, reads):
+            px = rd.get("signal_price") or rd.get("current_price")
+            if not px:
+                continue
+            try:
+                store.close_signal(r["id"], float(px), closed_at=at, reason="OPPOSITE_SIGNAL",
+                                   source_ts=at)
+                out["closed"] += 1
+                notes.append(f"{r['symbol']} {r['direction']} closed at ~{float(px):,.6g}: its 1D signal "
+                             f"is now {rd['direction']} {float(rd.get('strength') or 0):.0f}")
+            except Exception:
+                out["errors"] += 1
+        if notify and notes:
+            _scalp_private("🚪 Early exits (opposite 1D signal at 62+, tested 2018-now):\n" + "\n".join(notes))
+    except Exception as exc:
+        out["error"] = type(exc).__name__
+    return out
+
+
 def _close_read(data: dict) -> dict:
     sig = data.get("signal") or {}
     return {"direction": sig.get("direction", "NEUTRAL"),
@@ -5875,6 +5930,10 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
         _pattern_log_close({sym: analyses[sym] for sym in current})
         # Hyperliquid liquidation clusters at this close, for the later test.
         _hlliq_log_close(close_publish.close_key(now))
+        # Early exit (exit_rule_test, pre-registered, adopted Nov 22 2026): an
+        # open 1D pick whose coin's 1D signal now points the OTHER way at 62+
+        # is closed at this close. Best effort, never blocks the close.
+        _opposite_signal_exits({sym: reads[sym] for sym in current}, expected)
 
     htf = close_publish.HIGHER_TF[tf]
     wanted = [sym for sym in current if reads[sym]["direction"] in ("LONG", "SHORT")]
