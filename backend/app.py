@@ -1504,6 +1504,25 @@ def _liquidation_bias(liq: dict, oi: dict) -> dict:
 
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
+def _prev_tp1_reached(closed: list, symbol: str, *, signal_fn=None):
+    """{"direction", "tp1"} when the signal on the closed weeks BEFORE the last
+    one was LONG / SHORT at 62+ and the last closed week reached its TP1 (as
+    tp_reached_test: the candle-only signal); else None. Never raises."""
+    try:
+        if len(closed) < 61:
+            return None
+        import tp_reached_test as _tt
+        fn = signal_fn or (lambda w: generate_signal(
+            candle_analysis.build_candle_analysis(list(w), "1W", symbol)))
+        prev = fn(closed[-151:-1]) or {}
+        hit = _tt.reached(prev, closed[-1])
+        if hit["tp1"]:
+            return {"direction": prev["direction"], "tp1": (prev.get("tp_targets") or [None])[0]}
+    except Exception:
+        return None
+    return None
+
+
 def build_analysis(symbol: str, timeframe: str) -> dict:
     bs       = SYMBOLS[symbol]
     # The business week (Mon-Fri, closing Saturday 00:00 UTC) is built from
@@ -1881,6 +1900,11 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         except Exception:
             analysis["fib"] = None
 
+    # Weekly only (calendar 1W, not the business week): did LAST week's 62+
+    # signal see its TP1 reached in the week that just closed? Then the
+    # same-way signal now takes -10 (tp_reached_test, passed on 1W).
+    if timeframe == "1W" and not business:
+        analysis["prev_tp1_reached"] = _prev_tp1_reached(spot, symbol)
     analysis["signal"] = generate_signal(analysis)
 
     # Bull Market Support Band (20W SMA + 21W EMA) — a WEEKLY macro read, so it
