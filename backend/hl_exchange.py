@@ -229,7 +229,8 @@ def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
                      tp2_cloid: Optional[str] = None,
                      tp_type: Optional[str] = None,
                      evidence_signal: Optional[Dict[str, Any]] = None,
-                     evidence_observer: Optional[Callable] = None) -> Dict[str, Any]:
+                     evidence_observer: Optional[Callable] = None,
+                     scalp_order_observer: Optional[Callable] = None) -> Dict[str, Any]:
     """Place REDUCE-ONLY stop-loss + take-profit orders for an open position.
     `is_buy_exit` is the side that CLOSES the position — the opposite of the
     entry (a LONG exits by selling). The stop is a market trigger (isMarket
@@ -252,6 +253,8 @@ def send_exit_orders(coin: str, is_buy_exit: bool, size: float,
         return _send_trigger(ex, coin, is_buy_exit, sz, px, "tp", cloid)
 
     def observed(call, intent, cloid):
+        if scalp_order_observer is not None and hl_account._env(env) == "testnet":
+            return scalp_order_observer(call, intent, cloid, is_buy_exit)
         if evidence_observer is None or hl_account._env(env) != 'testnet':
             return call()
         from open_order_capture import observed_order
