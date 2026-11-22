@@ -57,6 +57,8 @@ SL_POOL_MIN_FRESHNESS = 0.5   # i.e. touched within ~20 bars
 
 # tp_reached_test (1W, Nov 22 2026): penalty after last week's TP1 was reached.
 TP1_REACHED_PENALTY = 10.0
+# money leans on alt 1D signals (owner, Nov 22 2026): +/- this per agreeing lean.
+MONEY_LEAN_POINTS = 5.0
 
 def _candle_interval_ms(candles: List[Dict]) -> Optional[int]:
     """Bar length in ms, from the most recent pair that gives a positive gap."""
@@ -3474,6 +3476,24 @@ def generate_signal(analysis: Dict) -> Dict:
     # in the week that just closed, the next signal the SAME way won only
     # ~39-40% (vs 46-55%). -10 strength. Set only on the calendar 1W
     # (analysis["prev_tp1_reached"], app.build_analysis).
+    # Money leans, LIVE on alt 1D signals (owner, Nov 22 2026, +/-5): the two
+    # that passed macro_lean_test in both eras - the Coinbase premium and
+    # stablecoin supply. Market-wide; set only for 1D non-BTC analyses
+    # (analysis["money_leans"], app.build_analysis). Their +/-10 shadow
+    # tests keep running on the 1D paper book.
+    _ml = analysis.get("money_leans") or {}
+    if direction in ("LONG", "SHORT"):
+        for _k, _name in (("premium", "Coinbase premium"), ("stable", "stablecoin supply")):
+            _side = _ml.get(_k)
+            if _side not in ("LONG", "SHORT"):
+                continue
+            _adj = MONEY_LEAN_POINTS if _side == direction else -MONEY_LEAN_POINTS
+            strength = max(0, min(100, strength + _adj))
+            _txt = (f"💵 {_name} leans {_side.lower()} — tested on alts 2018-now "
+                    f"({'+' if _adj > 0 else ''}{_adj:g})")
+            ((bull_reasons if direction == "LONG" else bear_reasons) if _adj > 0
+             else (bear_reasons if direction == "LONG" else bull_reasons)).append(_txt)
+
     _ptr = analysis.get("prev_tp1_reached") or {}
     if direction in ("LONG", "SHORT") and _ptr.get("direction") == direction:
         strength = max(0, min(100, strength - TP1_REACHED_PENALTY))

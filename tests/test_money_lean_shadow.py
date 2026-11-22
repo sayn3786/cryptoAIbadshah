@@ -35,7 +35,7 @@ def test_tag_and_notes():
     assert t["premium_agree"] is True and t["stable_agree"] is False
     lines = ms.note_lines({"day": T0, "premium": "LONG", "premium_pct": 0.15,
                            "stable": None, "stable_30d_pct": 1.2})
-    assert "shadow test, not in the signal" in lines[0]
+    assert "live ±5 on alt 1D signals" in lines[0]
     assert "+0.15% (3d) → LONG" in lines[1] and "no lean" in lines[1]
 
 

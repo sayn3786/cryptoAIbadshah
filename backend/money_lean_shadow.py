@@ -102,4 +102,5 @@ def note_lines(state: Optional[Dict]) -> List[str]:
     st = s.get("stable_30d_pct")
     parts.append(f"stablecoin supply {st:+.1f}% (30d)" + (f" → {s['stable']}" if s.get("stable") else " → no lean")
                  if st is not None else "stablecoin supply n/a")
-    return ["💵 Money leans (passed the backtest; shadow test, not in the signal)", "   " + " · ".join(parts)]
+    return ["💵 Money leans (passed the backtest; live ±5 on alt 1D signals, ±10 shadow test running)",
+            "   " + " · ".join(parts)]
