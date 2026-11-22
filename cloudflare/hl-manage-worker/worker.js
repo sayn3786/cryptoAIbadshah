@@ -75,6 +75,9 @@ const JOBS = [
   // wallets per run, paced under Hyperliquid's rate limit.
   { name: "hl-liq", path: "/api/cron/hl-liq", ...S, retries: 0, timeoutMs: 280_000,
     due: ({ m }) => m === 25 },
+  // Swiftedge order-flow snapshots (third-party, information): hourly.
+  { name: "swiftedge", path: "/api/cron/swiftedge", ...S, retries: 0,
+    due: ({ m }) => m === 37 },
   { name: "etf-snapshot", path: "/api/cron/etf-snapshot", ...S, retries: 2,
     due: ({ h, m }) => h === 1 && m === 30 },
   { name: "market-snapshot", path: "/api/cron/market-snapshot", ...S, retries: 2,
