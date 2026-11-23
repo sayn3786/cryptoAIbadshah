@@ -44,7 +44,7 @@ def test_wired_display_only():
     sig = open(os.path.join(root, "backend", "signals.py"), encoding="utf-8").read()
     assert "rsi_live_watch" not in sig                                 # never scored
     js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
-    assert "renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe)" in js
+    assert "renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe, a)" in js
 
 
 def test_uses_the_swing_with_the_biggest_rsi_gap_not_only_the_lowest():
@@ -107,6 +107,34 @@ def test_forming_on_closed_candles_from_the_biggest_gap_swing(monkeypatch):
 def test_forming_shown_when_no_live_watch():
     root = os.path.join(os.path.dirname(__file__), "..")
     js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
-    assert "renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe)" in js
+    assert "renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe, a)" in js
     src = open(os.path.join(root, "backend", "app.py"), encoding="utf-8").read()
     assert '"rsi_forming_watch": _rsi_forming_watch(spot, timeframe)' in src
+
+
+def test_subtitle_matches_the_kind():
+    root = os.path.join(os.path.dirname(__file__), "..")
+    js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
+    assert "'unconfirmed swing · closed candles · not scored'" in js
+    html = open(os.path.join(root, "dashboard", "index.html"), encoding="utf-8").read()
+    assert 'id="divWatchSub"' in html
+
+
+def test_watch_card_draws_the_divergence_chart():
+    root = os.path.join(os.path.dirname(__file__), "..")
+    js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
+    i = js.index("function renderDivWatch(w, tf, a)")
+    assert "buildDivergencePanel(div, candles, rsi" in js[i:i + 2000]
+    html = open(os.path.join(root, "dashboard", "index.html"), encoding="utf-8").read()
+    assert 'id="divWatchChart"' in html
+
+
+def test_confirmed_divergence_played_out_label_and_dots_note():
+    root = os.path.join(os.path.dirname(__file__), "..")
+    js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
+    i = js.index("function renderDivergencePanel(div, candles, rsiSeries, now)")
+    body = js[i:i + 3500]
+    assert "move > 0.03 && nowRsi >= 50" in body and "move < -0.03 && nowRsi <= 50" in body
+    assert "played out ✓ (" in body and "Dots = the candles'" in body
+    sig = open(os.path.join(root, "backend", "signals.py"), encoding="utf-8").read()
+    assert "ranPct" not in sig                                        # display only

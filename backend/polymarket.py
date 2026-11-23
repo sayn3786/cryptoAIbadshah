@@ -121,7 +121,7 @@ def fetch(get: Optional[Callable] = None) -> Dict[str, List[Dict]]:
 def _pct(p: Dict) -> str:
     ch = f" ({p['change_7d']:+.0f} pts 7d)" if p.get("change_7d") else ""
     who = "" if p["outcome"].lower() == "yes" else f" {p['outcome']}"
-    return f"{p['question']}{who}: {p['prob']:.0f}%{ch}"
+    return f"{p['question']}{who} → {p['prob']:.0f}%{ch}"
 
 
 def note_lines(summary: Optional[Dict], per_group: int = 2) -> List[str]:

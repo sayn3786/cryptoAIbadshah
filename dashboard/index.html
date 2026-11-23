@@ -534,9 +534,10 @@
     <div class="card rsi-chart-card">
       <div class="chart-header">
         <span class="chart-title" id="divWatchTitle">🔴 Live watch</span>
-        <span class="chart-sub">unconfirmed · forming candle · not scored</span>
+        <span class="chart-sub" id="divWatchSub">unconfirmed · forming candle · not scored</span>
       </div>
       <div id="divWatchBody" style="font-size:13px;line-height:1.6"></div>
+      <div id="divWatchChart" class="div-panel"></div>
     </div>
   </section>
 
@@ -1173,7 +1174,7 @@
 
 <script>
 (function () {
-  var DJS = "/dashboard/js/dashboard.js?v=281";
+  var DJS = "/dashboard/js/dashboard.js?v=284";
   var overlay = document.getElementById("cm-auth");
   var admin = document.getElementById("cm-admin");
   var appLoaded = false;

@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '281';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '284';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -419,7 +419,7 @@ function renderAll(a) {
   renderPrice(a);
   renderSignal(a.signal);
   renderSignalProgress(a);
-  renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe);
+  renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe, a);
   renderMACDCard(a.macd);
   renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
@@ -1086,7 +1086,7 @@ async function renderPolymarket() {
       const ch = p.change_7d ? ` <span class="${p.change_7d > 0 ? 'bullish' : 'bearish'}">(${p.change_7d > 0 ? '+' : ''}${p.change_7d.toFixed(0)} pts 7d)</span>` : '';
       const who = String(p.outcome).toLowerCase() === 'yes' ? '' : ` — ${esc(p.outcome)}`;
       const link = p.slug ? `https://polymarket.com/market/${encodeURIComponent(p.slug)}` : 'https://polymarket.com';
-      return `<div><a href="${link}" target="_blank" rel="noopener">${esc(p.question)}</a>${who}: <b>${Number(p.prob).toFixed(0)}%</b>${ch}</div>`;
+      return `<div><a href="${link}" target="_blank" rel="noopener">${esc(p.question)}</a>${who} → <b>${Number(p.prob).toFixed(0)}%</b>${ch}</div>`;
     };
     const parts = [];
     if ((d.macro || []).length) parts.push(`<div style="opacity:.7;margin-top:4px">🏛️ Macro</div>` + d.macro.slice(0, 4).map(row).join(''));
@@ -2307,16 +2307,37 @@ function renderRsiDivCard(div, candles, rsiSeries, now) {
 /* Live RSI divergence WATCH (live_divergence): the divergence a trader would
    draw on the still-forming candle. Unconfirmed - it can vanish before the
    close - and never scored. */
-function renderDivWatch(w, tf) {
+function renderDivWatch(w, tf, a) {
   const sec = document.getElementById('divWatchSection');
   const body = document.getElementById('divWatchBody');
+  const chart = document.getElementById('divWatchChart');
   if (!sec || !body) return;
-  if (!w) { body.innerHTML = ''; sec.style.display = 'none'; return; }
+  if (!w) { body.innerHTML = ''; if (chart) chart.innerHTML = ''; sec.style.display = 'none'; return; }
+  // Drawn with the divergence panel's own chart (dashed = unconfirmed). The
+  // live kind's second point is the still-forming candle, so it is appended.
+  if (chart && a) {
+    const live = w.kind !== 'forming' && a.live_candle;
+    const candles = live ? [...(a.candles || []), a.live_candle] : (a.candles || []);
+    const rsi = live ? [...(a.rsi_series || []), { timestamp: a.live_candle.timestamp, rsi: w.live_rsi }]
+                     : (a.rsi_series || []);
+    const curTs = w.kind === 'forming' ? w.live_ts : (a.live_candle && a.live_candle.timestamp);
+    const div = { type: w.type, forming: true,
+      points: { prev: { timestamp: w.prev_ts, price: w.prev_price, rsi: w.prev_rsi },
+                curr: { timestamp: curTs, price: w.live_price, rsi: w.live_rsi } } };
+    let svg = '';
+    try { svg = buildDivergencePanel(div, candles, rsi, { price: a.live_price ?? a.signal_price, rsi: a.rsi }); }
+    catch (_) { svg = ''; }
+    chart.innerHTML = svg;
+  }
   const bull = w.type === 'bullish';
   const px = v => `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
   const when = w.prev_ts ? new Date(w.prev_ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   const t = document.getElementById('divWatchTitle');
   const closedKind = w.kind === 'forming';
+  const sub = document.getElementById('divWatchSub');
+  if (sub) sub.textContent = closedKind
+    ? 'unconfirmed swing · closed candles · not scored'
+    : 'unconfirmed · forming candle · not scored';
   const whenNow = w.live_ts ? new Date(w.live_ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'now';
   if (t) t.textContent = closedKind
     ? `⏳ Forming — ${bull ? 'bullish' : 'bearish'} divergence on closed candles${tf ? ` (${tf})` : ''}`
@@ -2345,16 +2366,30 @@ function renderDivergencePanel(div, candles, rsiSeries, now) {
     sec.style.display = 'none';
     return;
   }
-  box.innerHTML = svg;
-  sec.style.display = '';
   const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
   const hidden = div.type === 'hidden_bullish' || div.type === 'hidden_bearish';
+  // The dots sit on the candles' extremes, the line on the closes - say so.
+  box.innerHTML = svg + `<div style="font-size:11px;opacity:.65;margin-top:4px">Dots = the candles' ` +
+    `${bull ? 'lows' : 'highs'} (where a divergence is measured); line = the closes.</div>`;
+  sec.style.display = '';
+  // Display only (Nov 2026): a CONFIRMED divergence whose move has already run
+  // - price 3%+ beyond its pivot in the called direction and RSI back across
+  // 50 - is labelled played out, as the forming ones already are. The score
+  // is unchanged (it decays confirmed divergences by age).
+  let ranPct = null;
+  const piv = div.points && div.points.curr;
+  const nowPx = Number(now && now.price), nowRsi = Number(now && now.rsi);
+  if (!div.forming && div.status !== 'played_out' && piv && Number.isFinite(nowPx) && Number.isFinite(nowRsi)) {
+    const move = nowPx / Number(piv.price) - 1;
+    if (bull ? (move > 0.03 && nowRsi >= 50) : (move < -0.03 && nowRsi <= 50)) ranPct = move * 100;
+  }
   const t = document.getElementById('divPanelTitle');
   const sub = document.getElementById('divPanelSub');
   if (t) {
     t.textContent = `RSI Divergence — ${bull ? 'Bullish' : 'Bearish'}`
       + (hidden ? ' (hidden · continuation)' : '')
       + (div.status === 'played_out' ? ' · played out ✓'
+         : ranPct != null ? ` · played out ✓ (${ranPct > 0 ? '+' : ''}${ranPct.toFixed(0)}% since)`
          : div.forming ? ' · forming ⏳' : '');
     t.style.color = bull ? 'var(--bull)' : 'var(--bear)';
   }

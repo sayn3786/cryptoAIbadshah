@@ -46,7 +46,7 @@ def test_fetch_pages_by_24h_volume():
 
 def test_notes():
     lines = pm.note_lines(pm.pick(ROWS))
-    assert "Polymarket" in lines[0] and "72% (+8 pts 7d)" in lines[1]
+    assert "Polymarket" in lines[0] and "→ 72% (+8 pts 7d)" in lines[1]
 
 
 def test_run_endpoint_and_wiring(monkeypatch):
