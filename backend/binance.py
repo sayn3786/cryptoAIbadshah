@@ -1746,6 +1746,15 @@ class BinanceClient:
     def aggregate_candles(candles: List[Dict], n: int) -> List[Dict]:
         if not candles or n < 2:
             return candles
+        # Weekly input (the 2W / 3W views): group on FIXED calendar periods -
+        # weeks counted from Monday 1970-01-05, so a 2W candle always covers
+        # the same two weeks. Pairing from the start of a rolling download
+        # re-paired every week (Nov 2026: BTC 2W RSI 47.3 -> 40.4 overnight
+        # with no real move), so 2W candles, RSI and divergences repainted.
+        if len(candles) >= 2 and all(
+                int(candles[k + 1]["timestamp"]) - int(candles[k]["timestamp"]) == 7 * 86_400_000
+                for k in range(min(len(candles) - 1, 5))):
+            return BinanceClient._aggregate_weeks(candles, n)
         result = []
         num_complete = len(candles) // n
         for i in range(num_complete):
@@ -1773,3 +1782,30 @@ class BinanceClient:
                 "taker_buy_volume": sum(c.get("taker_buy_volume", 0) for c in remainder),
             })
         return result
+
+    @staticmethod
+    def _aggregate_weeks(candles: List[Dict], n: int) -> List[Dict]:
+        """n-week candles on fixed periods (weeks since Monday 1970-01-05).
+        A period missing weeks at the START of the data is dropped (it would
+        not be a full candle); the last period is kept even if incomplete -
+        it is the forming candle (the closed / live split is done later)."""
+        week, monday0 = 7 * 86_400_000, 4 * 86_400_000
+        groups: Dict[int, List[Dict]] = {}
+        for c in candles:
+            groups.setdefault((int(c["timestamp"]) - monday0) // week // n, []).append(c)
+        keys = sorted(groups)
+        out = []
+        for k in keys:
+            chunk = sorted(groups[k], key=lambda c: int(c["timestamp"]))
+            if len(chunk) < n and k != keys[-1]:
+                continue
+            out.append({
+                "timestamp":        monday0 + k * n * week,
+                "open":             chunk[0]["open"],
+                "high":             max(c["high"] for c in chunk),
+                "low":              min(c["low"] for c in chunk),
+                "close":            chunk[-1]["close"],
+                "volume":           sum(c["volume"] for c in chunk),
+                "taker_buy_volume": sum(c.get("taker_buy_volume", 0) for c in chunk),
+            })
+        return out
