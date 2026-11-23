@@ -1,0 +1,39 @@
+name: Quarterly edge check (private Telegram)
+
+# Every quarter: each ADOPTED rule (1D signal 62+, the 1D size cap, the 8H
+# early exit, the played-out divergence rule, the money leans, the scalp lean
+# filter) re-run with its own test code on the latest 180 days and the 180
+# before, graded on rules fixed Nov 23 2026 (backend/edge_check.py). Results
+# go ONLY to the owner's private Telegram chat; this repo is public, so the
+# log prints how many edges were checked and whether the send worked.
+# Nothing switches off automatically. Manual run: Actions -> Run workflow.
+
+on:
+  schedule:
+    - cron: "23 5 2 1,4,7,10 *"     # 2nd of Jan / Apr / Jul / Oct, 05:23 UTC
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Edge check to private Telegram
+        working-directory: backend
+        env:
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_REPORT_CHAT_ID: ${{ secrets.TELEGRAM_REPORT_CHAT_ID }}
+          TELEGRAM_EXTRA_CHAT_IDS: ${{ secrets.TELEGRAM_EXTRA_CHAT_IDS }}
+          DISABLE_REC_SCHEDULER:   "1"
+        run: python -m edge_check --telegram
