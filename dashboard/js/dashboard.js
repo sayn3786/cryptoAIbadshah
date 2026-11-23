@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '282';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '283';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -419,7 +419,7 @@ function renderAll(a) {
   renderPrice(a);
   renderSignal(a.signal);
   renderSignalProgress(a);
-  renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe);
+  renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe, a);
   renderMACDCard(a.macd);
   renderNewsCard(a.news);
   renderEMACard(a.ema_trend);
@@ -2307,11 +2307,28 @@ function renderRsiDivCard(div, candles, rsiSeries, now) {
 /* Live RSI divergence WATCH (live_divergence): the divergence a trader would
    draw on the still-forming candle. Unconfirmed - it can vanish before the
    close - and never scored. */
-function renderDivWatch(w, tf) {
+function renderDivWatch(w, tf, a) {
   const sec = document.getElementById('divWatchSection');
   const body = document.getElementById('divWatchBody');
+  const chart = document.getElementById('divWatchChart');
   if (!sec || !body) return;
-  if (!w) { body.innerHTML = ''; sec.style.display = 'none'; return; }
+  if (!w) { body.innerHTML = ''; if (chart) chart.innerHTML = ''; sec.style.display = 'none'; return; }
+  // Drawn with the divergence panel's own chart (dashed = unconfirmed). The
+  // live kind's second point is the still-forming candle, so it is appended.
+  if (chart && a) {
+    const live = w.kind !== 'forming' && a.live_candle;
+    const candles = live ? [...(a.candles || []), a.live_candle] : (a.candles || []);
+    const rsi = live ? [...(a.rsi_series || []), { timestamp: a.live_candle.timestamp, rsi: w.live_rsi }]
+                     : (a.rsi_series || []);
+    const curTs = w.kind === 'forming' ? w.live_ts : (a.live_candle && a.live_candle.timestamp);
+    const div = { type: w.type, forming: true,
+      points: { prev: { timestamp: w.prev_ts, price: w.prev_price, rsi: w.prev_rsi },
+                curr: { timestamp: curTs, price: w.live_price, rsi: w.live_rsi } } };
+    let svg = '';
+    try { svg = buildDivergencePanel(div, candles, rsi, { price: a.live_price ?? a.signal_price, rsi: a.rsi }); }
+    catch (_) { svg = ''; }
+    chart.innerHTML = svg;
+  }
   const bull = w.type === 'bullish';
   const px = v => `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
   const when = w.prev_ts ? new Date(w.prev_ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';

@@ -118,3 +118,12 @@ def test_subtitle_matches_the_kind():
     assert "'unconfirmed swing · closed candles · not scored'" in js
     html = open(os.path.join(root, "dashboard", "index.html"), encoding="utf-8").read()
     assert 'id="divWatchSub"' in html
+
+
+def test_watch_card_draws_the_divergence_chart():
+    root = os.path.join(os.path.dirname(__file__), "..")
+    js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
+    i = js.index("function renderDivWatch(w, tf, a)")
+    assert "buildDivergencePanel(div, candles, rsi" in js[i:i + 2000]
+    html = open(os.path.join(root, "dashboard", "index.html"), encoding="utf-8").read()
+    assert 'id="divWatchChart"' in html
