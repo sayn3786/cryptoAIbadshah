@@ -86,8 +86,21 @@ def render(res: Dict[str, Dict], days: int) -> str:
 
 
 def fetch(days: int, get=None) -> List[Dict]:
-    import requests
-    get = get or (lambda url: requests.get(url, timeout=60).json())
+    if get is None:
+        import requests
+
+        def get(url):
+            r = requests.get(url, timeout=90, headers={"Accept": "application/json"})
+            print(f"tracker HTTP {r.status_code}")            # status only, no data
+            try:
+                d = r.json()
+            except ValueError:
+                print("tracker: not JSON")
+                return {}
+            if isinstance(d, dict):
+                print("tracker keys: " + ",".join(sorted(d.keys())[:12])
+                      + (f"; error_code {d.get('error_code')}" if d.get("error_code") else ""))
+            return d
     data = get(f"{APP_URL}/api/signals/tracker?days={days}") or {}
     return list(data.get("closed") or [])
 
