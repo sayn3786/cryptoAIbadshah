@@ -44,7 +44,7 @@ def test_wired_display_only():
     sig = open(os.path.join(root, "backend", "signals.py"), encoding="utf-8").read()
     assert "rsi_live_watch" not in sig                                 # never scored
     js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
-    assert "renderDivWatch(a.rsi_live_watch, a.timeframe)" in js
+    assert "renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe)" in js
 
 
 def test_uses_the_swing_with_the_biggest_rsi_gap_not_only_the_lowest():
@@ -78,3 +78,35 @@ def test_uses_the_swing_with_the_biggest_rsi_gap_not_only_the_lowest():
         indicators.calculate_rsi_series = real
         ld2._swings = orig
     assert w["prev_price"] == 60000 and w["prev_rsi"] == 35.2 and w["live_rsi"] == 38.3
+
+
+def test_forming_on_closed_candles_from_the_biggest_gap_swing(monkeypatch):
+    """BTC 2W after the Nov 9-23 candle closed: its low 55.1k (RSI 39.0) vs
+    Feb 60k (RSI 35.3) - not vs June 57.8k (RSI 38.2, gap under 1)."""
+    import indicators
+    closed = _series()
+    n = len(closed)
+    feb, jun, last = 29, n - 6, n - 1
+    closed[feb]["low"], closed[jun]["low"], closed[last]["low"] = 60000, 57809, 55134
+    for k in range(jun + 1, last):
+        closed[k]["low"] = max(closed[k]["low"], 59000)
+    real = indicators.calculate_rsi_series
+
+    def fake(xs, period=14):
+        r = list(real(xs, period))
+        r[feb], r[jun], r[last] = 35.3, 38.2, 39.0
+        return r
+    monkeypatch.setattr(indicators, "calculate_rsi_series", fake)
+    monkeypatch.setattr(ld, "_swings", lambda c, w=2: ([feb, jun], []))
+    w = ld.forming(closed, pw=2)
+    assert w["kind"] == "forming" and w["type"] == "bullish"
+    assert w["prev_price"] == 60000 and w["prev_rsi"] == 35.3 and w["live_rsi"] == 39.0
+    assert w["closes_to_confirm"] == 2
+
+
+def test_forming_shown_when_no_live_watch():
+    root = os.path.join(os.path.dirname(__file__), "..")
+    js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
+    assert "renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe)" in js
+    src = open(os.path.join(root, "backend", "app.py"), encoding="utf-8").read()
+    assert '"rsi_forming_watch": _rsi_forming_watch(spot, timeframe)' in src

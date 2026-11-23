@@ -69,3 +69,50 @@ def watch(closed: Sequence[Dict], live: Optional[Dict]) -> Optional[Dict]:
         out["note"] = ("UNCONFIRMED - drawn on the still-forming candle; it can vanish before the close. "
                        "Display only, not scored (RSI divergences tested as a coin flip on 1D).")
     return out
+
+
+def forming(closed: Sequence[Dict], pw: int = 3) -> Optional[Dict]:
+    """A divergence FORMING on the latest CLOSED candles (display only): one of
+    the last `pw` closed candles - too recent to be a confirmed swing - makes a
+    lower low than a confirmed swing low of the last LOOKBACK candles while its
+    RSI is at least MIN_GAP higher (the biggest gap wins), or the mirror at the
+    highs. The scored detector (indicators.detect_rsi_divergence) only checks
+    this when no confirmed divergence exists and only against the latest swing,
+    so a newer one drawn from an older swing (BTC 2W: Feb 60k / RSI 35 -> Nov
+    55k / RSI 39) never showed. Never scored."""
+    n = len(closed)
+    if n < 20 + pw:
+        return None
+    from indicators import calculate_rsi_series
+    rsi = calculate_rsi_series([float(c["close"]) for c in closed])
+    start = max(0, n - LOOKBACK)
+    lows, highs = _swings(closed, pw)
+    lows = [i for i in lows if start <= i < n - pw and rsi[i] is not None]
+    highs = [i for i in highs if start <= i < n - pw and rsi[i] is not None]
+    tail = [i for i in range(n - pw, n) if rsi[i] is not None]
+    if not tail:
+        return None
+    out = None
+    ti = min(tail, key=lambda i: float(closed[i]["low"]))
+    bull = [i for i in lows if float(closed[ti]["low"]) < float(closed[i]["low"])
+            and float(rsi[ti]) >= float(rsi[i]) + MIN_GAP]
+    if bull:
+        i = max(bull, key=lambda k: float(rsi[ti]) - float(rsi[k]))
+        out = {"type": "bullish", "prev_price": float(closed[i]["low"]), "prev_rsi": round(float(rsi[i]), 1),
+               "prev_ts": closed[i]["timestamp"], "live_price": float(closed[ti]["low"]),
+               "live_rsi": round(float(rsi[ti]), 1), "live_ts": closed[ti]["timestamp"]}
+    else:
+        ti = max(tail, key=lambda i: float(closed[i]["high"]))
+        bear = [i for i in highs if float(closed[ti]["high"]) > float(closed[i]["high"])
+                and float(rsi[ti]) <= float(rsi[i]) - MIN_GAP]
+        if bear:
+            i = max(bear, key=lambda k: float(rsi[k]) - float(rsi[ti]))
+            out = {"type": "bearish", "prev_price": float(closed[i]["high"]), "prev_rsi": round(float(rsi[i]), 1),
+                   "prev_ts": closed[i]["timestamp"], "live_price": float(closed[ti]["high"]),
+                   "live_rsi": round(float(rsi[ti]), 1), "live_ts": closed[ti]["timestamp"]}
+    if out:
+        out["kind"] = "forming"
+        out["closes_to_confirm"] = max(1, pw - (n - 1 - ti))
+        out["note"] = ("FORMING on closed candles - unconfirmed until the low / high holds for "
+                       f"{out['closes_to_confirm']} more close(s). Display only, not scored.")
+    return out

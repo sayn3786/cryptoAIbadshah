@@ -1543,6 +1543,14 @@ def _liquidation_bias(liq: dict, oi: dict) -> dict:
 
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
+def _rsi_forming_watch(closed, timeframe):
+    try:
+        import live_divergence as _ld
+        return _ld.forming(closed, 2 if timeframe in candle_analysis.WEEKLY_TFS else 3)
+    except Exception:
+        return None
+
+
 def _rsi_live_watch(closed, live):
     try:
         import live_divergence as _ld
@@ -1917,6 +1925,7 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
         # Live RSI divergence WATCH on the forming candle (live_divergence):
         # display only, unconfirmed, never scored.
         "rsi_live_watch": _rsi_live_watch(spot, live_candle),
+        "rsi_forming_watch": _rsi_forming_watch(spot, timeframe),
         "live_price":   live_price,           # latest (possibly unfinished) price
         "signal_price": signal_price,         # last CLOSED close
         "spot_cvd":     spot_cvd,
