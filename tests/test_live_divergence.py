@@ -127,3 +127,14 @@ def test_watch_card_draws_the_divergence_chart():
     assert "buildDivergencePanel(div, candles, rsi" in js[i:i + 2000]
     html = open(os.path.join(root, "dashboard", "index.html"), encoding="utf-8").read()
     assert 'id="divWatchChart"' in html
+
+
+def test_confirmed_divergence_played_out_label_and_dots_note():
+    root = os.path.join(os.path.dirname(__file__), "..")
+    js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
+    i = js.index("function renderDivergencePanel(div, candles, rsiSeries, now)")
+    body = js[i:i + 3500]
+    assert "move > 0.03 && nowRsi >= 50" in body and "move < -0.03 && nowRsi <= 50" in body
+    assert "played out ✓ (" in body and "Dots = the candles'" in body
+    sig = open(os.path.join(root, "backend", "signals.py"), encoding="utf-8").read()
+    assert "ranPct" not in sig                                        # display only

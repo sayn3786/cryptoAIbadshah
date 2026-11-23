@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '283';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '284';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -1086,7 +1086,7 @@ async function renderPolymarket() {
       const ch = p.change_7d ? ` <span class="${p.change_7d > 0 ? 'bullish' : 'bearish'}">(${p.change_7d > 0 ? '+' : ''}${p.change_7d.toFixed(0)} pts 7d)</span>` : '';
       const who = String(p.outcome).toLowerCase() === 'yes' ? '' : ` — ${esc(p.outcome)}`;
       const link = p.slug ? `https://polymarket.com/market/${encodeURIComponent(p.slug)}` : 'https://polymarket.com';
-      return `<div><a href="${link}" target="_blank" rel="noopener">${esc(p.question)}</a>${who}: <b>${Number(p.prob).toFixed(0)}%</b>${ch}</div>`;
+      return `<div><a href="${link}" target="_blank" rel="noopener">${esc(p.question)}</a>${who} → <b>${Number(p.prob).toFixed(0)}%</b>${ch}</div>`;
     };
     const parts = [];
     if ((d.macro || []).length) parts.push(`<div style="opacity:.7;margin-top:4px">🏛️ Macro</div>` + d.macro.slice(0, 4).map(row).join(''));
@@ -2366,16 +2366,30 @@ function renderDivergencePanel(div, candles, rsiSeries, now) {
     sec.style.display = 'none';
     return;
   }
-  box.innerHTML = svg;
-  sec.style.display = '';
   const bull = div.type === 'bullish' || div.type === 'hidden_bullish';
   const hidden = div.type === 'hidden_bullish' || div.type === 'hidden_bearish';
+  // The dots sit on the candles' extremes, the line on the closes - say so.
+  box.innerHTML = svg + `<div style="font-size:11px;opacity:.65;margin-top:4px">Dots = the candles' ` +
+    `${bull ? 'lows' : 'highs'} (where a divergence is measured); line = the closes.</div>`;
+  sec.style.display = '';
+  // Display only (Nov 2026): a CONFIRMED divergence whose move has already run
+  // - price 3%+ beyond its pivot in the called direction and RSI back across
+  // 50 - is labelled played out, as the forming ones already are. The score
+  // is unchanged (it decays confirmed divergences by age).
+  let ranPct = null;
+  const piv = div.points && div.points.curr;
+  const nowPx = Number(now && now.price), nowRsi = Number(now && now.rsi);
+  if (!div.forming && div.status !== 'played_out' && piv && Number.isFinite(nowPx) && Number.isFinite(nowRsi)) {
+    const move = nowPx / Number(piv.price) - 1;
+    if (bull ? (move > 0.03 && nowRsi >= 50) : (move < -0.03 && nowRsi <= 50)) ranPct = move * 100;
+  }
   const t = document.getElementById('divPanelTitle');
   const sub = document.getElementById('divPanelSub');
   if (t) {
     t.textContent = `RSI Divergence — ${bull ? 'Bullish' : 'Bearish'}`
       + (hidden ? ' (hidden · continuation)' : '')
       + (div.status === 'played_out' ? ' · played out ✓'
+         : ranPct != null ? ` · played out ✓ (${ranPct > 0 ? '+' : ''}${ranPct.toFixed(0)}% since)`
          : div.forming ? ' · forming ⏳' : '');
     t.style.color = bull ? 'var(--bull)' : 'var(--bear)';
   }
