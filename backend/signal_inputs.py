@@ -85,6 +85,8 @@ EXTERNAL_POINT_IN_TIME = frozenset({
 STATIC_CONFIG = frozenset({
     "symbol", "timeframe",
     "div_need_extreme",     # 15m scalp switch (Nov 2026): a flag, not market data
+    "div_zero_played_out",  # 1D switch (Nov 2026): zero a played-out confirmed divergence
+    "div_flip_played_out",  # test-only variant: score it for the other side
 })
 
 ALL_INPUTS = (CANDLE_DERIVED | EXTERNAL_HISTORICAL | LIVE_ONLY

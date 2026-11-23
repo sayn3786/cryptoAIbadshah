@@ -74,20 +74,30 @@ def keep(book: str, direction: str, ln: Dict[str, Optional[str]]) -> bool:
     return agree and not against
 
 
-def _hours_to_close(slot_ms: int) -> float:
+def _hours_to_close(slot_ms: int, end_h: Optional[int] = None) -> float:
     t = datetime.fromtimestamp(slot_ms / 1000, tz=timezone.utc)
-    close = t.replace(hour=sl.SESSION_END_H, minute=0, second=0, microsecond=0)
+    close = t.replace(hour=sl.SESSION_END_H if end_h is None else end_h, minute=0, second=0, microsecond=0)
     return max(0.25, (close - t).total_seconds() / 3600)
 
 
-def book(scalps: Sequence[Dict], m15: Dict[str, List[Dict]], *, sim: Callable = ee.simulate_hl) -> List[Dict]:
-    """sdg.book with the session: entries only in session, flat at 21:00 UTC."""
+def in_window(slot_ms: int, window) -> bool:
+    """Mon-Fri, start <= hour < end (UTC) - the live session by default."""
+    if window is None:
+        return sl.in_session(slot_ms)
+    t = datetime.fromtimestamp(slot_ms / 1000, tz=timezone.utc)
+    return t.weekday() < 5 and window[0] <= t.hour < window[1]
+
+
+def book(scalps: Sequence[Dict], m15: Dict[str, List[Dict]], *, sim: Callable = ee.simulate_hl,
+         window=None) -> List[Dict]:
+    """sdg.book with a session: entries only inside it, flat at its end
+    (`window` = (start_h, end_h) UTC; None = the live session)."""
     trades, open_until = [], {}
     idx = {s: {int(b["timestamp"]) + M15: i for i, b in enumerate(bars)} for s, bars in m15.items()}
     piv = {s: sf.pivots(bars) for s, bars in m15.items()}
     for c in sorted(scalps, key=lambda x: (x["slot_ms"], -x["score"])):
         t0, sym = c["slot_ms"], c["symbol"]
-        if not sl.in_session(t0):
+        if not in_window(t0, window):
             continue
         open_until = {k: u for k, u in open_until.items() if u > t0}
         if sym in open_until:
@@ -105,7 +115,7 @@ def book(scalps: Sequence[Dict], m15: Dict[str, List[Dict]], *, sim: Callable = 
         rec = {"symbol": sym, "direction": c["direction"], "entry": entry, "sl": ex["sl"],
                "tp_targets": [ex["target"]], "slot_ms": t0}
         t = sim(rec, m15[sym], tp1_frac=1.0, be=None, costs=rc.cm.LIMIT_TPS,
-                max_hold_hours=_hours_to_close(t0))
+                max_hold_hours=_hours_to_close(t0, None if window is None else window[1]))
         if not t.get("taken"):
             continue
         notional = sl.DEFAULT_RISK_USD / stop_pct

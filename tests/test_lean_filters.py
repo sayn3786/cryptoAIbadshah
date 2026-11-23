@@ -67,3 +67,14 @@ def test_threshold_verdict():
     assert "can the threshold come down" in slf.render_thresholds(
         {"window": {"start": "2026-01-01", "end": "2026-03-01", "days": 60}, "coins": ["X"],
          "thresholds": full, "threshold_verdict": {"lowest_ok": 100.0}})
+
+
+def test_in_window_asia_and_live():
+    from datetime import datetime, timezone
+    mon3 = int(datetime(2026, 11, 23, 3, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    sat3 = int(datetime(2026, 11, 28, 3, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    assert slf.in_window(mon3, (0, 8)) and not slf.in_window(sat3, (0, 8))
+    assert not slf.in_window(mon3, (13, 21))
+    assert slf._hours_to_close(mon3, 8) == 5.0
+    import scalp_asia_compare as sa
+    assert sa.ASIA == (0, 8) and sa.MIN_PF == 1.10

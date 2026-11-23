@@ -1976,6 +1976,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # same-way signal now takes -10 (tp_reached_test, passed on 1W).
     if timeframe == "1W" and not business:
         analysis["prev_tp1_reached"] = _prev_tp1_reached(spot, symbol)
+    # A played-out confirmed RSI divergence scores 0 on the 1D signal
+    # (divergence_playout_test, passed both eras, Nov 23 2026).
+    if timeframe == "1D" and not business:
+        analysis["div_zero_played_out"] = True
     # Money leans (Coinbase premium, stablecoin supply), live on ALT 1D
     # signals at +/-5 (owner, Nov 22 2026). Computed daily at 00:40 UTC by
     # the paper-book run; only a reading at most 2 days old is used.
