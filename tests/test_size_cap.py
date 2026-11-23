@@ -23,10 +23,12 @@ def _iso(day, hour=0):
 
 
 def test_tracker_hints_use_what_was_open_then():
-    rows = [{"signal_id": i, "timeframe": "1D", "direction": "SHORT", "opened_at": _iso(10 + i),
-             "closed_at": None} for i in range(4)]
-    rows.append({"signal_id": 9, "timeframe": "1D", "direction": "SHORT", "opened_at": _iso(9),
+    rows = [{"signal_id": i, "symbol": f"C{i}", "timeframe": "1D", "direction": "SHORT",
+             "opened_at": _iso(10 + i), "closed_at": None} for i in range(4)]
+    rows.append({"signal_id": 9, "symbol": "C9", "timeframe": "1D", "direction": "SHORT", "opened_at": _iso(9),
                  "closed_at": _iso(10, 12)})                  # closed before #1 opened
+    rows.append({"signal_id": 8, "symbol": "C0", "timeframe": "1D", "direction": "SHORT",
+                 "opened_at": _iso(10, 6), "closed_at": None})    # C0 republished: one coin
     rows.append({"signal_id": 7, "timeframe": "4H", "direction": "SHORT", "opened_at": _iso(9)})
     h = sc.tracker_hints(rows)
     assert h["0"]["open"] == 1 and h["3"]["open"] == 3 and h["3"]["size"] == 0.75 and "7" not in h
@@ -63,11 +65,12 @@ def test_close_size_hints_count_active_1d_only():
     class Store:
         @staticmethod
         def list_active_signals(**kw):
-            return [{"id": 1, "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME},
-                    {"id": 2, "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME},
-                    {"id": 3, "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME},
+            return [{"id": 1, "symbol": "A", "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME},
+                    {"id": 2, "symbol": "B", "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME},
+                    {"id": 6, "symbol": "B", "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME},
+                    {"id": 3, "symbol": "C", "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME},
                     {"id": 4, "timeframe": "1W", "direction": "SHORT"},
-                    {"id": 5, "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME}]
+                    {"id": 5, "symbol": "AAA", "timeframe": "1D", "direction": "SHORT", "strategy_name": cp.STRATEGY_NAME}]
     sets = {"1D": [{"symbol": "AAA", "direction": "SHORT", "strength": 70, "signal_id": 5}]}
     h = app._close_size_hints(sets, [5], store=Store)
-    assert h["AAA"] == {"size": 0.75, "open": 3}                   # today's own pick (id 5) not counted
+    assert h["AAA"] == {"size": 0.75, "open": 3}     # A, B (republished once) and C; today's own pick not counted

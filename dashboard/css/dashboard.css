@@ -2221,6 +2221,8 @@ html { overflow-x: hidden; }
 /* One setup republished on several candles — shown once, counted here. */
 .tk-rep { color: var(--muted2); font-weight: 600; font-size: .62rem; margin-left: 4px;
           padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px; }
+.tk-badges { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 4px; white-space: normal; }
+.tk-badges > span { margin-left: 0; }
 /* 1D size cap: reduced size when many picks are open the same way. */
 .tk-size { color: #38bdf8; font-weight: 600; font-size: .6rem; margin-left: 4px; white-space: nowrap;
            padding: 1px 4px; border: 1px solid rgba(56, 189, 248, .45); border-radius: 3px; }

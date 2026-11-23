@@ -6098,15 +6098,18 @@ def _close_size_hints(sets: dict, new_ids, *, store=None) -> dict:
                 return {}
             import signal_store as store
         new = {str(x) for x in new_ids if x is not None}
-        counts = {"LONG": 0, "SHORT": 0}
+        seen = {"LONG": set(), "SHORT": set()}   # each coin once (republished setups)
+        new_syms = {(str(r.get("symbol") or "").upper(), str(r.get("direction") or "").upper()) for r in daily}
         for r in store.list_active_signals(environment=_deploy_env(), limit=500):
             if str(r.get("timeframe") or "") != close_publish.DAILY or str(r.get("id")) in new:
                 continue
             if r.get("strategy_name") and r.get("strategy_name") != close_publish.STRATEGY_NAME:
                 continue
             d = str(r.get("direction") or "").upper()
-            if d in counts:
-                counts[d] += 1
+            sym = str(r.get("symbol") or "").upper()
+            if d in seen and (sym, d) not in new_syms:      # a re-pick of an open coin is the same trade
+                seen[d].add(sym)
+        counts = {d: len(v) for d, v in seen.items()}
         daily.sort(key=lambda r: -float(r.get("strength") or 0))
         return _szc.batch(counts, [(r.get("symbol"), r.get("direction")) for r in daily])
     except Exception:
