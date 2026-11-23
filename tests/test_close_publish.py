@@ -258,3 +258,16 @@ def test_the_monitor_gives_close_trades_their_own_clock(monkeypatch):
 def test_weekly_picks_carry_the_not_yet_proven_note():
     assert cp.WEEKLY_NOTE in cp.build_message({"1D": [], "BW": []}, day=SAT)
     assert cp.WEEKLY_NOTE not in cp.build_message({"1D": []}, day=SAT)
+
+
+def test_money_lean_filter_skips_1d_picks_against_a_lean():
+    assert cp.lean_against("LONG", {"premium": "SHORT", "stable": None}) == "premium"
+    assert cp.lean_against("LONG", {"premium": "LONG", "stable": "LONG"}) is None
+    assert cp.lean_against("SHORT", {}) is None
+    read = {"direction": "LONG", "strength": 80, "sig": {}, "tradeable": True}
+    s = cp.screen("ETH", read, None, tf=cp.DAILY, corr_factor=0.0, influence={},
+                  money_leans={"stable": "SHORT"})
+    assert s["reason"] == "MONEY_LEAN_AGAINST" and s["lean_against"] == "stable"
+    s = cp.screen("ETH", read, None, tf=cp.BUSINESS, corr_factor=0.0, influence={},
+                  money_leans={"stable": "SHORT"})
+    assert s.get("reason") != "MONEY_LEAN_AGAINST"          # weekly picks: not tested, not filtered

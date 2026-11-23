@@ -79,3 +79,13 @@ def test_check_daily_on_tiny_data_runs():
     out = ec.check_daily({"X": rows}, {}, 1_795_392_000_000, log=lambda m: None, signal_fn=sig)
     assert set(out) == {"1D signal 62+", "1D size cap"}
     assert all(out[k][w]["status"] in ec.ICON for k in out for w in ec.WINDOWS)
+
+
+def test_grade_lean_filter():
+    era = {"no-against": {"stats": {"resolved": 50, "n": 50, "win_pct": 56, "avg_r": 0.10}, "random": 0.05,
+                          "ok": True}}
+    assert ec.grade_lean_filter(era)["status"] == "working"
+    era["no-against"]["ok"] = False
+    assert ec.grade_lean_filter(era)["status"] == "weakening"
+    era["no-against"]["stats"]["avg_r"] = 0.04
+    assert ec.grade_lean_filter(era)["status"] == "gone"

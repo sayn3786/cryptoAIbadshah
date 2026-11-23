@@ -17,6 +17,10 @@ test code on recent data only, and graded on rules fixed here, now:
                     daily exit's · GONE: else
   played-out div.   (divergence_playout_test) WORKING: passes its rule ·
                     WEAKENING: avg R at least the current score's · GONE: else
+  1D lean filter    (lean_filter_1d_test, skip against a lean) WORKING:
+                    passes its rule (30+, win >= 53%, avg R > 0, +0.03R
+                    over random skipping) · WEAKENING: avg R above random
+                    skipping · GONE: else  (added Nov 23 2026)
   money leans       (macro_lean_test, each lean) WORKING: 30+, win >= 53%,
                     z >= 2, avg R > 0 · WEAKENING: avg R > 0 · GONE: else
   scalp lean filter (scalp_lean_filter_compare, last 60 days and the 60
@@ -110,6 +114,18 @@ def grade_lean(st: Dict) -> Dict:
     return {"status": "weakening" if (st["avg_r"] or 0) > 0 else "gone", "st": st}
 
 
+def grade_lean_filter(era: Dict) -> Dict:
+    x = era["no-against"]
+    st = {**x["stats"], "random": x["random"]}
+    if (x["stats"].get("resolved") or 0) < MIN_N:
+        return {"status": "too few", "st": st}
+    if x["ok"]:
+        s = "working"
+    else:
+        s = "weakening" if x["random"] is not None and (x["stats"]["avg_r"] or -9) > x["random"] else "gone"
+    return {"status": s, "st": st}
+
+
 def grade_scalp(res: Dict) -> Dict:
     import scalp_lean_filter_compare as slf
     rows = res["rows"]
@@ -127,7 +143,7 @@ def _line(st: Dict) -> str:
     bits = []
     for k, lab in (("n", "n"), ("trades", "trades"), ("resolved", "n"), ("win_pct", "win"), ("avg_r", "avg R"),
                    ("ratio", "return/DD"), ("shuffled", "shuffled"), ("daily_avg_r", "daily exit R"),
-                   ("current_avg_r", "current R"), ("pf_usd", "PF"), ("baseline_pf", "unfiltered PF")):
+                   ("current_avg_r", "current R"), ("random", "random skip R"), ("pf_usd", "PF"), ("baseline_pf", "unfiltered PF")):
         v = st.get(k)
         if v is None or (lab == "n" and any(b.startswith("n ") for b in bits)):
             continue
@@ -177,7 +193,8 @@ def run(*, log=print) -> Dict:
         fg = {}
     daily = cs.fetch_deep(syms, 600, log=log)
     res: Dict[str, Dict] = {}
-    res.update(_safe("1D signal 62+", lambda: check_daily(daily, fg, now, log=log), log))
+    sig = memo_signal(tc.signal_at)              # one 1D signal per coin-day, shared
+    res.update(_safe("1D signal 62+", lambda: check_daily(daily, fg, now, log=log, signal_fn=sig), log))
 
     def div():
         import divergence_playout_test as dp
@@ -200,6 +217,17 @@ def run(*, log=print) -> Dict:
                 {w: grade_lean(rv.side_stats([e for e in pick(evs, *window_ms(w, now)) if e["lean"] == k], "x"))
                  for w in WINDOWS} for k in ("premium", "stable")}      # the two adopted leans
     res.update(_safe("money leans", leans, log))
+
+    def lean_filter():
+        import lean_filter_1d_test as lf
+        import scalp_lean_filter_compare as slf
+        lv = slf.leans_by_day(daily.get("BTC") or [])
+        evs = []
+        for sym, c in daily.items():
+            evs += lf.scan(c, sym, fg, lv, signal_fn=sig)
+        return {"1D lean filter": {w: grade_lean_filter(lf.era(pick(evs, *window_ms(w, now))))
+                                   for w in WINDOWS}}
+    res.update(_safe("1D lean filter", lean_filter, log))
 
     def exit8h():
         import exit_8h_test as e8

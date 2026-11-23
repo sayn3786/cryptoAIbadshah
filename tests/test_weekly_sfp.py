@@ -42,3 +42,15 @@ def test_structure_panel_row():
     panel = patterns.build_structure_panel(a)
     rows = [r for r in (panel or {}).get("rows", []) if r.get("label") == "Weekly SFP"]
     assert rows and rows[0]["value"].startswith("BULLISH") and "not scored" in rows[0]["detail"]
+
+
+def test_money_lean_filter_row():
+    import patterns
+    base = {"timeframe": "1D", "candles": [{"timestamp": MON + i * 86_400_000, "open": 100, "high": 101, "low": 99,
+                                            "close": 100, "volume": 1} for i in range(60)],
+            "signal": {"direction": "LONG", "strength": 70}}
+    rows = lambda a: {r["label"]: r for r in patterns.build_structure_panel(a)["rows"]}   # noqa: E731
+    r = rows({**base, "money_lean_filter": {"premium": None, "stable": "SHORT"}})["Money Lean Filter"]
+    assert r["value"].startswith("AGAINST") and r["tone"] == "bear"
+    assert rows({**base, "money_lean_filter": {"premium": "LONG", "stable": None}})["Money Lean Filter"]["value"] == "agrees"
+    assert "Money Lean Filter" not in rows(base)
