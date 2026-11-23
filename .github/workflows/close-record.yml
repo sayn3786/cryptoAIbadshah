@@ -52,3 +52,14 @@ jobs:
           APP_URL:                 ${{ secrets.APP_URL }}
           CRON_SECRET:             ${{ secrets.CRON_SECRET }}
         run: python -m weekly_picks_record --telegram --days 365
+
+      # The weekly bullish SFP's OUT-OF-SAMPLE record (rule fixed Nov 23 2026,
+      # backend/weekly_sfp_test.py --forward). Logs: counts only.
+      - name: Weekly SFP forward record (private Telegram)
+        working-directory: backend
+        env:
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_REPORT_CHAT_ID: ${{ secrets.TELEGRAM_REPORT_CHAT_ID }}
+          TELEGRAM_EXTRA_CHAT_IDS: ${{ secrets.TELEGRAM_EXTRA_CHAT_IDS }}
+          DISABLE_REC_SCHEDULER:   "1"
+        run: python -m weekly_sfp_test --forward --telegram --days 400
