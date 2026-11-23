@@ -13,7 +13,7 @@ import os
 import sys
 from typing import Dict, List, Optional, Sequence
 
-APP_URL = os.getenv("APP_URL", "https://cryptomarket-sigma.vercel.app")
+APP_URL = os.getenv("APP_URL") or "https://cryptomarket-sigma.vercel.app"
 DECIDED = ("TP_HIT", "SL_HIT", "CLOSED")
 TFS = ("1W", "BW", "1D")
 
@@ -90,7 +90,11 @@ def fetch(days: int, get=None) -> List[Dict]:
         import requests
 
         def get(url):
-            r = requests.get(url, timeout=90, headers={"Accept": "application/json"})
+            # the tracker sits behind login; the workflow's CRON_SECRET opens it (never printed)
+            hdr = {"Accept": "application/json"}
+            if os.getenv("CRON_SECRET"):
+                hdr["x-cron-secret"] = os.environ["CRON_SECRET"]
+            r = requests.get(url, timeout=90, headers=hdr)
             print(f"tracker HTTP {r.status_code}")            # status only, no data
             try:
                 d = r.json()
