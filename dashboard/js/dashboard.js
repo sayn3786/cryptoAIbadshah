@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '284';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '285';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -9028,6 +9028,9 @@ function _tkRow(row) {
 
   return `<tr>
     <td class="tk-sym">${row.symbol}<span class="tk-tf">${row.timeframe || ''}</span>${
+      ['1W', 'BW'].includes(row.timeframe)
+        ? `<span class="tk-unproven" title="Weekly picks are not yet proven: the 1W backtest since 2022 is a coin flip (46% wins, -0.04R). Judged once 30 weekly trades (5+ longs) have closed.">not yet proven</span>`
+        : ''}${
       row.republished > 1
         ? `<span class="tk-rep" title="Republished on ${row.republished} candles with the same levels — one setup, not ${row.republished} trades">×${row.republished}</span>`
         : ''}</td>

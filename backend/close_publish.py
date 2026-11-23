@@ -31,6 +31,12 @@ ORDER = (DAILY, BUSINESS, CRYPTO)
 LABELS = {DAILY: "Daily (1D)", BUSINESS: "Business week (Mon-Fri)",
           CRYPTO: "Crypto week (1W)"}
 SHORT = {DAILY: "1D", BUSINESS: "BW", CRYPTO: "1W"}
+# Nov 23 2026: the weekly picks are NOT yet proven. The 1W replay since 2022 was
+# a coin flip (46% wins, -0.04R); the live record so far is all shorts in one
+# falling market. Judged once 30 weekly trades (5+ longs) have closed
+# (weekly_picks_record, every Monday).
+WEEKLY_NOTE = ("🧪 Weekly picks (BW / 1W): not yet proven - the backtest since 2022 is a coin flip; "
+               "judged at 30 closed trades. Size small.")
 
 # The next timeframe up, read as a nudge only.
 HIGHER_TF = {DAILY: "1W", BUSINESS: "1M", CRYPTO: "1M"}
@@ -283,6 +289,8 @@ def build_message(sets: Dict[str, List[Dict[str, Any]]], *, day: datetime) -> st
             lines.extend(_levels(r))
         lines.append("")
     counts = ", ".join(f"{SHORT[tf]} {len(sets.get(tf) or [])}/{TOP_N}" for tf in tfs)
+    if any(tf in (BUSINESS, CRYPTO) for tf in tfs):
+        lines.append(WEEKLY_NOTE)
     lines += [f"Picks: {counts}",
               "⚠️ Not financial advice. Risk 1-2% per trade at most."]
     return "\n".join(lines).rstrip()

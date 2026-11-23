@@ -38,3 +38,17 @@ jobs:
           APP_URL:                 ${{ secrets.APP_URL }}
           CRON_SECRET:             ${{ secrets.CRON_SECRET }}
         run: python -m close_record --telegram
+
+      # The published 1W / BW picks' record and the 30-trade check (rule fixed
+      # Nov 23 2026, backend/weekly_picks_record.py). Logs print the check's
+      # state and counts only; the record goes to the private chat.
+      - name: Weekly picks record + 30-trade check (private Telegram)
+        working-directory: backend
+        env:
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_REPORT_CHAT_ID: ${{ secrets.TELEGRAM_REPORT_CHAT_ID }}
+          TELEGRAM_EXTRA_CHAT_IDS: ${{ secrets.TELEGRAM_EXTRA_CHAT_IDS }}
+          DISABLE_REC_SCHEDULER:   "1"
+          APP_URL:                 ${{ secrets.APP_URL }}
+          CRON_SECRET:             ${{ secrets.CRON_SECRET }}
+        run: python -m weekly_picks_record --telegram --days 365
