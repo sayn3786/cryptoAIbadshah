@@ -123,8 +123,18 @@ def business_weeks(daily: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 # ── Screening one coin ───────────────────────────────────────────────────────
 
+def lean_against(direction: str, money_leans: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The name of a money lean pointing the other way, else None."""
+    for k in ("premium", "stable"):
+        side = (money_leans or {}).get(k)
+        if side in ("LONG", "SHORT") and side != direction:
+            return k
+    return None
+
+
 def screen(sym: str, read: Optional[Dict[str, Any]], higher: Optional[Dict[str, Any]],
-           *, tf: str, corr_factor: float, influence: Dict[str, Any]) -> Dict[str, Any]:
+           *, tf: str, corr_factor: float, influence: Dict[str, Any],
+           money_leans: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """One coin's reading on a close timeframe -> {"ok", "reason", ...}.
 
     `read` / `higher` are the per-timeframe dicts app builds (direction,
@@ -144,6 +154,17 @@ def screen(sym: str, read: Optional[Dict[str, Any]], higher: Optional[Dict[str, 
         out["reason"] = "NEUTRAL"
         return out
     out["direction"] = direction
+    # 1D money-lean filter (lean_filter_1d_test, pre-registered, passed both
+    # eras Nov 23 2026: skipping 1D signals against a lean ~doubled R per
+    # trade, random skipping did nothing). Every coin, BTC included. The lean
+    # is the latest stored reading (computed 00:40 UTC, so at the 00:00 close
+    # it is the previous day's - both leans move slowly).
+    if tf == DAILY:
+        against = lean_against(direction, money_leans)
+        if against:
+            out["reason"] = "MONEY_LEAN_AGAINST"
+            out["lean_against"] = against
+            return out
     sig = read.get("sig") or {}
     raw = round(float(read.get("strength") or 0), 1)
     out["raw_strength"] = raw

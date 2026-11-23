@@ -2554,6 +2554,23 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
             f"widening range: highs rising, lows falling · upper {_mg['upper_now']:,.4f} / lower "
             f"{_mg['lower_now']:,.4f} now · a close outside is the break · context only")
 
+    # ── 1D money-lean filter (lean_filter_1d_test): what the publish step does
+    if "money_lean_filter" in analysis:
+        _mlf = analysis.get("money_lean_filter") or {}
+        _sig = (analysis.get("signal") or {}).get("direction")
+        _sides = {k: v for k, v in _mlf.items() if v in ("LONG", "SHORT")}
+        if not _mlf:
+            row("Money Lean Filter", "no reading", "neutral", "no fresh lean (computed daily 00:40 UTC)")
+        else:
+            _txt = " · ".join(f"{'Coinbase premium' if k == 'premium' else 'stablecoins'} {v}"
+                              for k, v in _sides.items()) or "no lean today"
+            _against = _sig in ("LONG", "SHORT") and any(v != _sig for v in _sides.values())
+            row("Money Lean Filter", "AGAINST - pick skipped" if _against else
+                ("agrees" if _sig in ("LONG", "SHORT") and _sides else "no conflict"),
+                "bear" if _against else "neutral",
+                _txt + " · a 1D pick against a lean is not published (tested since 2018: skipping them "
+                "~doubled R per trade, +0.06 → +0.12R, in both eras)")
+
     # ── Weekly bullish swing failure (weekly_sfp): tested, context only ────
     _sfp = analysis.get("weekly_sfp")
     if _sfp:

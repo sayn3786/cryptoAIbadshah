@@ -1996,6 +1996,10 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # the paper-book run; only a reading at most 2 days old is used.
     if timeframe == "1D" and not business and symbol != "BTC":
         analysis["money_leans"] = _money_leans_live()
+    # The 1D money-lean FILTER (lean_filter_1d_test): display of what the
+    # publish step does - a 1D pick against a lean is not published.
+    if timeframe == "1D" and not business:
+        analysis["money_lean_filter"] = _money_leans_live()
     # Multi-year major levels + the megaphone shape (major_levels): display
     # only, never scored. Not for the business week (its own candle set).
     if not business:
@@ -6058,7 +6062,8 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
         corr = 0.0 if sym == "BTC" else _BTC_CORR.get(sym, 1.0)
         s = close_publish.screen(sym, reads[sym], hreads.get(sym), tf=tf,
                                  corr_factor=corr,
-                                 influence=no_btc if sym == "BTC" else influence)
+                                 influence=no_btc if sym == "BTC" else influence,
+                                 money_leans=_money_leans_live() if tf == close_publish.DAILY else None)
         if s["ok"]:
             passed.append(close_publish.to_rec(s, reads[sym], btc_corr=corr,
                                                detected_at=detected))
