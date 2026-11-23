@@ -103,7 +103,9 @@ def opened_note(trades: Sequence[Dict[str, Any]]) -> str:
     for t in trades:
         lines.append(f"{'🟢' if t['direction'] == 'LONG' else '🔴'} {t['symbol']} {t['direction']} "
                      f"· strength {t['strength']:g} · entry ~{_px(t['entry'])} · SL {_px(t['sl'])} "
-                     f"· TP {_px(t['target'])} (1.5 × 1D ATR, max {HOLD_DAYS} days, $5 risk)")
+                     f"· TP {_px(t['target'])} (1.5 × 1D ATR, max {HOLD_DAYS} days, $5 risk)"
+                     + (f" · size cap would use {t['size_cap']:g}× ({t.get('open_same_way')} open that way)"
+                        if float(t.get("size_cap", 1) or 1) < 1 else ""))
     return "\n".join(lines)
 
 

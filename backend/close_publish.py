@@ -266,7 +266,8 @@ def _levels(r: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def build_message(sets: Dict[str, List[Dict[str, Any]]], *, day: datetime) -> str:
+def build_message(sets: Dict[str, List[Dict[str, Any]]], *, day: datetime,
+                  size_hints: Optional[Dict[str, Dict]] = None) -> str:
     """Plain text (coin tickers and labels stay intact without Markdown)."""
     tfs = [tf for tf in ORDER if tf in sets]
     title = " + ".join(LABELS[tf] for tf in tfs)
@@ -280,8 +281,12 @@ def build_message(sets: Dict[str, List[Dict[str, Any]]], *, day: datetime) -> st
         tags = " + ".join(SHORT[tf] for tf in e["tfs"])
         best = max(e["recs"].values(), key=lambda r: r["strength"])
         both = " · closes agree" if len(e["tfs"]) > 1 else ""
+        size = ""
+        if DAILY in e["tfs"] and size_hints:
+            import size_cap
+            size = size_cap.label(size_hints.get(e["symbol"]), e["direction"])
         lines.append(f"#{i} {icon} {e['symbol']} {e['direction']} [{tags}] "
-                     f"{best['strength']:.0f}/100{both}")
+                     f"{best['strength']:.0f}/100{both}{size}")
         for tf in e["tfs"]:
             r = e["recs"][tf]
             if len(e["tfs"]) > 1:
@@ -289,6 +294,9 @@ def build_message(sets: Dict[str, List[Dict[str, Any]]], *, day: datetime) -> st
             lines.extend(_levels(r))
         lines.append("")
     counts = ", ".join(f"{SHORT[tf]} {len(sets.get(tf) or [])}/{TOP_N}" for tf in tfs)
+    if size_hints and any(float(h.get("size", 1)) < 1 for h in size_hints.values()):
+        lines.append(f"⚖️ 1D sizes: full while fewer than 3 are open the same way, then 3 ÷ (open + 1) - "
+                     "many same-side trades fail together (tested).")
     if any(tf in (BUSINESS, CRYPTO) for tf in tfs):
         lines.append(WEEKLY_NOTE)
     lines += [f"Picks: {counts}",
