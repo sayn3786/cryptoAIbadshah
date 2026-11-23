@@ -1442,6 +1442,17 @@ def _major_levels_for(symbol: str, timeframe: str, closed: list) -> tuple:
         return None, None
 
 
+def _weekly_sfp_for(symbol: str, timeframe: str, closed: list):
+    """The newest bullish weekly SFP of the last 4 closed weeks (1D+); display only."""
+    if timeframe not in ("1D", "1W", "2W", "3W", "1M") or not closed:
+        return None
+    try:
+        import weekly_sfp as _ws
+        return _ws.latest(_weekly_history(symbol), float(closed[-1]["close"]))
+    except Exception:
+        return None
+
+
 def _collect_htf_levels(symbol: str, timeframe: str) -> list:
     """Swing high/low of every anchor TF above `timeframe`, derived from one
     daily series so the levels are source-consistent and correctly nested."""
@@ -1989,6 +2000,9 @@ def build_analysis(symbol: str, timeframe: str) -> dict:
     # only, never scored. Not for the business week (its own candle set).
     if not business:
         analysis["major_levels"], analysis["megaphone"] = _major_levels_for(symbol, timeframe, spot)
+        # The weekly bullish swing failure (weekly_sfp; passed weekly_sfp_test
+        # in both eras, Nov 23 2026): display only, never scored.
+        analysis["weekly_sfp"] = _weekly_sfp_for(symbol, timeframe, spot)
     analysis["signal"] = generate_signal(analysis)
 
     # Bull Market Support Band (20W SMA + 21W EMA) — a WEEKLY macro read, so it

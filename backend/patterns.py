@@ -2554,6 +2554,17 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
             f"widening range: highs rising, lows falling · upper {_mg['upper_now']:,.4f} / lower "
             f"{_mg['lower_now']:,.4f} now · a close outside is the break · context only")
 
+    # ── Weekly bullish swing failure (weekly_sfp): tested, context only ────
+    _sfp = analysis.get("weekly_sfp")
+    if _sfp:
+        ago = "this week" if _sfp["weeks_ago"] == 0 else f"{_sfp['weeks_ago']} week{'s' if _sfp['weeks_ago'] > 1 else ''} ago"
+        row("Weekly SFP", f"BULLISH · {_sfp['level']:,.4f}", "bull" if _sfp["holding"] else "neutral",
+            f"week closed {_sfp['closed']} ({ago}): wick to {_sfp['wick_low']:,.4f} under the 26-week low, closed back "
+            f"above · price {'holds' if _sfp['holding'] else 'LOST'} the level ({_sfp['dist_pct']:+.1f}%) · "
+            + _sfp["note"])
+    elif analysis.get("timeframe") in ("1D", "1W", "2W", "3W", "1M"):
+        row("Weekly SFP", "—", "neutral", "no 26-week low swept and reclaimed in the last 4 weeks")
+
     # ── Range position / midline stretch ─────────────────────────────────────
     rng = s_hi - s_lo
     if rng > 0:

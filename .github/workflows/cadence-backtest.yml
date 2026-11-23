@@ -383,7 +383,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate, tp-reached, tp-reached-1w, strength-tier, order-blocks, volume-profile, volume-profile-4h, polymarket-check, macro-leans, risk-leans, scalp-lean-filter, weekly-leans, amdx, scalp-lean-threshold, exit-rules, exit-8h, scalp-exit-5m, divergence-playout, divergence-playout2, scalp-div-playout, scalp-asia, weekly-picks-record, reversal-timing, flip-regime, risk-shape, weekly-sfp]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate, tp-reached, tp-reached-1w, strength-tier, order-blocks, volume-profile, volume-profile-4h, polymarket-check, macro-leans, risk-leans, scalp-lean-filter, weekly-leans, amdx, scalp-lean-threshold, exit-rules, exit-8h, scalp-exit-5m, divergence-playout, divergence-playout2, scalp-div-playout, scalp-asia, weekly-picks-record, reversal-timing, flip-regime, risk-shape, weekly-sfp, weekly-sfp-forward]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -583,6 +583,8 @@ jobs:
             python -m close_record --telegram
           elif [ "$STUDY" = "hl-liq-check" ]; then
             python -m hl_liq_check --telegram --wallets 1200 --budget 175
+          elif [ "$STUDY" = "weekly-sfp-forward" ]; then
+            python -m weekly_sfp_test --forward --telegram --days 400
           elif [ "$STUDY" = "weekly-sfp" ]; then
             python -m weekly_sfp_test --telegram --days 3400
           elif [ "$STUDY" = "risk-shape" ]; then
