@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '281';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '282';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -2317,6 +2317,10 @@ function renderDivWatch(w, tf) {
   const when = w.prev_ts ? new Date(w.prev_ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   const t = document.getElementById('divWatchTitle');
   const closedKind = w.kind === 'forming';
+  const sub = document.getElementById('divWatchSub');
+  if (sub) sub.textContent = closedKind
+    ? 'unconfirmed swing · closed candles · not scored'
+    : 'unconfirmed · forming candle · not scored';
   const whenNow = w.live_ts ? new Date(w.live_ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'now';
   if (t) t.textContent = closedKind
     ? `⏳ Forming — ${bull ? 'bullish' : 'bearish'} divergence on closed candles${tf ? ` (${tf})` : ''}`

@@ -110,3 +110,11 @@ def test_forming_shown_when_no_live_watch():
     assert "renderDivWatch(a.rsi_live_watch || a.rsi_forming_watch, a.timeframe)" in js
     src = open(os.path.join(root, "backend", "app.py"), encoding="utf-8").read()
     assert '"rsi_forming_watch": _rsi_forming_watch(spot, timeframe)' in src
+
+
+def test_subtitle_matches_the_kind():
+    root = os.path.join(os.path.dirname(__file__), "..")
+    js = open(os.path.join(root, "dashboard", "js", "dashboard.js"), encoding="utf-8").read()
+    assert "'unconfirmed swing · closed candles · not scored'" in js
+    html = open(os.path.join(root, "dashboard", "index.html"), encoding="utf-8").read()
+    assert 'id="divWatchSub"' in html
