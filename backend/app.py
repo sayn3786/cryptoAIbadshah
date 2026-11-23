@@ -3593,7 +3593,8 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None, mone
                     continue
                 t = _sf.open_trade(sym, sig, candles)
                 if t:
-                    t = _ms.tag(_ll.tag(t, ln), money)
+                    import size_cap as _szc
+                    t = _szc.tag_paper(_ms.tag(_ll.tag(t, ln), money), book)
                     book.append(t)
                     opened.append(t)
             if closed or opened or voided:
@@ -3611,8 +3612,16 @@ def _sig1d_daily(*, fetch_fn=None, signal_fn=None, notify=True, leans=None, mone
                     for t in voided:
                         _scalp_private(f"⚠️ Paper trade voided: {t['symbol']} {t['direction']} — "
                                        f"{t['void_reason']}. It does not count in the book.")
+                    _cmp = None
+                    if closed:
+                        import size_cap as _szc
+                        _cmp = _szc.paper_compare(book)
                     for t in closed:
-                        _scalp_private(_sf.closed_note(t, tally))
+                        _scalp_private(_sf.closed_note(t, tally)
+                                       + (f" · size-capped record: {_cmp['pnl_capped_usd']:+.2f}$ (max DD "
+                                          f"{_cmp['dd_capped_usd']:.2f}$) vs {_cmp['pnl_full_usd']:+.2f}$ (max DD "
+                                          f"{_cmp['dd_full_usd']:.2f}$) on {_cmp['trades']} trades"
+                                          if _cmp and _cmp["trades"] else ""))
                 except Exception:
                     pass
             return {"ran": True, "opened": len(opened), "closed": len(closed), "voided": len(voided),
@@ -3643,6 +3652,14 @@ def _money_views(book) -> dict:
         return {"error": type(exc).__name__}
 
 
+def _size_cap_view(book) -> dict:
+    try:
+        import size_cap as _szc
+        return {**_szc.paper_compare(book), "rule": _szc.NOTE}
+    except Exception as exc:
+        return {"error": type(exc).__name__}
+
+
 def _sig1d_view() -> dict:
     import sig1d_forward as _sf
     import liq_lean_shadow as _ll
@@ -3652,6 +3669,7 @@ def _sig1d_view() -> dict:
             "liq_lean_shadow": {**_ll.verdict(book, shadow, int(time.time() * 1000)),
                                 "summary": _sf.summary(shadow), "recent": shadow[-20:]},
             "money_lean_shadow": _money_views(book),
+            "size_cap": _size_cap_view(book),
             "rule": (f"each coin's 1D signal (price + Fear & Greed, as tested) at strength >= "
                      f"{_sf.FLOOR:g} on the latest closed day, {len(_sf.UNIVERSE)} coins; stop and "
                      f"target {_sf.ATR_MULT:g} x 1D ATR each, max {_sf.HOLD_DAYS} days, "
@@ -6061,14 +6079,44 @@ def _close_compute(tf: str, now: datetime, *, build=None, higher=None) -> dict:
             "candidates": len(passed)}
 
 
+def _close_size_hints(sets: dict, new_ids, *, store=None) -> dict:
+    """{symbol: size hint} for today's 1D picks (size_cap): the 1D picks
+    already active the same way, then each new pick in strength order."""
+    try:
+        import size_cap as _szc
+        daily = list(sets.get(close_publish.DAILY) or [])
+        if not daily:
+            return {}
+        if store is None:
+            import db as _db
+            if not _db.db_configured():
+                return {}
+            import signal_store as store
+        new = {str(x) for x in new_ids if x is not None}
+        counts = {"LONG": 0, "SHORT": 0}
+        for r in store.list_active_signals(environment=_deploy_env(), limit=500):
+            if str(r.get("timeframe") or "") != close_publish.DAILY or str(r.get("id")) in new:
+                continue
+            if r.get("strategy_name") and r.get("strategy_name") != close_publish.STRATEGY_NAME:
+                continue
+            d = str(r.get("direction") or "").upper()
+            if d in counts:
+                counts[d] += 1
+        daily.sort(key=lambda r: -float(r.get("strength") or 0))
+        return _szc.batch(counts, [(r.get("symbol"), r.get("direction")) for r in daily])
+    except Exception:
+        return {}
+
+
 def _close_send(sets: dict, now: datetime) -> bool:
     """The grouped morning post: the public channel, plus a copy to the
     private chats. True when the channel took it (or, with no channel set,
     the private chat did)."""
     import telegram as _tg
     import weekly_report
-    text = close_publish.build_message(sets, day=close_publish.close_day(now))
     signal_ids = [r.get("signal_id") for tf in close_publish.ORDER for r in sets.get(tf, [])]
+    text = close_publish.build_message(sets, day=close_publish.close_day(now),
+                                       size_hints=_close_size_hints(sets, signal_ids))
     token, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     sent = False
     if token and chat:

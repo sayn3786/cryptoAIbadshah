@@ -267,6 +267,7 @@ def build_row(signal: Dict[str, Any],
         # collapse below raises it. Defaulting it HERE rather than only when
         # merging means the field always exists, so the table never reads
         # undefined off a row that happened not to be merged.
+        "size_hint":     None,        # 1D size cap, filled by build_tracker
         "republished":   1,
         "signal_ids":    [signal.get("id")],
         "strategy_version": signal.get("strategy_version"),
@@ -418,6 +419,18 @@ def build_tracker(active: Sequence[Dict[str, Any]],
             continue
         closed_rows.append(build_row(s, s.get("targets"),
                                      prices.get(s.get("symbol")), now=now))
+
+    # 1D size cap (size_cap, tested): the size each 1D pick got at opening,
+    # from the same-direction 1D picks open then. Within this window only.
+    try:
+        import size_cap
+        hints = size_cap.tracker_hints(live_rows + closed_rows)
+        for r in live_rows + closed_rows:
+            h = hints.get(str(r.get("signal_id")))
+            if h:
+                r["size_hint"] = h
+    except Exception:
+        pass
 
     live_rows = collapse_republished(live_rows)
     live_rows.sort(key=lambda r: (r["opened_at"] or ""), reverse=True)
