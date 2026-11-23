@@ -253,3 +253,8 @@ def test_the_monitor_gives_close_trades_their_own_clock(monkeypatch):
     assert seen["1W"] == (72, 28 * 24)
     assert seen["2H"] == (sm.DEFAULT_FILL_WINDOW_HOURS, sm.DEFAULT_MAX_AGE_HOURS)
     assert cp.MONITOR_TF == {"1D": "1H", "BW": "4H", "1W": "4H"}
+
+
+def test_weekly_picks_carry_the_not_yet_proven_note():
+    assert cp.WEEKLY_NOTE in cp.build_message({"1D": [], "BW": []}, day=SAT)
+    assert cp.WEEKLY_NOTE not in cp.build_message({"1D": []}, day=SAT)
