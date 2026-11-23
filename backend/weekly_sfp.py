@@ -3,10 +3,12 @@ The weekly BULLISH swing failure (SFP), live - display only, never scored.
 
 A closed weekly candle wicks below the lowest low of the prior 26 weeks and
 CLOSES back above that level (the stops under a 6-month low are taken, price
-is reclaimed). weekly_sfp_test (pre-registered, Nov 23 2026) found it
-marked a reversal in both eras: LONG from the weekly close won 78% before
-2022 and 68% since, vs 66% / 51% for a long every week. The bearish mirror
-(a 26-week high swept) had no edge, so it is not shown.
+is reclaimed). weekly_sfp_test (pre-registered, Nov 23 2026): per trade,
+LONG from the weekly close won 78% before 2022 and 68% since (vs 66% / 51%
+for any week) - but its robustness check, each week counted once, held only
+before 2022 (65%); since 2022 it is a coin flip (49%, 87 weeks). The edge
+came from a few market-wide sweep weeks. So it is shown NEUTRAL, as context.
+The bearish mirror (a 26-week high swept) had no edge, so it is not shown.
 
 Shown for 4 weeks after the sweep, with whether price still holds the level.
 """
@@ -18,8 +20,9 @@ from typing import Dict, Optional, Sequence
 LOOK_W = 26
 SHOW_W = 4
 WEEK_MS = 7 * 86_400_000
-NOTE = ("tested since 2018 (weekly_sfp_test): long from the weekly close won 78% before 2022 / 68% since, "
-        "vs 66% / 51% for any week · bearish sweeps had no edge · context only, not scored")
+NOTE = ("tested since 2018 (weekly_sfp_test): per trade it won 78% before 2022 / 68% since, but counted once per "
+        "WEEK only 65% / 49% - the edge came from a few market-wide sweep weeks (many coins at once), not from a "
+        "typical sweep · bearish sweeps had no edge · context only, not scored")
 
 
 def bullish_level(weeks: Sequence[Dict], i: int) -> Optional[float]:

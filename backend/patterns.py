@@ -2558,7 +2558,8 @@ def build_structure_panel(analysis: Dict) -> Optional[Dict]:
     _sfp = analysis.get("weekly_sfp")
     if _sfp:
         ago = "this week" if _sfp["weeks_ago"] == 0 else f"{_sfp['weeks_ago']} week{'s' if _sfp['weeks_ago'] > 1 else ''} ago"
-        row("Weekly SFP", f"BULLISH · {_sfp['level']:,.4f}", "bull" if _sfp["holding"] else "neutral",
+        # neutral: per-week robustness failed since 2022 (weekly_sfp_test)
+        row("Weekly SFP", f"BULLISH · {_sfp['level']:,.4f}", "neutral",
             f"week closed {_sfp['closed']} ({ago}): wick to {_sfp['wick_low']:,.4f} under the 26-week low, closed back "
             f"above · price {'holds' if _sfp['holding'] else 'LOST'} the level ({_sfp['dist_pct']:+.1f}%) · "
             + _sfp["note"])
