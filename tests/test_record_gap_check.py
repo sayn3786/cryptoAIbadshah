@@ -13,11 +13,15 @@ def test_reason_of():
 
 
 def test_summarize_splits_the_gap():
-    pairs = [{"reason": "early exit (opposite signal)", "tracker": -0.4, "resettled": 0.6, "re_outcome": "tp2"},
-             {"reason": "all targets", "tracker": 1.0, "resettled": 1.0, "re_outcome": "tp3"},
-             {"reason": "stop (incl. at entry after TP1)", "tracker": -1.0, "resettled": None, "re_outcome": None}]
+    pairs = [{"reason": "early exit (opposite signal)", "tracker": -0.4, "resettled": 0.6, "re_outcome": "tp2", "live_kind": "x"},
+             {"reason": "all targets", "tracker": 1.0, "resettled": 1.0, "re_outcome": "tp3", "live_kind": "x"},
+             {"reason": "stop (incl. at entry after TP1)", "tracker": -1.0, "resettled": None, "re_outcome": None,
+              "live_kind": "full stop, no TP1"},
+             {"reason": "stop (incl. at entry after TP1)", "tracker": 0.3, "resettled": 0.9, "re_outcome": "tp1+expired",
+              "live_kind": "TP1 then stopped at entry"}]
     s = g.summarize(pairs)
-    assert s["matched"]["n"] == 2 and s["matched"]["gap_r"] == 1.0
-    assert s["by_reason"]["early exit (opposite signal)"]["share"] == 100
+    assert s["matched"]["n"] == 3 and s["matched"]["gap_r"] == 1.6
+    assert s["live_kinds"]["TP1 then stopped at entry"]["n"] == 1
+    assert s["by_reason"]["early exit (opposite signal)"]["share"] == 62
     assert s["only_tracker"]["n"] == 1 and s["only_tracker"]["tracker"] == -1.0
     assert "re-settled" in g.render_telegram(s)

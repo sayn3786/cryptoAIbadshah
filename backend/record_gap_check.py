@@ -56,8 +56,15 @@ def pair(rows: Sequence[Dict], h4: Dict[str, List[Dict]], tf: str = cp.DAILY) ->
             continue
         rec = cr.to_rec(r)
         res = cpc.settle(rec, h4.get(rec["symbol"]) or []) if rec else None
+        tp1 = any(int(x.get("target_number") or 0) == 1 and x.get("hit_at") for x in r.get("targets") or [])
+        try:
+            at_entry = abs(float(r.get("close_price")) / float(r["entry_price"]) - 1) < 0.002
+        except (TypeError, ValueError, KeyError, ZeroDivisionError):
+            at_entry = False
         out.append({"reason": reason_of(r), "tracker": t, "resettled": res["r"] if res else None,
-                    "re_outcome": res["outcome"] if res else None})
+                    "re_outcome": res["outcome"] if res else None,
+                    "live_kind": ("TP1 then stopped at entry" if tp1 and at_entry else
+                                  "TP1 then stopped (not at entry)" if tp1 else "full stop, no TP1")})
     return out
 
 
@@ -84,7 +91,18 @@ def summarize(pairs: Sequence[Dict]) -> Dict:
     only_by = {}
     for p in only:
         only_by.setdefault(p["reason"], []).append(p["tracker"])
-    return {"all": {"n": len(pairs), "tracker": avg(p["tracker"] for p in pairs)},
+    stops = [p for p in matched if p["reason"].startswith("stop")]
+    kinds = {}
+    for p in stops:
+        k = kinds.setdefault(p["live_kind"], {"n": 0, "tracker": [], "resettled": [], "re_out": {}})
+        k["n"] += 1
+        k["tracker"].append(p["tracker"])
+        k["resettled"].append(p["resettled"])
+        k["re_out"][p["re_outcome"]] = k["re_out"].get(p["re_outcome"], 0) + 1
+    live_kinds = {a: {"n": b["n"], "tracker": avg(b["tracker"]), "resettled": avg(b["resettled"]),
+                      "re_out": b["re_out"]} for a, b in kinds.items()}
+    return {"live_kinds": live_kinds,
+            "all": {"n": len(pairs), "tracker": avg(p["tracker"] for p in pairs)},
             "matched": {"n": len(matched), "tracker": avg(p["tracker"] for p in matched),
                         "resettled": avg(p["resettled"] for p in matched), "gap_r": round(gap_total, 2)},
             "only_tracker": {"n": len(only), "tracker": avg(p["tracker"] for p in only),
@@ -106,6 +124,12 @@ def render_telegram(s: Dict) -> str:
         outs = ", ".join(f"{a} {b}" for a, b in v["re_out"].items())
         L.append(f"   • {k}: {v['n']} · tracker {v['tracker']}R → re-settled {v['resettled']}R · gap {v['gap_r']:+}R "
                  f"({v['share']}% of it) · re-settled ended as: {outs}")
+    if s.get("live_kinds"):
+        L += ["", "3) The tracker's stopped trades, by what happened live:"]
+        for k, v in s["live_kinds"].items():
+            outs = ", ".join(f"{a} {b}" for a, b in v["re_out"].items())
+            L.append(f"   • {k}: {v['n']} · tracker {v['tracker']}R → re-settled {v['resettled']}R · "
+                     f"re-settled ended as: {outs}")
     L += ["", "Read-only: nothing live changes. Tracker R is before fees; re-settled includes them."]
     return "\n".join(L)
 
