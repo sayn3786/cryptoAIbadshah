@@ -63,13 +63,16 @@ def tracker_hints(rows: Sequence[Dict], timeframe: str = "1D") -> Dict[str, Dict
     out = {}
     for i, r in enumerate(mine):
         t0 = _ts(r["opened_at"])
-        k = 0
+        coins = set()             # each coin once: a republished setup is one trade
         for p in mine[:i]:
             if p.get("direction") != r.get("direction") or _ts(p["opened_at"]) >= t0:
                 continue
+            if p.get("symbol") == r.get("symbol"):
+                continue
             end = _ts(p.get("closed_at"))
             if end is None or end > t0:
-                k += 1
+                coins.add(p.get("symbol"))
+        k = len(coins)
         if r.get("signal_id") is not None:
             out[str(r["signal_id"])] = {"size": factor(k), "open": k}
     return out

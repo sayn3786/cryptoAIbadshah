@@ -11,7 +11,7 @@
 
    The old single stamp read the query string and called itself "the build",
    which is the shell's answer to a question about the code.                  */
-const CODE_BUILD = '287';                 // bump with index.html's ?v= — tested
+const CODE_BUILD = '288';                 // bump with index.html's ?v= — tested
 const SHELL_BUILD = (() => {
   try {
     const src = (document.currentScript && document.currentScript.src) || '';
@@ -9003,6 +9003,17 @@ function _tkExcursion(row) {
        + `<span class="tk-pos">${up}</span> / <span class="tk-neg">${dn}</span></div>`;
 }
 
+/* Badges under the symbol, on their own line so they never run into the
+   Side column (the symbol cell does not wrap). */
+function _tkBadges(row) {
+  const b = [];
+  if (row.size_hint && row.size_hint.size < 1)
+    b.push(`<span class="tk-size" title="1D size cap (tested): ${row.size_hint.open} ${row.direction}s were already open when this opened, so it gets ${row.size_hint.size}× the normal risk. Full size while fewer than 3 are open the same way, then 3 ÷ (open + 1).">size ${row.size_hint.size}×</span>`);
+  if (['1W', 'BW'].includes(row.timeframe))
+    b.push(`<span class="tk-unproven" title="Weekly picks are not yet proven: the 1W backtest since 2022 is a coin flip (46% wins, -0.04R). Judged once 30 weekly trades (5+ longs) have closed.">not yet proven</span>`);
+  return b.length ? `<div class="tk-badges">${b.join('')}</div>` : '';
+}
+
 function _tkRow(row) {
   const dir = (row.direction || '').toLowerCase();
   const status = (row.status || '').toLowerCase();
@@ -9028,15 +9039,9 @@ function _tkRow(row) {
 
   return `<tr>
     <td class="tk-sym">${row.symbol}<span class="tk-tf">${row.timeframe || ''}</span>${
-      (row.size_hint && row.size_hint.size < 1)
-        ? `<span class="tk-size" title="1D size cap (tested): ${row.size_hint.open} ${row.direction}s were already open when this opened, so it gets ${row.size_hint.size}× the normal risk. Full size while fewer than 3 are open the same way, then 3 ÷ (open + 1).">${row.size_hint.size}×</span>`
-        : ''}${
-      ['1W', 'BW'].includes(row.timeframe)
-        ? `<span class="tk-unproven" title="Weekly picks are not yet proven: the 1W backtest since 2022 is a coin flip (46% wins, -0.04R). Judged once 30 weekly trades (5+ longs) have closed.">not yet proven</span>`
-        : ''}${
       row.republished > 1
         ? `<span class="tk-rep" title="Republished on ${row.republished} candles with the same levels — one setup, not ${row.republished} trades">×${row.republished}</span>`
-        : ''}</td>
+        : ''}${_tkBadges(row)}</td>
     <td><span class="tk-dir ${dir}">${row.direction}</span></td>
     <td><span class="tk-status ${status}">${_TK_STATUS_LABEL[row.status] || row.status}</span></td>
     <td class="tk-num">${fmtPrice(row.entry)}${entryGap}</td>
