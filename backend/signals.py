@@ -1245,6 +1245,23 @@ DIV_RECENCY_FLOOR = 0.40
 REVERSAL_FRONT_FRESH_BARS = 1
 
 
+def confirmed_divergence_played_out(div: Dict, analysis: Dict) -> bool:
+    """A confirmed divergence whose called move has run: the last close 3%+
+    beyond its second pivot in the called direction and RSI back across 50."""
+    piv = (((div or {}).get("points") or {}).get("curr") or {}).get("price")
+    rsi = analysis.get("rsi")
+    cs = analysis.get("candles") or []
+    if piv is None or rsi is None or not cs:
+        return False
+    close, piv, rsi = float(cs[-1]["close"]), float(piv), float(rsi)
+    kind = str((div or {}).get("type") or "")
+    if "bullish" in kind:
+        return close > piv * 1.03 and rsi >= 50
+    if "bearish" in kind:
+        return close < piv * 0.97 and rsi <= 50
+    return False
+
+
 def divergence_at_extreme(div: Dict) -> bool:
     """Did the divergence form at an RSI extreme? A bullish one needs a pivot
     at an OVERSOLD bottom (RSI <= 40), a bearish one a pivot at an OVERBOUGHT
@@ -2599,7 +2616,18 @@ def generate_signal(analysis: Dict) -> Dict:
     # oversold bottom (bullish) / overbought top (bearish). Elsewhere: none.
     div_off_extreme = bool(analysis.get("div_need_extreme")) and bool(div_type) \
         and not divergence_at_extreme(rsi_div)
+    # Played-out CONFIRMED divergence (divergence_playout_test, Nov 23 2026):
+    # its move has run - price 3%+ beyond the second pivot in the called
+    # direction and RSI back across 50. "div_zero_played_out" (live on 1D,
+    # passed both eras) scores it 0; "div_flip_played_out" (a test variant)
+    # scores it for the OTHER side.
+    _po = (bool(div_type) and not div_forming and not div_played_out
+           and (analysis.get("div_zero_played_out") or analysis.get("div_flip_played_out"))
+           and confirmed_divergence_played_out(rsi_div, analysis))
+    _div_sgn = -1 if (_po and analysis.get("div_flip_played_out")) else 1
     if div_off_extreme:
+        pass
+    elif _po and analysis.get("div_zero_played_out") and _div_sgn == 1:
         pass
     elif div_played_out and div_type:
         # Spent divergence: recovery already ran. Add no points and paint no
@@ -2609,20 +2637,24 @@ def generate_signal(analysis: Dict) -> Dict:
         pass
     elif div_type == "bullish":
         pts = _decay(8 if div_forming else (18 if div_str >= 5 else 12))
+        pts *= _div_sgn
         score += pts; g['momentum'] += pts
-        bull_reasons.append(div_desc or "Bullish RSI divergence — price lower low, RSI higher low")
+        (bull_reasons if _div_sgn > 0 else bear_reasons).append(div_desc or "Bullish RSI divergence — price lower low, RSI higher low")
     elif div_type == "bearish":
         pts = _decay(8 if div_forming else (18 if div_str >= 5 else 12))
+        pts *= _div_sgn
         score -= pts; g['momentum'] -= pts
-        bear_reasons.append(div_desc or "Bearish RSI divergence — price higher high, RSI lower high")
+        (bear_reasons if _div_sgn > 0 else bull_reasons).append(div_desc or "Bearish RSI divergence — price higher high, RSI lower high")
     elif div_type == "hidden_bullish":
         pts = _decay(14 if div_str >= 5 else 10)
+        pts *= _div_sgn
         score += pts; g['momentum'] += pts
-        bull_reasons.append(div_desc or "Hidden bullish divergence — price higher low, RSI lower low (uptrend continuation)")
+        (bull_reasons if _div_sgn > 0 else bear_reasons).append(div_desc or "Hidden bullish divergence — price higher low, RSI lower low (uptrend continuation)")
     elif div_type == "hidden_bearish":
         pts = _decay(14 if div_str >= 5 else 10)
+        pts *= _div_sgn
         score -= pts; g['momentum'] -= pts
-        bear_reasons.append(div_desc or "Hidden bearish divergence — price lower high, RSI higher high (downtrend continuation)")
+        (bear_reasons if _div_sgn > 0 else bull_reasons).append(div_desc or "Hidden bearish divergence — price lower high, RSI higher high (downtrend continuation)")
 
     # ── Diagonal trendlines — LOCAL (trigger) + MACRO (bias filter) ───────────
     _mark('trendlines', score)

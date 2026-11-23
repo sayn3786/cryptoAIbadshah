@@ -55,6 +55,7 @@ def signal(candles: Sequence[Dict], sym: str, fear_greed: Optional[Dict]) -> Dic
     import candle_analysis as ca
     import signals
     a = ca.build_candle_analysis(list(candles), "1D", sym)
+    a["div_zero_played_out"] = True      # as the live 1D score (divergence_playout_test)
     if fear_greed and fear_greed.get("value") is not None:
         a["fear_greed"] = dict(fear_greed)
     return signals.generate_signal(a)
