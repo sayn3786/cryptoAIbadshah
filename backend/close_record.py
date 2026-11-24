@@ -178,6 +178,13 @@ def render_telegram(res: Dict) -> str:
             lines.append(f"  random direction: {r['random_r_mean']:+.1f}R avg, best 5% "
                          f"{r['random_r_p95']:+.1f}R → "
                          + ("beats" if r["beats_random"] else "does NOT beat") + " random")
+            if tf == cp.DAILY:
+                # record_gap_check (Nov 23 2026): 4H candles hide a dip back to
+                # entry after TP1 that the tracker's 1H candles see, so the
+                # re-settled figure overstates the 1D picks.
+                lines.append("  ⚠️ the re-settled R overstates 1D: on 4H candles a dip back to entry after TP1 "
+                             "is invisible, so trades the live stop closed at entry run on. Read the tracker "
+                             "R as the real result; use re-settled only for the vs-random check.")
         n = (r or {}).get("trades") or 0
         if n < MIN_TRADES:
             lines.append(f"  too early: {n} finished trades of the {MIN_TRADES} needed to judge")
