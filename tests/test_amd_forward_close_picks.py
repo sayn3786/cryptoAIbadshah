@@ -385,3 +385,15 @@ def test_history_endpoint_attaches_targets_on_request(monkeypatch):
     got = c.get("/api/signals/history?include_targets=1&strategy_version=v60_close_top5").get_json()
     assert got["items"][0]["targets"] == [{"target_number": 1}]
     assert calls[-1]["strategy_version"] == "v60_close_top5"
+
+
+def test_record_report_flags_the_1d_resettled_figure():
+    r = {"trades": 40, "passes": True, "win_rate_pct": 70.0, "avg_r": 0.3, "r_total": 12.0, "pnl_usd": 120,
+         "pf": 2.0, "random_r_mean": -1.0, "random_r_p95": 3.0, "beats_random": True}
+    t = {"picks": 50, "trades": 45, "unfilled": 2, "running": 3, "win_rate_pct": 70.0, "avg_r": 0.05,
+         "r_total": 2.0, "pf": 1.2}
+    empty = {"tracker": {"picks": 0}, "resettled": None}
+    res = {"since": 20380 * DAY, "rows": 50,
+           "by_tf": {"1D": {"tracker": t, "resettled": r}, "BW": empty, "1W": empty}}
+    text = cr.render_telegram(res)
+    assert "overstates 1D" in text and text.count("overstates") == 1
