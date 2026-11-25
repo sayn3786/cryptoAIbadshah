@@ -103,7 +103,8 @@ def action_ok(resp: Any):
 def _exchange(env: Optional[str] = None):
     from eth_account import Account                       # lazy: only when sending
     from hyperliquid.exchange import Exchange
-    key = (os.getenv("HYPERLIQUID_AGENT_KEY") or "").strip()
+    over = hl_account.override_key()
+    key = over if over is not None else (os.getenv("HYPERLIQUID_AGENT_KEY") or "").strip()
     if not key:
         raise RuntimeError("HYPERLIQUID_AGENT_KEY not set")
     wallet = Account.from_key(key)

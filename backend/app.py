@@ -6689,18 +6689,105 @@ def api_hl_manage():
         if guard:
             return guard
     import hl_account as _hl
+    one_d = _hl_1d_pass()           # the 1D book's own testnet account (hl_1d)
     if not _hl.configured():
-        return jsonify({"ok": False, "error_code": "HL_NOT_CONFIGURED"}), 503
+        return jsonify({"ok": False, "error_code": "HL_NOT_CONFIGURED", "hl_1d": one_d}), 503
     try:
         import hl_manage
         with _hl_execute_lock:
             out = hl_manage.run()
         _alert_manager_pass(out)
-        return jsonify(out)
+        return jsonify({**out, "hl_1d": one_d})
     except Exception:
         app.logger.exception("hyperliquid position manager failed")
         return jsonify({"ok": False, "error_code": "HL_MANAGE_FAILED",
                         "error": "Hyperliquid position manager failed"}), 502
+
+
+# ── The 1D picks on their own Hyperliquid testnet account (hl_1d) ───────────
+HL1D_TTL = 120 * 86_400
+
+
+def _hl_1d_key() -> str:
+    return f"hl1d:book:{_deploy_env()}"
+
+
+def _hl_1d_book() -> dict:
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(_hl_1d_key()) or "{}")
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
+
+
+def _hl_1d_status_fn():
+    """signal_id -> the tracker's status (None when unknown), cached per pass."""
+    cache = {}
+
+    def status(sid):
+        if sid not in cache:
+            try:
+                import signal_store as _st
+                row = _st.get_signal(sid)
+                cache[sid] = str(row.get("status") or "").upper() if row else None
+            except Exception:
+                cache[sid] = None
+        return cache[sid]
+    return status
+
+
+def _hl_1d_pass(now_ms=None) -> dict:
+    """One pass of the 1D book: place today's 1D close picks, follow the
+    tracker, then the position manager (stop to entry after TP1, orphan
+    clean-up) on the 1D account. Testnet only. Never raises."""
+    import hl_1d as _h1
+    g = _h1.gate()
+    if not g["ok"]:
+        return {"ran": False, "reasons": g["reasons"]}
+    try:
+        import hl_account as _ha
+        import hl_manage
+        now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+        now = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
+        picks = list((_close_load(close_publish.close_key(now), close_publish.DAILY) or {}).get("recs") or [])
+        book = _hl_1d_book()
+        with _hl_execute_lock, _ha.using(_h1.address(), _h1.key(), _h1.TAG):
+            # "test": one trade ever (none while the book holds any), then only follow it
+            cap = (0 if book else 1) if g["mode"] == "test" else None
+            res = _h1.step(book, picks, io=_h1.real_io(status_fn=_hl_1d_status_fn()), now_ms=now_ms,
+                           max_new=cap)
+            try:
+                import kv as _kv
+                _kv.set_value(_hl_1d_key(), json.dumps(_h1.trim(book)), ttl_seconds=HL1D_TTL)
+            except Exception:
+                res["errors"].append({"step": "save", "error": "KV"})
+            mng = hl_manage.run(env=_h1.ENV, evidence=False)
+        for kind in ("placed", "filled", "closed"):
+            for r in res[kind]:
+                _scalp_private(_h1.note(kind, r))
+        return {"ran": True, "mode": g["mode"], "placed": len(res["placed"]), "filled": len(res["filled"]),
+                "closed": len(res["closed"]), "skipped": res["skipped"], "errors": res["errors"],
+                "manager": {"actions": mng.get("actions"), "reason": mng.get("reason")},
+                **_h1.summary(book)}
+    except Exception as exc:
+        app.logger.exception("hl 1d pass failed")
+        return {"ran": False, "error": type(exc).__name__}
+
+
+@app.get("/api/hl/1d")
+def api_hl_1d():
+    """The 1D testnet book: switches, sizing, and its trades. Admin only."""
+    guard = _require_hl_admin()
+    if guard:
+        return guard
+    import hl_1d as _h1
+    import hl_account as _ha
+    book = _hl_1d_book()
+    rows = sorted(book.values(), key=lambda r: r.get("placed_ms") or 0)[-60:]
+    return jsonify({"gate": _h1.gate(), "config": _h1.cfg(), "network": _h1.ENV,
+                    "account": _ha._mask(_h1.address()) if _h1.address() else None,
+                    "summary": _h1.summary(book), "trades": rows})
 
 
 # How far back the every-minute manager looks for fully-closed trades to alert

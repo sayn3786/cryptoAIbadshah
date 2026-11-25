@@ -56,7 +56,8 @@ def kill_switch_on() -> bool:
 
 def agent_key_present() -> bool:
     """True when the agent key is set. We never read or return the value."""
-    return bool((os.getenv("HYPERLIQUID_AGENT_KEY") or "").strip())
+    over = hl_account.override_key()
+    return bool(over if over is not None else (os.getenv("HYPERLIQUID_AGENT_KEY") or "").strip())
 
 
 def arm_status() -> Dict[str, Any]:
