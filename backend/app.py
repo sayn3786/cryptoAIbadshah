@@ -6753,7 +6753,10 @@ def _hl_1d_pass(now_ms=None) -> dict:
         picks = list((_close_load(close_publish.close_key(now), close_publish.DAILY) or {}).get("recs") or [])
         book = _hl_1d_book()
         with _hl_execute_lock, _ha.using(_h1.address(), _h1.key(), _h1.TAG):
-            res = _h1.step(book, picks, io=_h1.real_io(status_fn=_hl_1d_status_fn()), now_ms=now_ms)
+            # "test": one trade ever (none while the book holds any), then only follow it
+            cap = (0 if book else 1) if g["mode"] == "test" else None
+            res = _h1.step(book, picks, io=_h1.real_io(status_fn=_hl_1d_status_fn()), now_ms=now_ms,
+                           max_new=cap)
             try:
                 import kv as _kv
                 _kv.set_value(_hl_1d_key(), json.dumps(_h1.trim(book)), ttl_seconds=HL1D_TTL)
@@ -6763,7 +6766,7 @@ def _hl_1d_pass(now_ms=None) -> dict:
         for kind in ("placed", "filled", "closed"):
             for r in res[kind]:
                 _scalp_private(_h1.note(kind, r))
-        return {"ran": True, "placed": len(res["placed"]), "filled": len(res["filled"]),
+        return {"ran": True, "mode": g["mode"], "placed": len(res["placed"]), "filled": len(res["filled"]),
                 "closed": len(res["closed"]), "skipped": res["skipped"], "errors": res["errors"],
                 "manager": {"actions": mng.get("actions"), "reason": mng.get("reason")},
                 **_h1.summary(book)}

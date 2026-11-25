@@ -179,3 +179,16 @@ def test_account_switch_is_scoped(monkeypatch):
         assert ha.account_address() == "0xone" and ha.override_key() == "onekey"
         assert ha.scope_tag() == ":1d" and hx.agent_key_present()
     assert ha.account_address() == "0xmain" and ha.override_key() is None
+
+
+def test_max_new_places_only_one(monkeypatch):
+    io = FakeIO(mids={"SOL": 100.0, "ETH": 2000.0})
+    out = h.step({}, [pick(), pick("ETH", sid="s2", entry=2000, sl=1900, tps=(2100, 2200), strength=80)],
+                 io=io, now_ms=0, conf=CONF, max_new=1)
+    assert [r["coin"] for r in out["placed"]] == ["ETH"]
+    out = h.step({}, [pick()], io=FakeIO(mids={"SOL": 100.0}), now_ms=0, conf=CONF, max_new=0)
+    assert not out["placed"]
+    monkeypatch.setenv("HL_1D_EXECUTE", "test")
+    assert h.mode() == "test"
+    monkeypatch.setenv("HL_1D_EXECUTE", "1")
+    assert h.mode() == "on"

@@ -6,7 +6,9 @@ a second testnet account, so each book has its own record:
   HYPERLIQUID_1D_ACCOUNT_ADDRESS   the account (0x...)
   HYPERLIQUID_1D_AGENT_KEY         its API (agent) wallet key - can trade,
                                    cannot withdraw
-  HL_1D_EXECUTE=1                  the switch (default OFF)
+  HL_1D_EXECUTE=1                  the switch (default OFF); "test" places
+                                   ONE trade only (the first valid pick)
+                                   and then just follows it
   HL_1D_RISK_USD                   $ lost at the stop, full size (default 10)
   HL_1D_LEVERAGE                   leverage, capped by HL's max (default 5)
   HL_1D_MAX_EXPOSURE_USD           the book's total notional (default 5000)
@@ -66,10 +68,16 @@ def key() -> str:
     return os.getenv("HYPERLIQUID_1D_AGENT_KEY", "").strip()
 
 
+def mode() -> str:
+    """"on", "test" (one trade, then only follow it) or "off"."""
+    v = os.getenv("HL_1D_EXECUTE", "").strip().lower()
+    return "test" if v == "test" else "on" if _flag("HL_1D_EXECUTE") else "off"
+
+
 def gate() -> Dict[str, Any]:
     """Whether the 1D book may act, and why not. No secret is revealed."""
     why = []
-    if not _flag("HL_1D_EXECUTE"):
+    if mode() == "off":
         why.append("HL_1D_EXECUTE is off")
     if not address():
         why.append("HYPERLIQUID_1D_ACCOUNT_ADDRESS is not set")
@@ -82,7 +90,7 @@ def gate() -> Dict[str, Any]:
     a = address()
     if a and a.lower() == os.getenv("HYPERLIQUID_ACCOUNT_ADDRESS", "").strip().lower():
         why.append("the 1D account must not be the scalp's account")
-    return {"ok": not why, "reasons": why, "env": ENV}
+    return {"ok": not why, "reasons": why, "env": ENV, "mode": mode()}
 
 
 def cfg() -> Dict[str, float]:
@@ -123,7 +131,7 @@ def _active(rec: Dict[str, Any]) -> bool:
 
 
 def step(book: Dict[str, Dict[str, Any]], picks: List[Dict[str, Any]], *, io: Any,
-         now_ms: int, conf: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+         now_ms: int, conf: Optional[Dict[str, float]] = None, max_new: Optional[int] = None) -> Dict[str, Any]:
     """One pass. `book` {signal_id: record} is updated in place. `io` supplies:
       positions() -> [{coin, side, size, entry_px}]     table() -> asset table
       mid(coin) -> float|None                           status(signal_id) -> tracker status|None
@@ -190,6 +198,8 @@ def step(book: Dict[str, Dict[str, Any]], picks: List[Dict[str, Any]], *, io: An
     busy = {r["coin"] for r in book.values() if _active(r)} | set(positions)
     exposure = sum(float(r.get("notional_usd") or 0) for r in book.values() if _active(r))
     for p in sorted(picks, key=lambda x: -float(x.get("strength") or 0)):
+        if max_new is not None and len(out["placed"]) >= max_new:
+            break
         sid = str(p.get("signal_id") or "")
         sym = str(p.get("symbol") or "").upper()
         if not sid or sid in book:
