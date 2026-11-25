@@ -320,6 +320,8 @@ name: Strategy backtests (private Telegram)
 #            (backend/combo_exit_test.py; ~60-120 min)
 #   be-rule  PRE-REGISTERED: 1D picks - stop to entry after TP1 (as now) vs
 #            keep the stop / after TP2 / halfway, on 1H (backend/be_rule_test.py; ~60-120 min)
+#   amd-record  read-only: the AMD forward test's paper record (read with
+#            APP_URL + CRON_SECRET), split by first / engine exits
 #   record-gap  read-only: why the 1D live record reads differently on the
 #            tracker and re-settled (backend/record_gap_check.py; ~3 min)
 #   time-stop  PRE-REGISTERED: close a 1D trade not +0.5R within 2/3/4 days
@@ -399,7 +401,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate, tp-reached, tp-reached-1w, strength-tier, order-blocks, volume-profile, volume-profile-4h, polymarket-check, macro-leans, risk-leans, scalp-lean-filter, weekly-leans, amdx, scalp-lean-threshold, exit-rules, exit-8h, scalp-exit-5m, divergence-playout, divergence-playout2, scalp-div-playout, scalp-asia, weekly-picks-record, reversal-timing, flip-regime, risk-shape, weekly-sfp, weekly-sfp-forward, size-cap, time-stop, lean-filter-1d, record-gap, be-rule, combo-exit, scalp-more-coins]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate, tp-reached, tp-reached-1w, strength-tier, order-blocks, volume-profile, volume-profile-4h, polymarket-check, macro-leans, risk-leans, scalp-lean-filter, weekly-leans, amdx, scalp-lean-threshold, exit-rules, exit-8h, scalp-exit-5m, divergence-playout, divergence-playout2, scalp-div-playout, scalp-asia, weekly-picks-record, reversal-timing, flip-regime, risk-shape, weekly-sfp, weekly-sfp-forward, size-cap, time-stop, lean-filter-1d, record-gap, be-rule, combo-exit, scalp-more-coins, amd-record]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -605,6 +607,8 @@ jobs:
             python -m combo_exit_test --telegram --days 3400
           elif [ "$STUDY" = "be-rule" ]; then
             python -m be_rule_test --telegram --h1-days 900
+          elif [ "$STUDY" = "amd-record" ]; then
+            python -m amd_forward_record --telegram
           elif [ "$STUDY" = "record-gap" ]; then
             python -m record_gap_check --telegram
           elif [ "$STUDY" = "time-stop" ]; then
