@@ -38,8 +38,47 @@ def base_url(env: Optional[str] = None) -> str:
     return _MAINNET if _env(env) == "mainnet" else _TESTNET
 
 
+# A second account (the 1D book, hl_1d) runs inside `using(...)`: for that
+# block only, the address and the signing key come from it instead of
+# HYPERLIQUID_ACCOUNT_ADDRESS / HYPERLIQUID_AGENT_KEY. A ContextVar, so it is
+# per request/thread - code outside the block (the scalp, the 4H book) always
+# sees the main account. Threads started inside the block do NOT inherit it,
+# so the 1D book never fans out to threads.
+import contextlib
+import contextvars
+
+_ACCOUNT: "contextvars.ContextVar[Optional[Dict[str, str]]]" = contextvars.ContextVar(
+    "hl_account_override", default=None)
+
+
+@contextlib.contextmanager
+def using(address: str, key: str, tag: str):
+    tok = _ACCOUNT.set({"address": (address or "").strip(), "key": (key or "").strip(), "tag": tag})
+    try:
+        yield
+    finally:
+        _ACCOUNT.reset(tok)
+
+
+def override_key() -> Optional[str]:
+    """The signing key of the account in use, when it is not the main one."""
+    o = _ACCOUNT.get()
+    return o["key"] if o else None
+
+
+def scope_tag() -> str:
+    """'' for the main account, ':<tag>' inside using(...) (for KV keys)."""
+    o = _ACCOUNT.get()
+    return f":{o['tag']}" if o else ""
+
+
 def account_address(explicit: Optional[str] = None) -> str:
-    return (explicit or os.getenv("HYPERLIQUID_ACCOUNT_ADDRESS", "")).strip()
+    o = _ACCOUNT.get()
+    if explicit:
+        return explicit.strip()
+    if o:
+        return o["address"]
+    return os.getenv("HYPERLIQUID_ACCOUNT_ADDRESS", "").strip()
 
 
 def configured() -> bool:

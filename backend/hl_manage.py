@@ -262,7 +262,8 @@ def run(*, env: Optional[str] = None,
         cancel_fn: Optional[Callable] = None,
         close_fn: Optional[Callable] = None,
         read_fn: Optional[Callable] = None,
-        observer_fn: Optional[Callable] = None) -> Dict[str, Any]:
+        observer_fn: Optional[Callable] = None,
+        evidence: bool = True) -> Dict[str, Any]:
     """One manager pass. Never raises for an exchange rejection — each action's
     outcome is reported. I/O is injectable for tests."""
     import hl_exchange
@@ -298,7 +299,7 @@ def run(*, env: Optional[str] = None,
                    unprotected_since=since)
 
     from manager_execution_evidence import configured_observer, observed_call
-    observer = observer_fn or configured_observer(e)
+    observer = (observer_fn or configured_observer(e)) if evidence else None
     observations = []
     # Buffer in memory; database I/O happens only after ALL protective actions.
     event_sink = observations.append if observer is not None else None
@@ -366,7 +367,7 @@ def _track_unprotected(env: str, coins: List[str], now_ms: int) -> Dict[str, int
     every-minute runs; coins protected again drop out. Never raises: without a
     KV nothing is ever old enough, so no protective stop is placed."""
     import json
-    key = f"hl:unprotected:{env}"
+    key = f"hl:unprotected:{env}{hl_account.scope_tag()}"
     try:
         import kv
         seen = json.loads(kv.get_value(key) or "{}")
