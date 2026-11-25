@@ -6766,12 +6766,28 @@ def _hl_1d_pass(now_ms=None) -> dict:
         for kind in ("placed", "filled", "closed"):
             for r in res[kind]:
                 _scalp_private(_h1.note(kind, r))
+        last = {"at": datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat(timespec="seconds"),
+                "picks_today": [f"{p.get('symbol')} {p.get('direction')}" for p in picks],
+                "placed": len(res["placed"]), "skipped": res["skipped"], "errors": res["errors"],
+                "manager": {"actions": mng.get("actions"), "reason": mng.get("reason")}}
+        try:
+            import kv as _kv
+            _kv.set_value(_hl_1d_key() + ":last", json.dumps(last), ttl_seconds=2 * 86_400)
+        except Exception:
+            pass
         return {"ran": True, "mode": g["mode"], "placed": len(res["placed"]), "filled": len(res["filled"]),
                 "closed": len(res["closed"]), "skipped": res["skipped"], "errors": res["errors"],
                 "manager": {"actions": mng.get("actions"), "reason": mng.get("reason")},
                 **_h1.summary(book)}
     except Exception as exc:
         app.logger.exception("hl 1d pass failed")
+        try:
+            import kv as _kv
+            _kv.set_value(_hl_1d_key() + ":last", json.dumps(
+                {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 "error": type(exc).__name__}), ttl_seconds=2 * 86_400)
+        except Exception:
+            pass
         return {"ran": False, "error": type(exc).__name__}
 
 
@@ -6787,7 +6803,15 @@ def api_hl_1d():
     rows = sorted(book.values(), key=lambda r: r.get("placed_ms") or 0)[-60:]
     return jsonify({"gate": _h1.gate(), "config": _h1.cfg(), "network": _h1.ENV,
                     "account": _ha._mask(_h1.address()) if _h1.address() else None,
-                    "summary": _h1.summary(book), "trades": rows})
+                    "summary": _h1.summary(book), "last_pass": _hl_1d_last(), "trades": rows})
+
+
+def _hl_1d_last():
+    try:
+        import kv as _kv
+        return json.loads(_kv.get_value(_hl_1d_key() + ":last") or "null")
+    except Exception:
+        return None
 
 
 # How far back the every-minute manager looks for fully-closed trades to alert
