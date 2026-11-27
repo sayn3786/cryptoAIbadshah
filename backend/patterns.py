@@ -1748,6 +1748,9 @@ def detect_reversals(candles: List[Dict], tf_label: str, tf_weight: float = 1.0,
                 {"role": "right_shoulder", "price": round(rs["price"], 8),   "timestamp": rs["timestamp"]},
             ],
             "pattern_end_ts": rs["timestamp"],
+            # the two dips (peaks for an inverse H&S) the neckline is drawn from
+            "troughs": [{"price": round(t1["price"], 8), "timestamp": t1["timestamp"]},
+                        {"price": round(t2["price"], 8), "timestamp": t2["timestamp"]}],
         })
 
     # Newest patterns first (by where they end); confirmed ahead of forming.
