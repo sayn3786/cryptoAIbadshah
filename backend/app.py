@@ -3944,11 +3944,73 @@ def api_cron_rev_forward():
     except Exception:
         money = {}
     res = {"reversal_patterns": _rev_fwd_daily(fetch_fn=fetch),
-           "signal_1d": _sig1d_daily(fetch_fn=fetch, money=money)}
+           "signal_1d": _sig1d_daily(fetch_fn=fetch, money=money),
+           "rsi3": _rsi3_daily(fetch_fn=fetch)}
     print(f"[cron/rev-forward] {res}")
     okv = lambda r, off: bool(r.get("ran")) or r.get("reason") in (off, "BUSY")   # noqa: E731
+    # the Triple RSI record is new: its failure is reported, never fails the job
     ok = okv(res["reversal_patterns"], "REV_FORWARD_OFF") and okv(res["signal_1d"], "SIG1D_FORWARD_OFF")
     return jsonify({"ok": ok, "result": res}), (200 if ok else 503)
+
+
+# ── "Triple RSI" 1D forward paper record (rsi3_forward): alerts only ──────────
+def _rsi3_key() -> str:
+    return f"rsi3:paper:{_deploy_env()}"
+
+
+def _rsi3_load() -> list:
+    try:
+        import kv as _kv
+        v = json.loads(_kv.get_value(_rsi3_key()) or "[]")
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _rsi3_daily(*, fetch_fn=None, notify=True) -> dict:
+    """Once a day after the 1D close: settle and open the Triple RSI paper
+    trades on every scan coin. Never raises, never orders."""
+    try:
+        import rsi3_forward as _r3
+        import sig1d_forward as _sf
+        if not _r3.enabled():
+            return {"ran": False, "reason": "RSI3_FORWARD_OFF"}
+        import kv as _kv
+        try:
+            if not _kv.claim(f"rsi3:lock:{_deploy_env()}", ttl_seconds=280):
+                return {"ran": False, "reason": "BUSY"}
+        except Exception:
+            pass
+        fetch_fn = fetch_fn or (lambda sym: _monitor_candles(sym, "1D"))
+        book = _rsi3_load()
+        opened, closed, errors = [], [], 0
+        for sym in _sf.UNIVERSE:
+            try:
+                got = _r3.step(book, sym, fetch_fn(sym))
+            except Exception:
+                errors += 1
+                continue
+            opened += got["opened"]
+            closed += got["closed"]
+        if opened or closed:
+            _kv.set_value(_rsi3_key(), json.dumps(book[-_r3.KEEP:]), ttl_seconds=REV_FWD_TTL)
+        tally = _r3.summary(book)
+        if notify:
+            for t in opened:
+                _scalp_private(_r3.note("opened", t, tally))
+            for t in closed:
+                _scalp_private(_r3.note("closed", t, tally))
+        return {"ran": True, "opened": len(opened), "closed": len(closed), "errors": errors, **tally}
+    except Exception as exc:
+        return {"ran": False, "error": type(exc).__name__}
+
+
+def _rsi3_view() -> dict:
+    import rsi3_forward as _r3
+    book = _rsi3_load()
+    return {"enabled": _r3.enabled(), "paper_only": True, "summary": _r3.summary(book), "recent": book[-40:],
+            "check": f"after {_r3.VERDICT_N} closed trades: avg return > 0 and beating any uptrend day "
+                     "(same coin, same hold) by z >= 1.65"}
 
 
 FUNCTION_LIMIT_S = 300      # = vercel.json maxDuration (tested to match)
@@ -8817,6 +8879,7 @@ def api_hl_scalp():
                     "htf_forward": _htf_fwd_view(),
                     "rev_forward": _rev_fwd_view(),
                     "sig1d_forward": _sig1d_view(),
+                    "rsi3_forward": _rsi3_view(),
                     "timings": _timings_view(runs)})
 
 
