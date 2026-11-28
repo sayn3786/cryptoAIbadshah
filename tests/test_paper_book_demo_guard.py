@@ -65,4 +65,4 @@ def test_cron_refuses_demo_candles():
     i = SRC.index("def api_cron_rev_forward")
     body = SRC[i:i + 1500]
     assert "_monitor_candles(sym, \"1D\")" in body and "_fetch_closed_spot" not in body
-    assert SRC.count('fetch_fn = fetch_fn or (lambda sym: _monitor_candles(sym, "1D"))') == 2
+    assert SRC.count('fetch_fn = fetch_fn or (lambda sym: _monitor_candles(sym, "1D"))') == 3      # rev-forward, sig1d, rsi3 (the Triple RSI paper record)
