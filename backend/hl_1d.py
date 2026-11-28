@@ -9,7 +9,8 @@ a second testnet account, so each book has its own record:
   HL_1D_EXECUTE=1                  the switch (default OFF); "test" places
                                    ONE trade only (the first valid pick)
                                    and then just follows it
-  HL_1D_RISK_USD                   $ lost at the stop, full size (default 10)
+  HL_1D_RISK_USD                   $ lost at the stop, full size (default 30;
+                                   10 until Nov 28 2026, owner: 3x the size)
   HL_1D_LEVERAGE                   leverage, capped by HL's max (default 5)
   HL_1D_MAX_EXPOSURE_USD           the book's total notional (default 5000)
 Testnet only, always: the network is fixed here, whatever HYPERLIQUID_ENV
@@ -42,7 +43,7 @@ TAG = "1d"
 HOUR_MS = 3_600_000
 FILL_MS = 24 * HOUR_MS
 HOLD_MS = 7 * 24 * HOUR_MS
-DEFAULT_RISK_USD = 10.0
+DEFAULT_RISK_USD = 30.0             # owner, Nov 28 2026: 3x (was 10)
 DEFAULT_LEVERAGE = 5
 DEFAULT_MAX_EXPOSURE_USD = 5000.0
 WORKING = ("PENDING", "OPEN", "PARTIAL_TP")

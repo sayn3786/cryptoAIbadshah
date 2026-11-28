@@ -192,3 +192,10 @@ def test_max_new_places_only_one(monkeypatch):
     assert h.mode() == "test"
     monkeypatch.setenv("HL_1D_EXECUTE", "1")
     assert h.mode() == "on"
+
+
+def test_default_risk_is_30(monkeypatch):
+    monkeypatch.delenv("HL_1D_RISK_USD", raising=False)
+    assert h.cfg()["risk_usd"] == 30.0
+    monkeypatch.setenv("HL_1D_RISK_USD", "10")
+    assert h.cfg()["risk_usd"] == 10.0
