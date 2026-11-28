@@ -322,6 +322,9 @@ name: Strategy backtests (private Telegram)
 #            keep the stop / after TP2 / halfway, on 1H (backend/be_rule_test.py; ~60-120 min)
 #   amd-record  read-only: the AMD forward test's paper record (read with
 #            APP_URL + CRON_SECRET), split by first / engine exits
+#   pullback-level  PRE-REGISTERED: 1D direction + a pullback into a real level
+#            (S/R, order block, FVG) + a reaction close vs entering at the
+#            close and vs a random level
 #   rsi-triple  PRE-REGISTERED: the posted "Triple RSI" long rules on 1W and BW
 #            bars (1D as context) vs buying any uptrend bar
 #   trail  PRE-REGISTERED: the last third of a 1D pick - fixed TP3 vs a 1x / 2x
@@ -414,7 +417,7 @@ on:
       study:
         description: "Which backtest"
         type: choice
-        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate, tp-reached, tp-reached-1w, strength-tier, order-blocks, volume-profile, volume-profile-4h, polymarket-check, macro-leans, risk-leans, scalp-lean-filter, weekly-leans, amdx, scalp-lean-threshold, exit-rules, exit-8h, scalp-exit-5m, divergence-playout, divergence-playout2, scalp-div-playout, scalp-asia, weekly-picks-record, reversal-timing, flip-regime, risk-shape, weekly-sfp, weekly-sfp-forward, size-cap, time-stop, lean-filter-1d, record-gap, be-rule, combo-exit, scalp-more-coins, amd-record, fib-075, hs-strict, entry-mode, weekend-1d, trail, vol-regime-1d, rsi-triple]
+        options: [cadence, stops, entry-exit, combined, v54-oos, universe, rr, reads, read-filters, factors, strength, calibration, oneh, hourly, prejump, indicators, reweight, recent, market-lean, weekly-trend, recency, channel-exits, divergence, ema-flat, breakout-volume, vwap-whipsaw, combos, daily-setups, setup-exits, scalp, entry-15m, sweep-fvg, scalp-struct, scalp-chop, scalp-trend, scalp-sma, scalp-entry, scalp-reversal, scalp-smc, scalp-score, scalp-flow, scalp-amd, close-picks, close-picks-funding, close-record, confluence, rsi-retest, reversal-audit, reversal-tuning, close-picks-tuning, close-picks-d-check, close-picks-regime, close-picks-regime-2022, reversal-score, scalp-portfolio, scalp-vs-random, scalp-fade, htf-vs-random, htf-confirm, range-vs-random, pattern-outcomes, ipo-btc, radar-against, short-radar, trend-filter, reversal-1d, reversal-factors, tao-case, continuation-short, regime-switch, stoch-cross, target-hit, range-retest, pattern-agree, target-trend, funding-extreme, score-cleanup, hl-liq-check, scalp-div-gate, tp-reached, tp-reached-1w, strength-tier, order-blocks, volume-profile, volume-profile-4h, polymarket-check, macro-leans, risk-leans, scalp-lean-filter, weekly-leans, amdx, scalp-lean-threshold, exit-rules, exit-8h, scalp-exit-5m, divergence-playout, divergence-playout2, scalp-div-playout, scalp-asia, weekly-picks-record, reversal-timing, flip-regime, risk-shape, weekly-sfp, weekly-sfp-forward, size-cap, time-stop, lean-filter-1d, record-gap, be-rule, combo-exit, scalp-more-coins, amd-record, fib-075, hs-strict, entry-mode, weekend-1d, trail, vol-regime-1d, rsi-triple, pullback-level]
         default: cadence
       days:
         description: "Days of history to replay"
@@ -622,6 +625,8 @@ jobs:
             python -m be_rule_test --telegram --h1-days 900
           elif [ "$STUDY" = "amd-record" ]; then
             python -m amd_forward_record --telegram
+          elif [ "$STUDY" = "pullback-level" ]; then
+            python -m pullback_level_test --telegram --days 3400
           elif [ "$STUDY" = "rsi-triple" ]; then
             python -m rsi_triple_test --telegram --days 3400
           elif [ "$STUDY" = "trail" ]; then
