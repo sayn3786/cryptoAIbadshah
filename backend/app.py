@@ -7663,10 +7663,18 @@ def _scalp_size(sym, coin, setup, *, acct, table, recs):
 
 
 def _scalp_market(setup, *, acct, table, recs, now_ms, orders=None,
-                  observation_order_functions=None) -> dict:
+                  observation_order_functions=None, observation_capture=None) -> dict:
     """An engine-triggered scalp: a MARKET open through hl_autoexec.execute
     (stale-entry guard against the 15m close, exact-once id, the structure stop
     and target attached right after the fill), risk-sized. Never raises."""
+    # Explicit injection only. Keep the entire workflow, including emergency
+    # protection, inside run so journal persistence cannot precede protection.
+    if observation_capture is not None:
+        return observation_capture.run(
+            lambda wrappers: _scalp_market(
+                setup, acct=acct, table=table, recs=recs, now_ms=now_ms,
+                orders=orders, observation_order_functions=wrappers),
+            account_state=acct)
     import scalp_live as _sl
     import hl_autoexec as _ax
     import hl_exchange as _he

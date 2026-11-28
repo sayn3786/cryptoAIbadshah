@@ -499,7 +499,8 @@ def test_engine_scalp_opens_at_market_risk_sized(app_mod, hl_fake, monkeypatch):
 
 
 @pytest.mark.parametrize("closed", [True, False])
-def test_capture_flush_follows_emergency_protection(app_mod, monkeypatch, closed):
+@pytest.mark.parametrize("flush_fails", [True, False])
+def test_capture_flush_follows_emergency_protection(app_mod, monkeypatch, closed, flush_fails):
     import hashlib
     from datetime import datetime, timedelta, timezone
     import hl_account
@@ -533,17 +534,22 @@ def test_capture_flush_follows_emergency_protection(app_mod, monkeypatch, closed
     monkeypatch.setattr(app_mod, "_scalp_left_open", lambda coin: 0)
     monkeypatch.setattr(app_mod, "_scalp_audit", lambda event: order.append("protection_audit"))
     now = datetime.now(timezone.utc)
-    capture = observation.BufferedCapture(flush=lambda batch: order.append("flush"),
+    def flush(batch):
+        order.append("flush")
+        if flush_fails:
+            raise RuntimeError("synthetic persistence failure")
+    capture = observation.BufferedCapture(flush=flush,
         environment="research", account_hash=hashlib.sha256(address.encode()).hexdigest(),
         symbol="ETH", slot_ms=7, starts_at=now, ends_at=now+timedelta(hours=1))
     setup = dict(symbol="ETH", direction="LONG", strength=80, entry=100,
                  sl=99, target=102, slot_ms=7)
-    result = capture.run(lambda wrappers: app_mod._scalp_market(
+    result = app_mod._scalp_market(
         setup, acct=acct, table={}, recs={}, now_ms=8,
-        observation_order_functions=wrappers), account_state=acct)
+        observation_capture=capture)
     assert result["reason"] == ("UNPROTECTED_CLOSED" if closed else "UNPROTECTED_OPEN")
     assert order[-1] == "flush"
     assert order.index("emergency_close") < order.index("protection_audit") < order.index("flush")
+    assert capture.flush_status == ("FAILED" if flush_fails else "FLUSHED")
 
 
 def test_blend_1h_is_points_not_a_gate():
